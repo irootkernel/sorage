@@ -2,6 +2,17 @@
 .omx
 .claude
 .codex
+.zcode
 
 .DS_Store
 
+/.mulgae/*
+!/.mulgae/config.yaml
+
+.gaori/*
+!.gaori/tester.yaml
+!.gaori/tester/
+.gaori/tester/*
+!.gaori/tester/rules/
+.gaori/tester/rules/*
+!.gaori/tester/rules/*.yaml
