@@ -1,5 +1,4 @@
-import { parseDocument } from "yaml";
-import type { Document } from "yaml";
+import { Document, parseDocument } from "yaml";
 import { appError, err, ok, type AppError, type Result } from "./errors";
 
 /**
@@ -194,6 +193,11 @@ export function loadConfiguration(text: string, ports: LoadConfigurationPorts): 
 /** Serializes the comment-preserving document back to text (CFG-018). */
 export function serializeConfiguration(loaded: LoadedConfiguration): string {
   return loaded.document.toString({ lineWidth: 0 });
+}
+
+/** A fresh empty document for writing a configuration where no file exists yet. */
+export function emptyConfigurationDocument(): Document {
+  return new Document({});
 }
 
 /** Returns a copy whose `vault.path` is expanded and normalized (CFG-009). */

@@ -6,3 +6,4 @@ export * from "./sqlite/migrations";
 export * from "./logging";
 export * from "./home";
 export * from "./lockfile";
+export * from "./config-store";
