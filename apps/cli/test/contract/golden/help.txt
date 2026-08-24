@@ -1,0 +1,20 @@
+Usage: sorage [options] [command]
+
+Local document-handoff broker for AI coding sessions.
+
+Options:
+  --as <project-slug>         resolve the acting Project by slug instead of the
+                              working directory
+  --as-user                   assert the local User as the actor for a
+                              User-admin operation
+  --confirm                   confirm a state-conditional operation
+  --expected-row-version <n>  compare-and-set against this Row Version
+  --limit <n>                 page size for list commands
+  --cursor <cursor>           resume a listing from an opaque cursor
+  --json                      emit the versioned JSON envelope on standard
+                              output
+  -h, --help                  display help for the command
+
+Commands:
+  version                     print the CLI, product, and protocol versions
+  help [command]              display help for command

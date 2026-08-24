@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "data": {
+    "cli": "sorage",
+    "version": "0.0.0",
+    "protocolVersion": 1
+  },
+  "meta": {
+    "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+  }
+}

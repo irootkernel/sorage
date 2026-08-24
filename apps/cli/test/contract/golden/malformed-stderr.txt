@@ -1,0 +1,2 @@
+sorage: error: unknown command 'definitely-not-a-command'
+Run 'sorage --help' for usage.

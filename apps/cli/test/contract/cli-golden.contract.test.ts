@@ -1,0 +1,45 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+/**
+ * Golden-output harness every later command reuses: the CLI runs as a real process
+ * with a deterministic request id, and stdout must match the committed golden file
+ * exactly while stderr stays empty for successful commands.
+ */
+const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
+const goldenDir = fileURLToPath(new URL("./golden/", import.meta.url));
+
+function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync("bun", [entry, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, SORAGE_TEST_REQUEST_ID: "2f0ac9a0-0000-4000-8000-0000000000aa" },
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+describe("cli golden snapshots", () => {
+  it("pins `sorage version --json`", () => {
+    const run = runCli(["version", "--json"]);
+    expect(run.status).toBe(0);
+    expect(run.stderr).toBe("");
+    const golden = readFileSync(`${goldenDir}version.json`, "utf8");
+    expect(run.stdout).toBe(golden);
+  });
+
+  it("pins `sorage help`", () => {
+    const run = runCli(["--help"]);
+    expect(run.status).toBe(0);
+    const golden = readFileSync(`${goldenDir}help.txt`, "utf8");
+    expect(run.stdout).toBe(golden);
+  });
+
+  it("exits 2 on a malformed invocation and pins the exact stderr", () => {
+    const run = runCli(["definitely-not-a-command"]);
+    expect(run.status).toBe(2);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}malformed-stderr.txt`, "utf8");
+    expect(run.stderr).toBe(golden);
+  });
+});
