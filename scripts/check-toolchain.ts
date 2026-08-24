@@ -5,9 +5,7 @@ const PIN_FILES = [".bun-version", "package.json (engines.bun)"] as const;
 
 function fail(message: string): never {
   console.error(`toolchain check failed: ${message}`);
-  console.error(
-    `Sorage pins Bun ${PINNED_VERSION}; the pin is recorded in ${PIN_FILES.join(" and ")}.`,
-  );
+  console.error(`Sorage pins Bun ${PINNED_VERSION}; the pin is recorded in ${PIN_FILES.join(" and ")}.`);
   process.exit(1);
 }
 
@@ -45,9 +43,7 @@ if (!existsSync("bun.lock")) {
 
 const runningVersion = Bun.version;
 if (runningVersion !== PINNED_VERSION) {
-  fail(
-    `Bun ${runningVersion} is running but Sorage pins Bun ${PINNED_VERSION}; install the pinned version and retry.`,
-  );
+  fail(`Bun ${runningVersion} is running but Sorage pins Bun ${PINNED_VERSION}; install the pinned version and retry.`);
 }
 
 console.log(`toolchain check passed: Bun ${runningVersion} matches the pin recorded in ${PIN_FILES.join(" and ")}.`);

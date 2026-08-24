@@ -8,6 +8,11 @@ all: test
 test-prepare:
 	$(BUN) run check:toolchain
 	$(BUN) install --frozen-lockfile
+	$(BUN) run check:format
+	$(BUN) run check:lint
+	$(BUN) run check:typecheck
+	$(BUN) run check:import-boundaries
+	$(BUN) run check:dependency-boundaries
 
 test-unit:
 	$(BUN) run test:unit

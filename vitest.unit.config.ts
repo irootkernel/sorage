@@ -4,6 +4,5 @@ export default defineConfig({
   test: {
     name: "unit",
     include: ["**/test/unit/**/*.test.ts"],
-
   },
 });

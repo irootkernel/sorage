@@ -13,7 +13,16 @@ describe("toolchain pin", () => {
 
   it("provides every Makefile target the verification gate depends on", () => {
     const makefile = readFileSync("Makefile", "utf8");
-    for (const target of ["test-prepare", "test-unit", "test-int", "test-contract", "test-e2e", "test", "build", "package"]) {
+    for (const target of [
+      "test-prepare",
+      "test-unit",
+      "test-int",
+      "test-contract",
+      "test-e2e",
+      "test",
+      "build",
+      "package",
+    ]) {
       expect(makefile).toContain(`${target}:`);
     }
   });
