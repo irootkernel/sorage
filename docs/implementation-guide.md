@@ -27,7 +27,7 @@ The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 - Vite with Preact for `apps/web`, built to static assets the daemon serves.
 - `bun build --compile` for release binaries, followed by ad-hoc codesigning, distributed through a Homebrew tap so Gatekeeper never quarantines a downloaded binary.
 - `make test` as the single verification gate, over the targets `test-prepare`, `test-unit`, `test-int`, `test-contract`, and `test-e2e`; `make build` compiles `dist/sorage` and `make package` produces the signed binary and the Homebrew formula inputs (NFR-016).
-- CI runs on GitHub Actions on a `macos-latest` runner, invoking the same `make` targets a developer runs locally, so a green pipeline and a green workstation mean the same thing.
+- Verification is local: the same `make` targets a developer runs are the whole gate, because this repository uses no hosted continuous-integration service.
 
 Bun does not use libuv, so `F_FULLFSYNC` durability MUST be verified empirically in the foundation milestone rather than assumed.
 
@@ -289,7 +289,7 @@ Use an isolated temporary home, Vault, git repository, and database per test, cr
 
 Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun version assertion, and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; and `make test` as the single gate.
 
-CI runs those same targets on a GitHub Actions `macos-latest` runner, so a check that cannot run on macOS cannot be a gate.
+Those same targets run on the developer's macOS machine, so a check that cannot run on macOS cannot be a gate.
 
 ## 17. Ecosystem integration
 

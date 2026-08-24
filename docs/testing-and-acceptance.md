@@ -24,7 +24,7 @@ The toolchain is normative, fixed by ADR-0016 in [architecture-decisions.md](arc
 | `build` | `bun build --compile` producing `dist/sorage` |
 | `package` | The signed binary plus the Homebrew formula inputs |
 
-Continuous integration runs as a GitHub Actions workflow on a `macos-latest` runner, installing Bun `1.3.14` as pinned in `.bun-version` at the repository root and mirrored in the `package.json` `engines` field, so the runner cannot silently drift from the developer machine; a mismatch fails in `test-prepare` before any test executes.
+Verification runs locally on the developer's macOS machine through `make test`; `test-prepare` asserts Bun `1.3.14` as pinned in `.bun-version` at the repository root and mirrored in the `package.json` `engines` field, so no environment can silently drift from the pin; a mismatch fails in `test-prepare` before any test executes. This repository uses no hosted continuous-integration service.
 
 ## 2. `testkit` contract
 

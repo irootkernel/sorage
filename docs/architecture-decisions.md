@@ -441,7 +441,7 @@ Sibling repositories pin their toolchain hard — podway's `Makefile:3-6` raises
 
 The toolchain is Bun `1.3.14`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from 0.2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
 
-`make build` compiles with `bun build --compile` into `dist/sorage` and `make package` produces the ad-hoc signed binary and the Homebrew formula inputs; `make test` is the single verification gate, `make test-prepare` asserts the pinned Bun version, and CI runs GitHub Actions on a `macos-latest` runner.
+`make build` compiles with `bun build --compile` into `dist/sorage` and `make package` produces the ad-hoc signed binary and the Homebrew formula inputs; `make test` is the single verification gate and `make test-prepare` asserts the pinned Bun version; verification runs locally on macOS with no hosted CI service (the GitHub Actions workflow added in TASK-002 was removed by the owner's direction on 2026-08-24).
 
 The workspace is five packages — `core`, `adapters`, `cli`, `daemon`, `web` — with the domain and application boundary enforced by lint rather than by package count.
 

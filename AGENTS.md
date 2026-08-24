@@ -33,7 +33,7 @@ Sorage is a planned standalone TypeScript document-handoff broker for AI coding 
 ## Verification
 
 - `make test` is the single verification gate for code; it is created by `EPIC-001` and does not exist yet.
-- `scripts/sot-check` verifies this document set and must pass in CI; it is also created by `EPIC-001`.
+- `scripts/sot-check` verifies this document set and must pass in `make test-prepare`; it is also created by `EPIC-001`.
 - Run the narrowest meaningful check first, then `make test` before asking for review; report every skipped check with its reason.
 
 ## Documentation Style
