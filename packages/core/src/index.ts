@@ -6,3 +6,4 @@ export * from "./protocol";
 export * from "./config";
 export * from "./init";
 export * from "./config-commands";
+export * from "./doctor";

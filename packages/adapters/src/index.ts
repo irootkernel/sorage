@@ -10,3 +10,4 @@ export * from "./config-store";
 export * from "./vault";
 export * from "./init-ports";
 export * from "./config-command-ports";
+export * from "./doctor";

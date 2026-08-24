@@ -1,0 +1,116 @@
+{
+  "checks": [
+    {
+      "id": "home.permissions",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "config.schema",
+      "severity": "blocking",
+      "message": "Sorage is not initialized; expected configuration file: /tmp/sorage-golden-home/config.yaml",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "config.lock",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "vault.marker",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "vault.gitattributes",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "vault.writable",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "db.integrity",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "db.pendingIntents",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "db.migrations",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "artifacts.checksums",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "bindings.exist",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "bindings.nested",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "bindings.ambiguous",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "platform.tcc",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    }
+  ]
+}

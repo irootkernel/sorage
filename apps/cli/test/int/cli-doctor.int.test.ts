@@ -1,0 +1,197 @@
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { runCli } from "../../src/main";
+import { CONFIGURATION_DEFAULTS } from "@sorage/core";
+
+/**
+ * The EPIC-002 acceptance journeys executed through the CLI: AJ-01 runs a fresh
+ * non-interactive initialization and a clean doctor, AJ-02 verifies the
+ * pre-initialization guidance and catalog. The journeys are re-run in full at the
+ * 0.1 release gate; until `project list` and `completion` arrive with their epics,
+ * the gated-command step uses `config show`, the gated command this epic ships.
+ */
+const homes: string[] = [];
+afterEach(() => {
+  while (homes.length > 0) {
+    const home = homes.pop();
+    if (home !== undefined) rmSync(home, { recursive: true, force: true });
+  }
+  delete process.env.SORAGE_HOME;
+});
+
+function tempHome(prefix: string): string {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  homes.push(home);
+  process.env.SORAGE_HOME = home;
+  return home;
+}
+
+function capture() {
+  const out: string[] = [];
+  const err: string[] = [];
+  return {
+    ports: {
+      out: (text: string) => out.push(text),
+      err: (text: string) => err.push(text),
+    },
+    outText(): string {
+      return out.join("");
+    },
+    errText(): string {
+      return err.join("");
+    },
+  };
+}
+
+interface DoctorEnvelope {
+  ok: boolean;
+  data: { checks: Array<{ id: string; severity: string; message: string; recovery?: { suggestedCommand: string } }> };
+}
+
+describe("AJ-01: fresh non-interactive initialization and doctor", () => {
+  it("initializes idempotently and doctors clean", () => {
+    const home = tempHome("sorage-aj01-");
+    const vault = join(home, "vault");
+
+    const init = capture();
+    expect(runCli(["init", "--vault", vault, "--non-interactive"], init.ports)).toBe(0);
+    expect(join(home, "config.yaml") !== "");
+    expect(runCli(["--help"], capture().ports)).toBe(0);
+
+    expect(readFileSync(join(vault, ".gitattributes"), "utf8")).toBe(
+      "artifacts/** -text -diff\nsnapshots/** text eol=lf\n.sorage-vault.json text eol=lf\n",
+    );
+    expect(readFileSync(join(vault, ".gitignore"), "utf8")).toBe("staging/\n");
+    expect(readFileSync(join(vault, ".sorage-vault.json"), "utf8")).toContain("sorage-vault");
+
+    const show = capture();
+    expect(runCli(["config", "show", "--json"], show.ports)).toBe(0);
+    const shown = JSON.parse(show.outText()) as { data: Record<string, unknown> };
+    const expected = {
+      ...CONFIGURATION_DEFAULTS,
+      installationId: shown.data["installationId"],
+      vault: { ...CONFIGURATION_DEFAULTS.vault, path: vault },
+    };
+    expect(shown.data).toEqual(expected);
+    expect(typeof shown.data["installationId"]).toBe("string");
+
+    const before = readFileSync(join(home, "config.yaml"), "utf8");
+    const markerBefore = readFileSync(join(vault, ".sorage-vault.json"), "utf8");
+    const again = capture();
+    expect(runCli(["init", "--vault", vault, "--non-interactive"], again.ports)).toBe(0);
+    expect(again.outText()).toContain("already initialized");
+    expect(readFileSync(join(home, "config.yaml"), "utf8")).toBe(before);
+    expect(readFileSync(join(vault, ".sorage-vault.json"), "utf8")).toBe(markerBefore);
+
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    expect(report.ok).toBe(true);
+    expect(report.data.checks).toHaveLength(14);
+    for (const check of report.data.checks) {
+      expect(check.severity).toBe("ok");
+      expect(check.recovery).toBeUndefined();
+    }
+  });
+});
+
+describe("AJ-02: pre-initialization guidance", () => {
+  it("gates non-bootstrap commands and runs the bootstrap set", () => {
+    const home = tempHome("sorage-aj02-");
+
+    const gated = capture();
+    expect(runCli(["config", "show"], gated.ports)).toBe(78);
+    expect(gated.errText()).toContain("NOT_INITIALIZED");
+    expect(gated.errText()).toContain(join(home, "config.yaml"));
+    expect(gated.errText()).toContain("sorage init");
+
+    const gatedJson = capture();
+    expect(runCli(["config", "show", "--json"], gatedJson.ports)).toBe(78);
+    expect(gatedJson.outText()).toBe("");
+    const envelope = JSON.parse(gatedJson.errText()) as {
+      error: { code: string; details: { expectedConfigPath: string }; recovery: { suggestedCommand: string } };
+    };
+    expect(envelope.error.code).toBe("NOT_INITIALIZED");
+    expect(envelope.error.details.expectedConfigPath).toBe(join(home, "config.yaml"));
+    expect(envelope.error.recovery.suggestedCommand).toBe("sorage init");
+
+    expect(runCli(["--help"], capture().ports)).toBe(0);
+    expect(runCli(["version"], capture().ports)).toBe(0);
+    const doctor = capture();
+    expect(runCli(["doctor"], doctor.ports)).toBe(1);
+    expect(doctor.outText()).toContain("[blocking] config.schema");
+  });
+
+  it("emits the pre-initialization catalog with every installation-dependent check blocking", () => {
+    const home = tempHome("sorage-aj02-catalog-");
+    const doctor = capture();
+    const code = runCli(["doctor", "--json"], doctor.ports);
+    expect(code).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    expect(report.ok).toBe(true);
+    expect(report.data.checks).toHaveLength(14);
+    const expectedIds = [
+      "home.permissions",
+      "config.schema",
+      "config.lock",
+      "vault.marker",
+      "vault.gitattributes",
+      "vault.writable",
+      "db.integrity",
+      "db.pendingIntents",
+      "db.migrations",
+      "artifacts.checksums",
+      "bindings.exist",
+      "bindings.nested",
+      "bindings.ambiguous",
+      "platform.tcc",
+    ];
+    expect(report.data.checks.map((check) => check.id)).toEqual(expectedIds);
+    for (const check of report.data.checks) {
+      expect(check.severity).toBe("blocking");
+      if (check.id !== "config.schema") {
+        expect(check.message).toBe("Sorage is not initialized");
+        expect(check.message).not.toContain(join(home, "config.yaml"));
+      }
+      expect(check.recovery).toEqual({ suggestedCommand: "sorage init" });
+    }
+    const schema = report.data.checks.find((check) => check.id === "config.schema");
+    expect(schema?.message).toBe(
+      `Sorage is not initialized; expected configuration file: ${join(home, "config.yaml")}`,
+    );
+  });
+});
+
+describe("doctor severities after initialization", () => {
+  it("exits 0 with a warning alone when config.lock goes stale", () => {
+    const home = tempHome("sorage-doctor-warning-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    mkdirSync(join(home, "run"), { recursive: true });
+    writeFileSync(
+      join(home, "run", "config.lock"),
+      `${JSON.stringify({ pid: 999999, startedAt: new Date().toISOString(), hostname: "gone" })}\n`,
+    );
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const lock = report.data.checks.find((check) => check.id === "config.lock");
+    expect(lock?.severity).toBe("warning");
+    expect(lock?.recovery?.suggestedCommand).toContain("config.lock");
+    expect(report.data.checks.every((check) => check.severity !== "blocking")).toBe(true);
+  });
+
+  it("exits non-zero with a blocking check when the configuration is broken", () => {
+    const home = tempHome("sorage-doctor-blocking-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    chmodSync(join(home, "config.yaml"), 0o644);
+    const doctor = capture();
+    const code = runCli(["doctor", "--json"], doctor.ports);
+    expect(code).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const permissions = report.data.checks.find((check) => check.id === "home.permissions");
+    expect(permissions?.severity).toBe("blocking");
+    expect(permissions?.recovery?.suggestedCommand).toContain("sorage init --reconfigure");
+  });
+});

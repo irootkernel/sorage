@@ -13,6 +13,8 @@ import {
 // must never load inside the shipped CLI process.
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
+import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
+import { runDoctor, hasBlockingCheck, type DoctorReport } from "@sorage/core";
 import { editConfiguration, setConfigurationValue, showConfiguration, validateConfigurationFile } from "@sorage/core";
 
 export const CLI_NAME = "sorage" as const;
@@ -219,13 +221,32 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       }
     });
 
+  program
+    .command("doctor")
+    .description("run the milestone-scoped installation checks and report the catalog")
+    .action((_options, command) => {
+      const json = command.optsWithGlobals().json === true;
+      const doctorPorts = createNodeDoctorPorts();
+      const report = runDoctor(doctorPorts, createNodeConfigCommandPorts().configFile);
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(report, requestId()), null, 2)}\n`);
+      } else {
+        renderDoctorReport(report, ports);
+      }
+      reportExitCode(hasBlockingCheck(report) ? 1 : 0);
+    });
+
   program.helpOption("-h, --help", "display help for the command");
 
   return program;
 }
 
-/** The commands that may run before initialization (INIT-011). */
-const PRE_INIT_EXEMPT = new Set(["init", "help", "version", "completion", "doctor"]);
+function renderDoctorReport(report: DoctorReport, ports: OutputPorts): void {
+  for (const check of report.checks) {
+    ports.out(`[${check.severity}] ${check.id} — ${check.message}\n`);
+    if (check.recovery !== undefined) ports.out(`        recovery: ${check.recovery.suggestedCommand}\n`);
+  }
+}
 
 /**
  * The pre-initialization gate (INIT-011, INIT-012): renders the documented human or

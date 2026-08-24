@@ -20,4 +20,6 @@ Commands:
   init [options]              create the Sorage installation: home tree,
                               configuration, database, and Vault
   config                      inspect and change the installation configuration
+  doctor                      run the milestone-scoped installation checks and
+                              report the catalog
   help [command]              display help for command

@@ -1,0 +1,58 @@
+[
+  {
+    "id": "home.permissions",
+    "worst": "blocking"
+  },
+  {
+    "id": "config.schema",
+    "worst": "blocking"
+  },
+  {
+    "id": "config.lock",
+    "worst": "warning"
+  },
+  {
+    "id": "vault.marker",
+    "worst": "blocking"
+  },
+  {
+    "id": "vault.gitattributes",
+    "worst": "warning"
+  },
+  {
+    "id": "vault.writable",
+    "worst": "blocking"
+  },
+  {
+    "id": "db.integrity",
+    "worst": "blocking"
+  },
+  {
+    "id": "db.pendingIntents",
+    "worst": "warning"
+  },
+  {
+    "id": "db.migrations",
+    "worst": "blocking"
+  },
+  {
+    "id": "artifacts.checksums",
+    "worst": "blocking"
+  },
+  {
+    "id": "bindings.exist",
+    "worst": "warning"
+  },
+  {
+    "id": "bindings.nested",
+    "worst": "warning"
+  },
+  {
+    "id": "bindings.ambiguous",
+    "worst": "warning"
+  },
+  {
+    "id": "platform.tcc",
+    "worst": "warning"
+  }
+]
