@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error": {
+    "code": "CURSOR_INVALID",
+    "message": "The cursor does not match the supplied filter set",
+    "details": {
+      "cursor": true
+    },
+    "recovery": {
+      "suggestedCommand": "Restart the listing without --cursor"
+    }
+  },
+  "meta": {
+    "requestId": "2f0ac9a0-0000-4000-8000-000000000002"
+  }
+}
