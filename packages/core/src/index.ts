@@ -3,3 +3,4 @@ export * from "./errors";
 export * from "./ids";
 export * from "./cursor";
 export * from "./protocol";
+export * from "./config";
