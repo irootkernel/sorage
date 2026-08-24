@@ -162,6 +162,15 @@ describe("tilde expansion and path normalization", () => {
     expect(expandConfigurationPath("~/a/b", "/Users/tester/")).toBe("/Users/tester/a/b");
   });
 
+  it("resolves the canonical ~/.sorage prefix under the effective Sorage home", () => {
+    expect(expandConfigurationPath("~/.sorage/vault", "/Users/tester", "/tmp/override")).toBe("/tmp/override/vault");
+    expect(expandConfigurationPath("~/.sorage", "/Users/tester", "/tmp/override")).toBe("/tmp/override");
+    expect(expandConfigurationPath("~/.sorage/vault", "/Users/tester")).toBe("/Users/tester/.sorage/vault");
+    expect(expandConfigurationPath("~/.sorage-backup/vault", "/Users/tester", "/tmp/override")).toBe(
+      "/Users/tester/.sorage-backup/vault",
+    );
+  });
+
   it("normalizes dots and duplicate separators without resolving against the cwd", () => {
     expect(expandConfigurationPath("/tmp//x/./y", "/Users/tester")).toBe("/tmp/x/y");
     expect(expandConfigurationPath("~/a/../b", "/Users/tester")).toBe("/Users/tester/b");

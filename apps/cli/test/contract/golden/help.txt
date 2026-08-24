@@ -17,4 +17,6 @@ Options:
 
 Commands:
   version                     print the CLI, product, and protocol versions
+  init [options]              create the Sorage installation: home tree,
+                              configuration, database, and Vault
   help [command]              display help for command

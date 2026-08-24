@@ -1,4 +1,5 @@
 import { chmodSync, closeSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfiguration, errorSpec, type Configuration } from "@sorage/core";
 import { createConfigStore, type ConfigStoreFs } from "../../src/config-store";
@@ -118,7 +119,7 @@ function mode(path: string): number {
 
 describe("the atomic configuration store", () => {
   it("reads null before any file exists and validates a written file", async () => {
-    await withTempHome(async () => {
+    await withTempHome(async (home) => {
       const store = createConfigStore({
         home: createNodeHomePaths(),
         lockPorts: createNodeLockProbePorts(),
@@ -134,7 +135,8 @@ describe("the atomic configuration store", () => {
       if (read.ok && read.value !== null) {
         expect(read.value.revision).toBe(1);
         expect(read.value.config.installationId).toBe(UUID);
-        expect(read.value.config.vault.path).toBe("/Users/tester/.sorage/vault");
+        // The canonical ~/.sorage prefix resolves under the overridden Sorage home.
+        expect(read.value.config.vault.path).toBe(join(home, "vault"));
         expect(read.value.etag).toBe(store.etag());
       }
     }, "sorage-test-store-read-");

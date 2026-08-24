@@ -124,7 +124,7 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
     read() {
       const text = currentText();
       if (text === null) return ok(null);
-      const loaded = loadConfiguration(text, { userHome: ports.userHome });
+      const loaded = loadConfiguration(text, { userHome: ports.userHome, sorageHome: ports.home.home });
       if (!loaded.ok) return loaded;
       return ok({ config: loaded.value.config, etag: contentEtag(text), revision: loaded.value.config.configRevision });
     },
@@ -155,7 +155,8 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
         expectation?: WriteExpectation,
       ): Result<WrittenConfiguration, AppError> {
         const text = currentText();
-        const existing = text === null ? null : loadConfiguration(text, { userHome: ports.userHome });
+        const existing =
+          text === null ? null : loadConfiguration(text, { userHome: ports.userHome, sorageHome: ports.home.home });
         if (existing !== null && !existing.ok) return existing;
 
         const currentRevision = existing === null ? 0 : existing.ok ? existing.value.config.configRevision : 0;

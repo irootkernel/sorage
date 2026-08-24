@@ -1,6 +1,17 @@
 import { Command, InvalidArgumentError } from "commander";
 import { randomUUID } from "node:crypto";
-import { errorSpec, successEnvelope, errorEnvelope, protocolVersion, type AppError, type Envelope } from "@sorage/core";
+import {
+  errorSpec,
+  successEnvelope,
+  errorEnvelope,
+  protocolVersion,
+  initializeInstallation,
+  type AppError,
+  type Envelope,
+} from "@sorage/core";
+// Deep import: the adapters index also exports the testkit, which is vitest-only and
+// must never load inside the shipped CLI process.
+import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 
 export const CLI_NAME = "sorage" as const;
 export const CLI_VERSION = "0.0.0" as const;
@@ -44,7 +55,10 @@ function parseInteger(value: string): number {
   return parsed;
 }
 
-export function buildProgram(ports: OutputPorts = defaultPorts): Command {
+/** Runs one CLI action and remembers its exit code for `runCli` to return. */
+type ReportExitCode = (code: number) => void;
+
+export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: ReportExitCode = () => {}): Command {
   const program = new Command();
   program
     .name(CLI_NAME)
@@ -71,6 +85,50 @@ export function buildProgram(ports: OutputPorts = defaultPorts): Command {
       }
     });
 
+  program
+    .command("init")
+    .description("create the Sorage installation: home tree, configuration, database, and Vault")
+    .option("--vault <path>", "Vault directory; defaults to ~/.sorage/vault")
+    .option("--non-interactive", "never prompt; missing answers use the documented defaults")
+    .option("--reconfigure", "explicitly repair or backfill an existing installation")
+    .action((options, command) => {
+      const json = command.optsWithGlobals().json === true;
+      if (options.nonInteractive !== true) {
+        ports.err(`${CLI_NAME}: the interactive wizard arrives in milestone 0.3; pass --non-interactive\n`);
+        ports.err(`Run '${CLI_NAME} --help' for usage.\n`);
+        reportExitCode(2);
+        return;
+      }
+      const result = initializeInstallation(createNodeInitPorts(), {
+        vaultPath: typeof options.vault === "string" ? options.vault : undefined,
+        reconfigure: options.reconfigure === true,
+      });
+      if (!result.ok) {
+        // A malformed configuration routes to the doctor, which names every defect.
+        reportExitCode(
+          renderAppError(
+            result.error,
+            ports,
+            json,
+            result.error.code === "CONFIG_INVALID" ? "sorage doctor" : undefined,
+          ),
+        );
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else if (result.value.outcome === "created") {
+        ports.out(`Initialized Sorage at ${result.value.home}\n`);
+        ports.out(`Installation: ${result.value.installationId}\n`);
+        ports.out(`Vault: ${result.value.vaultPath}\n`);
+      } else {
+        ports.out(`Sorage is already initialized at ${result.value.home}\n`);
+        ports.out(`Installation: ${result.value.installationId}\n`);
+        ports.out(`Vault: ${result.value.vaultPath}\n`);
+        ports.out(`Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`);
+      }
+    });
+
   program.helpOption("-h, --help", "display help for the command");
 
   return program;
@@ -78,7 +136,10 @@ export function buildProgram(ports: OutputPorts = defaultPorts): Command {
 
 /** Runs one CLI invocation and returns its process exit code without exiting. */
 export function runCli(argv: string[], ports: OutputPorts = defaultPorts): number {
-  const program = buildProgram(ports);
+  let actionExitCode: number | null = null;
+  const program = buildProgram(ports, (code) => {
+    actionExitCode = code;
+  });
   program.configureOutput({
     writeOut: (str) => ports.out(str),
     // The catch block below is the single renderer for usage errors; suppressing
@@ -112,6 +173,9 @@ export function runCli(argv: string[], ports: OutputPorts = defaultPorts): numbe
     ports.err(`Run '${program.name()} --help' for usage.\n`);
     return 2;
   }
+  if (actionExitCode !== null) {
+    return actionExitCode;
+  }
   const [first] = program.args;
   if (first !== undefined && program.commands.every((cmd) => cmd.name() !== first)) {
     return renderUsageError(new InvalidArgumentError(`unknown command '${first}'`), program, ports);
@@ -127,13 +191,14 @@ function renderUsageError(error: unknown, program: Command, ports: OutputPorts):
 }
 
 /** Maps an application error to its envelope rendering and published exit code. */
-export function renderAppError(error: AppError, ports: OutputPorts, json: boolean): number {
+export function renderAppError(error: AppError, ports: OutputPorts, json: boolean, recoveryOverride?: string): number {
   const spec = errorSpec(error.code);
   if (json) {
     ports.err(`${JSON.stringify(errorEnvelope(error, requestId()), null, 2)}\n`);
   } else {
     ports.err(`${error.code}: ${error.message}\n`);
-    if (spec.recovery !== undefined) ports.err(`Recovery: ${spec.recovery.suggestedCommand}\n`);
+    const recovery = recoveryOverride ?? spec.recovery?.suggestedCommand;
+    if (recovery !== undefined) ports.err(`Recovery: ${recovery}\n`);
   }
   return spec.exitCode;
 }

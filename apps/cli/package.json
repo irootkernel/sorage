@@ -7,6 +7,7 @@
   "types": "./src/index.ts",
   "dependencies": {
     "commander": "14.0.2",
-    "@sorage/core": "0.0.0"
+    "@sorage/core": "0.0.0",
+    "@sorage/adapters": "0.0.0"
   }
 }

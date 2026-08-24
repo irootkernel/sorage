@@ -18,6 +18,7 @@
       "name": "@sorage/cli",
       "version": "0.0.0",
       "dependencies": {
+        "@sorage/adapters": "0.0.0",
         "@sorage/core": "0.0.0",
         "commander": "14.0.2",
       },

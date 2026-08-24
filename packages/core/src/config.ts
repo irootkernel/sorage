@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Document, parseDocument } from "yaml";
 import { appError, err, ok, type AppError, type Result } from "./errors";
 
@@ -144,9 +145,20 @@ export function defaultConfiguration(installationId: string): Configuration {
   return structuredClone({ ...CONFIGURATION_DEFAULTS, installationId }) as Configuration;
 }
 
-/** Expands a leading `~` against the supplied user home and normalizes the result. */
-export function expandConfigurationPath(value: string, userHome: string): string {
+/**
+ * Expands a leading `~` against the supplied user home and normalizes the result.
+ * The canonical `~/.sorage` prefix resolves under the effective Sorage home, so a
+ * `SORAGE_HOME` override relocates the default Vault with the installation instead
+ * of dropping it in the operating-system home (interfaces-and-operations section 1).
+ */
+export function expandConfigurationPath(
+  value: string,
+  userHome: string,
+  sorageHome: string = join(userHome, ".sorage"),
+): string {
   if (value === "~") return userHome;
+  if (value === "~/.sorage") return normalizeJoined(sorageHome, undefined);
+  if (value.startsWith("~/.sorage/")) return normalizeJoined(sorageHome, value.slice("~/.sorage/".length));
   if (value.startsWith("~/")) return normalizeJoined(userHome, value.slice(2));
   return normalizeJoined(value, undefined);
 }
@@ -177,6 +189,8 @@ export interface LoadedConfiguration {
 
 export interface LoadConfigurationPorts {
   userHome: string;
+  /** The effective Sorage home; defaults to `<userHome>/.sorage`. */
+  sorageHome?: string | undefined;
 }
 
 /** Loads one `config.yaml` body: parse, validate, expand, and keep the document. */
@@ -187,7 +201,7 @@ export function loadConfiguration(text: string, ports: LoadConfigurationPorts): 
   }
   const validated = validateConfiguration(document.toJS());
   if (!validated.ok) return validated;
-  return ok({ config: expandConfiguration(validated.value, ports.userHome), document });
+  return ok({ config: expandConfiguration(validated.value, ports.userHome, ports.sorageHome), document });
 }
 
 /** Serializes the comment-preserving document back to text (CFG-018). */
@@ -201,8 +215,15 @@ export function emptyConfigurationDocument(): Document {
 }
 
 /** Returns a copy whose `vault.path` is expanded and normalized (CFG-009). */
-export function expandConfiguration(config: Configuration, userHome: string): Configuration {
-  return { ...config, vault: { ...config.vault, path: expandConfigurationPath(config.vault.path, userHome) } };
+export function expandConfiguration(
+  config: Configuration,
+  userHome: string,
+  sorageHome?: string | undefined,
+): Configuration {
+  return {
+    ...config,
+    vault: { ...config.vault, path: expandConfigurationPath(config.vault.path, userHome, sorageHome) },
+  };
 }
 
 /**
