@@ -16,3 +16,6 @@
 !.gaori/tester/rules/
 .gaori/tester/rules/*
 !.gaori/tester/rules/*.yaml
+
+dist/
+node_modules/

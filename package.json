@@ -1,0 +1,29 @@
+{
+  "name": "sorage",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Sorage, a local document-handoff broker for AI coding sessions.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "bun": "1.3.14"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "check:toolchain": "bun run scripts/check-toolchain.ts",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "test:contract": "vitest run --config vitest.contract.config.ts",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "build:cli": "bun build --compile apps/cli/src/main.ts --outfile dist/sorage",
+    "package": "bun run scripts/package.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.20",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
