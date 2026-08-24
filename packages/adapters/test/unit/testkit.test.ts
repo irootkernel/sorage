@@ -111,7 +111,8 @@ describe("fsync durability probe", () => {
     if (result.platform === "darwin") {
       expect(result.fullFsyncSupported).toBe(true);
     } else {
-      expect(result.detail).toContain("not applicable");
+      expect(result.fullFsyncSupported).toBe(true);
+      expect(result.detail).toContain("probe skipped");
     }
   });
 });
