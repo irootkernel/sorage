@@ -3,3 +3,4 @@ export * from "./testkit";
 export * from "./sqlite/connection";
 export * from "./sqlite/migrator";
 export * from "./sqlite/migrations";
+export * from "./logging";
