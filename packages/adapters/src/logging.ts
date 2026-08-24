@@ -74,19 +74,21 @@ export function createLogger(config: LoggerConfig) {
     const directory = dirname(config.file);
     const base = basename(config.file);
     const existing = new Set(readdirSync(directory));
+    // Drop the oldest rotated file first so the window keeps exactly maxFiles files.
+    const oldest = join(directory, `${base}.${rotation.maxFiles}`);
+    if (rotation.maxFiles >= 1 && existing.has(`${base}.${rotation.maxFiles}`)) rmSync(oldest);
     // Shift the oldest first so a shift never overwrites an unread file.
     for (let index = rotation.maxFiles - 1; index >= 1; index--) {
       const from = join(directory, `${base}.${index}`);
       const to = join(directory, `${base}.${index + 1}`);
-      if (existing.has(`${base}.${index}`)) {
-        if (index + 1 > rotation.maxFiles) rmSync(from);
-        else renameSync(from, to);
-      }
+      if (existing.has(`${base}.${index}`)) renameSync(from, to);
     }
     renameSync(config.file, join(directory, `${base}.1`));
-    // Drop everything beyond the retained window.
+    // Drop everything beyond the retained window; the basename is escaped so only
+    // genuine rotation siblings can match.
+    const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     for (const entry of readdirSync(directory)) {
-      const match = entry.match(new RegExp(`^${base}\\.(\\d+)$`));
+      const match = entry.match(new RegExp(`^${escapedBase}\\.(\\d+)$`));
       if (match && Number.parseInt(match[1] ?? "0", 10) > rotation.maxFiles) rmSync(join(directory, entry));
     }
   }

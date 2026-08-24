@@ -197,7 +197,16 @@ function checkIdentifiers(): void {
   for (const [requirement, citers] of citingTasks) {
     const milestone = requirements.get(requirement);
     if (milestone === undefined || milestone === "Deferred") continue;
-    if (citers.every((task) => task.milestone > milestone)) {
+    const later = (a: string, b: string): boolean => {
+      const parse = (value: string): [number, number] => {
+        const [major, minor] = value.split(".").map((part) => Number.parseInt(part ?? "0", 10));
+        return [major ?? 0, minor ?? 0];
+      };
+      const [aMajor, aMinor] = parse(a);
+      const [bMajor, bMinor] = parse(b);
+      return aMajor > bMajor || (aMajor === bMajor && aMinor > bMinor);
+    };
+    if (citers.every((task) => later(task.milestone, milestone))) {
       const firstCiter = citers[0];
       fail(
         `docs/roadmap.md:${firstCiter?.line ?? 0}`,

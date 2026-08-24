@@ -38,7 +38,7 @@ function parseInteger(value: string): number {
     throw new InvalidArgumentError("expected a non-negative integer");
   }
   const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
+  if (Number.isNaN(parsed) || parsed < 0 || parsed > Number.MAX_SAFE_INTEGER) {
     throw new InvalidArgumentError("expected a non-negative integer");
   }
   return parsed;

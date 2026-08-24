@@ -61,7 +61,7 @@ describe("cli shell", () => {
   });
 
   it("exits 2 for a malformed or fractional option value", () => {
-    for (const bad of ["not-a-number", "3.5", "10x"]) {
+    for (const bad of ["not-a-number", "3.5", "10x", "9007199254740992"]) {
       const cap = capture();
       expect(runCli(["--limit", bad, "version"], cap.ports)).toBe(2);
       expect(cap.err).toContain("non-negative integer");

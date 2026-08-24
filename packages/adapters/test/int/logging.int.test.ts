@@ -86,6 +86,15 @@ describe("structured logging", () => {
     expect(readFileSync(logFile, "utf8")).toContain("first.huge");
   });
 
+  it("retains exactly one rotated file when maxFiles is one", () => {
+    const { home, logger } = fixture({ maxBytes: 100, maxFiles: 1 });
+    for (let index = 0; index < 12; index++) {
+      logger.warn(`single-${index}`, { payload: "y".repeat(30) });
+    }
+    const rotated = readdirSync(join(home.home, "logs")).filter((name) => name.startsWith("sorage.log."));
+    expect(rotated.sort()).toEqual(["sorage.log.1"]);
+  });
+
   it("accounts for multibyte record content in the rotation threshold", () => {
     const { home, logger } = fixture({ maxBytes: 100, maxFiles: 2 });
     for (let index = 0; index < 8; index++) {
