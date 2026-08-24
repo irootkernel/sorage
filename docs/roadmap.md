@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-001`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-009`
@@ -69,7 +69,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 | Epic ID | Title | Milestone | Status | Task range |
 |---|---|---|---|---|
-| `EPIC-001` | Foundation and toolchain | 0.1 | Planned | `TASK-001` to `TASK-008` |
+| `EPIC-001` | Foundation and toolchain | 0.1 | Completed | `TASK-001` to `TASK-008` |
 | `EPIC-002` | Minimal installation and configuration core | 0.1 | Planned | `TASK-009` to `TASK-014` |
 | `EPIC-003` | Project registry and identity | 0.1 | Planned | `TASK-015` to `TASK-020` |
 | `EPIC-004` | Vault and Artifact store | 0.1 | Planned | `TASK-021` to `TASK-026` |
