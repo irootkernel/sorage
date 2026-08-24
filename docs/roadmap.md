@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-002`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-015`
@@ -70,7 +70,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | Epic ID | Title | Milestone | Status | Task range |
 |---|---|---|---|---|
 | `EPIC-001` | Foundation and toolchain | 0.1 | Completed | `TASK-001` to `TASK-008` |
-| `EPIC-002` | Minimal installation and configuration core | 0.1 | Planned | `TASK-009` to `TASK-014` |
+| `EPIC-002` | Minimal installation and configuration core | 0.1 | Completed | `TASK-009` to `TASK-014` |
 | `EPIC-003` | Project registry and identity | 0.1 | Planned | `TASK-015` to `TASK-020` |
 | `EPIC-004` | Vault and Artifact store | 0.1 | Planned | `TASK-021` to `TASK-026` |
 | `EPIC-005` | Handoff domain and workflow | 0.1 | Planned | `TASK-027` to `TASK-035` |
@@ -100,9 +100,10 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-002: Minimal installation and configuration core
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.1
 - **Objective:** Make a Sorage installation exist, be repairable, and be inspectable before any domain concept appears, delivering the journeys AJ-01 and AJ-02.
+- **Validation record (whole-epic review, 2026-08-25):** the first whole-epic review over `a8d5320` to `d5fc8e7` found five cross-task seam findings (`F001` to `F005`), all remediated with regression tests in `4f7ccd7`; the second round over `a8d5320` to `4f7ccd7` converged with complete coverage, `ci_decision=pass`, and zero findings. `make test` exits 0 with 158 tests and `scripts/sot-check` exits 0 on the audited snapshot; the journeys AJ-01 and AJ-02 pass through the CLI surface this epic ships, with the AJ-02 gated-command step exercised through `config show` until `project list` arrives in `EPIC-003`. Every member task closed with a clean committed round-1 Mulgae run and no hardening deferral; nothing was pushed, and publication remains local.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
