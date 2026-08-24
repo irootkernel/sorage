@@ -101,7 +101,9 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
   const vaultPath = expandConfigurationPath(config.vault.path, ports.userHome, ports.paths.home);
   const vault = ports.vault.initialize(vaultPath, installationId);
   if (!vault.ok) return vault;
-  const written = ports.config.write(config);
+  // The creating write is fenced on revision 0 so a concurrent init that won the
+  // race fails with CONFIG_CONFLICT instead of silently replacing the identity.
+  const written = ports.config.write(config, { revision: 0 });
   if (!written.ok) return written;
   return ok({ outcome: "created", installationId, vaultPath, home: ports.paths.home });
 }

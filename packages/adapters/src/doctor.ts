@@ -227,7 +227,7 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           return ok("schema_migrations is at the version this build expects.");
         }
         const verdict = evaluateStaleness("migration", parseLockRecord(lockBody), new Date(), isPidAlive);
-        if (verdict.stale) return blocking("migration.lock is held by a dead pid.");
+        if (verdict.stale) return blocking(`migration.lock is stale (${verdict.reason}).`);
         return ok("schema_migrations is at the version this build expects.");
       }
 

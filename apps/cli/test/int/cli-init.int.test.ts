@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/main";
 
@@ -88,6 +88,25 @@ describe("sorage init", () => {
     const code = runCli(["init"], io.ports);
     expect(code).toBe(2);
     expect(io.err.join("")).toContain("--non-interactive");
+  });
+
+  it("resolves a relative --vault against the working directory once", async () => {
+    const home = tempHome("sorage-cli-init-relative-");
+    const parent = mkdtempSync(join(tmpdir(), "sorage-cli-init-cwd-"));
+    const previousCwd = process.cwd();
+    process.chdir(parent);
+    try {
+      const io = capture();
+      const code = runCli(["init", "--vault", "relative-vault", "--non-interactive"], io.ports);
+      expect(code).toBe(0);
+      const config = readFileSync(join(home, "config.yaml"), "utf8");
+      // resolve() follows the macOS /tmp symlink, so compare against the resolved form.
+      expect(config).toContain(resolve(join(parent, "relative-vault")));
+      expect(existsSync(join(parent, "relative-vault", ".sorage-vault.json"))).toBe(true);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("emits the versioned success envelope under --json", () => {

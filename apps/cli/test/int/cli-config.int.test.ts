@@ -250,6 +250,25 @@ describe("sorage config", () => {
     expect(existsSync(join(home, "config.yaml.bak"))).toBe(true);
   });
 
+  it("surfaces a filesystem failure as INTERNAL_ERROR with exit 1, not a usage error", () => {
+    const home = initializedHome("sorage-cli-set-ro-");
+    chmodSync(join(home), 0o500);
+    try {
+      const io = capture();
+      const code = runCli(["config", "set", "server.port", "46325", "--as-user"], io.ports);
+      expect(code).toBe(1);
+      expect(io.errText()).toContain("INTERNAL_ERROR");
+      expect(io.errText()).not.toContain("Run 'sorage --help'");
+      const jsonIo = capture();
+      const jsonCode = runCli(["config", "set", "server.port", "46325", "--as-user", "--json"], jsonIo.ports);
+      expect(jsonCode).toBe(1);
+      const envelope = JSON.parse(jsonIo.errText()) as { error: { code: string } };
+      expect(envelope.error.code).toBe("INTERNAL_ERROR");
+    } finally {
+      chmodSync(join(home), 0o700);
+    }
+  });
+
   it("requires --as-user for config edit", () => {
     initializedHome("sorage-cli-edit-nouser-");
     const io = capture();

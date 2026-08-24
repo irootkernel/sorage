@@ -40,7 +40,7 @@ import { acquireLock, type LockProbePorts } from "./lockfile";
  * not bump the counter (CFG-019).
  */
 export interface ConfigStoreFs {
-  writeFile(path: string, data: string): void;
+  writeFile(path: string, data: string, mode?: number): void;
   readFile(path: string): string;
   rename(from: string, to: string): void;
   unlink(path: string): void;
@@ -50,8 +50,9 @@ export interface ConfigStoreFs {
   chmod(path: string, mode: number): void;
 }
 
-const realConfigStoreFs: ConfigStoreFs = {
-  writeFile: (path, data) => writeFileSync(path, data, { encoding: "utf8" }),
+export const realConfigStoreFs: ConfigStoreFs = {
+  writeFile: (path, data, mode) =>
+    writeFileSync(path, data, { encoding: "utf8", ...(mode !== undefined ? { mode } : {}) }),
   readFile: (path) => readFileSync(path, "utf8"),
   rename: (from, to) => renameSync(from, to),
   unlink: (path) => unlinkSync(path),
@@ -105,8 +106,9 @@ export interface ConfigStore {
    * appear on disk; the store validates it and stamps the next monotonic revision. */
   write(next: Configuration, expect?: WriteExpectation): Result<WrittenConfiguration, AppError>;
   /** Atomically writes validated raw bytes under `config.lock` without applying a
-   * document edit; used to restore a known-good file after a rejected editor pass. */
-  writeRaw(text: string): Result<{ etag: string }, AppError>;
+   * document edit; used to restore a known-good file after a rejected editor pass,
+   * optionally fenced on the expected current content hash. */
+  writeRaw(text: string, expect?: { etag?: string }): Result<{ etag: string }, AppError>;
 }
 
 export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
@@ -127,7 +129,13 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
   }
 
   function withConfigLock<T>(body: () => Result<T, AppError>): Result<T, AppError> {
-    const lock = acquireLock({ path: ports.home.lockFile("config"), lock: "config", ports: ports.lockPorts });
+    let lock: ReturnType<typeof acquireLock>;
+    try {
+      lock = acquireLock({ path: ports.home.lockFile("config"), lock: "config", ports: ports.lockPorts });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return err(appError("INTERNAL_ERROR", `the configuration lock could not be acquired: ${message}`));
+    }
     if (!lock.ok) {
       return err(
         appError("SERVICE_PAUSED", "another process is writing the configuration; wait for it to finish and retry", {
@@ -143,30 +151,41 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
     }
   }
 
-  /** Steps 6 to 9: temporary write, fsync, validated .bak swap, rename, permissions. */
-  function swapIn(text: string, previousExists: boolean): void {
-    fs.mkdir(dirname(configFile));
+  /**
+   * Steps 6 to 9: temporary write, fsync, validated .bak swap, rename, permissions.
+   * The temporary file is owner-only from creation, so the configuration bytes are
+   * never group- or world-readable even before the rename, and an environmental
+   * failure surfaces as INTERNAL_ERROR instead of an unclassified throw.
+   */
+  function swapIn(text: string, previousExists: boolean): Result<void, AppError> {
     const temporary = `${configFile}.tmp-${process.pid}`;
-    fs.writeFile(temporary, text);
-    fs.fsync(temporary);
     try {
-      // The single .bak holds the previous valid file, replaced only after validation.
-      if (previousExists) {
-        fs.copyFile(configFile, backupFile);
-        fs.chmod(backupFile, 0o600);
-      }
-      fs.rename(temporary, configFile);
-      fs.fsync(dirname(configFile));
-      fs.chmod(configFile, 0o600);
-    } catch (error) {
-      // A failed swap must not leave a temporary file behind for a later rename.
+      fs.mkdir(dirname(configFile));
+      fs.writeFile(temporary, text, 0o600);
+      fs.fsync(temporary);
       try {
-        fs.unlink(temporary);
-      } catch {
-        // The rename may already have consumed it.
+        // The single .bak holds the previous valid file, replaced only after validation.
+        if (previousExists) {
+          fs.copyFile(configFile, backupFile);
+          fs.chmod(backupFile, 0o600);
+        }
+        fs.rename(temporary, configFile);
+        fs.fsync(dirname(configFile));
+        fs.chmod(configFile, 0o600);
+      } catch (error) {
+        // A failed swap must not leave a temporary file behind for a later rename.
+        try {
+          fs.unlink(temporary);
+        } catch {
+          // The rename may already have consumed it.
+        }
+        throw error;
       }
-      throw error;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return err(appError("INTERNAL_ERROR", `the configuration could not be written: ${message}`));
     }
+    return ok(undefined);
   }
 
   return {
@@ -220,17 +239,27 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
         applyConfigurationToDocument(document, proposed);
         const serialized = serializeConfiguration({ config: proposed, document });
 
-        swapIn(serialized, text !== null);
+        const swapped = swapIn(serialized, text !== null);
+        if (!swapped.ok) return swapped;
         return ok({ config: proposed, etag: contentEtag(serialized) });
       }
     },
 
-    writeRaw(text) {
+    writeRaw(text, expect) {
       return withConfigLock(() => {
-        // Raw bytes still pass full validation before they can become canonical.
+        // Raw bytes still pass full validation before they can become canonical, and
+        // an expected ETag makes the restore a compare-and-set: when another writer
+        // moved the file meanwhile, the restore refuses and reports the conflict.
         const validated = parseConfigurationFile(text);
         if (!validated.ok) return validated;
-        swapIn(text, currentText() !== null);
+        const current = currentText();
+        if (expect?.etag !== undefined) {
+          if (current === null || contentEtag(current) !== expect.etag) {
+            return err(conflict("the configuration changed while the editor was open; re-read and retry"));
+          }
+        }
+        const swapped = swapIn(text, current !== null);
+        if (!swapped.ok) return swapped;
         return ok({ etag: contentEtag(text) });
       });
     },

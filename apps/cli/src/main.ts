@@ -1,5 +1,6 @@
 import { Command, InvalidArgumentError } from "commander";
 import { randomUUID } from "node:crypto";
+import { isAbsolute, resolve } from "node:path";
 import {
   errorSpec,
   successEnvelope,
@@ -103,8 +104,16 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(2);
         return;
       }
+      // A relative --vault resolves against the cwd once, so the recorded path and
+      // every later probe agree no matter where subsequent commands run from.
+      const vaultOption =
+        typeof options.vault === "string" && options.vault.trim() !== "" && !isAbsolute(options.vault)
+          ? resolve(options.vault)
+          : typeof options.vault === "string"
+            ? options.vault
+            : undefined;
       const result = initializeInstallation(createNodeInitPorts(), {
-        vaultPath: typeof options.vault === "string" ? options.vault : undefined,
+        vaultPath: vaultOption,
         reconfigure: options.reconfigure === true,
       });
       if (!result.ok) {

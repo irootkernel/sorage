@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfiguration, errorSpec, type Configuration } from "@sorage/core";
-import { createConfigStore, type ConfigStoreFs } from "../../src/config-store";
+import { createConfigStore, realConfigStoreFs, type ConfigStoreFs } from "../../src/config-store";
 import { createHomePaths, createNodeHomePaths } from "../../src/home";
 import { createNodeLockProbePorts } from "../../src/lockfile";
 import {
@@ -218,6 +219,61 @@ describe("the atomic configuration store", () => {
     }
   });
 
+  it("creates the temporary file owner-only from creation", () => {
+    const home = makeTempHome("sorage-test-store-tempmode-");
+    const paths = createHomePaths({ SORAGE_HOME: home.home }, "/Users/tester");
+    const modes: Array<number | undefined> = [];
+    const base = realConfigStoreFs;
+    const recording: ConfigStoreFs = {
+      ...base,
+      writeFile: (path, data, mode) => {
+        modes.push(mode);
+        base.writeFile(path, data, mode);
+      },
+    };
+    const store = createConfigStore({
+      home: paths,
+      lockPorts: createNodeLockProbePorts(new FakeClock()),
+      userHome: "/Users/tester",
+      fs: recording,
+    });
+    try {
+      writeFileSync(paths.configFile, ANNOTATED);
+      const result = store.write(
+        { ...defaultConfiguration(UUID), server: { ...defaultConfiguration(UUID).server, port: 46399 } },
+        { revision: 1 },
+      );
+      expect(result.ok).toBe(true);
+      expect(modes).toContain(0o600);
+      expect(mode(paths.configFile)).toBe(0o600);
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("refuses a raw restore whose expected content no longer matches", () => {
+    const { store, paths, cleanup } = storeFixture();
+    try {
+      writeFileSync(paths.configFile, ANNOTATED);
+      const before = readFileSync(paths.configFile, "utf8");
+      const edited = ANNOTATED.replace("port: 46321", "port: 46400");
+      // Another writer lands between the editor and the restore.
+      writeFileSync(paths.configFile, ANNOTATED.replace("port: 46321", "port: 46401"));
+      const staleEtag = createHash("sha256").update(edited, "utf8").digest("hex");
+      const refused = store.writeRaw(before, { etag: staleEtag });
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error.code).toBe("CONFIG_CONFLICT");
+      expect(readFileSync(paths.configFile, "utf8")).toContain("port: 46401");
+      // The matching fence restores the previous valid bytes.
+      const currentEtag = createHash("sha256").update(readFileSync(paths.configFile, "utf8"), "utf8").digest("hex");
+      const restored = store.writeRaw(before, { etag: currentEtag });
+      expect(restored.ok).toBe(true);
+      expect(readFileSync(paths.configFile, "utf8")).toBe(before);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("keeps the previous valid configuration active and the .bak intact through an injected crash between write and rename", () => {
     const registry = new CrashPointRegistry();
     const { store, paths, cleanup } = storeFixture(registry);
@@ -232,13 +288,13 @@ describe("the atomic configuration store", () => {
       const bakAfterFirst = readFileSync(`${paths.configFile}.bak`, "utf8");
 
       registry.arm("CP-write-rename", "fs", "rename", "before");
-      expect(() =>
-        store.write(
-          { ...defaultConfiguration(UUID), server: { ...defaultConfiguration(UUID).server, port: 46332 } },
-          { revision: 2 },
-        ),
-      ).toThrow();
+      const crashed = store.write(
+        { ...defaultConfiguration(UUID), server: { ...defaultConfiguration(UUID).server, port: 46332 } },
+        { revision: 2 },
+      );
       registry.disarm("CP-write-rename");
+      expect(crashed.ok).toBe(false);
+      if (!crashed.ok) expect(crashed.error.code).toBe("INTERNAL_ERROR");
 
       // The ten-step order replaces .bak (step 7) before the rename (step 8), so the
       // crash leaves the previous valid configuration active with the backup holding

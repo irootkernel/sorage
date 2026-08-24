@@ -1,5 +1,6 @@
 import { CONFIGURATION_DEFAULTS } from "./config";
 import { parseConfigurationFile, validateConfiguration, type Configuration } from "./config";
+import { createHash } from "node:crypto";
 import { appError, err, ok, type AppError, type Result } from "./errors";
 
 /**
@@ -17,7 +18,7 @@ export interface ConfigCommandStore {
     config: Configuration,
     expect?: { revision?: number; etag?: string },
   ): Result<{ config: Configuration; etag: string }, AppError>;
-  writeRaw(text: string): Result<{ etag: string }, AppError>;
+  writeRaw(text: string, expect?: { etag?: string }): Result<{ etag: string }, AppError>;
 }
 
 export interface ConfigCommandPorts {
@@ -152,7 +153,11 @@ export function editConfiguration(
   // the previous valid file so the installation never runs on broken configuration.
   const edited = parseConfigurationFile(afterText);
   if (!edited.ok) {
-    const restored = ports.store.writeRaw(beforeText);
+    // The restore is a compare-and-set on the bytes the editor produced: when a
+    // concurrent mediated write moved the file while the editor was open, the
+    // restore refuses rather than regressing the revision under that write.
+    const editedEtag = sha256Of(afterText);
+    const restored = ports.store.writeRaw(beforeText, { etag: editedEtag });
     if (!restored.ok) return restored;
     return edited;
   }
@@ -224,4 +229,8 @@ function readLeaf(value: unknown, segments: string[]): unknown {
     cursor = (cursor as Record<string, unknown>)[segment];
   }
   return cursor;
+}
+
+function sha256Of(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
