@@ -11,10 +11,14 @@ import { describe, expect, it } from "vitest";
 const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
 const goldenDir = fileURLToPath(new URL("./golden/", import.meta.url));
 
-function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
+function runCli(args: string[], sorageHome?: string): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync("bun", [entry, ...args], {
     encoding: "utf8",
-    env: { ...process.env, SORAGE_TEST_REQUEST_ID: "2f0ac9a0-0000-4000-8000-0000000000aa" },
+    env: {
+      ...process.env,
+      SORAGE_TEST_REQUEST_ID: "2f0ac9a0-0000-4000-8000-0000000000aa",
+      ...(sorageHome !== undefined ? { SORAGE_HOME: sorageHome } : {}),
+    },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -33,6 +37,14 @@ describe("cli golden snapshots", () => {
     expect(run.status).toBe(0);
     const golden = readFileSync(`${goldenDir}help.txt`, "utf8");
     expect(run.stdout).toBe(golden);
+  });
+
+  it("pins the pre-initialization NOT_INITIALIZED JSON envelope", () => {
+    const run = runCli(["config", "show", "--json"], "/tmp/sorage-golden-home");
+    expect(run.status).toBe(78);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}not-initialized.json`, "utf8");
+    expect(run.stderr).toBe(golden);
   });
 
   it("exits 2 on a malformed invocation and pins the exact stderr", () => {

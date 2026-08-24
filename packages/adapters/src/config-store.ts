@@ -19,6 +19,7 @@ import {
   err,
   loadConfiguration,
   ok,
+  parseConfigurationFile,
   serializeConfiguration,
   validateConfiguration,
   type AppError,
@@ -95,12 +96,17 @@ export interface WrittenConfiguration {
 export interface ConfigStore {
   /** Reads and fully validates the current file; null when none exists yet. */
   read(): Result<ReadConfiguration | null, AppError>;
+  /** The raw file bytes as text, or null when no file exists. */
+  readText(): string | null;
   /** The SHA-256 content hash of the canonical file, or null when absent. */
   etag(): string | null;
   /** Performs one atomic Sorage-mediated write under `config.lock`. The proposal is
    * the file view, so `vault.path` keeps its literal tilde form exactly as it should
    * appear on disk; the store validates it and stamps the next monotonic revision. */
   write(next: Configuration, expect?: WriteExpectation): Result<WrittenConfiguration, AppError>;
+  /** Atomically writes validated raw bytes under `config.lock` without applying a
+   * document edit; used to restore a known-good file after a rejected editor pass. */
+  writeRaw(text: string): Result<{ etag: string }, AppError>;
 }
 
 export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
@@ -120,6 +126,49 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
     return createHash("sha256").update(text, "utf8").digest("hex");
   }
 
+  function withConfigLock<T>(body: () => Result<T, AppError>): Result<T, AppError> {
+    const lock = acquireLock({ path: ports.home.lockFile("config"), lock: "config", ports: ports.lockPorts });
+    if (!lock.ok) {
+      return err(
+        appError("SERVICE_PAUSED", "another process is writing the configuration; wait for it to finish and retry", {
+          lock: "config.lock",
+          holder: lock.error.record ?? undefined,
+        }),
+      );
+    }
+    try {
+      return body();
+    } finally {
+      lock.release();
+    }
+  }
+
+  /** Steps 6 to 9: temporary write, fsync, validated .bak swap, rename, permissions. */
+  function swapIn(text: string, previousExists: boolean): void {
+    fs.mkdir(dirname(configFile));
+    const temporary = `${configFile}.tmp-${process.pid}`;
+    fs.writeFile(temporary, text);
+    fs.fsync(temporary);
+    try {
+      // The single .bak holds the previous valid file, replaced only after validation.
+      if (previousExists) {
+        fs.copyFile(configFile, backupFile);
+        fs.chmod(backupFile, 0o600);
+      }
+      fs.rename(temporary, configFile);
+      fs.fsync(dirname(configFile));
+      fs.chmod(configFile, 0o600);
+    } catch (error) {
+      // A failed swap must not leave a temporary file behind for a later rename.
+      try {
+        fs.unlink(temporary);
+      } catch {
+        // The rename may already have consumed it.
+      }
+      throw error;
+    }
+  }
+
   return {
     read() {
       const text = currentText();
@@ -129,26 +178,17 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
       return ok({ config: loaded.value.config, etag: contentEtag(text), revision: loaded.value.config.configRevision });
     },
 
+    readText() {
+      return currentText();
+    },
+
     etag() {
       const text = currentText();
       return text === null ? null : contentEtag(text);
     },
 
     write(next, expect) {
-      const lock = acquireLock({ path: ports.home.lockFile("config"), lock: "config", ports: ports.lockPorts });
-      if (!lock.ok) {
-        return err(
-          appError("SERVICE_PAUSED", "another process is writing the configuration; wait for it to finish and retry", {
-            lock: "config.lock",
-            holder: lock.error.record ?? undefined,
-          }),
-        );
-      }
-      try {
-        return writeUnderLock(next, expect);
-      } finally {
-        lock.release();
-      }
+      return withConfigLock(() => writeUnderLock(next, expect));
 
       function writeUnderLock(
         proposal: Configuration,
@@ -180,32 +220,19 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
         applyConfigurationToDocument(document, proposed);
         const serialized = serializeConfiguration({ config: proposed, document });
 
-        fs.mkdir(dirname(configFile));
-        const temporary = `${configFile}.tmp-${process.pid}`;
-        // Step 6: write and fsync the temporary file before it becomes visible.
-        fs.writeFile(temporary, serialized);
-        fs.fsync(temporary);
-        try {
-          // Step 7: the single .bak holds the previous valid file, replaced only after validation.
-          if (text !== null) {
-            fs.copyFile(configFile, backupFile);
-            fs.chmod(backupFile, 0o600);
-          }
-          // Steps 8 and 9: atomic rename, parent fsync, owner-only permissions.
-          fs.rename(temporary, configFile);
-          fs.fsync(dirname(configFile));
-          fs.chmod(configFile, 0o600);
-        } catch (error) {
-          // A failed swap must not leave a temporary file behind for a later rename.
-          try {
-            fs.unlink(temporary);
-          } catch {
-            // The rename may already have consumed it.
-          }
-          throw error;
-        }
+        swapIn(serialized, text !== null);
         return ok({ config: proposed, etag: contentEtag(serialized) });
       }
+    },
+
+    writeRaw(text) {
+      return withConfigLock(() => {
+        // Raw bytes still pass full validation before they can become canonical.
+        const validated = parseConfigurationFile(text);
+        if (!validated.ok) return validated;
+        swapIn(text, currentText() !== null);
+        return ok({ etag: contentEtag(text) });
+      });
     },
   };
 }

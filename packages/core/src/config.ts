@@ -195,13 +195,26 @@ export interface LoadConfigurationPorts {
 
 /** Loads one `config.yaml` body: parse, validate, expand, and keep the document. */
 export function loadConfiguration(text: string, ports: LoadConfigurationPorts): Result<LoadedConfiguration, AppError> {
+  const parsed = parseConfigurationFile(text);
+  if (!parsed.ok) return parsed;
+  return ok({
+    config: expandConfiguration(parsed.value.config, ports.userHome, ports.sorageHome),
+    document: parsed.value.document,
+  });
+}
+
+/**
+ * Loads the file view: parsed and fully validated with the literal on-disk values,
+ * so a tilde path stays written as `~` instead of being replaced by its expansion.
+ */
+export function parseConfigurationFile(text: string): Result<{ config: Configuration; document: Document }, AppError> {
   const document = parseDocument(text);
   if (document.errors.length > 0) {
     return err(invalid([`yaml: ${document.errors.map((error) => error.message).join("; ")}`]));
   }
   const validated = validateConfiguration(document.toJS());
   if (!validated.ok) return validated;
-  return ok({ config: expandConfiguration(validated.value, ports.userHome, ports.sorageHome), document });
+  return ok({ config: validated.value, document });
 }
 
 /** Serializes the comment-preserving document back to text (CFG-018). */

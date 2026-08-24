@@ -12,6 +12,8 @@ import {
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
+import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
+import { editConfiguration, setConfigurationValue, showConfiguration, validateConfigurationFile } from "@sorage/core";
 
 export const CLI_NAME = "sorage" as const;
 export const CLI_VERSION = "0.0.0" as const;
@@ -129,9 +131,130 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       }
     });
 
+  const config = program.command("config").description("inspect and change the installation configuration");
+
+  config
+    .command("show")
+    .description("print the effective configuration exactly as declared in config.yaml")
+    .action((_options, command) => {
+      const json = command.optsWithGlobals().json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = showConfiguration(createNodeConfigCommandPorts());
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      else {
+        const text = createNodeConfigCommandPorts().store.readText();
+        ports.out(text === null ? "" : `${text.endsWith("\n") ? text : `${text}\n`}`);
+      }
+    });
+
+  config
+    .command("validate")
+    .description("validate config.yaml against the schema and report every issue")
+    .action((_options, command) => {
+      const json = command.optsWithGlobals().json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = validateConfigurationFile(createNodeConfigCommandPorts());
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json)
+        ports.out(
+          `${JSON.stringify(successEnvelope({ valid: true, path: result.value.path }, requestId()), null, 2)}\n`,
+        );
+      else ports.out(`Configuration is valid: ${result.value.path}\n`);
+    });
+
+  config
+    .command("set")
+    .description("set one configuration leaf through the atomic comment-preserving store")
+    .argument("<key>", "the dotted configuration key, for example server.port")
+    .argument("<value>", "the value written verbatim for strings, as integers or booleans otherwise")
+    .option("--expected-revision <n>", "compare-and-set against this configRevision", parseInteger)
+    .action((key, value, options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = setConfigurationValue(createNodeConfigCommandPorts(), {
+        key,
+        rawValue: value,
+        asUser: globals.asUser === true,
+        expectedRevision: options.expectedRevision,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(
+          `Set ${result.value.key} = ${String(result.value.value)} (configRevision ${result.value.configRevision})\n`,
+        );
+      }
+    });
+
+  config
+    .command("edit")
+    .description("open config.yaml in $EDITOR and adopt the result through the atomic store")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = editConfiguration(createNodeConfigCommandPorts(), { asUser: globals.asUser === true });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else if (result.value.outcome === "changed") {
+        ports.out(`Configuration updated (configRevision ${result.value.configRevision})\n`);
+      } else {
+        ports.out(`No changes (configRevision ${result.value.configRevision})\n`);
+      }
+    });
+
   program.helpOption("-h, --help", "display help for the command");
 
   return program;
+}
+
+/** The commands that may run before initialization (INIT-011). */
+const PRE_INIT_EXEMPT = new Set(["init", "help", "version", "completion", "doctor"]);
+
+/**
+ * The pre-initialization gate (INIT-011, INIT-012): renders the documented human or
+ * JSON NOT_INITIALIZED form with the expected configuration path and reports exit 78
+ * when the installation does not exist yet.
+ */
+function requireInitialized(ports: OutputPorts, json: boolean, reportExitCode: (code: number) => void): boolean {
+  const gate = createNodeConfigCommandPorts();
+  const current = gate.store.read();
+  if (current.ok && current.value !== null) return true;
+  if (!current.ok) {
+    // A present but broken configuration is doctor territory, not a gate case.
+    reportExitCode(renderAppError(current.error, ports, json));
+    return false;
+  }
+  const error: AppError = {
+    code: "NOT_INITIALIZED",
+    message: "Sorage has not been initialized.",
+    details: { expectedConfigPath: gate.configFile },
+  };
+  if (json) {
+    ports.err(`${JSON.stringify(errorEnvelope(error, requestId()), null, 2)}\n`);
+  } else {
+    ports.err(
+      `ERROR [${error.code}]\n\n${error.message}\n\nExpected configuration:\n  ${gate.configFile}\n\nRun:\n  sorage init\n`,
+    );
+  }
+  reportExitCode(errorSpec(error.code).exitCode);
+  return false;
 }
 
 /** Runs one CLI invocation and returns its process exit code without exiting. */

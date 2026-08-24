@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error": {
+    "code": "NOT_INITIALIZED",
+    "message": "Sorage has not been initialized.",
+    "details": {
+      "expectedConfigPath": "/tmp/sorage-golden-home/config.yaml"
+    },
+    "recovery": {
+      "suggestedCommand": "sorage init"
+    }
+  },
+  "meta": {
+    "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+  }
+}
