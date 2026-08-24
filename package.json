@@ -24,7 +24,8 @@
     "test:contract": "vitest run --config vitest.contract.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "build:cli": "bun build --compile apps/cli/src/main.ts --outfile dist/sorage",
-    "package": "bun run scripts/package.ts"
+    "package": "bun run scripts/package.ts",
+    "check:sot": "bun run scripts/sot-check.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.4",

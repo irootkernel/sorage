@@ -13,6 +13,7 @@ test-prepare:
 	$(BUN) run check:typecheck
 	$(BUN) run check:import-boundaries
 	$(BUN) run check:dependency-boundaries
+	$(BUN) run check:sot
 
 test-unit:
 	$(BUN) run test:unit
