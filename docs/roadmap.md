@@ -81,9 +81,10 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-001: Foundation and toolchain
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.1
 - **Objective:** Stand up the standalone repository, the pinned toolchain, the five-package layout, the test kit, and the CLI shell, so that every later Epic has an observable command to test against and no later Task has to retrofit its foundation.
+- **Remediation note (cold validation, 2026-08-24):** the whole-epic cold validation of `EPIC-001` at snapshot `6c9b57e` confirmed one gap owned by the epic: this section's status bullet still read `Planned` after the closeout commit `16407ab` advanced the registry row and the active pointer to `Completed`. The correction aligns the bullet with the registry; owner `EPIC-001`, planned commit identity the validation remediation commit under `EPIC-001` through the task-commit gate, verification `make test` exit 0 on the corrected snapshot, Mulgae whole-epic review run `r_01a0335f-6c64-7948-9a3e-a5ad2acd4157` committed with `coverage_status=complete`, `ci_decision=pass`, and zero findings against audited snapshot `6c9b57e`.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
