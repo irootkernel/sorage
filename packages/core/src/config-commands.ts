@@ -115,6 +115,9 @@ export function setConfigurationValue(
   if (!next.ok) return next;
   const written = ports.store.write(next.value, {
     ...(input.expectedRevision !== undefined ? { revision: input.expectedRevision } : {}),
+    // The recomputed ETag comparison runs underneath the revision fence, so an
+    // out-of-band edit conflicts even when the counter still matches.
+    etag: sha256Of(basisText),
   });
   if (!written.ok) return written;
   return ok({ key: input.key, value: parsed.value, configRevision: written.value.config.configRevision });
