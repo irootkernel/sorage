@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -193,5 +194,64 @@ describe("sorage project archive and unarchive", () => {
     const unarchived = capture();
     expect(runCli(["project", "unarchive", "web-app", "--as-user", "--json"], unarchived.ports)).toBe(0);
     expect(runCli(["project", "unarchive", "web-app", "--json"], capture().ports)).toBe(77);
+  });
+});
+
+describe("sorage project resolve", () => {
+  function git(cwd: string, ...args: string[]): void {
+    const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  }
+
+  it("resolves a worktree of a bound repository to its Project and folds the common directory", () => {
+    initializedHome();
+    const repo = tempDir();
+    git(repo, "init");
+    git(repo, "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init");
+    const worktree = join(tempDir(), "wt");
+    git(repo, "worktree", "add", worktree);
+    const added = capture();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", repo], added.ports)).toBe(0);
+    expect(added.outText()).toContain("git_repository");
+    const resolved = capture();
+    expect(runCli(["project", "resolve", "--path", worktree, "--json"], resolved.ports)).toBe(0);
+    const payload = JSON.parse(resolved.outText()) as {
+      data: { kind: string; project: { slug: string }; binding: { bindingKind: string } };
+    };
+    expect(payload.data.kind).toBe("registered_project");
+    expect(payload.data.project.slug).toBe("web-app");
+    expect(payload.data.binding.bindingKind).toBe("git_repository");
+  });
+
+  it("returns the deepest nested binding and resolves a symlinked path identically", () => {
+    initializedHome();
+    const outer = tempDir();
+    const inner = join(outer, "inner");
+    mkdirSync(inner);
+    expect(runCli(["project", "add", "--name", "Outer", "--dir", outer], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Inner", "--dir", inner], capture().ports)).toBe(0);
+    const nested = join(inner, "sub");
+    mkdirSync(nested);
+    const deep = capture();
+    expect(runCli(["project", "resolve", "--path", nested, "--json"], deep.ports)).toBe(0);
+    expect(JSON.parse(deep.outText()).data.project.slug).toBe("inner");
+    const alias = join(tempDir(), "alias");
+    symlinkSync(inner, alias);
+    const viaSymlink = capture();
+    expect(runCli(["project", "resolve", "--path", alias, "--json"], viaSymlink.ports)).toBe(0);
+    expect(JSON.parse(viaSymlink.outText()).data.project.slug).toBe("inner");
+  });
+
+  it("applies the as-override failure modes", () => {
+    initializedHome();
+    const dir = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", dir], capture().ports)).toBe(0);
+    const unknown = capture();
+    expect(runCli(["project", "resolve", "--as", "missing", "--json"], unknown.ports)).toBe(66);
+    expect(JSON.parse(unknown.errText()).error.code).toBe("PROJECT_NOT_FOUND");
+    expect(runCli(["project", "unbind", "web-app", "--dir", dir], capture().ports)).toBe(0);
+    const unbound = capture();
+    expect(runCli(["project", "resolve", "--as", "web-app", "--json"], unbound.ports)).toBe(65);
+    expect(JSON.parse(unbound.errText()).error.code).toBe("PROJECT_UNBOUND");
   });
 });

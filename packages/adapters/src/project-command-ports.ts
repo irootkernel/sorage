@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import type { ProjectCommandPorts } from "@sorage/core";
 import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
-import { createHomePaths, type HomeEnvironment } from "./home";
 import { createConfigStore } from "./config-store";
+import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
 import { MIGRATIONS } from "./sqlite/migrations";
@@ -58,6 +58,19 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
     clock: new SystemClock(),
     ids: new UuidGenerator(),
     bindings: {
+      realPath(path, currentUserHome) {
+        const expanded =
+          path === "~" ? currentUserHome : path.startsWith("~/") ? joinPath(currentUserHome, path.slice(2)) : path;
+        const absolute = isAbsolute(expanded) ? expanded : resolve(expanded);
+        if (!existsSync(absolute)) {
+          return err(appError("CONFIG_INVALID", `the directory '${absolute}' does not exist`, { directory: absolute }));
+        }
+        return ok(fs.realpath(absolute));
+      },
+      gitCommonDirectory(path) {
+        const common = git(path);
+        return common === null ? null : fs.realpath(common);
+      },
       resolveDirectory(path, currentUserHome) {
         const expanded =
           path === "~" ? currentUserHome : path.startsWith("~/") ? joinPath(currentUserHome, path.slice(2)) : path;

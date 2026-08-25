@@ -15,6 +15,8 @@ import {
   type AddProjectOutcome,
   type AppError,
   addProject,
+  archiveProject,
+  bindProject,
   type DoctorReport,
   type Envelope,
   editConfiguration,
@@ -24,17 +26,16 @@ import {
   initializeInstallation,
   type ListedProject,
   listProjects,
-  archiveProject,
-  bindProject,
-  unarchiveProject,
-  unbindProject,
   protocolVersion,
   renameProject,
+  resolveWorkspaceActor,
   runDoctor,
   setConfigurationValue,
   showConfiguration,
   showProject,
   successEnvelope,
+  unarchiveProject,
+  unbindProject,
   validateConfigurationFile,
 } from "@sorage/core";
 import { Command, InvalidArgumentError } from "commander";
@@ -469,6 +470,33 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         }
       });
   }
+
+  project
+    .command("resolve")
+    .description("print what the actor resolver would decide for a path, or for --as <project-slug>")
+    .option("--path <path>", "the directory to resolve; defaults to the current working directory")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = resolveWorkspaceActor(createNodeProjectPorts(), {
+        path: typeof options.path === "string" && options.path !== "" ? options.path : process.cwd(),
+        userHome: homedir(),
+        as: globals.as,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      const actor = result.value;
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(actor, requestId()), null, 2)}\n`);
+      } else if (actor.kind === "registered_project") {
+        ports.out(`${actor.project.slug} (${actor.binding.bindingKind} ${actor.binding.directory})\n`);
+      } else {
+        ports.out(`unregistered workspace: ${actor.directory}\n`);
+      }
+    });
 
   program.helpOption("-h, --help", "display help for the command");
 

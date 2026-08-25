@@ -105,6 +105,10 @@ const passthroughFs: ProjectBindingFsPort = {
   resolveDirectory(path) {
     return ok({ directory: `/real${path.startsWith("/") ? path : `/${path}`}`, bindingKind: "directory" });
   },
+  realPath(path) {
+    return ok(path.startsWith("/real") ? path : `/real${path.startsWith("/") ? path : `/${path}`}`);
+  },
+  gitCommonDirectory: () => null,
 };
 
 function ports(

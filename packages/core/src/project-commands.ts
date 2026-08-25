@@ -18,6 +18,10 @@ export interface ProjectBindingFsPort {
    * (PRJ-006, PRJ-017).
    */
   resolveDirectory(path: string, userHome: string): Result<{ directory: string; bindingKind: BindingKind }, AppError>;
+  /** The normalized real path of any candidate path: ~ expansion, absolutization, symlink resolution. */
+  realPath(path: string, userHome: string): Result<string, AppError>;
+  /** The git common directory when the path is inside a working tree, otherwise null (PRJ-017). */
+  gitCommonDirectory(path: string): string | null;
 }
 
 /** The Handoff facts the Project commands need; the handoffs table itself arrives with EPIC-005. */
@@ -296,4 +300,107 @@ export function checkRecipientEligibility(ports: ProjectCommandPorts, slug: stri
     return err(appError("PROJECT_UNBOUND", `the Project '${slug}' has no binding on this installation`, { slug }));
   }
   return ok(found.value);
+}
+
+/** The workspace root a binding claims on disk: the stored directory, or the main working tree for a repository binding. */
+export function workspaceRootOf(binding: ProjectBinding): string {
+  if (binding.bindingKind === "directory") return binding.directory;
+  // The stored directory is the git common directory; the main working tree is its parent.
+  const parent = binding.directory.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
+  return parent === "" ? "/" : parent;
+}
+
+export type ResolvedActor =
+  | { kind: "registered_project"; project: Project; binding: ProjectBinding }
+  | { kind: "unregistered_workspace"; directory: string };
+
+export interface ResolveWorkspaceInput {
+  path: string;
+  userHome: string;
+  as?: string | undefined;
+}
+
+/**
+ * The actor resolution of section 22.2, a pure function of the normalized path and the
+ * binding set: git common-directory folding, longest-prefix deepest match, git_repository
+ * precedence, the same-kind same-depth ambiguity, and the `--as` override (PRJ-006 to
+ * PRJ-008, PRJ-017, PRJ-018).
+ */
+export function resolveWorkspaceActor(
+  ports: ProjectCommandPorts,
+  input: ResolveWorkspaceInput,
+): Result<ResolvedActor, AppError> {
+  if (input.as !== undefined) {
+    const found = ports.projects.findProjectBySlug(input.as);
+    if (!found.ok) return found;
+    if (found.value === null) {
+      return err(appError("PROJECT_NOT_FOUND", `no Project matches the slug '${input.as}'`, { slug: input.as }));
+    }
+    const bindings = ports.projects.listBindingsForProject(found.value.id);
+    if (!bindings.ok) return bindings;
+    if (bindings.value.length === 0) {
+      return err(
+        appError("PROJECT_UNBOUND", `the Project '${input.as}' has no binding on this installation`, {
+          slug: input.as,
+        }),
+      );
+    }
+    return ok({ kind: "registered_project", project: found.value, binding: bindings.value[0] as ProjectBinding });
+  }
+  const real = ports.bindings.realPath(input.path, input.userHome);
+  if (!real.ok) return real;
+  const bindings = ports.projects.listBindings();
+  if (!bindings.ok) return bindings;
+  const common = ports.bindings.gitCommonDirectory(real.value);
+  const registered = new Map<string, Project>();
+  const projects = ports.projects.listProjects();
+  if (!projects.ok) return projects;
+  for (const project of projects.value) registered.set(project.id, project);
+
+  if (common !== null) {
+    // Step 5: a repository binding outranks every directory binding, whatever the depths.
+    const gitMatches = bindings.value.filter(
+      (binding) => binding.bindingKind === "git_repository" && binding.directory === common,
+    );
+    if (gitMatches.length === 1) {
+      const binding = gitMatches[0] as ProjectBinding;
+      const project = registered.get(binding.projectId);
+      if (project !== undefined) return ok({ kind: "registered_project", project, binding });
+    }
+    if (gitMatches.length > 1) {
+      return err(ambiguity(gitMatches, registered));
+    }
+  }
+
+  // Step 4: the deepest directory binding wins; a same-depth tie is ambiguous (step 6).
+  const directoryMatches = bindings.value.filter(
+    (binding) => binding.bindingKind === "directory" && isAtOrBelow(real.value, binding.directory),
+  );
+  if (directoryMatches.length > 0) {
+    const deepest = Math.max(...directoryMatches.map((binding) => depthOf(binding.directory)));
+    const best = directoryMatches.filter((binding) => depthOf(binding.directory) === deepest);
+    if (best.length === 1) {
+      const binding = best[0] as ProjectBinding;
+      const project = registered.get(binding.projectId);
+      if (project !== undefined) return ok({ kind: "registered_project", project, binding });
+    } else {
+      return err(ambiguity(best, registered));
+    }
+  }
+
+  return ok({ kind: "unregistered_workspace", directory: real.value });
+}
+
+function depthOf(directory: string): number {
+  return directory
+    .replace(/\/+$/, "")
+    .split("/")
+    .filter((segment) => segment !== "").length;
+}
+
+function ambiguity(bindings: ProjectBinding[], registered: Map<string, Project>): AppError {
+  const slugs = bindings.map((binding) => registered.get(binding.projectId)?.slug ?? binding.projectId).sort();
+  return appError("AMBIGUOUS_PROJECT", `two bindings match at the same depth: ${slugs.join(" and ")}`, {
+    projects: slugs,
+  });
 }
