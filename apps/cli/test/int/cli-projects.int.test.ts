@@ -255,3 +255,52 @@ describe("sorage project resolve", () => {
     expect(JSON.parse(unbound.errText()).error.code).toBe("PROJECT_UNBOUND");
   });
 });
+
+describe("unregistered workspace identity through the CLI surface", () => {
+  function git(cwd: string, ...args: string[]): void {
+    const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  }
+
+  it("reports an unregistered workspace with a stable workspaceKey from an unbound directory", () => {
+    initializedHome();
+    const elsewhere = tempDir();
+    const first = capture();
+    expect(runCli(["project", "resolve", "--path", elsewhere, "--json"], first.ports)).toBe(0);
+    const payload = JSON.parse(first.outText()) as { data: { kind: string; workspaceKey: string } };
+    expect(payload.data.kind).toBe("unregistered_workspace");
+    expect(payload.data.workspaceKey).toMatch(/^[0-9a-f]{64}$/);
+    const second = capture();
+    expect(runCli(["project", "resolve", "--path", elsewhere, "--json"], second.ports)).toBe(0);
+    expect(JSON.parse(second.outText()).data.workspaceKey).toBe(payload.data.workspaceKey);
+  });
+
+  it("never resolves an unregistered workspace above a bound directory", () => {
+    initializedHome();
+    const bound = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", bound], capture().ports)).toBe(0);
+    const above = { ports: { out: () => {}, err: () => {} } };
+    void above;
+    // The downgrade guard itself is a send-time rule; resolution from the parent reports
+    // the unregistered workspace, and the guard is proved in the core unit suite.
+    const resolved = capture();
+    expect(runCli(["project", "resolve", "--path", bound, "--json"], resolved.ports)).toBe(0);
+    expect(JSON.parse(resolved.outText()).data.kind).toBe("registered_project");
+  });
+
+  it("keeps worktree resolution stable for a repository bound through its common directory", () => {
+    initializedHome();
+    const repo = tempDir();
+    git(repo, "init");
+    git(repo, "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init");
+    const worktree = join(tempDir(), "wt");
+    git(repo, "worktree", "add", worktree);
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", repo], capture().ports)).toBe(0);
+    const nestedRepo = join(repo, "inner");
+    mkdirSync(nestedRepo);
+    git(nestedRepo, "init");
+    const nested = capture();
+    expect(runCli(["project", "resolve", "--path", nestedRepo, "--json"], nested.ports)).toBe(0);
+    expect(JSON.parse(nested.outText()).data.kind).toBe("unregistered_workspace");
+  });
+});

@@ -118,6 +118,7 @@ function ports(
 ): ProjectCommandPorts {
   let counter = 0;
   return {
+    installationId: "i1",
     projects: fakeRegistry(existing, bindings),
     bindings: passthroughFs,
     handoffs: {

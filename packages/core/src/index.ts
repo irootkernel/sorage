@@ -7,5 +7,6 @@ export * from "./errors";
 export * from "./ids";
 export * from "./init";
 export * from "./project-commands";
+export * from "./workspace-identity";
 export * from "./projects";
 export * from "./protocol";

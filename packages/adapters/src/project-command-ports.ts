@@ -54,6 +54,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
     throw new Error(`the configuration at ${home.configFile} could not be read`);
   }
   return {
+    installationId: read.value.config.installationId,
     projects: createSqliteProjectRepository(db, { installationId: read.value.config.installationId, fs }),
     clock: new SystemClock(),
     ids: new UuidGenerator(),

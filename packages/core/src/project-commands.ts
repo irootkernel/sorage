@@ -31,6 +31,8 @@ export interface ProjectHandoffStatsPort {
 }
 
 export interface ProjectCommandPorts {
+  /** The Installation identity every unregistered Workspace key derives from (PRJ-014). */
+  installationId: string;
   projects: ProjectRepositoryPort;
   bindings: ProjectBindingFsPort;
   handoffs: ProjectHandoffStatsPort;

@@ -58,6 +58,7 @@ function ports(bindings: ProjectBinding[], projects: Project[], git: Record<stri
     },
   };
   return {
+    installationId: "i1",
     projects: fakeRegistry(projects, bindings),
     bindings: fs,
     handoffs: { openHandoffCount: () => ok(0) },

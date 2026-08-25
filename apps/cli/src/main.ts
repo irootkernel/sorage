@@ -37,6 +37,7 @@ import {
   unarchiveProject,
   unbindProject,
   validateConfigurationFile,
+  workspaceKey,
 } from "@sorage/core";
 import { Command, InvalidArgumentError } from "commander";
 
@@ -479,7 +480,8 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = resolveWorkspaceActor(createNodeProjectPorts(), {
+      const resolvePorts = createNodeProjectPorts();
+      const result = resolveWorkspaceActor(resolvePorts, {
         path: typeof options.path === "string" && options.path !== "" ? options.path : process.cwd(),
         userHome: homedir(),
         as: globals.as,
@@ -490,7 +492,11 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       }
       const actor = result.value;
       if (json) {
-        ports.out(`${JSON.stringify(successEnvelope(actor, requestId()), null, 2)}\n`);
+        const payload =
+          actor.kind === "unregistered_workspace"
+            ? { ...actor, workspaceKey: workspaceKey(resolvePorts.installationId, actor.directory) }
+            : actor;
+        ports.out(`${JSON.stringify(successEnvelope(payload, requestId()), null, 2)}\n`);
       } else if (actor.kind === "registered_project") {
         ports.out(`${actor.project.slug} (${actor.binding.bindingKind} ${actor.binding.directory})\n`);
       } else {
