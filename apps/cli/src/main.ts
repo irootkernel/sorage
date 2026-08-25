@@ -1,24 +1,39 @@
-import { Command, InvalidArgumentError } from "commander";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import {
-  errorSpec,
-  successEnvelope,
-  errorEnvelope,
-  protocolVersion,
-  initializeInstallation,
-  type AppError,
-  type Envelope,
-} from "@sorage/core";
-// Deep import: the adapters index also exports the testkit, which is vitest-only and
-// must never load inside the shipped CLI process.
-import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
+// Deep import: the adapters index also exports the testkit, which is vitest-only and
+// must never load inside the shipped CLI process.
+import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
-import { runDoctor, hasBlockingCheck, type DoctorReport } from "@sorage/core";
-import { editConfiguration, setConfigurationValue, showConfiguration, validateConfigurationFile } from "@sorage/core";
+// Deep import: the adapters index also exports the testkit, which is vitest-only and
+// must never load inside the shipped CLI process.
+import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import {
+  type AddProjectOutcome,
+  type AppError,
+  addProject,
+  type DoctorReport,
+  type Envelope,
+  editConfiguration,
+  errorEnvelope,
+  errorSpec,
+  hasBlockingCheck,
+  initializeInstallation,
+  type ListedProject,
+  listProjects,
+  protocolVersion,
+  renameProject,
+  runDoctor,
+  setConfigurationValue,
+  showConfiguration,
+  showProject,
+  successEnvelope,
+  validateConfigurationFile,
+} from "@sorage/core";
+import { Command, InvalidArgumentError } from "commander";
 
 export const CLI_NAME = "sorage" as const;
 export const CLI_VERSION = "0.0.0" as const;
@@ -247,9 +262,144 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       reportExitCode(hasBlockingCheck(report) ? 1 : 0);
     });
 
+  const project = program.command("project").description("register and inspect Projects and their bindings");
+
+  project
+    .command("add")
+    .description("register a Project and its first directory binding")
+    .requiredOption("--name <name>", "display name of the Project, in any script")
+    .option("--slug <slug>", "explicit slug; defaults to the one derived from the display name")
+    .requiredOption("--dir <path>", "working directory to bind, with ~ expansion")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = addProject(createNodeProjectPorts(), {
+        name: options.name,
+        slug: options.slug,
+        dir: options.dir,
+        userHome: homedir(),
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(renderAddedProject(result.value), requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Added Project ${result.value.project.slug} (${result.value.project.displayName})\n`);
+        ports.out(`Bound ${result.value.binding.bindingKind} ${result.value.binding.directory}\n`);
+      }
+    });
+
+  project
+    .command("list")
+    .description("list every Project with its binding count, flagging unbound Projects")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = listProjects(createNodeProjectPorts());
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value.map(renderListedProject), requestId()), null, 2)}\n`);
+      } else {
+        if (result.value.length === 0) ports.out("No Projects registered.\n");
+        for (const listed of result.value) {
+          const unbound = listed.unbound ? " (unbound)" : "";
+          ports.out(`${listed.project.slug}${unbound} — ${listed.project.displayName} [${listed.project.status}]\n`);
+          ports.out(`    bindings: ${listed.bindingCount}\n`);
+        }
+      }
+    });
+
+  project
+    .command("show")
+    .description("show one Project with every binding, its counts, and its lifecycle state")
+    .argument("<project>", "Project slug")
+    .action((slug, _options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = showProject(createNodeProjectPorts(), slug);
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(
+          `${JSON.stringify(
+            successEnvelope(
+              {
+                project: result.value.project,
+                bindings: result.value.bindings,
+                bindingCount: result.value.bindings.length,
+                unbound: result.value.project.status === "active" && result.value.bindings.length === 0,
+              },
+              requestId(),
+            ),
+            null,
+            2,
+          )}\n`,
+        );
+      } else {
+        ports.out(
+          `${result.value.project.slug} — ${result.value.project.displayName} [${result.value.project.status}]\n`,
+        );
+        if (result.value.bindings.length === 0) ports.out("  no bindings (unbound)\n");
+        for (const binding of result.value.bindings) {
+          ports.out(`  ${binding.bindingKind} ${binding.directory}\n`);
+        }
+      }
+    });
+
+  project
+    .command("rename")
+    .description("change the display name; the slug is identity and is never renamed")
+    .argument("<project>", "Project slug")
+    .requiredOption("--name <name>", "the new display name")
+    .action((slug, options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = renameProject(createNodeProjectPorts(), { slug, name: options.name });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Renamed ${result.value.slug} to ${result.value.displayName}\n`);
+      }
+    });
+
   program.helpOption("-h, --help", "display help for the command");
 
   return program;
+}
+
+/** The JSON view of one added Project: identity, first binding, and slug provenance. */
+function renderAddedProject(outcome: AddProjectOutcome) {
+  return {
+    project: outcome.project,
+    binding: outcome.binding,
+    derivedSlug: outcome.derivedSlug,
+  };
+}
+
+/** The JSON view of one listed Project; `unbound` is derived, never stored (PRJ-022). */
+function renderListedProject(listed: ListedProject) {
+  return {
+    slug: listed.project.slug,
+    displayName: listed.project.displayName,
+    status: listed.project.status,
+    bindingCount: listed.bindingCount,
+    unbound: listed.unbound,
+  };
 }
 
 function renderDoctorReport(report: DoctorReport, ports: OutputPorts): void {

@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
-import { appError, err, ok, type AppError, type Result } from "@sorage/core";
 import type { NewProject, NewProjectBinding, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
+import { type AppError, appError, err, ok, type Result } from "@sorage/core";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**
@@ -37,12 +37,18 @@ export type ProjectRepositoryFs = {
 const nativeFs: ProjectRepositoryFs = { realpath: (path) => realpathSync(path) };
 
 export interface SqliteProjectRepositoryOptions {
+  /**
+   * The installation identity that owns every binding. The canonical value is the
+   * generated `installationId` in the effective configuration, so the wiring reads it
+   * from the config store and the repository never trusts a caller-supplied identity.
+   */
+  installationId: string;
   fs?: ProjectRepositoryFs;
 }
 
 export function createSqliteProjectRepository(
   db: SorageSqlite,
-  options: SqliteProjectRepositoryOptions = {},
+  options: SqliteProjectRepositoryOptions,
 ): ProjectRepositoryPort {
   const fs = options.fs ?? nativeFs;
   return {
@@ -72,6 +78,49 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
+    createProjectWithBinding(project, binding) {
+      try {
+        const installationId = options.installationId;
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.prepare(
+            "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+          ).run(
+            project.id,
+            project.slug,
+            project.displayName,
+            project.description,
+            project.createdAt,
+            project.createdAt,
+          );
+          const directory = fs.realpath(binding.directory);
+          db.prepare(
+            "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          ).run(
+            binding.id,
+            project.id,
+            installationId,
+            directory,
+            binding.bindingKind,
+            binding.createdAt,
+            binding.createdAt,
+          );
+          db.exec("COMMIT");
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction may already be closed; the original failure is decisive.
+          }
+          throw transactionError;
+        }
+        const projectRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as ProjectRow;
+        const bindingRow = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(binding.id) as BindingRow;
+        return ok({ project: toProject(projectRow), binding: toBinding(bindingRow) });
+      } catch (error) {
+        return err(mapInsertError(error, project.slug, binding.directory));
+      }
+    },
     findProjectBySlug(slug) {
       try {
         const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug) as
@@ -93,7 +142,7 @@ export function createSqliteProjectRepository(
     addBinding(binding) {
       const directory = fs.realpath(binding.directory);
       try {
-        const installationId = installationIdOf(db);
+        const installationId = options.installationId;
         db.prepare(
           "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         ).run(
@@ -128,6 +177,23 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
+    updateProjectDisplayName(projectId, displayName, updatedAt) {
+      try {
+        const changed = db
+          .prepare("UPDATE projects SET display_name = ?, updated_at = ? WHERE id = ?")
+          .run(displayName, updatedAt, projectId) as { changes: number };
+        if (changed.changes !== 1) {
+          return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
+        }
+        const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow | undefined;
+        if (row === undefined) {
+          return err(internal(new Error("the renamed Project row disappeared mid-transaction")));
+        }
+        return ok(toProject(row));
+      } catch (error) {
+        return err(internal(error));
+      }
+    },
     listBindings() {
       try {
         const rows = db.prepare("SELECT * FROM project_bindings ORDER BY directory").all() as unknown as BindingRow[];
@@ -149,14 +215,18 @@ export function createSqliteProjectRepository(
   };
 }
 
-function installationIdOf(db: SorageSqlite): string {
-  const row = db.prepare("SELECT installation_id FROM installation WHERE id = 1").get() as
-    | { installation_id: string }
-    | undefined;
-  if (row === undefined) {
-    throw new Error("the installation row is missing; the database was never initialized");
+/** Maps one insert failure to its published conflict code, or an internal error. */
+function mapInsertError(error: unknown, slug: string, directory: string): AppError {
+  const conflict = uniqueViolation(error);
+  if (conflict === "projects.slug") {
+    return appError("PROJECT_SLUG_CONFLICT", `the slug '${slug}' is already taken`, { slug });
   }
-  return row.installation_id;
+  if (conflict === "project_bindings.installation_id, project_bindings.directory") {
+    return appError("BINDING_DUPLICATE", `the directory '${directory}' is already bound on this installation`, {
+      directory,
+    });
+  }
+  return internal(error);
 }
 
 /** Returns the violated unique constraint's columns, or undefined for any other failure. */

@@ -22,4 +22,5 @@ Commands:
   config                      inspect and change the installation configuration
   doctor                      run the milestone-scoped installation checks and
                               report the catalog
+  project                     register and inspect Projects and their bindings
   help [command]              display help for command

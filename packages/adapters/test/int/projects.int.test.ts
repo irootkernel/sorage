@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createSqliteProjectRepository } from "../../src/projects";
 import { MIGRATIONS, PROJECT_REGISTRY_MIGRATION } from "../../src/sqlite/migrations";
-import { migrate, MigrationFailedError } from "../../src/sqlite/migrator";
+import { MigrationFailedError, migrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 
 const tempCleanups: Array<() => void> = [];
@@ -35,7 +35,7 @@ function tempDir() {
 }
 
 function seedProject(temp: ReturnType<typeof migratedDb>, slug: string, id = "11111111-1111-4111-8111-111111111111") {
-  const repository = createSqliteProjectRepository(temp.db);
+  const repository = createSqliteProjectRepository(temp.db, { installationId: "00000000-0000-4000-8000-000000000001" });
   const result = repository.createProject({
     id,
     slug,
@@ -90,7 +90,9 @@ describe("project repository", () => {
   it("inserts two bindings of one Project on two directories", () => {
     const temp = migratedDb();
     const project = seedProject(temp, "web-app");
-    const repository = createSqliteProjectRepository(temp.db);
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
     const firstDir = tempDir();
     const secondDir = tempDir();
     const first = repository.addBinding({
@@ -119,7 +121,9 @@ describe("project repository", () => {
     const temp = migratedDb();
     const project = seedProject(temp, "web-app");
     const directory = tempDir();
-    const repository = createSqliteProjectRepository(temp.db);
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
     const input = {
       projectId: project.id,
       directory,
@@ -138,7 +142,9 @@ describe("project repository", () => {
   it("collides two slugs that differ only in case with PROJECT_SLUG_CONFLICT", () => {
     const temp = migratedDb();
     seedProject(temp, "web-app");
-    const repository = createSqliteProjectRepository(temp.db);
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
     const collision = repository.createProject({
       id: "61111111-1111-4111-8111-611111111111",
       slug: "Web-App",
@@ -157,7 +163,9 @@ describe("project repository", () => {
     mkdirSync(join(real, "nested"));
     const alias = join(tempDir(), "alias");
     symlinkSync(real, alias);
-    const repository = createSqliteProjectRepository(temp.db);
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
     const viaSymlink = repository.addBinding({
       id: "71111111-1111-4111-8111-711111111111",
       projectId: project.id,
@@ -175,7 +183,9 @@ describe("project repository", () => {
     const temp = migratedDb();
     seedProject(temp, "alpha", "81111111-1111-4111-8111-811111111111");
     seedProject(temp, "Beta", "91111111-1111-4111-8111-911111111111");
-    const repository = createSqliteProjectRepository(temp.db);
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
     const found = repository.findProjectBySlug("ALPHA");
     expect(found.ok && found.value?.slug).toBe("alpha");
     const missing = repository.findProjectBySlug("missing");

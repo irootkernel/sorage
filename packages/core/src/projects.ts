@@ -60,6 +60,16 @@ export interface ProjectRepositoryPort {
   listProjects(): Result<Project[], AppError>;
   /** Fails with `BINDING_DUPLICATE` when the directory is already bound on this installation (PRJ-016). */
   addBinding(binding: NewProjectBinding): Result<ProjectBinding, AppError>;
+  /**
+   * Registers a Project and its first binding in one transaction, so a duplicate
+   * binding leaves no orphan Project row behind (PRJ-003, PRJ-016).
+   */
+  createProjectWithBinding(
+    project: NewProject,
+    binding: NewProjectBinding,
+  ): Result<{ project: Project; binding: ProjectBinding }, AppError>;
+  /** Renames the display name only; the slug is identity and never changes (PRJ-001). */
+  updateProjectDisplayName(projectId: string, displayName: string, updatedAt: string): Result<Project, AppError>;
   listBindings(): Result<ProjectBinding[], AppError>;
   listBindingsForProject(projectId: string): Result<ProjectBinding[], AppError>;
 }
