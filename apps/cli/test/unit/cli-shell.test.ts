@@ -46,6 +46,13 @@ describe("cli shell", () => {
     expect(cap.out).toContain("Usage:");
   });
 
+  it("exits 0 for the literal help subcommand", () => {
+    const cap = capture();
+    expect(runCli(["help"], cap.ports)).toBe(0);
+    expect(cap.out).toContain("Usage:");
+    expect(cap.err).toBe("");
+  });
+
   it("exits 2 for an unknown command and renders the diagnostic exactly once", () => {
     const cap = capture();
     expect(runCli(["definitely-not-a-command"], cap.ports)).toBe(2);

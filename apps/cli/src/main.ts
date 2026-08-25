@@ -314,6 +314,9 @@ export function runCli(argv: string[], ports: OutputPorts = defaultPorts): numbe
       "version",
       "(outputHelp)",
       "(outputVersion)",
+      // commander 14 exits the implicit `help` command through `commander.help`
+      // while the `--help` flag throws `commander.helpDisplayed`; both are exits 0.
+      "commander.help",
       "commander.helpDisplayed",
       "commander.helpCommandDisplayed",
       "commander.version",
