@@ -6,6 +6,7 @@ export * from "./cursor";
 export * from "./doctor";
 export * from "./errors";
 export * from "./ids";
+export * from "./import-policy";
 export * from "./init";
 export * from "./project-commands";
 export * from "./workspace-identity";

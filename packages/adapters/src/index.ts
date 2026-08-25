@@ -4,6 +4,7 @@ export * from "./config-command-ports";
 export * from "./config-store";
 export * from "./doctor";
 export * from "./home";
+export * from "./import-source";
 export * from "./init-ports";
 export * from "./lockfile";
 export * from "./logging";

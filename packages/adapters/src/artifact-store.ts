@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -165,6 +166,13 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
             cause: String(error),
           }),
         );
+      }
+      // Managed Artifact files are read-only after import where the filesystem
+      // supports it (VLT-008); the placement stands even when the mark cannot.
+      try {
+        chmodSync(destination, 0o444);
+      } catch {
+        // Read-only is best effort on exotic filesystems; vault verify reports it.
       }
       return ok({ path: destination });
     },
