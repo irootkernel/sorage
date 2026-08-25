@@ -2,7 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { AppError, Clock, Result } from "../../src/index";
 import { appError, err, ok } from "../../src/index";
 import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
-import { addProject, listProjects, renameProject, showProject } from "../../src/project-commands";
+import {
+  addProject,
+  archiveProject,
+  bindProject,
+  checkRecipientEligibility,
+  listProjects,
+  renameProject,
+  showProject,
+  unarchiveProject,
+  unbindProject,
+} from "../../src/project-commands";
 import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/projects";
 
 /** An in-memory Project registry so the use cases stay testable without SQLite. */
@@ -66,6 +76,19 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
       project.updatedAt = updatedAt;
       return ok({ ...project });
     },
+    updateProjectStatus(projectId, status, updatedAt) {
+      const project = projects.find((candidate) => candidate.id === projectId);
+      if (project === undefined) return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`));
+      project.status = status;
+      project.updatedAt = updatedAt;
+      return ok({ ...project });
+    },
+    removeBinding(bindingId) {
+      const index = rows.findIndex((row) => row.id === bindingId);
+      if (index === -1) return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`));
+      const [removed] = rows.splice(index, 1);
+      return ok(removed as ProjectBinding);
+    },
     listBindings() {
       return ok([...rows]);
     },
@@ -84,11 +107,20 @@ const passthroughFs: ProjectBindingFsPort = {
   },
 };
 
-function ports(existing: Project[] = [], bindings: ProjectBinding[] = []): ProjectCommandPorts {
+function ports(
+  existing: Project[] = [],
+  bindings: ProjectBinding[] = [],
+  openHandoffs: Record<string, number> = {},
+): ProjectCommandPorts {
   let counter = 0;
   return {
     projects: fakeRegistry(existing, bindings),
     bindings: passthroughFs,
+    handoffs: {
+      openHandoffCount(projectId) {
+        return ok(openHandoffs[projectId] ?? 0);
+      },
+    },
     clock: fixedClock,
     ids: {
       next: () => {
@@ -217,9 +249,130 @@ describe("renameProject and showProject", () => {
 /** The registry type this module relies on is a compile-time fact; keep the import honest. */
 describe("module contract", () => {
   it("exposes no Project removal path, because archive plus unbind is the retirement path (PRJ-011)", () => {
-    const keys = Object.keys(fakeRegistry()) as Array<keyof ProjectRepositoryPort>;
-    expect(keys.filter((key) => key.toLowerCase().includes("delete") || key.toLowerCase().includes("remove"))).toEqual(
+    const keys = Object.keys(fakeRegistry()) as string[];
+    expect(keys.filter((key) => key.includes("roject") && (key.includes("delete") || key.includes("remove")))).toEqual(
       [],
     );
+  });
+});
+
+describe("bindProject and unbindProject", () => {
+  const project = (): Project => ({
+    id: "p1",
+    slug: "web-app",
+    displayName: "Web App",
+    description: null,
+    status: "active",
+    createdAt: "t",
+    updatedAt: "t",
+  });
+  const binding = (): ProjectBinding => ({
+    id: "b1",
+    projectId: "p1",
+    installationId: "i1",
+    directory: "/real/dirs/one",
+    bindingKind: "directory",
+    createdAt: "t",
+    updatedAt: "t",
+  });
+
+  it("binds a second directory and rejects a duplicate binding", () => {
+    const bound = bindProject(ports([project()], [binding()]), { slug: "web-app", dir: "/dirs/two", userHome: "/h" });
+    expect(bound.ok && bound.value.directory).toBe("/real/dirs/two");
+    const duplicate = bindProject(ports([project()], [binding()]), {
+      slug: "web-app",
+      dir: "/dirs/one",
+      userHome: "/h",
+    }) as { ok: boolean; error?: AppError };
+    expect(duplicate.ok).toBe(false);
+    expect(duplicate.error?.code).toBe("BINDING_DUPLICATE");
+  });
+
+  it("rejects a plain directory inside a repository already bound as git_repository", () => {
+    const repoBinding: ProjectBinding = { ...binding(), bindingKind: "git_repository", directory: "/real/repos/main" };
+    const result = bindProject(ports([project()], [repoBinding]), {
+      slug: "web-app",
+      dir: "/repos/main/sub",
+      userHome: "/h",
+    }) as { ok: boolean; error?: AppError };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("BINDING_DUPLICATE");
+  });
+
+  it("requires confirmation for an unbind that would leave open Handoffs unbound, and honors --confirm", () => {
+    const withOpen = ports([project()], [binding()], { p1: 2 });
+    const refused = unbindProject(withOpen, { slug: "web-app", dir: "/dirs/one", userHome: "/h", confirm: false }) as {
+      ok: boolean;
+      error?: AppError;
+    };
+    expect(refused.ok).toBe(false);
+    expect(refused.error?.code).toBe("CONFIRMATION_REQUIRED");
+    const confirmed = unbindProject(withOpen, { slug: "web-app", dir: "/dirs/one", userHome: "/h", confirm: true });
+    expect(confirmed.ok && confirmed.value.directory).toBe("/real/dirs/one");
+    const remaining = withOpen.projects.listBindingsForProject("p1");
+    expect(remaining.ok && remaining.value).toHaveLength(0);
+  });
+
+  it("unbinds without confirmation when no Handoff is open and names a missing binding PROJECT_NOT_FOUND", () => {
+    const direct = unbindProject(ports([project()], [binding()]), {
+      slug: "web-app",
+      dir: "/dirs/one",
+      userHome: "/h",
+      confirm: false,
+    });
+    expect(direct.ok).toBe(true);
+    const missing = unbindProject(ports([project()], []), {
+      slug: "web-app",
+      dir: "/dirs/none",
+      userHome: "/h",
+      confirm: true,
+    }) as { ok: boolean; error?: AppError };
+    expect(missing.ok).toBe(false);
+    expect(missing.error?.code).toBe("PROJECT_NOT_FOUND");
+  });
+});
+
+describe("archive, unarchive, and recipient eligibility", () => {
+  const project = (): Project => ({
+    id: "p1",
+    slug: "web-app",
+    displayName: "Web App",
+    description: null,
+    status: "active",
+    createdAt: "t",
+    updatedAt: "t",
+  });
+  const binding = (): ProjectBinding => ({
+    id: "b1",
+    projectId: "p1",
+    installationId: "i1",
+    directory: "/real/d",
+    bindingKind: "directory",
+    createdAt: "t",
+    updatedAt: "t",
+  });
+
+  it("archives and unarchives without ever deleting the row", () => {
+    const archived = archiveProject(ports([project()], [binding()]), "web-app");
+    expect(archived.ok && archived.value.status).toBe("archived");
+    const unarchived = unarchiveProject(ports([{ ...project(), status: "archived" }], [binding()]), "web-app");
+    expect(unarchived.ok && unarchived.value.status).toBe("active");
+    const missing = archiveProject(ports(), "nope") as { ok: boolean; error?: AppError };
+    expect(missing.error?.code).toBe("PROJECT_NOT_FOUND");
+  });
+
+  it("applies the one shared recipient rule", () => {
+    const unknown = checkRecipientEligibility(ports(), "nope") as { ok: boolean; error?: AppError };
+    expect(unknown.error?.code).toBe("UNREGISTERED_RECIPIENT");
+    const archivedProject: Project = { ...project(), status: "archived" };
+    const archived = checkRecipientEligibility(ports([archivedProject], [binding()]), "web-app") as {
+      ok: boolean;
+      error?: AppError;
+    };
+    expect(archived.error?.code).toBe("PROJECT_ARCHIVED");
+    const unbound = checkRecipientEligibility(ports([project()], []), "web-app") as { ok: boolean; error?: AppError };
+    expect(unbound.error?.code).toBe("PROJECT_UNBOUND");
+    const eligible = checkRecipientEligibility(ports([project()], [binding()]), "web-app");
+    expect(eligible.ok && eligible.value.slug).toBe("web-app");
   });
 });

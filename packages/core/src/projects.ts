@@ -70,6 +70,10 @@ export interface ProjectRepositoryPort {
   ): Result<{ project: Project; binding: ProjectBinding }, AppError>;
   /** Renames the display name only; the slug is identity and never changes (PRJ-001). */
   updateProjectDisplayName(projectId: string, displayName: string, updatedAt: string): Result<Project, AppError>;
+  /** Moves the lifecycle status between `active` and `archived`; rows are never deleted. */
+  updateProjectStatus(projectId: string, status: ProjectStatus, updatedAt: string): Result<Project, AppError>;
+  /** Removes one binding; a Project with zero bindings remains, derived unbound (PRJ-010, PRJ-022). */
+  removeBinding(bindingId: string): Result<ProjectBinding, AppError>;
   listBindings(): Result<ProjectBinding[], AppError>;
   listBindingsForProject(projectId: string): Result<ProjectBinding[], AppError>;
 }

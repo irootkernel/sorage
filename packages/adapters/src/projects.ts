@@ -194,6 +194,32 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
+    updateProjectStatus(projectId, status, updatedAt) {
+      try {
+        const changed = db
+          .prepare("UPDATE projects SET status = ?, updated_at = ? WHERE id = ?")
+          .run(status, updatedAt, projectId) as { changes: number };
+        if (changed.changes !== 1) {
+          return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
+        }
+        const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow;
+        return ok(toProject(row));
+      } catch (error) {
+        return err(internal(error));
+      }
+    },
+    removeBinding(bindingId) {
+      try {
+        const row = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as BindingRow | undefined;
+        if (row === undefined) {
+          return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`, { bindingId }));
+        }
+        db.prepare("DELETE FROM project_bindings WHERE id = ?").run(bindingId);
+        return ok(toBinding(row));
+      } catch (error) {
+        return err(internal(error));
+      }
+    },
     listBindings() {
       try {
         const rows = db.prepare("SELECT * FROM project_bindings ORDER BY directory").all() as unknown as BindingRow[];

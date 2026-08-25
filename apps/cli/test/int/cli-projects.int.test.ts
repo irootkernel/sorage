@@ -144,3 +144,54 @@ describe("sorage project rename and show", () => {
     expect(envelope.error.code).toBe("PROJECT_NOT_FOUND");
   });
 });
+
+describe("sorage project bind and unbind", () => {
+  it("binds two directories to one Project and rejects a duplicate with exit 65", () => {
+    initializedHome();
+    const first = tempDir();
+    const second = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", first], capture().ports)).toBe(0);
+    const bound = capture();
+    expect(runCli(["project", "bind", "web-app", "--dir", second, "--json"], bound.ports)).toBe(0);
+    const shown = capture();
+    expect(runCli(["project", "show", "web-app", "--json"], shown.ports)).toBe(0);
+    const detail = JSON.parse(shown.outText()) as { data: { bindingCount: number } };
+    expect(detail.data.bindingCount).toBe(2);
+    const duplicate = capture();
+    expect(runCli(["project", "bind", "web-app", "--dir", first, "--json"], duplicate.ports)).toBe(65);
+    const envelope = JSON.parse(duplicate.errText()) as { error: { code: string } };
+    expect(envelope.error.code).toBe("BINDING_DUPLICATE");
+  });
+
+  it("unbinds without confirmation while no Handoffs table exists, leaving the Project unbound", () => {
+    initializedHome();
+    const dir = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", dir], capture().ports)).toBe(0);
+    const unbound = capture();
+    expect(runCli(["project", "unbind", "web-app", "--dir", dir], unbound.ports)).toBe(0);
+    const listed = capture();
+    expect(runCli(["project", "list", "--json"], listed.ports)).toBe(0);
+    const payload = JSON.parse(listed.outText()) as { data: Array<{ unbound: boolean; bindingCount: number }> };
+    expect(payload.data[0]?.unbound).toBe(true);
+    expect(payload.data[0]?.bindingCount).toBe(0);
+  });
+});
+
+describe("sorage project archive and unarchive", () => {
+  it("requires --as-user with exit 77 and archives with it", () => {
+    initializedHome();
+    const dir = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", dir], capture().ports)).toBe(0);
+    const refused = capture();
+    expect(runCli(["project", "archive", "web-app", "--json"], refused.ports)).toBe(77);
+    const envelope = JSON.parse(refused.errText()) as { error: { code: string } };
+    expect(envelope.error.code).toBe("USER_CONTEXT_REQUIRED");
+    const archived = capture();
+    expect(runCli(["project", "archive", "web-app", "--as-user", "--json"], archived.ports)).toBe(0);
+    const payload = JSON.parse(archived.outText()) as { data: { status: string } };
+    expect(payload.data.status).toBe("archived");
+    const unarchived = capture();
+    expect(runCli(["project", "unarchive", "web-app", "--as-user", "--json"], unarchived.ports)).toBe(0);
+    expect(runCli(["project", "unarchive", "web-app", "--json"], capture().ports)).toBe(77);
+  });
+});

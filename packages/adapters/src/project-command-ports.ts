@@ -79,6 +79,26 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
         return ok({ directory: real, bindingKind: "directory" });
       },
     },
+    handoffs: {
+      // The handoffs table arrives with EPIC-005; until then no Handoff can be open, so
+      // the honest count is zero and the unbind confirmation rule is dormant.
+      openHandoffCount(projectId) {
+        try {
+          const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'").get() as
+            | { name: string }
+            | undefined;
+          if (table === undefined) return ok(0);
+          const row = db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM handoffs WHERE recipient_project_id = ? AND review_state IN ('awaiting_recipient', 'changes_requested') AND deleted_at IS NULL",
+            )
+            .get(projectId) as { count: number };
+          return ok(row.count);
+        } catch (error) {
+          return err(appError("INTERNAL_ERROR", `the open Handoff count failed: ${String(error)}`));
+        }
+      },
+    },
   };
 }
 

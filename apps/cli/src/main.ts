@@ -24,6 +24,10 @@ import {
   initializeInstallation,
   type ListedProject,
   listProjects,
+  archiveProject,
+  bindProject,
+  unarchiveProject,
+  unbindProject,
   protocolVersion,
   renameProject,
   runDoctor,
@@ -376,6 +380,95 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ports.out(`Renamed ${result.value.slug} to ${result.value.displayName}\n`);
       }
     });
+
+  project
+    .command("bind")
+    .description("add another directory binding to a registered Project")
+    .argument("<project>", "Project slug")
+    .requiredOption("--dir <path>", "working directory to bind, with ~ expansion")
+    .action((slug, options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = bindProject(createNodeProjectPorts(), { slug, dir: options.dir, userHome: homedir() });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Bound ${result.value.bindingKind} ${result.value.directory} to ${slug}\n`);
+      }
+    });
+
+  project
+    .command("unbind")
+    .description("remove a directory binding; --confirm is required when open Handoffs would lose their binding")
+    .argument("<project>", "Project slug")
+    .requiredOption("--dir <path>", "the bound directory, with ~ expansion")
+    .action((slug, options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = unbindProject(createNodeProjectPorts(), {
+        slug,
+        dir: options.dir,
+        userHome: homedir(),
+        confirm: globals.confirm === true,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Unbound ${result.value.directory} from ${slug}\n`);
+      }
+    });
+
+  for (const [name, description, run] of [
+    [
+      "archive",
+      "archive a Project: its existing inbox keeps working, new incoming Handoffs are refused",
+      archiveProject,
+    ],
+    ["unarchive", "return an archived Project to active", unarchiveProject],
+  ] as const) {
+    project
+      .command(name)
+      .description(description)
+      .argument("<project>", "Project slug")
+      .action((slug: string, _options: unknown, command: Command) => {
+        const globals = command.optsWithGlobals();
+        const json = globals.json === true;
+        if (!requireInitialized(ports, json, reportExitCode)) return;
+        if (globals.asUser !== true) {
+          reportExitCode(
+            renderAppError(
+              {
+                code: "USER_CONTEXT_REQUIRED",
+                message: `Project ${name} is a User administration operation.`,
+              },
+              ports,
+              json,
+            ),
+          );
+          return;
+        }
+        const result = run(createNodeProjectPorts(), slug);
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json));
+          return;
+        }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+        } else {
+          ports.out(`${name === "archive" ? "Archived" : "Unarchived"} ${result.value.slug}\n`);
+        }
+      });
+  }
 
   program.helpOption("-h, --help", "display help for the command");
 
