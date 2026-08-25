@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/main";
 
@@ -302,5 +303,74 @@ describe("unregistered workspace identity through the CLI surface", () => {
     const nested = capture();
     expect(runCli(["project", "resolve", "--path", nestedRepo, "--json"], nested.ports)).toBe(0);
     expect(JSON.parse(nested.outText()).data.kind).toBe("unregistered_workspace");
+  });
+});
+
+describe("doctor binding checks", () => {
+  function doctorChecks(): Record<
+    string,
+    { severity: string; message: string; recovery?: { suggestedCommand: string } }
+  > {
+    const run = capture();
+    const code = runCli(["doctor", "--json"], run.ports);
+    expect(code).toBe(0);
+    const payload = JSON.parse(run.outText()) as {
+      data: {
+        checks: Array<{ id: string; severity: string; message: string; recovery?: { suggestedCommand: string } }>;
+      };
+    };
+    const byId: Record<string, { severity: string; message: string; recovery?: { suggestedCommand: string } }> = {};
+    for (const check of payload.data.checks) byId[check.id] = check;
+    return byId;
+  }
+
+  it("reports a missing binding directory and a zero-binding Project through bindings.exist", () => {
+    initializedHome();
+    const dir = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", dir], capture().ports)).toBe(0);
+    expect(doctorChecks()["bindings.exist"]?.severity).toBe("ok");
+    rmSync(dir, { recursive: true, force: true });
+    const missing = doctorChecks()["bindings.exist"];
+    expect(missing?.severity).toBe("warning");
+    expect(missing?.message).toContain("no longer exists");
+    expect(missing?.recovery?.suggestedCommand).toBe("sorage project bind <project> --dir <path>");
+    mkdirSync(dir);
+    expect(runCli(["project", "unbind", "web-app", "--dir", dir], capture().ports)).toBe(0);
+    const unbound = doctorChecks()["bindings.exist"];
+    expect(unbound?.severity).toBe("warning");
+    expect(unbound?.message).toContain("no directory binding");
+  });
+
+  it("reports a nested binding through bindings.nested with the Project each resolves to", () => {
+    initializedHome();
+    const outer = tempDir();
+    const inner = join(outer, "inner");
+    mkdirSync(inner);
+    expect(runCli(["project", "add", "--name", "Outer", "--dir", outer], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Inner", "--dir", inner], capture().ports)).toBe(0);
+    const nested = doctorChecks()["bindings.nested"];
+    expect(nested?.severity).toBe("warning");
+    expect(nested?.message).toContain("outer");
+    expect(nested?.message).toContain("inner");
+    expect(nested?.recovery?.suggestedCommand).toContain("--as");
+  });
+
+  it("reports an alias-ambiguous pair through bindings.ambiguous", () => {
+    initializedHome();
+    const real = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", real], capture().ports)).toBe(0);
+    // A stored uncollapsed alias spelling, exactly what an APFS firmlink leaves behind:
+    // two distinct stored directories whose realpath is one physical directory.
+    const home = process.env.SORAGE_HOME as string;
+    const alias = join(home, "state", "sorage.sqlite3");
+    const db = new DatabaseSync(alias);
+    db.prepare(
+      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('alias-1', (SELECT id FROM projects LIMIT 1), (SELECT installation_id FROM project_bindings LIMIT 1), ?, 'directory', 't', 't')",
+    ).run(real.startsWith("/private/") ? `/${real.slice("/private/".length)}` : join(real, "x", ".."));
+    db.close();
+    const ambiguous = doctorChecks()["bindings.ambiguous"];
+    expect(ambiguous?.severity).toBe("warning");
+    expect(ambiguous?.message).toContain("alias one directory");
+    expect(ambiguous?.recovery?.suggestedCommand).toContain("unbind");
   });
 });

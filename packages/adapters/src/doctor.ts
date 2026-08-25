@@ -1,4 +1,4 @@
-import { accessSync, constants, readFileSync, statSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseConfigurationFile, type Configuration } from "@sorage/core";
@@ -73,6 +73,45 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     if (raw.startsWith("~/.sorage/")) return join(home.home, raw.slice("~/.sorage/".length));
     if (raw.startsWith("~/")) return join(userHome, raw.slice(2));
     return raw;
+  }
+
+  interface ProjectRow {
+    id: string;
+    slug: string;
+    status: string;
+  }
+
+  interface BindingRow {
+    id: string;
+    project_id: string;
+    directory: string;
+    binding_kind: string;
+  }
+
+  /** Reads the Project registry once per probe; null before any table exists. */
+  function bindingRegistry(): { projects: ProjectRow[]; bindings: BindingRow[] } | null {
+    try {
+      const db = openSorageDatabase(databasePath);
+      try {
+        const table = db
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_bindings'")
+          .get() as { name: string } | undefined;
+        if (table === undefined) return null;
+        const projects = db.prepare("SELECT id, slug, status FROM projects").all() as unknown as ProjectRow[];
+        const bindings = db
+          .prepare("SELECT id, project_id, directory, binding_kind FROM project_bindings")
+          .all() as unknown as BindingRow[];
+        return { projects, bindings };
+      } finally {
+        db.close();
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  function projectSlugOf(projects: ProjectRow[], binding: BindingRow): string {
+    return projects.find((project) => project.id === binding.project_id)?.slug ?? binding.project_id;
   }
 
   function perform(id: DoctorCheckId): CheckOutcome {
@@ -235,10 +274,80 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         return ok("No Artifacts are recorded yet on this installation.");
       }
 
-      case "bindings.exist":
-      case "bindings.nested":
+      case "bindings.exist": {
+        const registry = bindingRegistry();
+        if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
+        const { projects, bindings } = registry;
+        const problems: string[] = [];
+        for (const project of projects) {
+          if (project.status !== "active") continue;
+          if (!bindings.some((binding) => binding.project_id === project.id)) {
+            problems.push(`Project '${project.slug}' has no directory binding on this installation.`);
+          }
+        }
+        for (const binding of bindings) {
+          let exists = false;
+          try {
+            exists = statSync(binding.directory).isDirectory();
+          } catch {
+            exists = false;
+          }
+          if (!exists)
+            problems.push(
+              `Project '${projectSlugOf(projects, binding)}' binding '${binding.directory}' no longer exists.`,
+            );
+        }
+        if (problems.length > 0) return warning(problems.join(" "));
+        return ok("Every active Project has a binding and every binding directory exists.");
+      }
+
+      case "bindings.nested": {
+        const registry = bindingRegistry();
+        if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
+        const { projects, bindings } = registry;
+        const nested: string[] = [];
+        const directories = bindings.filter((binding) => binding.binding_kind === "directory");
+        for (const inner of directories) {
+          for (const outer of directories) {
+            if (outer.id === inner.id || outer.directory === inner.directory) continue;
+            if (inner.directory.startsWith(`${outer.directory}/`)) {
+              nested.push(
+                `'${inner.directory}' (${projectSlugOf(projects, inner)}) is nested inside '${outer.directory}' (${projectSlugOf(projects, outer)}); the deepest match wins`,
+              );
+            }
+          }
+        }
+        if (nested.length > 0) return warning([...new Set(nested)].join(" "));
+        return ok("No directory binding is nested inside another.");
+      }
+
       case "bindings.ambiguous": {
-        return ok("No Project bindings are recorded yet on this installation.");
+        const registry = bindingRegistry();
+        if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
+        const { projects, bindings } = registry;
+        const aliases: string[] = [];
+        for (let i = 0; i < bindings.length; i++) {
+          for (let j = i + 1; j < bindings.length; j++) {
+            const first = bindings[i] as (typeof bindings)[number];
+            const second = bindings[j] as (typeof bindings)[number];
+            if (first.binding_kind !== second.binding_kind || first.directory === second.directory) continue;
+            let firstReal: string | null = null;
+            let secondReal: string | null = null;
+            try {
+              firstReal = realpathSync(first.directory);
+              secondReal = realpathSync(second.directory);
+            } catch {
+              continue;
+            }
+            if (firstReal === secondReal) {
+              aliases.push(
+                `'${first.directory}' (${projectSlugOf(projects, first)}) and '${second.directory}' (${projectSlugOf(projects, second)}) alias one directory`,
+              );
+            }
+          }
+        }
+        if (aliases.length > 0) return warning([...new Set(aliases)].join(" "));
+        return ok("No two bindings of the same kind alias one directory.");
       }
 
       case "platform.tcc": {
