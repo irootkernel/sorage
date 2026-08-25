@@ -7,3 +7,4 @@ export * from "./config";
 export * from "./init";
 export * from "./config-commands";
 export * from "./doctor";
+export * from "./projects";

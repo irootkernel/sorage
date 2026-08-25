@@ -30,7 +30,7 @@ describe("migration runner", () => {
   it("applies every migration, is idempotent on a second run, and records schema_migrations", () => {
     const temp = freshDb();
     const first = migrate(temp.db, MIGRATIONS, () => "2026-01-01T00:00:00.000Z");
-    expect(first.appliedVersions).toEqual([1]);
+    expect(first.appliedVersions).toEqual([1, 2]);
     const second = migrate(temp.db, MIGRATIONS, () => "2026-01-02T00:00:00.000Z");
     expect(second.alreadyUpToDate).toBe(true);
     expect(second.appliedVersions).toEqual([]);
@@ -39,7 +39,10 @@ describe("migration runner", () => {
       name: string;
       applied_at: string;
     }>;
-    expect(rows).toEqual([{ version: 1, name: "operational-baseline-v1", applied_at: "2026-01-01T00:00:00.000Z" }]);
+    expect(rows).toEqual([
+      { version: 1, name: "operational-baseline-v1", applied_at: "2026-01-01T00:00:00.000Z" },
+      { version: 2, name: "project-registry-v1", applied_at: "2026-01-01T00:00:00.000Z" },
+    ]);
   });
 
   it("rolls a failed step back and leaves the previous schema version active", () => {
@@ -48,7 +51,7 @@ describe("migration runner", () => {
     const failing = [
       ...MIGRATIONS,
       {
-        version: 2,
+        version: 3,
         name: "broken",
         sql: "CREATE TABLE deliberately_broken (id INTEGER PRIMARY KEY); CREATE TABLE deliberately_broken (id INTEGER);",
       },
@@ -57,7 +60,7 @@ describe("migration runner", () => {
     const versions = temp.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
       version: number;
     }>;
-    expect(versions.map((row) => row.version)).toEqual([1]);
+    expect(versions.map((row) => row.version)).toEqual([1, 2]);
     const broken = temp.db
       .prepare("SELECT name FROM sqlite_master WHERE name = 'deliberately_broken'")
       .all() as unknown[];
@@ -68,7 +71,7 @@ describe("migration runner", () => {
     const temp = freshDb();
     // Simulate the concurrent winner: another process migrates the same file first.
     const other = openAndMigrate(temp.databasePath, MIGRATIONS);
-    expect(other.outcome.appliedVersions).toEqual([1]);
+    expect(other.outcome.appliedVersions).toEqual([1, 2]);
     const loser = migrate(temp.db, MIGRATIONS);
     expect(loser.alreadyUpToDate).toBe(true);
     expect(loser.appliedVersions).toEqual([]);
@@ -80,8 +83,11 @@ describe("migration runner", () => {
     expect(fixture).toContain("CREATE TABLE installation");
     const seeded = freshDb();
     seeded.db.exec(fixture);
+    // The fixture holds the first released schema only, so replaying the full history
+    // upgrades it to the current schema without data loss (the TASK-063 upgrade path).
     const replay = migrate(seeded.db, MIGRATIONS);
-    expect(replay.alreadyUpToDate).toBe(true);
+    expect(replay.appliedVersions).toEqual([2]);
+    expect(replay.alreadyUpToDate).toBe(false);
     const migrated = freshDb();
     migrate(migrated.db, MIGRATIONS);
     const tableNames = (db: (typeof seeded)["db"]) =>
