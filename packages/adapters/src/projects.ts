@@ -146,8 +146,11 @@ export function createSqliteProjectRepository(
       }
     },
     addBinding(binding) {
-      const directory = fs.realpath(binding.directory);
       try {
+        // Inside the try like createProjectWithBinding, so a directory that vanishes
+        // between the resolveDirectory check and this insert surfaces as an error
+        // result instead of a raw throw past the error envelope.
+        const directory = fs.realpath(binding.directory);
         const installationId = options.installationId;
         db.prepare(
           "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -175,9 +178,13 @@ export function createSqliteProjectRepository(
         const conflict = uniqueViolation(error);
         if (conflict === "project_bindings.installation_id, project_bindings.directory") {
           return err(
-            appError("BINDING_DUPLICATE", `the directory '${directory}' is already bound on this installation`, {
-              directory,
-            }),
+            appError(
+              "BINDING_DUPLICATE",
+              `the directory '${binding.directory}' is already bound on this installation`,
+              {
+                directory: binding.directory,
+              },
+            ),
           );
         }
         return err(internal(error));

@@ -213,4 +213,26 @@ describe("project repository", () => {
     const found = repository.findProjectBySlug("WIZARD");
     expect(found.ok && found.value?.slug).toBe("wizard");
   });
+
+  it("maps a binding directory that vanishes before the insert to INTERNAL_ERROR instead of throwing", () => {
+    const temp = migratedDb();
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      fs: {
+        realpath: () => {
+          throw new Error("ENOENT: the directory vanished between the check and the insert");
+        },
+      },
+    });
+    const result = repository.addBinding({
+      id: "71111111-1111-4111-8111-711111111113",
+      projectId: "81111111-1111-4111-8111-811111111111",
+      directory: "/tmp/vanished",
+      bindingKind: "directory",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }) as { ok: boolean; error?: { code: string; message: string } };
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe("INTERNAL_ERROR");
+    expect(result.error?.message).toContain("vanished");
+  });
 });
