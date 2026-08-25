@@ -2,7 +2,14 @@ import { accessSync, constants, readFileSync, realpathSync, statSync } from "nod
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
-import { type Configuration, parseConfigurationFile } from "@sorage/core";
+import {
+  type Configuration,
+  parseConfigurationFile,
+  parseVaultMarker,
+  validateVaultMarkerForInstallation,
+  vaultGitattributesContent,
+  vaultGitignoreContent,
+} from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
@@ -35,13 +42,9 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
 };
 
-const GITATTRIBUTES = `artifacts/** -text -diff
-snapshots/** text eol=lf
-.sorage-vault.json text eol=lf
-`;
+const GITATTRIBUTES = vaultGitattributesContent();
 
-const GITIGNORE = `staging/
-`;
+const GITIGNORE = vaultGitignoreContent();
 
 export interface NodeDoctorPortsOptions {
   env?: HomeEnvironment | undefined;
@@ -169,18 +172,16 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (config === null || vault === null) {
           return blocking("The Vault marker cannot be checked without a valid configuration.");
         }
-        let marker: Record<string, unknown>;
+        let body: string;
         try {
-          marker = JSON.parse(readFileSync(join(vault, ".sorage-vault.json"), "utf8")) as Record<string, unknown>;
+          body = readFileSync(join(vault, ".sorage-vault.json"), "utf8");
         } catch {
           return blocking("The Vault marker is missing or unparseable.");
         }
-        if (marker["type"] !== "sorage-vault") return blocking("The Vault marker is not a Sorage vault marker.");
-        if (marker["schemaVersion"] !== 1)
-          return blocking(`Unsupported Vault marker schemaVersion: ${String(marker["schemaVersion"])}`);
-        if (marker["installationId"] !== config.installationId) {
-          return blocking("The Vault marker belongs to a different installation.");
-        }
+        const marker = parseVaultMarker(body);
+        if (!marker.ok) return blocking(marker.error.message);
+        const owned = validateVaultMarkerForInstallation(marker.value, config.installationId);
+        if (!owned.ok) return blocking(owned.error.message);
         return ok("The Vault marker matches this installation.");
       }
 

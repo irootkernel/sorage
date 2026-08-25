@@ -10,3 +10,4 @@ export * from "./project-commands";
 export * from "./workspace-identity";
 export * from "./projects";
 export * from "./protocol";
+export * from "./vault";
