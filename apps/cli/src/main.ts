@@ -1,6 +1,6 @@
 import { Command, InvalidArgumentError } from "commander";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   errorSpec,
   successEnvelope,
@@ -15,6 +15,8 @@ import {
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
+import { createNodeHomePaths } from "@sorage/adapters/src/home";
+import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { runDoctor, hasBlockingCheck, type DoctorReport } from "@sorage/core";
 import { editConfiguration, setConfigurationValue, showConfiguration, validateConfigurationFile } from "@sorage/core";
 
@@ -276,8 +278,10 @@ function requireInitialized(ports: OutputPorts, json: boolean, reportExitCode: (
     message: "Sorage has not been initialized.",
     details: { expectedConfigPath: gate.configFile },
   };
+  const id = requestId();
+  logCommandFailure(error, id);
   if (json) {
-    ports.err(`${JSON.stringify(errorEnvelope(error, requestId()), null, 2)}\n`);
+    ports.err(`${JSON.stringify(errorEnvelope(error, id), null, 2)}\n`);
   } else {
     ports.err(
       `ERROR [${error.code}]\n\n${error.message}\n\nExpected configuration:\n  ${gate.configFile}\n\nRun:\n  sorage init\n`,
@@ -346,11 +350,43 @@ function renderUsageError(error: unknown, program: Command, ports: OutputPorts):
   return 2;
 }
 
+let processLogger: Logger | null | undefined;
+
+/**
+ * Every process writes its failures to `<home>/logs/sorage.log` (RUN-009). The
+ * logger is created lazily so a successful run never touches the log directory,
+ * and a logging failure must never mask the command's own result.
+ */
+function failureLogger(): Logger | null {
+  if (processLogger !== undefined) return processLogger;
+  try {
+    const home = createNodeHomePaths();
+    processLogger = createLogger({ file: join(home.logsDir, "sorage.log"), level: "warn", homePath: home.home });
+  } catch {
+    processLogger = null;
+  }
+  return processLogger;
+}
+
+function logCommandFailure(error: AppError, id: string): void {
+  try {
+    const logger = failureLogger();
+    if (logger === null) return;
+    const record = { code: error.code, requestId: id, message: error.message };
+    if (error.code === "INTERNAL_ERROR") logger.error("cli.command_failed", record);
+    else logger.warn("cli.command_failed", record);
+  } catch {
+    // A logging failure must never change the command's output or exit code.
+  }
+}
+
 /** Maps an application error to its envelope rendering and published exit code. */
 export function renderAppError(error: AppError, ports: OutputPorts, json: boolean, recoveryOverride?: string): number {
   const spec = errorSpec(error.code);
+  const id = requestId();
+  logCommandFailure(error, id);
   if (json) {
-    ports.err(`${JSON.stringify(errorEnvelope(error, requestId()), null, 2)}\n`);
+    ports.err(`${JSON.stringify(errorEnvelope(error, id), null, 2)}\n`);
   } else {
     ports.err(`${error.code}: ${error.message}\n`);
     const recovery = recoveryOverride ?? spec.recovery?.suggestedCommand;
