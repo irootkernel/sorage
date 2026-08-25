@@ -1,4 +1,5 @@
 export const CORE_PACKAGE_NAME = "@sorage/core" as const;
+export * from "./artifacts";
 export * from "./config";
 export * from "./config-commands";
 export * from "./cursor";
