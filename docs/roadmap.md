@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-003`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-021`
 
 ## 3. Identifier policy
 
@@ -71,7 +71,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 |---|---|---|---|---|
 | `EPIC-001` | Foundation and toolchain | 0.1 | Completed | `TASK-001` to `TASK-008` |
 | `EPIC-002` | Minimal installation and configuration core | 0.1 | Completed | `TASK-009` to `TASK-014` |
-| `EPIC-003` | Project registry and identity | 0.1 | Planned | `TASK-015` to `TASK-020` |
+| `EPIC-003` | Project registry and identity | 0.1 | Completed | `TASK-015` to `TASK-020` |
 | `EPIC-004` | Vault and Artifact store | 0.1 | Planned | `TASK-021` to `TASK-026` |
 | `EPIC-005` | Handoff domain and workflow | 0.1 | Planned | `TASK-027` to `TASK-035` |
 | `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Planned | `TASK-036` to `TASK-041` |
@@ -116,9 +116,10 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-003: Project registry and identity
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.1
 - **Objective:** Give every actor a stable identity and a correct resolution rule, including many bindings per Project and worktree folding, delivering the journeys AJ-03 and AJ-05.
+- **Validation record (whole-epic review, 2026-08-25):** the whole-epic review over `20b5a6c` to `c2bfda5` converged at the first round with complete coverage, `ci_decision=pass`, and zero findings. `make test` exits 0 with 218 tests and `scripts/sot-check` exits 0 on the audited snapshot; the journeys AJ-03 and AJ-05 pass through the registry, resolution, and diagnostics surface this epic ships, with the send-dependent steps exercised through the eligibility and identity services until the Handoff commands arrive in `EPIC-005`. Every member task closed with a clean committed round-1 Mulgae run and no hardening deferral; nothing was pushed, and publication remains local.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
