@@ -21,7 +21,7 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
   const rows = [...bindings];
   const repository: ProjectRepositoryPort = {
     createProject(project) {
-      if (projects.some((candidate) => candidate.slug.toLocaleLowerCase() === project.slug.toLocaleLowerCase())) {
+      if (projects.some((candidate) => candidate.slug.toLowerCase() === project.slug.toLowerCase())) {
         return err(appError("PROJECT_SLUG_CONFLICT", `the slug '${project.slug}' is already taken`));
       }
       const stored: Project = {
@@ -37,7 +37,7 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
       return ok(stored);
     },
     findProjectBySlug(slug) {
-      return ok(projects.find((candidate) => candidate.slug.toLocaleLowerCase() === slug.toLocaleLowerCase()) ?? null);
+      return ok(projects.find((candidate) => candidate.slug.toLowerCase() === slug.toLowerCase()) ?? null);
     },
     listProjects() {
       return ok([...projects]);
@@ -169,6 +169,11 @@ describe("addProject", () => {
     }) as { ok: boolean; error?: AppError };
     expect(collision.ok).toBe(false);
     expect(collision.error?.code).toBe("PROJECT_SLUG_CONFLICT");
+  });
+
+  it("folds an explicit slug through the locale-independent mapping, so a Turkic-locale host stores the same slug", () => {
+    const explicit = addProject(ports(), { name: "Alpha", slug: "WIZARD", dir: "/tmp/a", userHome: "/home/user" });
+    expect(explicit.ok && explicit.value.project.slug).toBe("wizard");
   });
 
   it("fails the whole registration when the first binding duplicates an existing one", () => {

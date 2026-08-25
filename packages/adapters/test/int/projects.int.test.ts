@@ -203,4 +203,14 @@ describe("project repository", () => {
     const found = repository.findProjectBySlug("ПРОЕКТ");
     expect(found.ok && found.value?.slug).toBe("проект");
   });
+
+  it("folds a lookup through the locale-independent mapping, so a Turkic-locale host finds the same slug", () => {
+    const temp = migratedDb();
+    seedProject(temp, "wizard", "71111111-1111-4111-8111-711111111112");
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
+    const found = repository.findProjectBySlug("WIZARD");
+    expect(found.ok && found.value?.slug).toBe("wizard");
+  });
 });

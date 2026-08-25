@@ -413,7 +413,7 @@ Path rules for every `--dir`:
 - Require an existing directory when a binding is registered; `project unbind` additionally accepts the recorded directory of an existing binding after that directory has vanished, normalized against its longest existing ancestor.
 - When the directory is inside a git working tree, store the git common directory and record `bindingKind = git_repository`; otherwise store the normalized real path with `bindingKind = directory` (PRJ-017).
 - Reject a duplicate binding with `BINDING_DUPLICATE`, which also covers a directory that lies inside a repository already bound as `git_repository`, since binding a worktree or a subdirectory of a registered repository would create a second identity for the same repository; `UNIQUE(installationId, directory)` is the only uniqueness constraint (PRJ-016).
-- Reject a slug that is already taken under case-insensitive comparison with `PROJECT_SLUG_CONFLICT` (PRJ-005); the comparison is Unicode-aware, and an explicit `--slug` is stored case-folded exactly like a derived one.
+- Reject a slug that is already taken under case-insensitive comparison with `PROJECT_SLUG_CONFLICT` (PRJ-005); the comparison is Unicode-aware, an explicit `--slug` is stored case-folded exactly like a derived one, and the folding is locale-independent, so one name produces the same slug on every machine.
 - Reject Vault and Project containment in either direction with `VAULT_CONTAINMENT` (VLT-017).
 - Allow a nested binding and report it; resolution picks the deepest match (PRJ-008).
 

@@ -124,10 +124,11 @@ export function createSqliteProjectRepository(
     findProjectBySlug(slug) {
       try {
         // NOCASE folds only ASCII, so the query folds the way every stored slug is
-        // folded (deriveProjectSlug and addProject use toLocaleLowerCase) and lookup
-        // stays case-insensitive in every script (PRJ-005). bun:sqlite returns null
-        // for a no-row get and node:sqlite returns undefined, so both mean absence.
-        const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug.toLocaleLowerCase()) as
+        // folded (deriveProjectSlug and addProject use toLowerCase, which is
+        // locale-independent) and lookup stays case-insensitive in every script and on
+        // every host (PRJ-005). bun:sqlite returns null for a no-row get and
+        // node:sqlite returns undefined, so both mean absence.
+        const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug.toLowerCase()) as
           | ProjectRow
           | null
           | undefined;

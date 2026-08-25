@@ -78,7 +78,10 @@ export interface ShownProject {
  * transliteration.
  */
 export function deriveProjectSlug(name: string): string {
-  const folded = name.trim().toLocaleLowerCase();
+  // toLowerCase is the locale-independent Unicode default case conversion;
+  // toLocaleLowerCase follows the host locale (Turkic I and İ), which would derive
+  // different slugs for one name on different machines (PRJ-001, PRJ-005).
+  const folded = name.trim().toLowerCase();
   const slug = folded
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
@@ -108,9 +111,10 @@ export function addProject(ports: ProjectCommandPorts, input: AddProjectInput): 
   if (input.slug !== undefined) {
     const explicit = validateProjectSlug(input.slug);
     if (!explicit.ok) return explicit;
-    // Stored exactly like a derived slug, case-folded, so case-insensitive uniqueness
-    // (PRJ-005) holds in every script and not only where SQLite's NOCASE folds.
-    slug = explicit.value.toLocaleLowerCase();
+    // Stored exactly like a derived slug, case-folded by the same locale-independent
+    // mapping, so case-insensitive uniqueness (PRJ-005) holds in every script and the
+    // stored slug never depends on the host locale.
+    slug = explicit.value.toLowerCase();
     derivedSlug = false;
   }
   if (slug === "") {

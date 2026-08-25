@@ -19,6 +19,11 @@ describe("slug derivation from a display name in any script", () => {
     expect(deriveProjectSlug("123 456")).toBe("123-456");
   });
 
+  it("folds through the locale-independent mapping, so a Turkic-locale host derives the same slug", () => {
+    expect(deriveProjectSlug("WIZARD")).toBe("wizard");
+    expect(deriveProjectSlug("DIŞ YOL")).toBe("diş-yol");
+  });
+
   it("derives an empty slug when the name carries no letters or digits", () => {
     expect(deriveProjectSlug("!!!")).toBe("");
     expect(deriveProjectSlug("   ")).toBe("");

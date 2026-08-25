@@ -16,7 +16,7 @@ function fakeRegistry(projects: Project[], bindings: ProjectBinding[]): ProjectR
       throw new Error("not used by resolution");
     },
     findProjectBySlug(slug) {
-      return ok(projects.find((project) => project.slug === slug.toLocaleLowerCase()) ?? null);
+      return ok(projects.find((project) => project.slug === slug.toLowerCase()) ?? null);
     },
     listProjects() {
       return ok(projects);
