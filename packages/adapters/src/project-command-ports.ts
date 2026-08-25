@@ -68,6 +68,22 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
         }
         return ok(fs.realpath(absolute));
       },
+      absentRealPath(path, currentUserHome) {
+        const expanded =
+          path === "~" ? currentUserHome : path.startsWith("~/") ? joinPath(currentUserHome, path.slice(2)) : path;
+        const absolute = isAbsolute(expanded) ? expanded : resolve(expanded);
+        // Climb to the longest existing ancestor so a symlinked prefix (for example
+        // /tmp on macOS) resolves the way it did when the binding was stored; "/"
+        // always exists, so the climb always terminates.
+        const segments = absolute.split("/").filter((segment) => segment !== "");
+        while (segments.length > 0 && !existsSync(`/${segments.join("/")}`)) {
+          segments.pop();
+        }
+        const existing = `/${segments.join("/")}`;
+        const real = fs.realpath(existing);
+        const rest = absolute.slice(existing.length).replace(/^\/+|\/+$/g, "");
+        return ok(rest === "" ? real : `${real}/${rest}`);
+      },
       gitCommonDirectory(path) {
         const common = git(path);
         return common === null ? null : fs.realpath(common);
@@ -98,10 +114,14 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
       // the honest count is zero and the unbind confirmation rule is dormant.
       openHandoffCount(projectId) {
         try {
+          // bun:sqlite returns null for a no-row get while node:sqlite returns
+          // undefined, and the test suite runs through node:sqlite, so the guard
+          // must treat both shapes as absence or unbind fails on the real engine.
           const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'").get() as
             | { name: string }
+            | null
             | undefined;
-          if (table === undefined) return ok(0);
+          if (!table) return ok(0);
           const row = db
             .prepare(
               "SELECT COUNT(*) AS count FROM handoffs WHERE recipient_project_id = ? AND review_state IN ('awaiting_recipient', 'changes_requested') AND deleted_at IS NULL",

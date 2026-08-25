@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveSenderIdentity, workspaceKey } from "../../src/workspace-identity";
-import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
 import { ok } from "../../src/index";
+import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
 import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/projects";
+import { resolveSenderIdentity, workspaceKey } from "../../src/workspace-identity";
 
 const projects: Project[] = [
   {
@@ -57,6 +57,9 @@ const repository: ProjectRepositoryPort = {
 function ports(git: Record<string, string>): ProjectCommandPorts {
   const fs: ProjectBindingFsPort = {
     resolveDirectory: () => {
+      throw new Error("unused");
+    },
+    absentRealPath: () => {
       throw new Error("unused");
     },
     realPath: (path) => ok(path),

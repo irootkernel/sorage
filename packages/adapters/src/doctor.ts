@@ -1,13 +1,13 @@
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseConfigurationFile, type Configuration } from "@sorage/core";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
+import { type Configuration, parseConfigurationFile } from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
-import { MIGRATIONS } from "./sqlite/migrations";
 import { openSorageDatabase } from "./sqlite/connection";
+import { MIGRATIONS } from "./sqlite/migrations";
 
 /**
  * The production doctor probes over the live installation: every check the 0.1
@@ -28,7 +28,8 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
     "Inspect the ARTIFACT_INTEGRITY_FAILED events for the affected Handoffs and restore them from backup",
   "db.migrations": "Install the matching sorage build; remove a stale ~/.sorage/run/migration.lock",
   "artifacts.checksums": "sorage vault verify, then restore the affected Handoff from backup",
-  "bindings.exist": "sorage project bind <project> --dir <path>",
+  "bindings.exist":
+    "sorage project bind <project> --dir <path> for an unbound Project, or sorage project unbind <project> --dir <the recorded directory this warning names> for a binding whose directory vanished",
   "bindings.nested": "Pass --as <project-slug> wherever the deepest match is not the intended Project",
   "bindings.ambiguous": "sorage project unbind the aliased path, or always pass --as <project-slug> from it",
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
@@ -93,10 +94,12 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     try {
       const db = openSorageDatabase(databasePath);
       try {
+        // bun:sqlite returns null for a no-row get and node:sqlite returns
+        // undefined; both mean the registry tables are not there yet.
         const table = db
           .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_bindings'")
-          .get() as { name: string } | undefined;
-        if (table === undefined) return null;
+          .get() as { name: string } | null | undefined;
+        if (!table) return null;
         const projects = db.prepare("SELECT id, slug, status FROM projects").all() as unknown as ProjectRow[];
         const bindings = db
           .prepare("SELECT id, project_id, directory, binding_kind FROM project_bindings")

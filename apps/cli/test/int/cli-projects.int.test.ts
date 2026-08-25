@@ -102,6 +102,21 @@ describe("sorage project add", () => {
     );
     expect(explicit.outText()).toContain("웹-앱");
   });
+
+  it("collides on a case-only difference in a non-Latin script and finds the folded slug by either case", () => {
+    initializedHome();
+    expect(runCli(["project", "add", "--name", "Alpha", "--slug", "проект", "--dir", tempDir()], capture().ports)).toBe(
+      0,
+    );
+    const collision = capture();
+    expect(runCli(["project", "add", "--name", "Beta", "--slug", "ПРОЕКТ", "--dir", tempDir()], collision.ports)).toBe(
+      65,
+    );
+    expect(collision.errText()).toContain("PROJECT_SLUG_CONFLICT");
+    const shown = capture();
+    expect(runCli(["project", "show", "ПРОЕКТ", "--json"], shown.ports)).toBe(0);
+    expect(shown.outText()).toContain('"slug": "проект"');
+  });
 });
 
 describe("sorage project list", () => {
@@ -333,8 +348,8 @@ describe("doctor binding checks", () => {
     const missing = doctorChecks()["bindings.exist"];
     expect(missing?.severity).toBe("warning");
     expect(missing?.message).toContain("no longer exists");
-    expect(missing?.recovery?.suggestedCommand).toBe("sorage project bind <project> --dir <path>");
-    mkdirSync(dir);
+    expect(missing?.recovery?.suggestedCommand).toContain("sorage project unbind");
+    // The recorded directory no longer exists, yet the binding it names stays removable.
     expect(runCli(["project", "unbind", "web-app", "--dir", dir], capture().ports)).toBe(0);
     const unbound = doctorChecks()["bindings.exist"];
     expect(unbound?.severity).toBe("warning");

@@ -108,6 +108,9 @@ const passthroughFs: ProjectBindingFsPort = {
   realPath(path) {
     return ok(path.startsWith("/real") ? path : `/real${path.startsWith("/") ? path : `/${path}`}`);
   },
+  absentRealPath(path) {
+    return ok(path.startsWith("/real") ? path : `/real${path.startsWith("/") ? path : `/${path}`}`);
+  },
   gitCommonDirectory: () => null,
 };
 
@@ -143,6 +146,29 @@ describe("addProject", () => {
     expect(result.ok && result.value.project.slug).toBe("web-app");
     expect(result.ok && result.value.derivedSlug).toBe(true);
     expect(result.ok && result.value.binding.bindingKind).toBe("directory");
+  });
+
+  it("stores an explicit slug case-folded, so case-only collisions cannot escape in any script", () => {
+    const explicit = addProject(ports(), { name: "Alpha", slug: "ПРОЕКТ", dir: "/tmp/a", userHome: "/home/user" });
+    expect(explicit.ok && explicit.value.project.slug).toBe("проект");
+    expect(explicit.ok && explicit.value.derivedSlug).toBe(false);
+    const folded: Project = {
+      id: "p1",
+      slug: "проект",
+      displayName: "Alpha",
+      description: null,
+      status: "active",
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const collision = addProject(ports([folded]), {
+      name: "Beta",
+      slug: "ПРОЕКТ",
+      dir: "/tmp/b",
+      userHome: "/home/user",
+    }) as { ok: boolean; error?: AppError };
+    expect(collision.ok).toBe(false);
+    expect(collision.error?.code).toBe("PROJECT_SLUG_CONFLICT");
   });
 
   it("fails the whole registration when the first binding duplicates an existing one", () => {
@@ -334,6 +360,46 @@ describe("bindProject and unbindProject", () => {
     }) as { ok: boolean; error?: AppError };
     expect(missing.ok).toBe(false);
     expect(missing.error?.code).toBe("PROJECT_NOT_FOUND");
+  });
+
+  it("unbinds a binding whose directory has vanished by normalizing against the longest existing ancestor", () => {
+    // resolveDirectory refuses the vanished path the way the production adapter does;
+    // absentRealPath still resolves the symlinked prefix onto the stored real path.
+    const vanishedFs: ProjectBindingFsPort = {
+      resolveDirectory(path) {
+        return err(
+          appError("CONFIG_INVALID", `the directory '${path}' does not exist or is not a directory`, {
+            directory: path,
+          }),
+        );
+      },
+      realPath(path) {
+        return ok(path);
+      },
+      absentRealPath(path) {
+        return ok(path.startsWith("/real") ? path : `/real${path.startsWith("/") ? path : `/${path}`}`);
+      },
+      gitCommonDirectory: () => null,
+    };
+    const base = ports([project()], [binding()]);
+    const withVanishedFs: ProjectCommandPorts = { ...base, bindings: vanishedFs };
+    const removed = unbindProject(withVanishedFs, {
+      slug: "web-app",
+      dir: "/dirs/one",
+      userHome: "/h",
+      confirm: false,
+    });
+    expect(removed.ok && removed.value.directory).toBe("/real/dirs/one");
+    const remaining = withVanishedFs.projects.listBindingsForProject("p1");
+    expect(remaining.ok && remaining.value).toHaveLength(0);
+    // The confirmation rule still guards a vanished binding.
+    const withOpen: ProjectCommandPorts = { ...ports([project()], [binding()], { p1: 1 }), bindings: vanishedFs };
+    const refused = unbindProject(withOpen, { slug: "web-app", dir: "/dirs/one", userHome: "/h", confirm: false }) as {
+      ok: boolean;
+      error?: AppError;
+    };
+    expect(refused.ok).toBe(false);
+    expect(refused.error?.code).toBe("CONFIRMATION_REQUIRED");
   });
 });
 

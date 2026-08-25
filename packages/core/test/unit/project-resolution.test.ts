@@ -50,6 +50,9 @@ function ports(bindings: ProjectBinding[], projects: Project[], git: Record<stri
     resolveDirectory: () => {
       throw new Error("not used by resolution");
     },
+    absentRealPath: () => {
+      throw new Error("not used by resolution");
+    },
     realPath(path) {
       return ok(git[path] !== undefined ? path : path);
     },

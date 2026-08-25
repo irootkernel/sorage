@@ -410,10 +410,10 @@ Path rules for every `--dir`:
 - Expand `~`.
 - Convert to an absolute path.
 - Resolve symlinks.
-- Require an existing directory.
+- Require an existing directory when a binding is registered; `project unbind` additionally accepts the recorded directory of an existing binding after that directory has vanished, normalized against its longest existing ancestor.
 - When the directory is inside a git working tree, store the git common directory and record `bindingKind = git_repository`; otherwise store the normalized real path with `bindingKind = directory` (PRJ-017).
 - Reject a duplicate binding with `BINDING_DUPLICATE`, which also covers a directory that lies inside a repository already bound as `git_repository`, since binding a worktree or a subdirectory of a registered repository would create a second identity for the same repository; `UNIQUE(installationId, directory)` is the only uniqueness constraint (PRJ-016).
-- Reject a slug that is already taken under case-insensitive comparison with `PROJECT_SLUG_CONFLICT` (PRJ-005).
+- Reject a slug that is already taken under case-insensitive comparison with `PROJECT_SLUG_CONFLICT` (PRJ-005); the comparison is Unicode-aware, and an explicit `--slug` is stored case-folded exactly like a derived one.
 - Reject Vault and Project containment in either direction with `VAULT_CONTAINMENT` (VLT-017).
 - Allow a nested binding and report it; resolution picks the deepest match (PRJ-008).
 
@@ -421,7 +421,7 @@ A second binding names a genuinely separate directory or repository that belongs
 
 A Project may hold many bindings, and a Project with zero bindings is flagged as unbound by `project list` and by `doctor` and fails as a recipient with `PROJECT_UNBOUND` (PRJ-022).
 
-`project unbind` that would leave a Project with open Handoffs unbound requires `--confirm` and otherwise fails with `CONFIRMATION_REQUIRED`; an **open Handoff** is one in `awaiting_recipient` or `changes_requested` that is not deleted (PRJ-022).
+`project unbind` that would leave a Project with open Handoffs unbound requires `--confirm` and otherwise fails with `CONFIRMATION_REQUIRED`; an **open Handoff** is one in `awaiting_recipient` or `changes_requested` that is not deleted (PRJ-022). A `--dir` whose directory no longer exists is accepted when it names the recorded binding directory, which the `bindings.exist` warning names, so a vanished binding can always be removed (PRJ-010).
 
 An archived Project keeps `fetch`, `review set`, `review withdraw`, `accept`, and `decline` on the Handoffs already in its inbox and rejects new incoming Handoffs with `PROJECT_ARCHIVED` (PRJ-021).
 
@@ -1384,7 +1384,7 @@ The command exits 0 when no check is `blocking`, and it is usable before and aft
 | `db.pendingIntents` | 0.1 | warning | Reports only the intents the start-up drain could not resolve, which are integrity-failed; an intent the drain cleared is never reported | Inspect the `ARTIFACT_INTEGRITY_FAILED` events for the affected Handoffs and restore them from backup |
 | `db.migrations` | 0.1 | blocking | `schema_migrations` is at the version this build expects and `migration.lock` is not held by a dead pid | Install the matching `sorage` build; remove a stale `~/.sorage/run/migration.lock` |
 | `artifacts.checksums` | 0.1 | blocking | Every live Handoff's current Artifact exists at its `storageKey` and matches its recorded SHA-256 | `sorage vault verify`, then restore the affected Handoff from backup |
-| `bindings.exist` | 0.1 | warning | Every active Project has at least one binding and every binding directory still exists | `sorage project bind <project> --dir <path>` |
+| `bindings.exist` | 0.1 | warning | Every active Project has at least one binding and every binding directory still exists | `sorage project bind <project> --dir <path> for an unbound Project, or sorage project unbind <project> --dir <the recorded directory this warning names> for a binding whose directory vanished` |
 | `bindings.nested` | 0.1 | warning | Nested bindings are reported together with the Project each one resolves to | Pass `--as <project-slug>` wherever the deepest match is not the intended Project |
 | `bindings.ambiguous` | 0.1 | warning | No two bindings of the same kind alias the same directory through a bind mount or an APFS firmlink, which `realpath` does not collapse, which is the only way a resolution can raise `AMBIGUOUS_PROJECT`; `--as <project-slug>` is the documented escape | `sorage project unbind` the aliased path, or always pass `--as <project-slug>` from it |
 | `daemon.reachable` | 0.2 | warning | `run/daemon.json` is fresh and `/api/v1/health` returns the expected `installationId` | `sorage daemon start`, or delete a stale `run/daemon.json` |

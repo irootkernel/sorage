@@ -193,4 +193,14 @@ describe("project repository", () => {
     const listed = repository.listProjects();
     expect(listed.ok && listed.value.map((project) => project.slug)).toEqual(["alpha", "Beta"]);
   });
+
+  it("folds a non-Latin lookup the way stored slugs are folded, because NOCASE folds only ASCII", () => {
+    const temp = migratedDb();
+    seedProject(temp, "проект", "71111111-1111-4111-8111-711111111111");
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+    });
+    const found = repository.findProjectBySlug("ПРОЕКТ");
+    expect(found.ok && found.value?.slug).toBe("проект");
+  });
 });

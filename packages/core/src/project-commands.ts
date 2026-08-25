@@ -20,6 +20,12 @@ export interface ProjectBindingFsPort {
   resolveDirectory(path: string, userHome: string): Result<{ directory: string; bindingKind: BindingKind }, AppError>;
   /** The normalized real path of any candidate path: ~ expansion, absolutization, symlink resolution. */
   realPath(path: string, userHome: string): Result<string, AppError>;
+  /**
+   * The normalized path of a directory that may no longer exist: ~ expansion, absolutization,
+   * and the real path of its longest existing ancestor, so `project unbind` can still match the
+   * recorded binding directory after the directory itself has vanished (PRJ-010).
+   */
+  absentRealPath(path: string, userHome: string): Result<string, AppError>;
   /** The git common directory when the path is inside a working tree, otherwise null (PRJ-017). */
   gitCommonDirectory(path: string): string | null;
 }
@@ -102,7 +108,9 @@ export function addProject(ports: ProjectCommandPorts, input: AddProjectInput): 
   if (input.slug !== undefined) {
     const explicit = validateProjectSlug(input.slug);
     if (!explicit.ok) return explicit;
-    slug = explicit.value;
+    // Stored exactly like a derived slug, case-folded, so case-insensitive uniqueness
+    // (PRJ-005) holds in every script and not only where SQLite's NOCASE folds.
+    slug = explicit.value.toLocaleLowerCase();
     derivedSlug = false;
   }
   if (slug === "") {
@@ -233,16 +241,25 @@ export interface UnbindProjectInput {
 export function unbindProject(ports: ProjectCommandPorts, input: UnbindProjectInput): Result<ProjectBinding, AppError> {
   const project = projectBySlug(ports.projects, input.slug);
   if (!project.ok) return project;
-  const directory = ports.bindings.resolveDirectory(input.dir, input.userHome);
-  if (!directory.ok) return directory;
+  const resolved = ports.bindings.resolveDirectory(input.dir, input.userHome);
+  let normalized: string;
+  if (resolved.ok) {
+    normalized = resolved.value.directory;
+  } else {
+    // The recorded binding directory is the authority once the directory itself is
+    // gone, so a vanished binding can always be removed (PRJ-010, PRJ-011).
+    const absent = ports.bindings.absentRealPath(input.dir, input.userHome);
+    if (!absent.ok) return absent;
+    normalized = absent.value;
+  }
   const bindings = ports.projects.listBindingsForProject(project.value.id);
   if (!bindings.ok) return bindings;
-  const binding = bindings.value.find((row) => row.directory === directory.value.directory);
+  const binding = bindings.value.find((row) => row.directory === normalized);
   if (binding === undefined) {
     return err(
-      appError("PROJECT_NOT_FOUND", `the Project '${input.slug}' has no binding on '${directory.value.directory}'`, {
+      appError("PROJECT_NOT_FOUND", `the Project '${input.slug}' has no binding on '${normalized}'`, {
         slug: input.slug,
-        directory: directory.value.directory,
+        directory: normalized,
       }),
     );
   }

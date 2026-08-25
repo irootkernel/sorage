@@ -123,10 +123,15 @@ export function createSqliteProjectRepository(
     },
     findProjectBySlug(slug) {
       try {
-        const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug) as
+        // NOCASE folds only ASCII, so the query folds the way every stored slug is
+        // folded (deriveProjectSlug and addProject use toLocaleLowerCase) and lookup
+        // stays case-insensitive in every script (PRJ-005). bun:sqlite returns null
+        // for a no-row get and node:sqlite returns undefined, so both mean absence.
+        const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug.toLocaleLowerCase()) as
           | ProjectRow
+          | null
           | undefined;
-        return ok(row === undefined ? null : toProject(row));
+        return ok(row ? toProject(row) : null);
       } catch (error) {
         return err(internal(error));
       }
@@ -185,8 +190,8 @@ export function createSqliteProjectRepository(
         if (changed.changes !== 1) {
           return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
         }
-        const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow | undefined;
-        if (row === undefined) {
+        const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow | null | undefined;
+        if (!row) {
           return err(internal(new Error("the renamed Project row disappeared mid-transaction")));
         }
         return ok(toProject(row));
@@ -210,8 +215,13 @@ export function createSqliteProjectRepository(
     },
     removeBinding(bindingId) {
       try {
-        const row = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as BindingRow | undefined;
-        if (row === undefined) {
+        // bun:sqlite returns null for a no-row get and node:sqlite returns undefined;
+        // both mean the binding is already gone.
+        const row = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as
+          | BindingRow
+          | null
+          | undefined;
+        if (!row) {
           return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`, { bindingId }));
         }
         db.prepare("DELETE FROM project_bindings WHERE id = ?").run(bindingId);
