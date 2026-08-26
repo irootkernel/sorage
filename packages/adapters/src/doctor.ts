@@ -7,9 +7,11 @@ import {
   parseConfigurationFile,
   parseVaultMarker,
   validateVaultMarkerForInstallation,
+  verifyVaultArtifacts,
   vaultGitattributesContent,
   vaultGitignoreContent,
 } from "@sorage/core";
+import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
@@ -302,7 +304,45 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "artifacts.checksums": {
-        return ok("No Artifacts are recorded yet on this installation.");
+        const config = configuration();
+        const vault = vaultPath(config);
+        if (config === null || vault === null) {
+          return blocking("Artifact checksums cannot be checked without a valid configuration.");
+        }
+        try {
+          const db = openSorageDatabase(databasePath);
+          let records: Array<{ storage_key: string; sha256: string }> = [];
+          try {
+            // The artifacts registry arrives with the TASK-027 migration; until
+            // then no Artifact is recorded and the exhaustive pass is vacuously
+            // clean (INIT-017, SEC-014).
+            const table = db
+              .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'")
+              .get() as { name: string } | null | undefined;
+            if (table) {
+              records = db
+                .prepare("SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1")
+                .all() as unknown as Array<{ storage_key: string; sha256: string }>;
+            }
+          } finally {
+            db.close();
+          }
+          if (records.length === 0) return ok("No Artifacts are recorded yet on this installation.");
+          const store = createNodeArtifactStore({ vaultPath: vault, installationId: config.installationId });
+          const findings = verifyVaultArtifacts(
+            { artifactStore: store },
+            records.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })),
+          );
+          if (!findings.ok) return blocking(findings.error.message);
+          if (findings.value.length > 0) {
+            return blocking(findings.value.map((finding) => finding.message).join(" "));
+          }
+          return ok("Every recorded current Artifact exists and matches its recorded SHA-256.");
+        } catch (error) {
+          return blocking(
+            `Artifact checksums could not be verified: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
 
       case "bindings.exist": {

@@ -1,4 +1,5 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -224,5 +225,51 @@ describe("doctor severities after initialization", () => {
     expect(check?.severity).toBe("warning");
     expect(check?.message).toContain("integrity-failed");
     expect(check?.recovery?.suggestedCommand).toContain("ARTIFACT_INTEGRITY_FAILED");
+  });
+
+  it("blocks through artifacts.checksums for a missing and a mismatched current Artifact (VLT-023)", () => {
+    const home = tempHome("sorage-doctor-checksums-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const vault = join(home, "vault");
+
+    // The artifacts registry arrives with the TASK-027 migration; the columns this
+    // probe reads are that table's contract, so the test seeds it directly.
+    const goodBytes = "good bytes";
+    const goodSha = createHash("sha256").update(goodBytes).digest("hex");
+    mkdirSync(join(vault, "artifacts/h-1/a-1"), { recursive: true });
+    writeFileSync(join(vault, "artifacts/h-1/a-1/good.md"), goodBytes);
+    mkdirSync(join(vault, "artifacts/h-1/a-2"), { recursive: true });
+    writeFileSync(join(vault, "artifacts/h-1/a-2/tampered.md"), "tampered bytes");
+
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      database.exec(`
+CREATE TABLE artifacts (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  materialized INTEGER NOT NULL
+);
+`);
+      const insert = database.prepare(
+        "INSERT INTO artifacts (id, handoff_id, storage_key, sha256, materialized) VALUES (?, 'h-1', ?, ?, 1)",
+      );
+      insert.run("a-1", "artifacts/h-1/a-1/good.md", goodSha);
+      insert.run("a-2", "artifacts/h-1/a-2/tampered.md", goodSha);
+      insert.run("a-3", "artifacts/h-1/a-3/missing.md", goodSha);
+    } finally {
+      database.close();
+    }
+
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const check = report.data.checks.find((entry) => entry.id === "artifacts.checksums");
+    expect(check?.severity).toBe("blocking");
+    expect(check?.message).toContain("artifacts/h-1/a-2/tampered.md");
+    expect(check?.message).toContain("artifacts/h-1/a-3/missing.md");
+    expect(check?.message).not.toContain("artifacts/h-1/a-1/good.md");
+    expect(check?.recovery?.suggestedCommand).toContain("sorage vault verify");
   });
 });

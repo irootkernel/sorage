@@ -187,7 +187,52 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
       }
       return ok(join(vaultPath, storageKey));
     },
+
+    exists(storageKey: string): Result<boolean, AppError> {
+      const path = resolveManagedPath(storageKey);
+      if (!path.ok) return err(path.error);
+      return ok(existsSync(path.value));
+    },
+
+    checksum(storageKey: string): Result<string, AppError> {
+      const path = resolveManagedPath(storageKey);
+      if (!path.ok) return err(path.error);
+      try {
+        const hash = createHash("sha256");
+        let handle: number | undefined;
+        try {
+          handle = openSync(path.value, "r");
+          const buffer = Buffer.allocUnsafe(STREAM_BUFFER_BYTES);
+          for (;;) {
+            const read = readSync(handle, buffer, 0, buffer.length, null);
+            if (read === 0) break;
+            hash.update(buffer.subarray(0, read));
+          }
+        } finally {
+          if (handle !== undefined) closeSync(handle);
+        }
+        return ok(hash.digest("hex"));
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading ${storageKey} for verification failed: ${messageOf(error)}.`, {
+            storageKey,
+            cause: String(error),
+          }),
+        );
+      }
+    },
   };
+
+  function resolveManagedPath(storageKey: string): Result<string, AppError> {
+    if (!isManagedStorageKey(storageKey)) {
+      return err(
+        appError("INTERNAL_ERROR", `The storage key is not a managed artifacts/ key: ${storageKey}.`, {
+          storageKey,
+        }),
+      );
+    }
+    return ok(join(vaultPath, storageKey));
+  }
 }
 
 function unreadableSource(sourcePath: string, error: unknown, stagingPath?: string): AppError {

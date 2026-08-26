@@ -44,6 +44,10 @@ export interface ArtifactStore {
   activate(request: ActivateRequest): Result<{ path: string }, AppError>;
   /** Resolves a storageKey to its path inside this Vault. */
   pathOf(storageKey: string): Result<string, AppError>;
+  /** Reports whether the bytes at a storageKey are present (SEC-014). */
+  exists(storageKey: string): Result<boolean, AppError>;
+  /** Recomputes the SHA-256 of the bytes at a storageKey with a bounded buffer (SEC-014). */
+  checksum(storageKey: string): Result<string, AppError>;
 }
 
 export interface StorageKeyParts {
