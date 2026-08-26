@@ -1,4 +1,5 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -193,5 +194,35 @@ describe("doctor severities after initialization", () => {
     const permissions = report.data.checks.find((check) => check.id === "home.permissions");
     expect(permissions?.severity).toBe("blocking");
     expect(permissions?.recovery?.suggestedCommand).toContain("sorage init --reconfigure");
+  });
+
+  it("warns through db.pendingIntents only for intents the drain cannot resolve", () => {
+    const home = tempHome("sorage-doctor-intents-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const clean = capture();
+    expect(runCli(["doctor", "--json"], clean.ports)).toBe(0);
+    const cleanReport = JSON.parse(clean.outText()) as DoctorEnvelope;
+    const cleanCheck = cleanReport.data.checks.find((check) => check.id === "db.pendingIntents");
+    expect(cleanCheck?.severity).toBe("ok");
+
+    // One committed intent whose bytes are gone on both ends: the durable
+    // integrity-failed signal the drain leaves behind (VLT-014, RUN-002).
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      database
+        .prepare(
+          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, 'activate', NULL, 'artifacts/h-1/a-9/none.md', NULL, ?, 1)",
+        )
+        .run("intent-1", "2026-05-01T00:00:00.000Z");
+    } finally {
+      database.close();
+    }
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const check = report.data.checks.find((entry) => entry.id === "db.pendingIntents");
+    expect(check?.severity).toBe("warning");
+    expect(check?.message).toContain("integrity-failed");
+    expect(check?.recovery?.suggestedCommand).toContain("ARTIFACT_INTEGRITY_FAILED");
   });
 });

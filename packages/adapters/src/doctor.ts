@@ -241,7 +241,34 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "db.pendingIntents": {
-        return ok("No pending filesystem intents are recorded in this schema version.");
+        try {
+          const db = openSorageDatabase(databasePath);
+          try {
+            const table = db
+              .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_fs_ops'")
+              .get() as { name: string } | null | undefined;
+            if (!table) return ok("No pending filesystem intents are recorded in this schema version.");
+            const row = db.prepare("SELECT COUNT(*) AS count FROM pending_fs_ops").get() as
+              | Record<string, unknown>
+              | undefined;
+            // bun:sqlite returns null-shaped rows as null and the test alias as
+            // undefined; both shapes mean absence here only when the row itself
+            // is missing, which COUNT(*) never is.
+            const count = Number(row?.["count"] ?? 0);
+            if (count > 0) {
+              return warning(
+                `${count} pending filesystem intent${count === 1 ? "" : "s"} remain${count === 1 ? "s" : ""} unresolved after the start drain; the affected Handoffs are integrity-failed.`,
+              );
+            }
+            return ok("No pending filesystem intents remain after the start drain.");
+          } finally {
+            db.close();
+          }
+        } catch (error) {
+          return blocking(
+            `pending_fs_ops could not be read: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
 
       case "db.migrations": {

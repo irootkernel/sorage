@@ -52,4 +52,29 @@ CREATE INDEX idx_project_bindings_project_id ON project_bindings(project_id);
 `,
 };
 
-export const MIGRATIONS: Migration[] = [FIRST_RELEASED_SCHEMA, PROJECT_REGISTRY_MIGRATION];
+/**
+ * The intent log of EPIC-004 (ADR-0013, VLT-021): one row in `pending_fs_ops` is
+ * a promise the database has already made, every process drains outstanding rows
+ * in `created_at` order before doing anything else, and an unresolved row after
+ * a drain is the durable integrity-failed signal the doctor check reports. Paths
+ * are Vault-relative; `attempts` increments on every drain evaluation (CP-7).
+ */
+export const INTENT_LOG_MIGRATION: Migration = {
+  version: 3,
+  name: "intent-log-v1",
+  sql: `
+CREATE TABLE pending_fs_ops (
+  id TEXT PRIMARY KEY,
+  op TEXT NOT NULL CHECK (op IN ('activate', 'unlink')),
+  from_path TEXT,
+  to_path TEXT NOT NULL,
+  artifact_id TEXT,
+  created_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_pending_fs_ops_created_at ON pending_fs_ops(created_at);
+`,
+};
+
+export const MIGRATIONS: Migration[] = [FIRST_RELEASED_SCHEMA, PROJECT_REGISTRY_MIGRATION, INTENT_LOG_MIGRATION];

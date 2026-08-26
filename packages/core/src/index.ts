@@ -8,6 +8,7 @@ export * from "./errors";
 export * from "./ids";
 export * from "./import-policy";
 export * from "./init";
+export * from "./intent-log";
 export * from "./project-commands";
 export * from "./workspace-identity";
 export * from "./projects";

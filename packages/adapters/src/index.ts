@@ -6,6 +6,7 @@ export * from "./doctor";
 export * from "./home";
 export * from "./import-source";
 export * from "./init-ports";
+export * from "./intent-log";
 export * from "./lockfile";
 export * from "./logging";
 export * from "./project-command-ports";
