@@ -28,7 +28,7 @@ import {
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore, type ConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
-import { createSqliteIntentLog, fsyncDirectory } from "./intent-log";
+import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { openAndMigrate } from "./sqlite/migrator";
 import { MIGRATIONS } from "./sqlite/migrations";
@@ -397,7 +397,23 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           installationId: view.value.installationId,
           runDir: home.runDir,
         });
-        return log.drain(view.value.vaultPath);
+        const drained = log.drain(view.value.vaultPath);
+        if (!drained.ok) return drained;
+        // Garbage collection runs only after the drain, over the surviving
+        // intents and the recorded storage keys (VLT-013, VLT-014); the
+        // daemon's scheduled job takes the recurring pass over in 0.2. A failed
+        // sweep never fails the command: doctor's vault.writable reports the
+        // underlying condition.
+        const surviving = log.pending();
+        const recorded = recordedArtifacts();
+        if (surviving.ok && recorded.ok) {
+          void collectVaultGarbage(view.value.vaultPath, surviving.value, {
+            liveStorageKeys: recorded.value.map((row) => row.storageKey),
+            graceHours: view.value.graceHours,
+            now: clock.now(),
+          });
+        }
+        return drained;
       });
     },
   };

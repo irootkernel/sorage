@@ -92,10 +92,14 @@ export function vaultVerify(ports: VaultVerifyPorts, options: { now: Date }): Re
       findings.push(`staging/${entry.name} is older than the gc.graceHours window.`);
     }
   }
+  // The on-disk census, next to the recorded count, so the two diverge visibly
+  // when files exist that no row names.
+  const onDisk = ports.artifactsStats();
+  if (!onDisk.ok) return err(onDisk.error);
   return ok({
     findings,
     checked: {
-      artifacts: recorded.value.length,
+      artifacts: onDisk.value.count,
       recordedArtifacts: recorded.value.length,
       stagedFiles: entries.value.length,
     },
@@ -154,6 +158,23 @@ export function moveVault(
   const source = ports.openVault(ports.vaultPath);
   if (!source.ok) return err(source.error);
 
+  // The target may never be the current Vault or live inside it, and the
+  // current Vault may never live inside the target: either layout would make
+  // the move copy its own scratch and pollute the retained original.
+  if (
+    ports.targetPath === ports.vaultPath ||
+    ports.targetPath.startsWith(`${ports.vaultPath}/`) ||
+    ports.vaultPath.startsWith(`${ports.targetPath}/`)
+  ) {
+    return err(
+      appError(
+        "VAULT_CONTAINMENT",
+        `The move target ${ports.targetPath} and the current Vault ${ports.vaultPath} would contain one another.`,
+        { resolvedVaultPath: ports.targetPath, currentVaultPath: ports.vaultPath, side: "move-target-overlaps-source" },
+      ),
+    );
+  }
+
   const bindings = ports.bindingDirectories();
   if (!bindings.ok) return err(bindings.error);
   const contained = checkVaultContainment({
@@ -179,6 +200,19 @@ export function moveVault(
       if (!copy.ok) return err(copy.error);
       staged.push({ relativePath, stagedPath: copy.value.stagedPath, sha256: copy.value.sha256 });
       if (ports.afterStagedCopy !== undefined) ports.afterStagedCopy(relativePath);
+    }
+    // A concurrent process may have renamed a file into the source after the
+    // listing; re-list and refuse to switch when the managed set moved, so the
+    // relocation's every-byte contract cannot pass on a stale census.
+    const relisted = ports.target.managedFiles();
+    if (!relisted.ok) return err(relisted.error);
+    if (JSON.stringify([...relisted.value].sort()) !== JSON.stringify([...files.value].sort())) {
+      return err(
+        appError("INTERNAL_ERROR", "The managed file set changed during the move; the original Vault stays active.", {
+          listed: files.value.length,
+          relisted: relisted.value.length,
+        }),
+      );
     }
     for (const entry of staged) {
       const expected = ports.target.sourceChecksum(entry.relativePath);

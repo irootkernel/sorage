@@ -53,16 +53,29 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
 
   /** Every mutation funnels through the move lock and the marker guard (RUN-014, VLT-019). */
   function guard(): Result<unknown, AppError> {
-    if (options.runDir !== undefined && vaultMoveLockHeld(options.runDir)) {
+    if (pausedNow()) {
       return err(
         appError(
           "SERVICE_PAUSED",
           "A Vault move or restore is in progress; this mutation paused instead of racing it.",
-          { lockPath: join(options.runDir, "vault-move.lock") },
+          { lockPath: options.runDir === undefined ? undefined : join(options.runDir, "vault-move.lock") },
         ),
       );
     }
     return openVault(vaultPath, installationId);
+  }
+
+  /** The lock is re-checked immediately before each mutation, not only at entry, so a move that starts mid-flight cannot switch the Vault underneath a write or rename. */
+  function pausedNow(): boolean {
+    return options.runDir !== undefined && vaultMoveLockHeld(options.runDir);
+  }
+
+  function pauseError(): AppError {
+    return appError(
+      "SERVICE_PAUSED",
+      "A Vault move or restore is in progress; this mutation paused instead of racing it.",
+      { lockPath: options.runDir === undefined ? undefined : join(options.runDir, "vault-move.lock") },
+    );
   }
 
   return {
@@ -92,6 +105,7 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
       let source: number | undefined;
       let staged: number | undefined;
       try {
+        if (pausedNow()) return err(pauseError());
         source = openSync(request.sourcePath, "r");
         staged = openSync(stagingPath, "wx");
         const hash = createHash("sha256");
@@ -169,6 +183,7 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
         );
       }
       try {
+        if (pausedNow()) return err(pauseError());
         mkdirSync(dirname(destination), { recursive: true });
         renameSync(request.stagingPath, destination);
       } catch (error) {

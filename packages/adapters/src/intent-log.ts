@@ -114,20 +114,23 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
     },
 
     drain(vaultPath: string): Result<DrainReport, AppError> {
-      if (options.runDir !== undefined && vaultMoveLockHeld(options.runDir)) {
-        return err(
-          appError(
-            "SERVICE_PAUSED",
-            "A Vault move or restore is in progress; the intent drain paused instead of racing it.",
-            { lockPath: join(options.runDir, "vault-move.lock") },
-          ),
+      const paused = (): boolean => options.runDir !== undefined && vaultMoveLockHeld(options.runDir);
+      const pauseError = (): AppError =>
+        appError(
+          "SERVICE_PAUSED",
+          "A Vault move or restore is in progress; the intent drain paused instead of racing it.",
+          { lockPath: options.runDir === undefined ? undefined : join(options.runDir, "vault-move.lock") },
         );
-      }
+      // The lock is re-checked before every intent, not only at entry, so a move
+      // that starts mid-drain cannot switch the Vault underneath in-flight
+      // renames (RUN-014).
+      if (paused()) return err(pauseError());
       const opened = openVault(vaultPath, installationId);
       if (!opened.ok) return err(opened.error);
       const report: DrainReport = { resolved: [], integrityFailed: [] };
       try {
         for (const intent of listPending()) {
+          if (paused()) return err(pauseError());
           const outcome = executeIntent(intent, vaultPath);
           // The completion commit: one short transaction per intent that bumps
           // attempts and deletes the row only when the effect is complete.
@@ -156,6 +159,7 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
               toPath: intent.toPath,
               artifactId: intent.artifactId,
               event: "ARTIFACT_INTEGRITY_FAILED",
+              reason: outcome,
             });
           }
         }
@@ -196,7 +200,10 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
 }
 
 /** One intent's filesystem effect, evaluated from current state; never runs inside a transaction. */
-export function executeIntent(intent: PendingFsOp, vaultPath: string): "done" | "integrity-failed" | "unsafe-path" {
+export function executeIntent(
+  intent: PendingFsOp,
+  vaultPath: string,
+): "done" | "both-gone" | "destination-conflict" | "unsafe-path" {
   if (!isSafeVaultRelative(intent.toPath) || (intent.fromPath !== null && !isSafeVaultRelative(intent.fromPath))) {
     // A hostile path never touches the filesystem; it stays recorded as failed.
     return "unsafe-path";
@@ -204,20 +211,37 @@ export function executeIntent(intent: PendingFsOp, vaultPath: string): "done" | 
   if (intent.op === "activate") {
     const source = intent.fromPath === null ? null : join(vaultPath, intent.fromPath);
     const destination = join(vaultPath, intent.toPath);
-    const sourcePresent = source !== null && existsSync(source);
-    const destinationPresent = existsSync(destination);
-    if (!sourcePresent && destinationPresent) return "done";
-    if (sourcePresent) {
-      mkdirSync(dirname(destination), { recursive: true });
-      renameSync(source, destination);
-      fsyncDirectory(dirname(destination));
-      return "done";
+    if (source !== null && existsSync(source)) {
+      if (existsSync(destination)) {
+        // Both ends present: overwriting the destination would violate the
+        // no-overwrite invariant the store enforces, so the row stays recorded
+        // as a failure instead of silently replacing bytes a record may name.
+        return "destination-conflict";
+      }
+      try {
+        mkdirSync(dirname(destination), { recursive: true });
+        renameSync(source, destination);
+        fsyncDirectory(dirname(destination));
+        return "done";
+      } catch (error) {
+        // A concurrent drain may have renamed the source first: re-evaluate
+        // from current state instead of failing the whole drain (CP-7).
+        if (!existsSync(source) && existsSync(destination)) return "done";
+        throw error;
+      }
     }
-    return "integrity-failed";
+    if (existsSync(destination)) return "done";
+    return "both-gone";
   }
   const target = join(vaultPath, intent.toPath);
   if (existsSync(target)) {
-    unlinkSync(target);
+    try {
+      unlinkSync(target);
+    } catch (error) {
+      // A concurrent drain may have unlinked first; a vanished target is done.
+      if (!existsSync(target)) return "done";
+      throw error;
+    }
     fsyncDirectory(dirname(target));
   }
   return "done";

@@ -33,6 +33,8 @@ export interface IntentIntegrityFailure {
   artifactId: string | null;
   /** The audit event of section 20.6; the event ledger append lands with TASK-028. */
   event: "ARTIFACT_INTEGRITY_FAILED";
+  /** Why the drain could not resolve it: bytes gone on both ends, a destination that already holds bytes, or a hostile recorded path. */
+  reason: "both-gone" | "destination-conflict" | "unsafe-path";
 }
 
 export interface DrainReport {

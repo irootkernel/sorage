@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -76,6 +76,23 @@ describe("sorage vault status", () => {
     expect(report.data.counts.pendingIntents).toBe(0);
   });
 
+  it("sweeps over-grace staging leftovers after the drain at start (VLT-013, epic audit F002)", () => {
+    const home = tempHome("sorage-vault-gc-");
+    const vault = join(home, "vault");
+    expect(runCli(["init", "--vault", vault, "--non-interactive"], capture().ports)).toBe(0);
+    const oldLeftover = join(vault, "staging", "old-leftover");
+    const youngLeftover = join(vault, "staging", "young-leftover");
+    writeFileSync(oldLeftover, "sweep me");
+    writeFileSync(youngLeftover, "keep me");
+    const aged = new Date("2026-01-01T00:00:00.000Z");
+    utimesSync(oldLeftover, aged, aged);
+
+    // Any vault command drains first and then runs the garbage pass.
+    expect(runCli(["vault", "status", "--json"], capture().ports)).toBe(0);
+    expect(existsSync(oldLeftover)).toBe(false);
+    expect(existsSync(youngLeftover)).toBe(true);
+  });
+
   it("fails fast with SERVICE_PAUSED at exit 75 while vault-move.lock is live (RUN-014)", () => {
     const home = tempHome("sorage-vault-paused-");
     const vault = join(home, "vault");
@@ -103,13 +120,15 @@ describe("sorage vault verify", () => {
     expect(runCli(["vault", "verify", "--json"], clean.ports)).toBe(0);
     expect(clean.errText()).toBe("");
 
-    // A staged file left past the grace window is a finding.
+    // The command's own start sequence drains and then sweeps, so an aged
+    // staging leftover is removed by the garbage pass before the sweep report;
+    // a young leftover survives and stays clean.
     const leftover = join(vault, "staging", "leftover");
     writeFileSync(leftover, "sweep me");
     utimesSync(leftover, new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:00.000Z"));
-    const finding = capture();
-    expect(runCli(["vault", "verify", "--json"], finding.ports)).toBe(1);
-    expect(finding.outText()).toContain("leftover");
+    const swept = capture();
+    expect(runCli(["vault", "verify", "--json"], swept.ports)).toBe(0);
+    expect(existsSync(leftover)).toBe(false);
   });
 });
 

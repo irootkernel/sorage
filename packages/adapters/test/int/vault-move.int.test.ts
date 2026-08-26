@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { errorSpec, moveVault, vaultStatus, type AppError } from "@sorage/core";
+import { errorSpec, moveVault, vaultStatus, vaultVerify, type AppError } from "@sorage/core";
 import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { initializeInstallation } from "@sorage/core";
@@ -146,5 +146,63 @@ describe("moveVault", () => {
     if (moved.ok) return;
     expect(moved.error.code).toBe("VAULT_CONTAINMENT");
     expect(exitCodeOf(moved.error)).toBe(64);
+  });
+
+  it("refuses a target that overlaps the current Vault itself (epic audit F005)", () => {
+    const { home, vault } = initializedHome("sorage-move-self-");
+    for (const target of [join(vault, "nested"), home]) {
+      const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+      const movePorts = ports.movePorts();
+      if (!movePorts.ok) throw new Error("move ports must build");
+      const moved = moveVault(movePorts.value);
+      expect(moved.ok, target).toBe(false);
+      if (moved.ok) return;
+      expect(moved.error.code).toBe("VAULT_CONTAINMENT");
+    }
+    expect(statusPathOf(home)).toBe(vault);
+  });
+
+  it("aborts when the managed file set changes during the move (epic audit F001)", () => {
+    const { home, vault } = initializedHome("sorage-move-raced-");
+    const target = join(home, "moved-vault");
+    seedArtifact(vault, "h-1/a-1/doc.md", "document one");
+    const racing = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: home },
+      userHome: home,
+      targetPath: target,
+      afterStagedCopy: () => {
+        // A concurrent process lands one more managed file after the listing.
+        seedArtifact(vault, "h-9/a-1/late.md", "late arrival");
+      },
+    });
+    const movePorts = racing.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(false);
+    if (moved.ok) return;
+    expect(moved.error.code).toBe("INTERNAL_ERROR");
+    expect(moved.error.message).toContain("changed during the move");
+    // The original stays active and configured; nothing switched.
+    expect(statusPathOf(home)).toBe(vault);
+    expect(readFileSync(join(vault, "artifacts/h-1/a-1/doc.md"), "utf8")).toBe("document one");
+  });
+});
+
+describe("vaultVerify direct sweep report", () => {
+  it("names an aged staging leftover when no drain ran first (section 6.2)", () => {
+    const { home, vault } = initializedHome("sorage-verify-direct-");
+    const leftover = join(vault, "staging", "leftover");
+    writeFileSync(leftover, "sweep me");
+    const aged = new Date("2026-01-01T00:00:00.000Z");
+    utimesSync(leftover, aged, aged);
+    const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home });
+    const verifyPorts = ports.verifyPorts();
+    if (!verifyPorts.ok) throw new Error("verify ports must build");
+    const report = vaultVerify(verifyPorts.value, { now: new Date("2026-06-02T00:00:00.000Z") });
+    expect(report.ok).toBe(true);
+    if (!report.ok) return;
+    expect(report.value.findings.some((finding) => finding.includes("leftover"))).toBe(true);
+    expect(report.value.checked.stagedFiles).toBe(1);
+    expect(report.value.checked.artifacts).toBe(0);
   });
 });

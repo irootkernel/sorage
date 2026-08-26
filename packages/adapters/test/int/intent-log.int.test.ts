@@ -140,6 +140,7 @@ describe("createSqliteIntentLog drain", () => {
       if (!failure) throw new Error("failure expected");
       expect(failure.id).toBe("i-1");
       expect(failure.event).toBe("ARTIFACT_INTEGRITY_FAILED");
+      expect(failure.reason).toBe("both-gone");
       expect(failure.toPath).toBe("artifacts/h-1/a-9/none.md");
       expect(existsSync(join(fixture.vaultPath, "artifacts/h-1/a-9/none.md"))).toBe(false);
       // The row stays recorded as the durable integrity-failed signal, and a
@@ -153,6 +154,29 @@ describe("createSqliteIntentLog drain", () => {
       if (!again.ok) return;
       expect(again.value.integrityFailed).toHaveLength(1);
       expect(existsSync(join(fixture.vaultPath, "artifacts/h-1/a-9/none.md"))).toBe(false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refuses to overwrite when both ends of an activate are present (epic audit F003)", () => {
+    const fixture = intentFixture("sorage-drain-both-");
+    try {
+      const source = join(fixture.vaultPath, "staging", "still-there");
+      const destination = join(fixture.vaultPath, "artifacts/h-1/a-1/doc.md");
+      writeFileSync(source, "staged replacement");
+      mkdirSync(join(fixture.vaultPath, "artifacts/h-1/a-1"), { recursive: true });
+      writeFileSync(destination, "existing bytes");
+      fixture.log.record([activate("i-1", "staging/still-there", "artifacts/h-1/a-1/doc.md")]);
+      const drained = fixture.log.drain(fixture.vaultPath);
+      expect(drained.ok).toBe(true);
+      if (!drained.ok) return;
+      expect(drained.value.resolved).toEqual([]);
+      expect(drained.value.integrityFailed).toHaveLength(1);
+      expect(drained.value.integrityFailed[0]?.reason).toBe("destination-conflict");
+      // Nothing was overwritten and nothing was fabricated.
+      expect(readFileSync(destination, "utf8")).toBe("existing bytes");
+      expect(readFileSync(source, "utf8")).toBe("staged replacement");
     } finally {
       fixture.cleanup();
     }
@@ -187,6 +211,7 @@ describe("createSqliteIntentLog drain", () => {
       expect(drained.ok).toBe(true);
       if (!drained.ok) return;
       expect(drained.value.resolved).toEqual([]);
+      expect(drained.value.integrityFailed[0]?.reason).toBe("unsafe-path");
       expect(existsSync(outside)).toBe(false);
     } finally {
       fixture.cleanup();
