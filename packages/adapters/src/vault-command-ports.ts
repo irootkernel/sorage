@@ -159,8 +159,12 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     let entries: Dirent[];
     try {
       entries = readdirSync(root, { withFileTypes: true }) as unknown as Dirent[];
-    } catch {
-      return;
+    } catch (error) {
+      // An absent root holds no files; every other failure — an unreadable
+      // directory among them — must surface, or a census would silently omit
+      // managed bytes it could not list and a move would relocate incomplete.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
     for (const entry of entries) {
       const path = join(root, entry.name);

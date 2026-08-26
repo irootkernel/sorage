@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -331,5 +340,40 @@ describe("moveVault switch fencing (cold validation round 1)", () => {
     expect(retried.value.artifactsMoved).toBe(1);
     expect(statusPathOf(home)).toBe(target);
     expect(readFileSync(join(target, "artifacts/h-1/a-1/doc.md"), "utf8")).toBe("document one");
+  });
+
+  it("refuses rather than silently skipping an unreadable managed directory (cold validation round 2)", () => {
+    const { home, vault } = initializedHome("sorage-move-unreadable-");
+    const target = join(home, "moved-vault");
+    seedArtifact(vault, "h-1/a-1/doc.md", "document one");
+    seedArtifact(vault, "h-2/a-1/doc.md", "document two");
+    // A permissions-tampered handoff directory must fail the census loudly; a
+    // silent omission would let the move switch while the copy is incomplete.
+    // 0o333 keeps write+execute but removes read, so listing it fails.
+    const handoffDir = join(vault, "artifacts", "h-2");
+    chmodSync(handoffDir, 0o333);
+    let moved: ReturnType<typeof moveVault>;
+    try {
+      const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+      const movePorts = ports.movePorts();
+      if (!movePorts.ok) throw new Error("move ports must build");
+      moved = moveVault(movePorts.value);
+    } finally {
+      chmodSync(handoffDir, 0o755);
+    }
+    expect(moved.ok).toBe(false);
+    if (moved.ok) return;
+    expect(moved.error.code).toBe("INTERNAL_ERROR");
+    expect(statusPathOf(home)).toBe(vault);
+    expect(readFileSync(join(vault, "artifacts/h-2/a-1/doc.md"), "utf8")).toBe("document two");
+    // With the directory readable again the move relocates every managed byte.
+    const retrying = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+    const retryPorts = retrying.movePorts();
+    if (!retryPorts.ok) throw new Error("retry ports must build");
+    const retried = moveVault(retryPorts.value);
+    expect(retried.ok).toBe(true);
+    if (!retried.ok) return;
+    expect(retried.value.artifactsMoved).toBe(2);
+    expect(readFileSync(join(target, "artifacts/h-2/a-1/doc.md"), "utf8")).toBe("document two");
   });
 });
