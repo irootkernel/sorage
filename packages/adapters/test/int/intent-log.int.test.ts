@@ -362,3 +362,37 @@ describe("record fencing and conservative garbage collection (epic audit round 2
     }
   });
 });
+
+describe("staging sweep guard (epic audit round 3)", () => {
+  it("never sweeps a staged source a pending intent still names, whatever its age", () => {
+    const fixture = intentFixture("sorage-gc-guarded-");
+    try {
+      const guardedStaged = join(fixture.vaultPath, "staging", "conflicted");
+      const oldStaged = join(fixture.vaultPath, "staging", "abandoned");
+      writeFileSync(guardedStaged, "awaiting conflict resolution");
+      writeFileSync(oldStaged, "nobody names this");
+      utimesSync(guardedStaged, OLD, OLD);
+      utimesSync(oldStaged, OLD, OLD);
+      const pending: PendingFsOp = {
+        id: "i-1",
+        op: "activate",
+        fromPath: "staging/conflicted",
+        toPath: "artifacts/h-1/a-1/doc.md",
+        artifactId: "a-1",
+        createdAt: "2026-05-01T00:00:00.000Z",
+        attempts: 1,
+      };
+      const collected = collectVaultGarbage(fixture.vaultPath, [pending], {
+        liveStorageKeys: ["artifacts/h-1/a-1/doc.md"],
+        graceHours: 24,
+        now: new Date("2026-06-02T00:00:00.000Z"),
+      });
+      expect(collected.ok).toBe(true);
+      if (!collected.ok) return;
+      expect(collected.value.sweptStaging).toEqual([oldStaged]);
+      expect(existsSync(guardedStaged)).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});

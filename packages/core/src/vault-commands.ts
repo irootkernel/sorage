@@ -183,8 +183,8 @@ export function moveVault(
         "VAULT_CONTAINMENT",
         `The move target ${ports.targetPath} and the current Vault ${ports.vaultPath} would contain one another.`,
         {
-          resolvedVaultPath: ports.resolvedTargetPath,
-          currentVaultPath: ports.resolvedVaultPath,
+          resolvedTargetPath: ports.resolvedTargetPath,
+          resolvedVaultPath: ports.resolvedVaultPath,
           side: "move-target-overlaps-source",
         },
       ),

@@ -283,6 +283,10 @@ export function collectVaultGarbage(
     if (existsSync(staging)) {
       for (const entry of readdirSync(staging)) {
         const path = join(staging, entry);
+        // A staged source a pending intent still names is never a candidate,
+        // whatever its age: sweeping it would turn a recoverable conflict into
+        // a durable both-gone integrity failure.
+        if (guarded.has(path)) continue;
         if (isSweepable(path, cutoffMs)) {
           unlinkSync(path);
           report.sweptStaging.push(path);

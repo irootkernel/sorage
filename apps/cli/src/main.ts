@@ -601,7 +601,10 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         );
         return;
       }
-      const vaultPorts = createNodeVaultCommandPorts({ targetPath: options.to });
+      // A relative --to resolves against the cwd once, so the recorded path and
+      // every later probe agree no matter where subsequent commands run from.
+      const targetPath = isAbsolute(options.to) ? options.to : resolve(options.to);
+      const vaultPorts = createNodeVaultCommandPorts({ targetPath });
       const drained = vaultPorts.drainAtStart();
       if (!drained.ok) {
         reportExitCode(renderAppError(drained.error, ports, json));

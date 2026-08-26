@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  mkdtempSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -177,5 +186,26 @@ describe("sorage vault move", () => {
 
     const verify = capture();
     expect(runCli(["vault", "verify", "--json"], verify.ports)).toBe(0);
+  });
+});
+
+describe("sorage vault move with a relative target", () => {
+  it("records an absolute vault.path resolved against the cwd once (epic audit round 3)", () => {
+    const home = tempHome("sorage-vault-relative-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(home);
+      const moved = capture();
+      expect(runCli(["vault", "move", "--to", "moved-vault", "--as-user", "--json"], moved.ports)).toBe(0);
+      const payload = JSON.parse(moved.outText()) as { data: { toPath: string } };
+      // resolve() anchors on the physical cwd, which darwin reports under /private.
+      expect(payload.data.toPath).toBe(join(realpathSync(home), "moved-vault"));
+      const show = capture();
+      expect(runCli(["config", "show", "--json"], show.ports)).toBe(0);
+      expect(show.outText()).toContain(join(realpathSync(home), "moved-vault"));
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 });
