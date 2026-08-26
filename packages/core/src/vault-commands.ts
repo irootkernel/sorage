@@ -1,6 +1,7 @@
 import { appError, err, ok, type AppError, type Result } from "./errors";
 import type { ArtifactStore } from "./artifacts";
 import { verifyVaultArtifacts } from "./artifact-integrity";
+import type { DrainReport } from "./intent-log";
 import { checkVaultContainment } from "./import-policy";
 import type { VaultMarker } from "./vault";
 
@@ -110,10 +111,19 @@ export interface VaultMovePorts {
   vaultPath: string;
   targetPath: string;
   installationId: string;
+  /** Physically resolved spellings (nearest existing ancestor), for alias-proof containment. */
+  resolvedVaultPath: string;
+  resolvedTargetPath: string;
   /** Validates one directory as this Installation's Vault (VLT-019). */
   openVault(path: string): Result<OpenedVaultInfo, AppError>;
   /** Resolved Project binding directories for the containment check (VLT-017). */
   bindingDirectories(): Result<string[], AppError>;
+  /**
+   * Drains outstanding intents as the lock owner, after the lock is acquired and
+   * before the copy begins, so a promise committed just before the lock cannot
+   * survive the switch as a false integrity failure in the relocated Vault.
+   */
+  drainUnderLock(): Result<DrainReport, AppError>;
   lock: {
     /** Acquires vault-move.lock; a live holder fails with SERVICE_PAUSED (RUN-014). */
     acquire(): Result<{ release: () => void }, AppError>;
@@ -160,17 +170,23 @@ export function moveVault(
 
   // The target may never be the current Vault or live inside it, and the
   // current Vault may never live inside the target: either layout would make
-  // the move copy its own scratch and pollute the retained original.
+  // the move copy its own scratch and pollute the retained original. The
+  // comparison runs on physically resolved spellings, so an alias such as a
+  // symlink or a /private prefix cannot slip a nested target past it.
   if (
-    ports.targetPath === ports.vaultPath ||
-    ports.targetPath.startsWith(`${ports.vaultPath}/`) ||
-    ports.vaultPath.startsWith(`${ports.targetPath}/`)
+    ports.resolvedTargetPath === ports.resolvedVaultPath ||
+    ports.resolvedTargetPath.startsWith(`${ports.resolvedVaultPath}/`) ||
+    ports.resolvedVaultPath.startsWith(`${ports.resolvedTargetPath}/`)
   ) {
     return err(
       appError(
         "VAULT_CONTAINMENT",
         `The move target ${ports.targetPath} and the current Vault ${ports.vaultPath} would contain one another.`,
-        { resolvedVaultPath: ports.targetPath, currentVaultPath: ports.vaultPath, side: "move-target-overlaps-source" },
+        {
+          resolvedVaultPath: ports.resolvedTargetPath,
+          currentVaultPath: ports.resolvedVaultPath,
+          side: "move-target-overlaps-source",
+        },
       ),
     );
   }
@@ -178,13 +194,33 @@ export function moveVault(
   const bindings = ports.bindingDirectories();
   if (!bindings.ok) return err(bindings.error);
   const contained = checkVaultContainment({
-    resolvedVaultPath: ports.targetPath,
+    resolvedVaultPath: ports.resolvedTargetPath,
     resolvedBindingDirectories: bindings.value,
   });
   if (!contained.ok) return err(contained.error);
 
   const lock = ports.lock.acquire();
   if (!lock.ok) return err(lock.error);
+
+  // As the lock owner, finish every outstanding promise against the source
+  // Vault before copying it; a Vault whose intents cannot resolve is not
+  // relocatable, and running this drain now means no committed promise can
+  // outlive the switch as a false integrity failure.
+  const preDrain = ports.drainUnderLock();
+  if (!preDrain.ok) {
+    lock.value.release();
+    return err(preDrain.error);
+  }
+  if (preDrain.value.integrityFailed.length > 0) {
+    lock.value.release();
+    return err(
+      appError(
+        "INTERNAL_ERROR",
+        `The Vault has ${preDrain.value.integrityFailed.length} unresolved filesystem intent(s); run sorage vault verify and resolve them before relocating.`,
+        { unresolvedIntents: preDrain.value.integrityFailed.length },
+      ),
+    );
+  }
 
   let staged: Array<{ relativePath: string; stagedPath: string; sha256: string }> = [];
   let activated = 0;

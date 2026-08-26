@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -204,5 +204,81 @@ describe("vaultVerify direct sweep report", () => {
     expect(report.value.findings.some((finding) => finding.includes("leftover"))).toBe(true);
     expect(report.value.checked.stagedFiles).toBe(1);
     expect(report.value.checked.artifacts).toBe(0);
+  });
+});
+
+describe("moveVault intent fencing (epic audit round 2)", () => {
+  it("drains a pre-committed staged intent under the lock and relocates the resolved artifact", () => {
+    const { home, vault } = initializedHome("sorage-move-pre-drain-");
+    const target = join(home, "moved-vault");
+    // A concurrent process staged bytes and committed its activate intent just
+    // before the mover took the lock.
+    writeFileSync(join(vault, "staging", "staged-1"), "committed bytes");
+    const { DatabaseSync: Db } = { DatabaseSync } as typeof import("node:sqlite");
+    const database = new Db(join(home, "state", "sorage.sqlite3"));
+    try {
+      database
+        .prepare(
+          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('i-1', 'activate', 'staging/staged-1', 'artifacts/h-1/a-1/doc.md', 'a-1', '2026-05-01T00:00:00.000Z', 0)",
+        )
+        .run();
+    } finally {
+      database.close();
+    }
+    const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+    const movePorts = ports.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+    expect(moved.value.artifactsMoved).toBe(1);
+    expect(readFileSync(join(target, "artifacts/h-1/a-1/doc.md"), "utf8")).toBe("committed bytes");
+    // The promise is fully resolved: no row survives in the relocated Vault.
+    const after = new Db(join(home, "state", "sorage.sqlite3"));
+    try {
+      const rows = after.prepare("SELECT COUNT(*) AS count FROM pending_fs_ops").get() as { count: number };
+      expect(rows.count).toBe(0);
+    } finally {
+      after.close();
+    }
+  });
+
+  it("refuses to relocate a Vault whose intents cannot resolve", () => {
+    const { home, vault } = initializedHome("sorage-move-unresolvable-");
+    const target = join(home, "moved-vault");
+    const { DatabaseSync: Db } = { DatabaseSync } as typeof import("node:sqlite");
+    const database = new Db(join(home, "state", "sorage.sqlite3"));
+    try {
+      database
+        .prepare(
+          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('i-1', 'activate', 'staging/gone', 'artifacts/h-1/a-9/none.md', 'a-9', '2026-05-01T00:00:00.000Z', 0)",
+        )
+        .run();
+    } finally {
+      database.close();
+    }
+    const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+    const movePorts = ports.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(false);
+    if (moved.ok) return;
+    expect(moved.error.message).toContain("unresolved filesystem intent");
+    expect(statusPathOf(home)).toBe(vault);
+  });
+
+  it("rejects an aliased nested target a lexical comparison would miss (darwin /private)", () => {
+    const { home, vault } = initializedHome("sorage-move-alias-");
+    // /var/folders/... is served as /private/var/folders/... on darwin; the two
+    // spellings share no string prefix, so only physical resolution catches it.
+    const aliased = `/private${vault}/nested`;
+    const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: aliased });
+    const movePorts = ports.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(false);
+    if (moved.ok) return;
+    expect(moved.error.code).toBe("VAULT_CONTAINMENT");
+    expect(existsSync(join(vault, "nested"))).toBe(false);
   });
 });

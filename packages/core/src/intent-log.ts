@@ -67,6 +67,13 @@ export interface GarbageCollectionOptions {
   /** The configured `gc.graceHours`; younger files are never candidates. */
   graceHours: number;
   now: Date;
+  /**
+   * When true, an empty registry still allows the artifacts/ sweep. Defaults to
+   * false: with no registry, no file can be proven unreferenced (a lost state
+   * database must not turn the first command into a mass deletion), so only
+   * staging/ is swept.
+   */
+  sweepArtifactsWithoutRegistry?: boolean;
 }
 
 export interface GarbageCollectionReport {

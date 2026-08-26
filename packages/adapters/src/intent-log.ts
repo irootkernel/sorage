@@ -77,6 +77,18 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
 
   return {
     record(intents: NewPendingFsOp[]): Result<{ recorded: number }, AppError> {
+      // A committed intent is a promise about the current Vault, so it may not
+      // be committed around a relocation that would relocate the promise's
+      // filesystem underneath it (RUN-014).
+      if (options.runDir !== undefined && vaultMoveLockHeld(options.runDir)) {
+        return err(
+          appError(
+            "SERVICE_PAUSED",
+            "A Vault move or restore is in progress; the intent commit paused instead of racing it.",
+            { lockPath: join(options.runDir, "vault-move.lock") },
+          ),
+        );
+      }
       try {
         db.exec("BEGIN IMMEDIATE");
         const insert = db.prepare(
@@ -278,7 +290,9 @@ export function collectVaultGarbage(
       }
     }
     const artifacts = join(vaultPath, "artifacts");
-    if (existsSync(artifacts)) {
+    const registryAuthorizesSweep =
+      options.liveStorageKeys.length > 0 || options.sweepArtifactsWithoutRegistry === true;
+    if (registryAuthorizesSweep && existsSync(artifacts)) {
       for (const path of filesUnder(artifacts)) {
         if (guarded.has(path)) continue;
         if (isSweepable(path, cutoffMs)) {

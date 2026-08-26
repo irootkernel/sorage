@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readdirSync,
+  realpathSync,
   readSync,
   renameSync,
   rmSync,
@@ -248,7 +250,16 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         vaultPath,
         targetPath,
         installationId,
+        resolvedVaultPath: resolvePhysicalPath(vaultPath),
+        resolvedTargetPath: resolvePhysicalPath(targetPath),
         openVault: (path) => openVault(path, installationId),
+        drainUnderLock: () =>
+          withDatabase((db) => {
+            // The lock owner's own drain: no pause guard, because this process
+            // holds the very lock other processes would pause on.
+            const log = createSqliteIntentLog({ db, installationId });
+            return log.drain(vaultPath);
+          }),
         bindingDirectories: () =>
           withDatabase((db) => {
             const table = db
@@ -258,7 +269,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             const rows = db.prepare("SELECT directory FROM project_bindings").all() as unknown as Array<{
               directory: string;
             }>;
-            return ok(rows.map((row) => row.directory));
+            return ok(rows.map((row) => resolvePhysicalPath(row.directory)));
           }),
         lock: { acquire: acquireVaultMoveLock },
         target: {
@@ -417,6 +428,29 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       });
     },
   };
+}
+
+/**
+ * Resolves one path to its physical spelling through the nearest existing
+ * ancestor, so a symlink or a platform prefix such as /private on darwin
+ * cannot disguise a nested layout from a prefix comparison. A path whose
+ * root does not resolve at all is returned unchanged.
+ */
+export function resolvePhysicalPath(path: string): string {
+  const tail: string[] = [];
+  let current = path;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return path;
+    tail.unshift(current.slice(parent.length + 1));
+    current = parent;
+  }
+  try {
+    const resolved = realpathSync(current);
+    return tail.length === 0 ? resolved : join(resolved, ...tail);
+  } catch {
+    return path;
+  }
 }
 
 function logVaultMoved(fromPath: string, toPath: string, artifactsMoved: number): void {

@@ -8,6 +8,7 @@ import { migrate } from "../../src/sqlite/migrator";
 import { MIGRATIONS } from "../../src/sqlite/migrations";
 import { FakeClock } from "../../src/testkit/fakes";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
+import { makeTempHome } from "../../src/testkit/temp-home";
 import { makeTempVault } from "../../src/testkit/temp-vault";
 
 const INSTALLATION = "11111111-1111-4111-8111-111111111111";
@@ -302,6 +303,60 @@ describe("collectVaultGarbage", () => {
       expect(existsSync(youngOrphan)).toBe(true);
       expect(existsSync(join(vault, ".sorage-vault.json"))).toBe(true);
       expect(existsSync(join(vault, ".gitattributes"))).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("record fencing and conservative garbage collection (epic audit round 2)", () => {
+  it("pauses an intent commit while vault-move.lock is live (RUN-014)", () => {
+    const home = makeTempHome("sorage-record-paused-");
+    try {
+      const database = makeTempDatabase("sorage-record-paused-db-");
+      migrate(database.db, MIGRATIONS);
+      mkdirSync(join(home.home, "run"), { recursive: true });
+      writeFileSync(
+        join(home.home, "run", "vault-move.lock"),
+        `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), hostname: "here" })}\n`,
+      );
+      const log = createSqliteIntentLog({
+        db: database.db,
+        installationId: INSTALLATION,
+        runDir: join(home.home, "run"),
+      });
+      const recorded = log.record([activate("i-1", "staging/a", "artifacts/h/a")]);
+      expect(recorded.ok).toBe(false);
+      if (recorded.ok) return;
+      expect(recorded.error.code).toBe("SERVICE_PAUSED");
+      const pending = log.pending();
+      if (pending.ok) expect(pending.value).toEqual([]);
+      database.cleanup();
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("never sweeps artifacts/ while no registry can prove a file unreferenced (F004 guard)", () => {
+    const fixture = intentFixture("sorage-gc-noregistry-");
+    try {
+      const orphan = join(fixture.vaultPath, "artifacts/h-1/a-1/orphan.md");
+      mkdirSync(join(fixture.vaultPath, "artifacts/h-1/a-1"), { recursive: true });
+      writeFileSync(orphan, "old bytes");
+      utimesSync(orphan, OLD, OLD);
+      const staged = join(fixture.vaultPath, "staging", "old-staged");
+      writeFileSync(staged, "old staged");
+      utimesSync(staged, OLD, OLD);
+      const collected = collectVaultGarbage(fixture.vaultPath, [], {
+        liveStorageKeys: [],
+        graceHours: 24,
+        now: new Date("2026-06-02T00:00:00.000Z"),
+      });
+      expect(collected.ok).toBe(true);
+      if (!collected.ok) return;
+      expect(collected.value.sweptStaging).toEqual([staged]);
+      expect(collected.value.sweptUnreferenced).toEqual([]);
+      expect(existsSync(orphan)).toBe(true);
     } finally {
       fixture.cleanup();
     }
