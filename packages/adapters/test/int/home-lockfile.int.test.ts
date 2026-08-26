@@ -1,10 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { createHomePaths, createNodeHomePaths } from "../../src/home";
-import { acquireLock, createNodeLockProbePorts, readLock, type LockProbePorts } from "../../src/lockfile";
+import {
+  acquireLock,
+  breakStaleLockIfUnchanged,
+  createNodeLockProbePorts,
+  readLock,
+  releaseLockIfRecord,
+  type LockProbePorts,
+} from "../../src/lockfile";
 import { FakeClock, makeTempHome, withTempHome } from "../../src/testkit";
 
 const systemPorts = createNodeLockProbePorts();
@@ -178,5 +185,47 @@ describe("the O_EXCL lockfile primitive", () => {
       expect(() => JSON.parse(body)).not.toThrow();
       if (acquired.ok) acquired.release();
     }, "sorage-test-lock-shape-");
+  });
+});
+
+describe("stale-lock breaking fencing (cold validation round 1)", () => {
+  it("removes a stale body only while it is still the exact bytes that were judged", async () => {
+    await withTempHome(async () => {
+      const paths = createNodeHomePaths();
+      mkdirSync(paths.runDir, { recursive: true });
+      const path = paths.lockFile("vault-move");
+      const judgedRaw = "not a lock record\n";
+      writeFileSync(path, judgedRaw);
+      // A different body means another process replaced the lock after the
+      // staleness judgment, so the breaker must leave it in place.
+      expect(breakStaleLockIfUnchanged(path, '{"pid":1,"startedAt":"x","hostname":"h"}\n')).toBe(false);
+      expect(readFileSync(path, "utf8")).toBe(judgedRaw);
+      // The unchanged body is the one the judgment saw, so it is removable.
+      expect(breakStaleLockIfUnchanged(path, judgedRaw)).toBe(true);
+      expect(existsSync(path)).toBe(false);
+    }, "sorage-test-lock-fence-break-");
+  });
+
+  it("never releases a lock another process took over after ours was broken", async () => {
+    await withTempHome(async () => {
+      const path = createNodeHomePaths().lockFile("vault-move");
+      const acquired = acquireLock({ path, lock: "vault-move", ports: systemPorts });
+      expect(acquired.ok).toBe(true);
+      if (!acquired.ok) return;
+      // The lock was broken and a different process now holds it; our stale
+      // release must not delete the new holder's live lock.
+      const successor = `${JSON.stringify({ pid: process.pid + 1, startedAt: new Date().toISOString(), hostname: "other.local" })}\n`;
+      writeFileSync(path, successor);
+      acquired.release();
+      expect(readFileSync(path, "utf8")).toBe(successor);
+      // Releasing while our own record still stands does remove it.
+      rmSync(path, { force: true });
+      const ours = acquireLock({ path, lock: "vault-move", ports: systemPorts });
+      expect(ours.ok).toBe(true);
+      if (ours.ok) {
+        releaseLockIfRecord(path, ours.record);
+        expect(existsSync(path)).toBe(false);
+      }
+    }, "sorage-test-lock-fence-release-");
   });
 });

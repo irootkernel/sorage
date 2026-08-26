@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildStorageKey, errorSpec, type AppError } from "@sorage/core";
@@ -78,6 +78,38 @@ describe("createNodeArtifactStore stage", () => {
         expect(staged.error.code).toBe("ARTIFACT_TOO_LARGE");
         expect(exitCodeOf(staged.error)).toBe(65);
         expect(readdirSync(join(vaultPath, "staging"))).toEqual([]);
+        expect(existsSync(source)).toBe(true);
+      } finally {
+        cleanup();
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  it("classifies a staging write failure as a staging failure rather than an unreadable source (cold validation round 1)", () => {
+    const home = makeTempHome("sorage-stagewrite-");
+    try {
+      const source = join(home.home, "source.md");
+      writeFileSync(source, "# Report\n");
+      const { store, vaultPath, cleanup } = initializedStore("sorage-stagewrite-v-");
+      try {
+        // An unwritable staging directory fails the staged write itself; the
+        // diagnosis must point at the Vault, never claim the source is unreadable.
+        const stagingDir = join(vaultPath, "staging");
+        chmodSync(stagingDir, 0o555);
+        let staged: ReturnType<typeof store.stage>;
+        try {
+          staged = store.stage({ sourcePath: source, maxBytes: 1024 });
+        } finally {
+          chmodSync(stagingDir, 0o755);
+        }
+        expect(staged.ok).toBe(false);
+        if (staged.ok) return;
+        expect(staged.error.code).toBe("INTERNAL_ERROR");
+        expect(staged.error.message).toContain("Writing the staged copy");
+        expect(staged.error.message).not.toContain("could not be read");
+        expect(readdirSync(stagingDir)).toEqual([]);
         expect(existsSync(source)).toBe(true);
       } finally {
         cleanup();

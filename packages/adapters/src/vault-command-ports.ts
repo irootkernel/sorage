@@ -208,13 +208,18 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     },
 
     verifyPorts(): Result<VaultVerifyPorts, AppError> {
-      const status = this.statusPorts();
-      if (!status.ok) return err(status.error);
+      // One installation read builds every port, so a relocation that switches
+      // the configuration mid-call cannot leave status ports aimed at one Vault
+      // and an artifact store at another.
       const view = installation();
       if (!view.ok) return err(view.error);
       const vaultPath = view.value.vaultPath;
       return ok({
-        ...status.value,
+        vaultPath,
+        openVault: () => openVault(vaultPath, view.value.installationId),
+        artifactsStats: () => directoryStats(join(vaultPath, "artifacts")),
+        stagingStats: () => directoryStats(join(vaultPath, "staging")),
+        pendingIntentCount,
         artifactStore: createNodeArtifactStore({ vaultPath, installationId: view.value.installationId }),
         graceHours: view.value.graceHours,
         recordedArtifacts,
@@ -260,6 +265,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             const log = createSqliteIntentLog({ db, installationId });
             return log.drain(vaultPath);
           }),
+        pendingIntentCount,
         bindingDirectories: () =>
           withDatabase((db) => {
             const table = db
@@ -483,7 +489,14 @@ function streamCopy(source: string, destination: string): string {
       const read = readSync(input, buffer, 0, buffer.length, null);
       if (read === 0) break;
       hash.update(buffer.subarray(0, read));
-      writeSync(output, buffer, 0, read);
+      // A partial write must never pass the copy verification, which compares
+      // two hashes of the same in-memory bytes and cannot see truncation.
+      let written = 0;
+      while (written < read) {
+        const count = writeSync(output, buffer, written, read - written);
+        if (count <= 0) throw new Error(`The move copy made no progress after ${written} of ${read} bytes.`);
+        written += count;
+      }
     }
     fsyncSync(output);
     closeSync(output);

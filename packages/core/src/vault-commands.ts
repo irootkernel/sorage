@@ -124,6 +124,13 @@ export interface VaultMovePorts {
    * survive the switch as a false integrity failure in the relocated Vault.
    */
   drainUnderLock(): Result<DrainReport, AppError>;
+  /**
+   * Counts intents again immediately before the configuration switch: an intent
+   * whose commit raced the lock acquisition landed after the mover's drain, and
+   * relocating past it would strand its staged bytes in the abandoned Vault, so
+   * a non-zero count refuses the switch instead.
+   */
+  pendingIntentCount(): Result<number, AppError>;
   lock: {
     /** Acquires vault-move.lock; a live holder fails with SERVICE_PAUSED (RUN-014). */
     acquire(): Result<{ release: () => void }, AppError>;
@@ -268,6 +275,25 @@ export function moveVault(
       if (!placed.ok) return err(placed.error);
       activated++;
     }
+
+    // The switch is the point of no return, so a promise that landed after the
+    // mover's drain must refuse it: relocating past a pending intent would
+    // strand its staged bytes in the abandoned Vault and surface afterwards as
+    // a both-gone integrity failure for a commit the database made. The check
+    // runs before the target is finalized, so a refused attempt leaves the
+    // target as clearable scratch rather than a complete second Vault.
+    const outstanding = ports.pendingIntentCount();
+    if (!outstanding.ok) return err(outstanding.error);
+    if (outstanding.value > 0) {
+      return err(
+        appError(
+          "INTERNAL_ERROR",
+          `The move cannot switch the Vault while ${outstanding.value} filesystem intent(s) became pending after the drain; run sorage vault verify and retry once they are resolved.`,
+          { pendingIntents: outstanding.value },
+        ),
+      );
+    }
+
     const finalized = ports.target.finalize();
     if (!finalized.ok) return err(finalized.error);
 

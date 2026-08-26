@@ -282,3 +282,54 @@ describe("moveVault intent fencing (epic audit round 2)", () => {
     expect(existsSync(join(vault, "nested"))).toBe(false);
   });
 });
+
+describe("moveVault switch fencing (cold validation round 1)", () => {
+  it("refuses the switch when an intent lands after the mover's drain, then relocates once it drains", () => {
+    const { home, vault } = initializedHome("sorage-move-postdrain-");
+    const target = join(home, "moved-vault");
+    seedArtifact(vault, "h-1/a-1/doc.md", "document one");
+    const racing = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: home },
+      userHome: home,
+      targetPath: target,
+      afterStagedCopy: () => {
+        // A concurrent process commits an unlink intent after the mover's drain
+        // already listed the table; its target is already gone, so the next
+        // drain resolves it, but the switch must not outrun the promise.
+        const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+        try {
+          database
+            .prepare(
+              "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('i-late', 'unlink', NULL, 'artifacts/h-9/a-9/gone.md', 'a-9', '2026-05-01T00:00:00.000Z', 0)",
+            )
+            .run();
+        } finally {
+          database.close();
+        }
+      },
+    });
+    const movePorts = racing.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(false);
+    if (moved.ok) return;
+    expect(moved.error.code).toBe("INTERNAL_ERROR");
+    expect(moved.error.message).toContain("became pending after the drain");
+    // The original stays active and configured; nothing switched.
+    expect(statusPathOf(home)).toBe(vault);
+    expect(readFileSync(join(vault, "artifacts/h-1/a-1/doc.md"), "utf8")).toBe("document one");
+    // The late intent's target is gone, so the next drain resolves it, and the
+    // retried move relocates cleanly.
+    const base = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home });
+    expect(base.drainAtStart().ok).toBe(true);
+    const retrying = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+    const retryPorts = retrying.movePorts();
+    if (!retryPorts.ok) throw new Error("retry ports must build");
+    const retried = moveVault(retryPorts.value);
+    expect(retried.ok).toBe(true);
+    if (!retried.ok) return;
+    expect(retried.value.artifactsMoved).toBe(1);
+    expect(statusPathOf(home)).toBe(target);
+    expect(readFileSync(join(target, "artifacts/h-1/a-1/doc.md"), "utf8")).toBe("document one");
+  });
+});

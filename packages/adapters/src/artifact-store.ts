@@ -106,13 +106,26 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
       let staged: number | undefined;
       try {
         if (pausedNow()) return err(pauseError());
-        source = openSync(request.sourcePath, "r");
-        staged = openSync(stagingPath, "wx");
+        try {
+          source = openSync(request.sourcePath, "r");
+        } catch (error) {
+          return err(unreadableSource(request.sourcePath, error));
+        }
+        try {
+          staged = openSync(stagingPath, "wx");
+        } catch (error) {
+          return err(stagingWriteFailed(stagingPath, error));
+        }
         const hash = createHash("sha256");
         const buffer = Buffer.allocUnsafe(STREAM_BUFFER_BYTES);
         let total = 0;
         for (;;) {
-          const read = readSync(source, buffer, 0, buffer.length, null);
+          let read: number;
+          try {
+            read = readSync(source, buffer, 0, buffer.length, null);
+          } catch (error) {
+            return err(unreadableSource(request.sourcePath, error));
+          }
           if (read === 0) break;
           if (total + read > request.maxBytes) {
             closeSync(source);
@@ -133,17 +146,38 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
             );
           }
           hash.update(buffer.subarray(0, read));
-          writeSync(staged, buffer, 0, read);
+          try {
+            // A partial write must never pass the same-pass hash as complete
+            // bytes, so the write loops until every read byte landed.
+            let written = 0;
+            while (written < read) {
+              const count = writeSync(staged, buffer, written, read - written);
+              if (count <= 0) throw new Error(`The staged write made no progress after ${written} of ${read} bytes.`);
+              written += count;
+            }
+          } catch (error) {
+            return err(stagingWriteFailed(stagingPath, error));
+          }
           total += read;
         }
-        fsyncSync(staged);
+        try {
+          fsyncSync(staged);
+        } catch (error) {
+          return err(stagingWriteFailed(stagingPath, error));
+        }
         closeSync(source);
         closeSync(staged);
         source = undefined;
         staged = undefined;
         return ok({ stagingPath, sizeBytes: total, sha256: hash.digest("hex") });
       } catch (error) {
-        return err(unreadableSource(request.sourcePath, error, stagingPath));
+        return err(
+          appError("INTERNAL_ERROR", `Staging ${request.sourcePath} failed unexpectedly: ${messageOf(error)}.`, {
+            sourcePath: request.sourcePath,
+            stagingPath,
+            cause: String(error),
+          }),
+        );
       } finally {
         if (source !== undefined) {
           try {
@@ -262,10 +296,22 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
   }
 }
 
-function unreadableSource(sourcePath: string, error: unknown, stagingPath?: string): AppError {
+function unreadableSource(sourcePath: string, error: unknown): AppError {
   return appError("INTERNAL_ERROR", `The source ${sourcePath} could not be read: ${messageOf(error)}.`, {
     sourcePath,
-    ...(stagingPath === undefined ? {} : { stagingPath }),
+    cause: String(error),
+  });
+}
+
+/**
+ * A failure writing the staged copy is never a statement about the source: a
+ * full disk or an unwritable staging directory must point recovery at the
+ * Vault, not at the sender's file (the closed catalogue has no dedicated code,
+ * so it surfaces as INTERNAL_ERROR with an explicit message).
+ */
+function stagingWriteFailed(stagingPath: string, error: unknown): AppError {
+  return appError("INTERNAL_ERROR", `Writing the staged copy ${stagingPath} failed: ${messageOf(error)}.`, {
+    stagingPath,
     cause: String(error),
   });
 }

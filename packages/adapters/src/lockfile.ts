@@ -125,7 +125,10 @@ export function isPidAlive(pid: number): boolean {
 
 /**
  * Acquires one exclusive lockfile with `O_EXCL`. A stale lock is broken and taken
- * over; a live lock produces a conflict rather than a wait loop.
+ * over, but only while its body is still the exact bytes that were judged stale,
+ * so a lock another process freshly acquired in between is a conflict rather
+ * than something this process may destroy; a live lock produces a conflict
+ * rather than a wait loop.
  */
 export function acquireLock(options: AcquireLockOptions): LockAcquisition {
   const { path, lock, ports } = options;
@@ -136,15 +139,16 @@ export function acquireLock(options: AcquireLockOptions): LockAcquisition {
     hostname: ports.hostname(),
   };
   const first = writeExclusive(path, record);
-  if (first) return { ok: true, record, release: () => releaseLock(path) };
+  if (first) return { ok: true, record, release: () => releaseLockIfRecord(path, record) };
 
-  const existing = parseLockRecord(readBody(path));
+  const judgedRaw = readBody(path);
+  const existing = parseLockRecord(judgedRaw);
   const verdict = evaluateStaleness(lock, existing, ports.clock.now(), ports.isPidAlive);
   if (!verdict.stale) {
     return { ok: false, error: { kind: "live-lock", lock, path, record: existing } };
   }
-  breakStaleLock(path);
-  if (writeExclusive(path, record)) return { ok: true, record, release: () => releaseLock(path) };
+  breakStaleLockIfUnchanged(path, judgedRaw);
+  if (writeExclusive(path, record)) return { ok: true, record, release: () => releaseLockIfRecord(path, record) };
   return { ok: false, error: { kind: "live-lock", lock, path, record: parseLockRecord(readBody(path)) } };
 }
 
@@ -175,6 +179,42 @@ export function releaseLock(path: string): void {
   }
 }
 
+/**
+ * Releases a lockfile only while it still carries this holder's own record
+ * (section 7 live-lock guarantee): a release whose lock was broken and taken
+ * over by another process must never delete that process's live lock, which
+ * would unpause every mutation the lock fences.
+ */
+export function releaseLockIfRecord(path: string, record: LockRecord): void {
+  const current = parseLockRecord(readBody(path));
+  if (current === undefined || !recordsEqual(current, record)) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Already gone; release is idempotent.
+  }
+}
+
+/**
+ * Removes a verified-stale lock only when its body is still the exact bytes
+ * that were judged stale. Two processes may judge the same stale record
+ * concurrently; whichever loses the race finds a changed body — the winner's
+ * fresh live record — and must leave it in place instead of unlinking it.
+ */
+export function breakStaleLockIfUnchanged(path: string, judgedRaw: string): boolean {
+  if (readBody(path) !== judgedRaw) return false;
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return true;
+}
+
+function recordsEqual(a: LockRecord, b: LockRecord): boolean {
+  return a.pid === b.pid && a.startedAt === b.startedAt && a.hostname === b.hostname;
+}
+
 function writeExclusive(path: string, record: LockRecord): boolean {
   let handle: number;
   try {
@@ -190,15 +230,6 @@ function writeExclusive(path: string, record: LockRecord): boolean {
     closeSync(handle);
   }
   return true;
-}
-
-/** Removes a verified-stale lock, tolerating a concurrent breaker that got there first. */
-function breakStaleLock(path: string): void {
-  try {
-    unlinkSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
 }
 
 function readBody(path: string): string {
