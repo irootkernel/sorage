@@ -24,11 +24,14 @@ import {
   type Result,
 } from "@sorage/core";
 import type { SorageSqlite } from "./sqlite/connection";
+import { vaultMoveLockHeld } from "./lockfile";
 import { openVault } from "./vault";
 
 export interface SqliteIntentLogOptions {
   db: SorageSqlite;
   installationId: string;
+  /** When provided, a live vault-move.lock pauses the drain with SERVICE_PAUSED (RUN-014). */
+  runDir?: string | undefined;
 }
 
 interface PendingRow {
@@ -111,6 +114,15 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
     },
 
     drain(vaultPath: string): Result<DrainReport, AppError> {
+      if (options.runDir !== undefined && vaultMoveLockHeld(options.runDir)) {
+        return err(
+          appError(
+            "SERVICE_PAUSED",
+            "A Vault move or restore is in progress; the intent drain paused instead of racing it.",
+            { lockPath: join(options.runDir, "vault-move.lock") },
+          ),
+        );
+      }
       const opened = openVault(vaultPath, installationId);
       if (!opened.ok) return err(opened.error);
       const report: DrainReport = { resolved: [], integrityFailed: [] };

@@ -24,6 +24,7 @@ import {
   type StagedFile,
 } from "@sorage/core";
 import { isManagedStorageKey } from "@sorage/core";
+import { vaultMoveLockHeld } from "./lockfile";
 import { openVault } from "./vault";
 
 /** One mebibyte: the fixed copy buffer that keeps import memory bounded (NFR-005). */
@@ -34,6 +35,8 @@ export interface NodeArtifactStoreOptions {
   installationId: string;
   /** Overridable for tests; each staged file gets a fresh exclusive name. */
   newStagingId?: (() => string) | undefined;
+  /** When provided, a live vault-move.lock pauses every mutation with SERVICE_PAUSED (RUN-014). */
+  runDir?: string | undefined;
 }
 
 /**
@@ -48,8 +51,17 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
   const { vaultPath, installationId } = options;
   const newStagingId = options.newStagingId ?? (() => randomUUID());
 
-  /** Every mutation funnels through the marker guard (VLT-019). */
+  /** Every mutation funnels through the move lock and the marker guard (RUN-014, VLT-019). */
   function guard(): Result<unknown, AppError> {
+    if (options.runDir !== undefined && vaultMoveLockHeld(options.runDir)) {
+      return err(
+        appError(
+          "SERVICE_PAUSED",
+          "A Vault move or restore is in progress; this mutation paused instead of racing it.",
+          { lockPath: join(options.runDir, "vault-move.lock") },
+        ),
+      );
+    }
     return openVault(vaultPath, installationId);
   }
 

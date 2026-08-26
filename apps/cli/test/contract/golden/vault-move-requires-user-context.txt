@@ -1,0 +1,2 @@
+USER_CONTEXT_REQUIRED: sorage vault move records a User decision and requires --as-user.
+Recovery: Re-run with --as-user

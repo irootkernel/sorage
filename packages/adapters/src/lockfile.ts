@@ -1,6 +1,6 @@
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 /** The normative lockfile set under `<home>/run` (domain-and-architecture section 19). */
 export type LockName = "config" | "daemon" | "backup" | "vault-move" | "migration";
@@ -151,6 +151,19 @@ export function acquireLock(options: AcquireLockOptions): LockAcquisition {
 /** Reads the record a lockfile carries without acquiring anything. */
 export function readLock(path: string): LockRecord | undefined {
   return parseLockRecord(readBody(path));
+}
+
+/**
+ * True while a live vault-move.lock is held in this run directory (RUN-014): a
+ * stale lock whose pid is dead does not pause anyone, because the next process
+ * may break it.
+ */
+export function vaultMoveLockHeld(runDir: string): boolean {
+  const path = join(runDir, "vault-move.lock");
+  const record = readLock(path);
+  if (record === undefined) return false;
+  const verdict = evaluateStaleness("vault-move", record, new Date(), isPidAlive);
+  return !verdict.stale;
 }
 
 /** Releases a lockfile; releasing an absent lock is not an error. */

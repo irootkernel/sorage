@@ -16,3 +16,4 @@ export * from "./sqlite/migrations";
 export * from "./sqlite/migrator";
 export * from "./testkit";
 export * from "./vault";
+export * from "./vault-command-ports";

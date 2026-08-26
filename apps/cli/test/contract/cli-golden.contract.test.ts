@@ -54,4 +54,22 @@ describe("cli golden snapshots", () => {
     const golden = readFileSync(`${goldenDir}malformed-stderr.txt`, "utf8");
     expect(run.stderr).toBe(golden);
   });
+
+  it("pins the vault status NOT_INITIALIZED envelope before initialization", () => {
+    const run = runCli(["vault", "status", "--json"], "/tmp/sorage-golden-home");
+    expect(run.status).toBe(78);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}vault-status-not-initialized.json`, "utf8");
+    expect(run.stderr).toBe(golden);
+  });
+
+  it("pins vault move without --as-user refusing with USER_CONTEXT_REQUIRED", () => {
+    const init = runCli(["init", "--non-interactive"], "/tmp/sorage-golden-home2");
+    expect(init.status).toBe(0);
+    const run = runCli(["vault", "move", "--to", "/tmp/sorage-golden-moved"], "/tmp/sorage-golden-home2");
+    expect(run.status).toBe(77);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}vault-move-requires-user-context.txt`, "utf8");
+    expect(run.stderr).toBe(golden);
+  });
 });
