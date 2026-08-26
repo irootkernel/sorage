@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-004`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-027`
@@ -72,7 +72,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `EPIC-001` | Foundation and toolchain | 0.1 | Completed | `TASK-001` to `TASK-008` |
 | `EPIC-002` | Minimal installation and configuration core | 0.1 | Completed | `TASK-009` to `TASK-014` |
 | `EPIC-003` | Project registry and identity | 0.1 | Completed | `TASK-015` to `TASK-020` |
-| `EPIC-004` | Vault and Artifact store | 0.1 | Planned | `TASK-021` to `TASK-026` |
+| `EPIC-004` | Vault and Artifact store | 0.1 | Completed | `TASK-021` to `TASK-026` |
 | `EPIC-005` | Handoff domain and workflow | 0.1 | Planned | `TASK-027` to `TASK-035` |
 | `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Planned | `TASK-036` to `TASK-041` |
 | `EPIC-007` | Daemon, API, and Web | 0.2 | Planned | `TASK-042` to `TASK-051` |
@@ -134,9 +134,12 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-004: Vault and Artifact store
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.1
 - **Objective:** Make Artifact storage crash-safe and tamper-evident through the intent-log protocol of ADR-0013, delivering the storage half of AJ-08 and the journey AJ-09.
+- **Validation record (whole-epic review, 2026-08-26):** the whole-epic review over `e116416` to `a4d53d3` ran its full three remediation rounds plus the confirmation pass: round one found five valid findings, all fixed in `702424d` (lock-race fencing, garbage collection wired into the process-start sequence, drain race semantics, move-target overlap, verify census); round two found two, fixed in `c33082b` (intent commits fenced by vault-move.lock, the mover draining under its own lock, physically resolved containment, conservative sweep with no registry); round three found three, fixed in `aadcd0d` (cwd-anchored relative `--to`, the guarded staging sweep, relabeled containment details); the confirmation-only round `r_01a03b9a-89a4-73d2-8482-d74c40861f46` reported the single accepted risk below. `make test` exits 0 with 325 tests and `scripts/sot-check` exits 0 on the audited snapshot; AJ-09 passes through the vault command surface this epic ships, with the Handoff-creation steps exercised at the storage layer until the send and review commands arrive in `EPIC-005`, and the storage half of AJ-08 (VLT-021, VLT-022, RUN-002) is proven by the intent-log tests ahead of `TASK-035`'s fault-injection matrix. Migration v3 is additive and non-breaking with the v1 upgrade fixture replaying to current, and every member task closed with a clean committed round-1 Mulgae run and no hardening deferral; nothing was pushed, and publication remains local.
+- **Accepted risk (confirmation round, 2026-08-26):** a quoted literal tilde-prefixed `--to` value such as `'~/vault'` resolves against the cwd instead of the user home, because a relative target is anchored once at entry; an interactive shell expands `~` before the CLI sees it, `sorage init --vault` shares the same anchoring, and no programmatic caller exists in 0.1, so the risk is accepted without an `EPIC-009` slot unless a programmatic tilde path becomes reachable.
+- **Seams for EPIC-005:** the drain-at-start obligation is wired into the vault command group, and the first intent-recording Handoff command must drain at start itself or hoist the helper into a shared startup path (RUN-002); the `ARTIFACT_INTEGRITY_FAILED` and `VAULT_MOVED` events are carried by the drain report, the command result, and the structured log until the append-only ledger of `TASK-028` exists; the doctor `artifacts.checksums` probe and the move's checksum verification read the `artifacts` table's `storage_key`, `sha256`, and `materialized` columns as `TASK-027`'s contract; the doctor `db.pendingIntents` message follows the pinned section 35 wording even when rows are merely undrained; and the closed error catalogue assigns no symbolic code to special-file rejection, which surfaces as `INTERNAL_ERROR` with an explicit message and is a candidate for a future material change.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
