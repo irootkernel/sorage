@@ -771,11 +771,11 @@ The mapping from symbolic code to HTTP status is published here and verified by 
 | `TOKEN_INVALID` | 401 | A token was presented but is unknown, rotated, or expired | `sorage web` for a fresh browser session, or re-read the API token |
 | `ROW_VERSION_CONFLICT` | 409 | The Handoff changed since the client last read it | Re-read the Handoff and retry with the new Row Version |
 | `REVISION_CONFLICT` | 409 | The target or expected Revision is stale | Re-read the current Revision |
-| `REVIEW_NOTE_PRESENT` | 409 | The operation is blocked while a Review Note exists | Resolve the Note by revising, withdrawing, or removing it |
+| `REVIEW_NOTE_PRESENT` | 409 | A Review Note exists on the Handoff | Resolve the Note: `sorage revise <handoff-id> --file <path>`, or `review withdraw` / `review remove` |
 | `NO_REVIEW_NOTE` | 409 | `revise --no-change` was invoked outside `changes_requested`, where there is no Note to resolve | Use `revise --file <path>`, which is the only revision form outside `changes_requested` |
 | `NO_CONTENT_CHANGE` | 422 | The supplied file has the current Artifact's SHA-256 | Change the document, or resolve the Note with `revise --no-change --reason` |
 | `NO_CHANGE_LIMIT` | 409 | A second consecutive no-change resolution was attempted | The next resolution MUST change content |
-| `HANDOFF_TERMINAL` | 409 | The Handoff is `accepted`, `declined`, or `withdrawn` | Create a superseding Handoff with `--supersedes` |
+| `HANDOFF_TERMINAL` | 409 | The Handoff is in a terminal review state | Create a superseding Handoff: `sorage send --supersedes <handoff-id>` |
 | `HANDOFF_NOT_TERMINAL` | 409 | The operation requires a terminal review state, such as `delete approve`, or a `--supersedes` target that is not terminal | Reach a terminal state first with `accept`, `decline`, or `withdraw` |
 | `HANDOFF_DELETED` | 409 | The Handoff is a tombstone; content operations are gone for good | Use `get` or a listing with `--include-deleted`, or create a new Handoff |
 | `HANDOFF_ALREADY_FETCHED` | 409 | Withdraw is blocked because the recipient has fetched or reviewed: `firstFetchedAt` or `reviewEngagedAt` is set | Ask the recipient to decline, or supersede the Handoff |

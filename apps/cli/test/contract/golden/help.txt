@@ -6,7 +6,10 @@ Options:
   --as <project-slug>             resolve the acting Project by slug instead of
                                   the working directory
   --as-user                       assert the local User as the actor for a
-                                  User-admin operation
+                                  User-admin operation; User-admin rows express
+                                  workflow intent, and any process able to run
+                                  the CLI as this operating-system user can
+                                  assert User context
   --confirm                       confirm a state-conditional operation
   --expected-row-version <n>      compare-and-set against this Row Version
   --limit <n>                     page size for list commands
@@ -53,4 +56,6 @@ Commands:
   delete                          request and decide Handoff deletion
   vault                           inspect, verify, and relocate the Artifact
                                   Vault
+  completion <shell>              print the shell completion script for zsh or
+                                  bash; source it from the shell's profile
   help [command]                  display help for command

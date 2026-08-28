@@ -80,6 +80,7 @@ import {
   withdrawReviewNote,
   workspaceKey,
 } from "@sorage/core";
+import { buildCompletionScript } from "./completion";
 import { Command, InvalidArgumentError } from "commander";
 
 export const CLI_NAME = "sorage" as const;
@@ -138,7 +139,10 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     .name(CLI_NAME)
     .description("Local document-handoff broker for AI coding sessions.")
     .option("--as <project-slug>", "resolve the acting Project by slug instead of the working directory")
-    .option("--as-user", "assert the local User as the actor for a User-admin operation")
+    .option(
+      "--as-user",
+      "assert the local User as the actor for a User-admin operation; User-admin rows express workflow intent, and any process able to run the CLI as this operating-system user can assert User context",
+    )
     .option("--confirm", "confirm a state-conditional operation")
     .option("--expected-row-version <n>", "compare-and-set against this Row Version", parseInteger)
     .option("--limit <n>", "page size for list commands", parseInteger)
@@ -1398,6 +1402,20 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           `Moved the Vault from ${result.value.fromPath} to ${result.value.toPath} (${result.value.artifactsMoved} artifacts); the previous Vault was kept in place.\n`,
         );
       }
+    });
+
+  program
+    .command("completion <shell>")
+    .description("print the shell completion script for zsh or bash; source it from the shell's profile")
+    .action((shell: string, _options: unknown, command: Command) => {
+      const script = buildCompletionScript(command.parent ?? program, shell, CLI_NAME);
+      if (script === null) {
+        ports.err(`sorage: completion supports zsh and bash, not '${shell}'\n`);
+        ports.err("Run 'sorage completion --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      ports.out(script);
     });
 
   program.helpOption("-h, --help", "display help for the command");

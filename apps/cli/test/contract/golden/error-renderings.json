@@ -532,7 +532,7 @@
     "exitCode": 75,
     "httpStatus": 409,
     "recovery": {
-      "suggestedCommand": "Resolve the Note by revising, withdrawing, or removing it"
+      "suggestedCommand": "Resolve the Note: sorage revise <handoff-id> --file <path>, or review withdraw / review remove"
     },
     "renderedExitCode": 75,
     "json": {
@@ -542,14 +542,14 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Resolve the Note by revising, withdrawing, or removing it"
+          "suggestedCommand": "Resolve the Note: sorage revise <handoff-id> --file <path>, or review withdraw / review remove"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "REVIEW_NOTE_PRESENT: rendering probe\nRecovery: Resolve the Note by revising, withdrawing, or removing it\n"
+    "human": "REVIEW_NOTE_PRESENT: rendering probe\nRecovery: Resolve the Note: sorage revise <handoff-id> --file <path>, or review withdraw / review remove\n"
   },
   {
     "code": "NO_REVIEW_NOTE",
@@ -628,7 +628,7 @@
     "exitCode": 65,
     "httpStatus": 409,
     "recovery": {
-      "suggestedCommand": "Create a superseding Handoff with --supersedes"
+      "suggestedCommand": "Create a superseding Handoff: sorage send --supersedes <handoff-id>"
     },
     "renderedExitCode": 65,
     "json": {
@@ -638,14 +638,14 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Create a superseding Handoff with --supersedes"
+          "suggestedCommand": "Create a superseding Handoff: sorage send --supersedes <handoff-id>"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "HANDOFF_TERMINAL: rendering probe\nRecovery: Create a superseding Handoff with --supersedes\n"
+    "human": "HANDOFF_TERMINAL: rendering probe\nRecovery: Create a superseding Handoff: sorage send --supersedes <handoff-id>\n"
   },
   {
     "code": "HANDOFF_NOT_TERMINAL",
