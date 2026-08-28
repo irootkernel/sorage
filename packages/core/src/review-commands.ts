@@ -3,6 +3,7 @@ import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
 import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { resolveWorkspaceActor } from "./project-commands";
+import { workspaceKey } from "./workspace-identity";
 
 /**
  * The Review Note lifecycle of section 10 (REV-002 to REV-007, REV-014 to REV-016,
@@ -82,6 +83,16 @@ function roleFor(
     if (resolved.value.project.id === facts.recipientProjectId) return ok("recipient");
     if (facts.senderKind === "registered_project" && facts.senderProjectId === resolved.value.project.id)
       return ok("sender");
+  }
+  // An unregistered Workspace that sent this Handoff participates as the sender: the
+  // permission matrix answers FORBIDDEN_ACTOR for the review side rather than hiding
+  // the Handoff from its own sender (REV-004, section 22.4).
+  if (
+    resolved.value.kind === "unregistered_workspace" &&
+    facts.senderKind === "unregistered_workspace" &&
+    facts.senderWorkspaceKey === workspaceKey(ports.projectPorts.installationId, resolved.value.directory)
+  ) {
+    return ok("sender");
   }
   return err(
     appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: "" }),

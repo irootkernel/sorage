@@ -191,6 +191,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   revisions: ReturnType<typeof createSqliteRevisionStore>;
   artifactStore: ReturnType<typeof createNodeArtifactStore>;
   config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
+  bindingDirectories: string[];
 } {
   const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
@@ -217,6 +218,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
       maxBytes: effective.artifact.maxBytes,
       verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch,
     },
+    bindingDirectories: bindingDirectoriesOf(db),
   };
 }
 

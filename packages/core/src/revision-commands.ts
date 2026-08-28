@@ -7,7 +7,7 @@ import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
 import type { NewPendingFsOp } from "./intent-log";
-import type { PreparedImport } from "./import-policy";
+import { prepareArtifactImport, type PreparedImport } from "./import-policy";
 
 /**
  * Sender revision of sections 9 and 10 (REV-008 to REV-013, REV-017, HND-015, VLT-011,
@@ -62,6 +62,8 @@ export interface RevisionPorts extends HandoffReadPorts {
     remove(storageKey: string): Result<void, AppError>;
   };
   config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
+  /** Resolved binding directories for the Vault containment half of the import policy. */
+  bindingDirectories: string[];
 }
 
 export interface ReviseInput extends ReadActorInput {
@@ -72,6 +74,8 @@ export interface ReviseInput extends ReadActorInput {
   idempotencyKey?: string | undefined;
   resolvedSourcePath?: string | undefined;
   originalName?: string | undefined;
+  /** The explicit override for a replacement file outside the resolved workspace. */
+  allowExternalSource?: boolean | undefined;
 }
 
 export interface ReviseOutcome {
@@ -250,12 +254,38 @@ function reviseContent(
     return ok({ ...response, rowVersion: applied.value.rowVersion });
   }
 
-  // Content revision: stage the new slot first, outside any transaction.
+  // Content revision: stage the new slot first, outside any transaction, through the
+  // same import policy a send uses — containment, the external-source rule, the
+  // stored-name sanitization, and the validated storage key (VLT-015, VLT-016, VLT-018).
   const file = input.file as string;
-  const staged = ports.artifactStore.stage({
-    sourcePath: input.resolvedSourcePath ?? file,
-    maxBytes: ports.config.maxBytes,
+  const workspace = resolveWorkspaceActor(ports.projectPorts, {
+    path: input.path,
+    userHome: input.userHome,
+    as: input.as,
   });
+  if (!workspace.ok) return err(workspace.error);
+  const workspaceRoot =
+    workspace.value.kind === "registered_project" ? workspace.value.binding.directory : workspace.value.directory;
+  const artifactId = `a${createHash("sha1")
+    .update(`${handoff.id}:${handoff.revision + 1}:${ports.clock.now().toISOString()}`)
+    .digest("hex")
+    .slice(0, 8)}`;
+  const staged = prepareArtifactImport(
+    { artifactStore: ports.artifactStore as unknown as Parameters<typeof prepareArtifactImport>[0]["artifactStore"] },
+    {
+      sourcePath: file,
+      resolvedSourcePath: input.resolvedSourcePath ?? file,
+      originalName: input.originalName ?? "document",
+      workspaceRoot,
+      externalPolicy: "workspace_or_explicit",
+      allowExternalSource: input.allowExternalSource === true,
+      maxBytes: ports.config.maxBytes,
+      handoffId: handoff.id,
+      artifactId,
+      resolvedVaultPath: ports.config.vaultPath,
+      resolvedBindingDirectories: ports.bindingDirectories,
+    },
+  );
   if (!staged.ok) return err(staged.error);
   const requestHash = sendRequestHash({
     to: [handoff.id],
@@ -287,12 +317,8 @@ function reviseContent(
   }
 
   const now = ports.clock.now().toISOString();
-  const artifactId = `a${createHash("sha1")
-    .update(`${handoff.id}:${handoff.revision + 1}:${now}`)
-    .digest("hex")
-    .slice(0, 8)}`;
-  const storedName = (input.originalName ?? "document").replace(/[^\p{L}\p{N}._-]+/gu, "-");
-  const storageKey = `artifacts/${handoff.id}/${artifactId}/${storedName}`;
+  const storedName = staged.value.storedName;
+  const storageKey = staged.value.storageKey;
   const vaultPrefix = `${ports.config.vaultPath.replace(/\/+$/, "")}/`;
   const activateIntent: NewPendingFsOp = {
     id: createHash("sha1").update(`activate:${storageKey}`).digest("hex"),
@@ -330,12 +356,12 @@ function reviseContent(
       id: artifactId,
       handoffId: handoff.id,
       storageKey,
-      originalName: input.originalName ?? storedName,
+      originalName: staged.value.originalName,
       storedName,
-      mimeType: storedName.endsWith(".md") ? "text/markdown" : "application/octet-stream",
+      mimeType: staged.value.mimeType,
       sizeBytes: staged.value.sizeBytes,
       sha256: staged.value.sha256,
-      importedFromPath: file,
+      importedFromPath: staged.value.importedFromPath,
       createdAt: now,
     },
     activateIntent,

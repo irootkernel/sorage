@@ -202,3 +202,56 @@ describe("sorage revise", () => {
     process.chdir(original);
   });
 });
+
+function handoffIdOf(output: string): string {
+  return (JSON.parse(output) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
+    ?.handoffId as string;
+}
+
+describe("the round-2 remediation regressions", () => {
+  it("F001: a revise from outside the workspace refuses without the override and passes with it", () => {
+    const original = process.cwd();
+    const home = tempHome("sorage-revise-ext-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const work = join(home, "work");
+    const outsider = mkdtempSync(join(tmpdir(), "sorage-revise-out-"));
+    homes.push(outsider);
+    mkdirSync(work, { recursive: true });
+    mkdirSync(outsider, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", work], capture().ports)).toBe(0);
+    const document = join(home, "brief.md");
+    writeFileSync(document, "# Shared\n");
+    const send = capture();
+    const exit = runCli(
+      [
+        "send",
+        "--as",
+        "alpha",
+        "--to",
+        "alpha",
+        "--title",
+        "Brief",
+        "--file",
+        document,
+        "--allow-external-source",
+        "--json",
+      ],
+      send.ports,
+    );
+    if (exit !== 0) throw new Error(`fixture send failed: ${send.errText()}`);
+    const handoffId = handoffIdOf(send.outText());
+
+    const replacement = join(home, "brief-v9.md");
+    writeFileSync(replacement, "# From outside the workspace\n");
+    process.chdir(work);
+    const refused = capture();
+    expect(runCli(["revise", handoffId, "--file", replacement, "--json"], refused.ports)).toBe(77);
+    const report = JSON.parse(refused.errText()) as { error: { code: string } };
+    expect(report.error.code).toBe("SOURCE_OUTSIDE_WORKSPACE");
+    const allowed = capture();
+    expect(
+      runCli(["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"], allowed.ports),
+    ).toBe(0);
+    process.chdir(original);
+  });
+});

@@ -873,7 +873,13 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     .action(
       (
         id: string,
-        options: { file?: string; noChange?: boolean; reason?: string; idempotencyKey?: string },
+        options: {
+          file?: string;
+          noChange?: boolean;
+          reason?: string;
+          idempotencyKey?: string;
+          allowExternalSource?: boolean;
+        },
         command: Command,
       ) => {
         const globals = command.optsWithGlobals();
@@ -921,6 +927,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           idempotencyKey: options.idempotencyKey,
           resolvedSourcePath,
           originalName,
+          allowExternalSource: options.allowExternalSource === true,
         });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
