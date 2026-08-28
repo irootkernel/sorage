@@ -34,6 +34,31 @@ import { openAndMigrate } from "./sqlite/migrator";
 
 const DIGEST_BUFFER_BYTES = 1024 * 1024;
 
+/** Digests a file with a bounded read, shared by the send and revise wirings. */
+function digestFile(path: string): Result<string, AppError> {
+  const inspected = inspectSourceFile(path);
+  if (!inspected.ok) return err(inspected.error);
+  try {
+    const digest = createHash("sha256");
+    const handle = openSync(inspected.value.resolvedPath, "r");
+    try {
+      const buffer = Buffer.alloc(DIGEST_BUFFER_BYTES);
+      for (;;) {
+        const read_ = readSync(handle, buffer, 0, DIGEST_BUFFER_BYTES, null);
+        if (read_ === 0) break;
+        digest.update(buffer.subarray(0, read_));
+      }
+    } finally {
+      closeSync(handle);
+    }
+    return ok(digest.digest("hex"));
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Digesting the source ${path} failed: ${String(error)}.`, { cause: String(error) }),
+    );
+  }
+}
+
 export interface NodeHandoffCommandPortsOptions {
   env?: HomeEnvironment | undefined;
   userHome?: string | undefined;
@@ -101,29 +126,7 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
       }
     },
     digestSource(path) {
-      const inspected = inspectSourceFile(expandHome(path, userHome));
-      if (!inspected.ok) return err(inspected.error);
-      try {
-        const digest = createHash("sha256");
-        const handle = openSync(inspected.value.resolvedPath, "r");
-        try {
-          const buffer = Buffer.alloc(DIGEST_BUFFER_BYTES);
-          for (;;) {
-            const read_ = readSync(handle, buffer, 0, DIGEST_BUFFER_BYTES, null);
-            if (read_ === 0) break;
-            digest.update(buffer.subarray(0, read_));
-          }
-        } finally {
-          closeSync(handle);
-        }
-        return ok(digest.digest("hex"));
-      } catch (error) {
-        return err(
-          appError("INTERNAL_ERROR", `Digesting the source ${path} failed: ${String(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+      return digestFile(expandHome(path, userHome));
     },
   };
 }
@@ -192,6 +195,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   artifactStore: ReturnType<typeof createNodeArtifactStore>;
   config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
   bindingDirectories: string[];
+  digestSource: (path: string) => Result<string, AppError>;
 } {
   const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
@@ -219,6 +223,9 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
       verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch,
     },
     bindingDirectories: bindingDirectoriesOf(db),
+    digestSource(path: string) {
+      return digestFile(path);
+    },
   };
 }
 

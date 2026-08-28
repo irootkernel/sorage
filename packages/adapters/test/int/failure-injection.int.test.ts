@@ -202,6 +202,7 @@ function makeWorld(): World {
         ids: { next: nextId },
         clock,
         config: { vaultPath: vault.vaultPath, maxBytes: 1024 * 1024, allowUnregisteredSenders: true },
+        digestSource: (path) => ({ ok: true, value: createHash("sha256").update(readFileSync(path)).digest("hex") }),
         bindingDirectories: [],
         inspectSource: (path) => ({ ok: true, value: { resolvedSourcePath: path, originalName: basename(path) } }),
         writeBodySource: (text, storedName) => {
@@ -209,7 +210,6 @@ function makeWorld(): World {
           writeFileSync(sourcePath, text);
           return { ok: true, value: { sourcePath, cleanup: () => rmSync(sourcePath, { force: true }) } };
         },
-        digestSource: (path) => ({ ok: true, value: createHash("sha256").update(readFileSync(path)).digest("hex") }),
       };
     },
     readStore(): HandoffReadPort {

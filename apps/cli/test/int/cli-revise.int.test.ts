@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -252,6 +252,55 @@ describe("the round-2 remediation regressions", () => {
     expect(
       runCli(["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"], allowed.ports),
     ).toBe(0);
+    process.chdir(original);
+  });
+
+  it("the round-3 finding: a refused revise never copies bytes into Vault staging", () => {
+    const original = process.cwd();
+    const home = tempHome("sorage-revise-order-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const work = join(home, "work");
+    mkdirSync(work, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", work], capture().ports)).toBe(0);
+    const document = join(home, "brief.md");
+    writeFileSync(document, "# Shared\n");
+    const send = capture();
+    const exit = runCli(
+      [
+        "send",
+        "--as",
+        "alpha",
+        "--to",
+        "alpha",
+        "--title",
+        "Brief",
+        "--file",
+        document,
+        "--allow-external-source",
+        "--json",
+      ],
+      send.ports,
+    );
+    if (exit !== 0) throw new Error(`fixture send failed: ${send.errText()}`);
+    const handoffId = handoffIdOf(send.outText());
+
+    // A same-content revise is refused and leaves staging empty: the digest answered
+    // before any copy ran (the section 19 coordination order).
+    process.chdir(work);
+    const same = capture();
+    expect(runCli(["revise", handoffId, "--file", document, "--allow-external-source", "--json"], same.ports)).toBe(65);
+    const staging = join(home, "vault", "staging");
+    expect(existsSync(staging) ? readdirSync(staging) : []).toHaveLength(0);
+
+    // The same refused request under an idempotency key also stages nothing.
+    const stale = capture();
+    expect(
+      runCli(
+        ["revise", handoffId, "--file", document, "--allow-external-source", "--idempotency-key", "k-x", "--json"],
+        stale.ports,
+      ),
+    ).toBe(65);
+    expect(existsSync(staging) ? readdirSync(staging) : []).toHaveLength(0);
     process.chdir(original);
   });
 });

@@ -64,6 +64,8 @@ export interface RevisionPorts extends HandoffReadPorts {
   config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
   /** Resolved binding directories for the Vault containment half of the import policy. */
   bindingDirectories: string[];
+  /** Digests a file with a bounded read so the guards can run before staging (section 19). */
+  digestSource(path: string): Result<string, AppError>;
 }
 
 export interface ReviseInput extends ReadActorInput {
@@ -254,10 +256,41 @@ function reviseContent(
     return ok({ ...response, rowVersion: applied.value.rowVersion });
   }
 
-  // Content revision: stage the new slot first, outside any transaction, through the
-  // same import policy a send uses — containment, the external-source rule, the
-  // stored-name sanitization, and the validated storage key (VLT-015, VLT-016, VLT-018).
+  // Content revision, in the section 19 coordination order: the source is digested
+  // first with a bounded read, the idempotency replay, the state evaluation, and the
+  // same-content comparison all answer against that digest, and only a mutation that
+  // will proceed copies bytes into Vault staging through the shared import policy.
   const file = input.file as string;
+  const sourcePath = input.resolvedSourcePath ?? file;
+  const digested = ports.digestSource(sourcePath);
+  if (!digested.ok) return err(digested.error);
+  const requestHash = sendRequestHash({
+    to: [handoff.id],
+    title: handoff.title,
+    contentSha256: digested.value,
+    kind: "file",
+  });
+  if (input.idempotencyKey !== undefined) {
+    const replayed = replay(ports, input.idempotencyKey, requestHash);
+    if (!replayed.ok) return err(replayed.error);
+    if (replayed.value !== null) return ok(replayed.value);
+  }
+  // The state machine answers before any content comparison (row 23, row 24).
+  const outcome = evaluateHandoffOperation("revise", facts, role, { participant: true, contentChanged: true });
+  if (!outcome.ok) return err(outcome.error);
+  // The same content refuses before anything mutates or stages (HND-015).
+  if (
+    handoff.currentArtifact !== null &&
+    digested.value.toLowerCase() === handoff.currentArtifact.sha256.toLowerCase()
+  ) {
+    return err(
+      appError(
+        "NO_CONTENT_CHANGE",
+        "the supplied file carries the current Artifact's SHA-256; change the document or use revise --no-change --reason",
+        { handoffId: handoff.id },
+      ),
+    );
+  }
   const workspace = resolveWorkspaceActor(ports.projectPorts, {
     path: input.path,
     userHome: input.userHome,
@@ -274,7 +307,7 @@ function reviseContent(
     { artifactStore: ports.artifactStore as unknown as Parameters<typeof prepareArtifactImport>[0]["artifactStore"] },
     {
       sourcePath: file,
-      resolvedSourcePath: input.resolvedSourcePath ?? file,
+      resolvedSourcePath: sourcePath,
       originalName: input.originalName ?? "document",
       workspaceRoot,
       externalPolicy: "workspace_or_explicit",
@@ -287,34 +320,6 @@ function reviseContent(
     },
   );
   if (!staged.ok) return err(staged.error);
-  const requestHash = sendRequestHash({
-    to: [handoff.id],
-    title: handoff.title,
-    contentSha256: staged.value.sha256,
-    kind: "file",
-  });
-  if (input.idempotencyKey !== undefined) {
-    const replayed = replay(ports, input.idempotencyKey, requestHash);
-    if (!replayed.ok) return err(replayed.error);
-    if (replayed.value !== null) return ok(replayed.value);
-  }
-  // The state machine answers first: a terminal or deleted Handoff refuses with its
-  // own code before the content comparison runs (row 23, row 24).
-  const outcome = evaluateHandoffOperation("revise", facts, role, { participant: true, contentChanged: true });
-  if (!outcome.ok) return err(outcome.error);
-  // The same content refuses before anything mutates (HND-015).
-  if (
-    handoff.currentArtifact !== null &&
-    staged.value.sha256.toLowerCase() === handoff.currentArtifact.sha256.toLowerCase()
-  ) {
-    return err(
-      appError(
-        "NO_CONTENT_CHANGE",
-        "the supplied file carries the current Artifact's SHA-256; change the document or use revise --no-change --reason",
-        { handoffId: handoff.id },
-      ),
-    );
-  }
 
   const now = ports.clock.now().toISOString();
   const storedName = staged.value.storedName;
