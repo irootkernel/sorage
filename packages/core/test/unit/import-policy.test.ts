@@ -202,6 +202,7 @@ function fakeStore(result: Result<StagedFile, AppError>): ArtifactStore {
     exists: () => {
       throw new Error("not used in this test");
     },
+    remove: () => ({ ok: true, value: undefined }),
     checksum: () => {
       throw new Error("not used in this test");
     },

@@ -49,6 +49,10 @@ export interface HandoffView {
   updatedAt: string;
   /** Derived for the next-actor exposure; never a status column (HND-013). */
   pendingDeletionRequest: boolean;
+  /** True while a Review Note exists; the section 4.2 guard input for revisions. */
+  hasReviewNote: boolean;
+  /** No-change resolutions since the last content revision (REV-017 bound). */
+  consecutiveNoChangeResolutions: number;
 }
 
 export interface HandoffListFilters {

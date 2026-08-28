@@ -48,6 +48,11 @@ export interface ArtifactStore {
   exists(storageKey: string): Result<boolean, AppError>;
   /** Recomputes the SHA-256 of the bytes at a storageKey with a bounded buffer (SEC-014). */
   checksum(storageKey: string): Result<string, AppError>;
+  /**
+   * Unlinks the bytes at a storageKey and fsyncs the parent directory (VLT-012): the
+   * committed unlink intent's execution arm for revision and deletion approval.
+   */
+  remove(storageKey: string): Result<void, AppError>;
 }
 
 export interface StorageKeyParts {

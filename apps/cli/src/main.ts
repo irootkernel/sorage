@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
@@ -13,11 +13,13 @@ import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 // must never load inside the shipped CLI process.
 import {
   createNodeHandoffReadPorts,
+  createNodeRevisionPorts,
   createNodeReviewPorts,
   createNodeSendPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
+import { inspectSourceFile } from "@sorage/adapters/src/import-source";
 import {
   type ActorRef,
   type AddProjectOutcome,
@@ -41,6 +43,7 @@ import {
   fetchHandoff,
   getHandoff,
   removeReviewNote,
+  reviseHandoff,
   setReviewNote,
   withdrawReviewNote,
   listInbox,
@@ -846,6 +849,80 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
 `);
       }
     });
+
+  program
+    .command("revise <handoff-id>")
+    .description("replace the current Artifact or resolve the Review Note without changing content")
+    .option("--file <path>", "the replacement document, with ~ expansion")
+    .option("--no-change", "resolve the Review Note without changing content")
+    .option("--reason <text>", "the reason a no-change resolution carries")
+    .option("--idempotency-key <uuid>", "replay an identical revise instead of applying it again")
+    .option("--allow-external-source", "revise from a source outside the resolved sender workspace")
+    .action(
+      (
+        id: string,
+        options: { file?: string; noChange?: boolean; reason?: string; idempotencyKey?: string },
+        command: Command,
+      ) => {
+        const globals = command.optsWithGlobals();
+        const json = globals.json === true;
+        if (!requireInitialized(ports, json, reportExitCode)) return;
+        // Commander parses --no-change as the negation of a defaulted `change` flag.
+        const noChange = (options as { change?: boolean }).change === false;
+        if (noChange && options.file !== undefined) {
+          ports.err("sorage: revise takes either --file or --no-change, not both\n");
+          ports.err("Run 'sorage --help' for usage.\n");
+          reportExitCode(2);
+          return;
+        }
+        if (!noChange && options.file === undefined) {
+          ports.err("sorage: revise takes either --file or --no-change\n");
+          ports.err("Run 'sorage --help' for usage.\n");
+          reportExitCode(2);
+          return;
+        }
+        // RUN-002: an intent-recording command drains at start before it revises.
+        const vaultPorts = createNodeVaultCommandPorts();
+        const drained = vaultPorts.drainAtStart();
+        if (!drained.ok) {
+          reportExitCode(renderAppError(drained.error, ports, json));
+          return;
+        }
+        let resolvedSourcePath: string | undefined;
+        let originalName: string | undefined;
+        if (options.file !== undefined) {
+          const expanded = expandTilde(options.file);
+          const inspected = inspectSourceFile(expanded);
+          if (!inspected.ok) {
+            reportExitCode(renderAppError(inspected.error, ports, json));
+            return;
+          }
+          resolvedSourcePath = inspected.value.resolvedPath;
+          originalName = basename(expanded);
+        }
+        const result = reviseHandoff(createNodeRevisionPorts(), {
+          ...actorInputOf(globals),
+          handoffId: id,
+          file: options.file,
+          noChange,
+          reason: options.reason,
+          idempotencyKey: options.idempotencyKey,
+          resolvedSourcePath,
+          originalName,
+        });
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json));
+          return;
+        }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+        } else {
+          ports.out(`Revised ${id}; revision ${result.value.revision}, state ${result.value.reviewState}
+`);
+        }
+      },
+    );
 
   const vault = program.command("vault").description("inspect, verify, and relocate the Artifact Vault");
 

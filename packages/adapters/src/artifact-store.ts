@@ -25,6 +25,7 @@ import {
 } from "@sorage/core";
 import { isManagedStorageKey } from "@sorage/core";
 import { vaultMoveLockHeld } from "./lockfile";
+import { fsyncDirectory } from "./intent-log";
 import { openVault } from "./vault";
 
 /** One mebibyte: the fixed copy buffer that keeps import memory bounded (NFR-005). */
@@ -255,6 +256,18 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
       return ok(existsSync(path.value));
     },
 
+    remove(storageKey: string): Result<void, AppError> {
+      const target = join(vaultPath, storageKey);
+      try {
+        if (existsSync(target)) {
+          unlinkSync(target);
+          fsyncDirectory(dirname(target));
+        }
+        return ok(undefined);
+      } catch (error) {
+        return err(appError("INTERNAL_ERROR", `Removing ${storageKey} failed: ${String(error)}.`, { storageKey }));
+      }
+    },
     checksum(storageKey: string): Result<string, AppError> {
       const path = resolveManagedPath(storageKey);
       if (!path.ok) return err(path.error);

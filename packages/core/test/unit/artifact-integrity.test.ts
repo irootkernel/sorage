@@ -21,6 +21,7 @@ function scriptedStore(script: Scripted): ArtifactStore {
     },
     pathOf: () => ok(`/vault/${KEY}`),
     exists: () => ok(script.present ?? true),
+    remove: () => ({ ok: true, value: undefined }),
     checksum: () => {
       if (script.checksum instanceof Error) return err(script.checksum as never);
       return ok(script.checksum ?? SHA);

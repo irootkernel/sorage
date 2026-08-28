@@ -31,6 +31,7 @@ interface HandoffRow {
   recipient_project_id: string;
   current_artifact_id: string | null;
   revision: number;
+  consecutive_no_change_resolutions: number;
   row_version: number;
   review_state: string;
   first_fetched_at: string | null;
@@ -80,6 +81,11 @@ export function createSqliteHandoffReadStore(db: SorageSqlite, ledger: SqliteEve
         }
       : null;
   };
+  const noteStatement = db.prepare("SELECT 1 AS one FROM review_notes WHERE handoff_id = ?");
+  const noteExists = (handoffId: string): boolean => {
+    const row = noteStatement.get(handoffId) as { one: number } | null | undefined;
+    return row !== null && row !== undefined;
+  };
   const pendingStatement = db.prepare(
     "SELECT 1 AS one FROM deletion_requests WHERE handoff_id = ? AND status = 'pending'",
   );
@@ -125,6 +131,8 @@ export function createSqliteHandoffReadStore(db: SorageSqlite, ledger: SqliteEve
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       pendingDeletionRequest: pendingDeletion(row.id),
+      hasReviewNote: noteExists(row.id),
+      consecutiveNoChangeResolutions: row.consecutive_no_change_resolutions,
     };
   };
 

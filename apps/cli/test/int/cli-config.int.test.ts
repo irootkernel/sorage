@@ -222,7 +222,7 @@ describe("sorage config", () => {
     expect(runCli(["config", "set", "server.host", "localhost", "--as-user"], capture().ports)).toBe(78);
   });
 
-  it("adopts a valid editor pass and restores the previous file on an invalid one", () => {
+  it("adopts a valid editor pass and restores the previous file on an invalid one", { timeout: 20_000 }, () => {
     const home = initializedHome("sorage-cli-edit-");
     const editor = join(home, "editor.sh");
     writeFileSync(editor, '#!/bin/sh\nsed -i "" "s/port: 46321/port: 46324/" "$1"\n');

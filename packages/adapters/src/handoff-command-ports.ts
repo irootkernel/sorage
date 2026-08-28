@@ -8,7 +8,7 @@ import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
-import { createSqliteHandoffWriteStore } from "./handoffs";
+import { createSqliteHandoffWriteStore, createSqliteRevisionStore } from "./handoffs";
 import { createSqliteHandoffReadStore } from "./handoff-read-store";
 import { createSqliteReviewStore } from "./review-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
@@ -127,6 +127,42 @@ function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
   if (path.startsWith("~/")) return join(userHome, path.slice(2));
   return resolve(path);
+}
+
+/** The production revision wiring of `sorage revise` (TASK-032). */
+export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions = {}): ReturnType<
+  typeof createNodeReviewPorts
+> & {
+  revisions: ReturnType<typeof createSqliteRevisionStore>;
+  artifactStore: ReturnType<typeof createNodeArtifactStore>;
+  config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
+} {
+  const reviews = createNodeReviewPorts(options);
+  const env = options.env ?? process.env;
+  const userHome = options.userHome ?? homedir();
+  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+  const read = config.read();
+  if (!read.ok || read.value === null) {
+    db.close();
+    throw new Error(`the configuration at ${home.configFile} could not be read`);
+  }
+  const effective = read.value.config;
+  const artifactStore = createNodeArtifactStore({
+    vaultPath: effective.vault.path,
+    installationId: effective.installationId,
+  });
+  return {
+    ...reviews,
+    revisions: createSqliteRevisionStore(db, createSqliteEventLedger(db)),
+    artifactStore,
+    config: {
+      vaultPath: effective.vault.path,
+      maxBytes: effective.artifact.maxBytes,
+      verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch,
+    },
+  };
 }
 
 /** The production read wiring of `sorage inbox`, `outbox`, `get`, and `fetch` (TASK-030). */
