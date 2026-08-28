@@ -84,6 +84,7 @@ node_definitions:
         min_items: 1
         max_items: 200
         max_item_length: 128
+        max_total_length: 1000000
         unique: true
       - id: hardening-deferral-summary
         type: text
