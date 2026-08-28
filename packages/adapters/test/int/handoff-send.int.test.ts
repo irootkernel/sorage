@@ -243,6 +243,22 @@ describe("sorage send", () => {
     expect(handoffRows(fixture)).toHaveLength(5);
   });
 
+  it("accepts a supersedes target whose recipient differs from the new send's", () => {
+    const fixture = makeFixture();
+    seedProject(fixture, "p-1", "alpha");
+    seedProject(fixture, "p-2", "beta");
+    seedTerminalHandoff(fixture, "h-old-alpha", "accepted", null);
+
+    const sent = sendHandoffs(fixture.ports, baseInput(fixture, { to: ["beta"], supersedes: "h-old-alpha" }));
+    expect(sent.ok).toBe(true);
+    const newer = handoffRows(fixture).find((row) => row.id !== "h-old-alpha") as {
+      recipient_project_id: string;
+      supersedes_handoff_id: string;
+    };
+    expect(newer.recipient_project_id).toBe("p-2");
+    expect(newer.supersedes_handoff_id).toBe("h-old-alpha");
+  });
+
   it("creates nothing for an ineligible recipient", () => {
     const fixture = makeFixture();
     seedProject(fixture, "p-1", "alpha");
