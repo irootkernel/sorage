@@ -77,4 +77,136 @@ CREATE INDEX idx_pending_fs_ops_created_at ON pending_fs_ops(created_at);
 `,
 };
 
-export const MIGRATIONS: Migration[] = [FIRST_RELEASED_SCHEMA, PROJECT_REGISTRY_MIGRATION, INTENT_LOG_MIGRATION];
+/**
+ * The Handoff domain of EPIC-005 (sections 3.3 to 3.9 and 18). The `handoffs` row
+ * carries exactly one recipient and the nullable engagement timestamps; the
+ * handoff-to-artifact reference cycle uses deferred foreign keys so one transaction
+ * can insert the Artifact row and the Handoff row that names it as current in either
+ * order; `review_notes.handoff_id` is the primary key and therefore the at-most-one
+ * Note constraint; a partial unique index keeps at most one pending Deletion Request
+ * per Handoff; and the `events` triggers make the ledger append-only in practice,
+ * because every update or delete aborts (SEC-012).
+ */
+export const HANDOFF_DOMAIN_MIGRATION: Migration = {
+  version: 4,
+  name: "handoff-domain-v1",
+  sql: `
+CREATE TABLE handoffs (
+  id TEXT PRIMARY KEY,
+  dispatch_group_id TEXT,
+  supersedes_handoff_id TEXT REFERENCES handoffs(id),
+  title TEXT NOT NULL,
+  sender_kind TEXT NOT NULL CHECK (sender_kind IN ('registered_project', 'unregistered_workspace', 'user')),
+  sender_project_id TEXT REFERENCES projects(id),
+  sender_workspace_key TEXT,
+  sender_path_snapshot TEXT,
+  recipient_project_id TEXT NOT NULL REFERENCES projects(id),
+  current_artifact_id TEXT REFERENCES artifacts(id) DEFERRABLE INITIALLY DEFERRED,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  row_version INTEGER NOT NULL CHECK (row_version >= 1),
+  review_state TEXT NOT NULL CHECK (review_state IN ('awaiting_recipient', 'changes_requested', 'accepted', 'declined', 'withdrawn')),
+  accepted_revision INTEGER,
+  accepted_at TEXT,
+  declined_at TEXT,
+  decline_reason TEXT,
+  withdrawn_at TEXT,
+  consecutive_no_change_resolutions INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_no_change_resolutions >= 0),
+  first_fetched_at TEXT,
+  review_engaged_at TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+  archived_at TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (deleted_at IS NOT NULL OR current_artifact_id IS NOT NULL)
+);
+
+CREATE TABLE artifacts (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT NOT NULL REFERENCES handoffs(id) DEFERRABLE INITIALLY DEFERRED,
+  storage_key TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  sha256 TEXT NOT NULL,
+  imported_from_path TEXT,
+  materialized INTEGER NOT NULL DEFAULT 0 CHECK (materialized IN (0, 1)),
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE review_notes (
+  handoff_id TEXT PRIMARY KEY REFERENCES handoffs(id),
+  author_kind TEXT NOT NULL CHECK (author_kind IN ('registered_project', 'user')),
+  author_project_id TEXT REFERENCES projects(id),
+  target_revision INTEGER NOT NULL CHECK (target_revision >= 1),
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE deletion_requests (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT NOT NULL REFERENCES handoffs(id),
+  requested_by_kind TEXT NOT NULL CHECK (requested_by_kind IN ('registered_project', 'unregistered_workspace', 'user')),
+  requested_by_id TEXT,
+  reason TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  requested_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by_user TEXT,
+  resolution_note TEXT
+);
+
+CREATE UNIQUE INDEX idx_deletion_requests_pending
+  ON deletion_requests(handoff_id) WHERE status = 'pending';
+
+CREATE TABLE events (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT REFERENCES handoffs(id),
+  event_type TEXT NOT NULL,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('registered_project', 'unregistered_workspace', 'user', 'system')),
+  actor_id TEXT,
+  row_version INTEGER,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TRIGGER events_append_only_update
+  BEFORE UPDATE ON events
+  BEGIN
+    SELECT RAISE(ABORT, 'events is append-only');
+  END;
+
+CREATE TRIGGER events_append_only_delete
+  BEFORE DELETE ON events
+  BEGIN
+    SELECT RAISE(ABORT, 'events is append-only');
+  END;
+
+CREATE TABLE idempotency_keys (
+  key TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (key, scope)
+);
+
+CREATE INDEX idx_handoffs_inbox ON handoffs(recipient_project_id, review_state, updated_at);
+CREATE INDEX idx_handoffs_outbox_project ON handoffs(sender_project_id, review_state, updated_at);
+CREATE INDEX idx_handoffs_outbox_workspace ON handoffs(sender_workspace_key);
+CREATE INDEX idx_handoffs_dispatch_group ON handoffs(dispatch_group_id);
+CREATE INDEX idx_events_handoff_created ON events(handoff_id, created_at);
+CREATE INDEX idx_artifacts_handoff ON artifacts(handoff_id);
+CREATE INDEX idx_idempotency_keys_expires ON idempotency_keys(expires_at);
+`,
+};
+
+export const MIGRATIONS: Migration[] = [
+  FIRST_RELEASED_SCHEMA,
+  PROJECT_REGISTRY_MIGRATION,
+  INTENT_LOG_MIGRATION,
+  HANDOFF_DOMAIN_MIGRATION,
+];

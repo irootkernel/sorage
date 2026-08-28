@@ -232,8 +232,6 @@ describe("doctor severities after initialization", () => {
     expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
     const vault = join(home, "vault");
 
-    // The artifacts registry arrives with the TASK-027 migration; the columns this
-    // probe reads are that table's contract, so the test seeds it directly.
     const goodBytes = "good bytes";
     const goodSha = createHash("sha256").update(goodBytes).digest("hex");
     mkdirSync(join(vault, "artifacts/h-1/a-1"), { recursive: true });
@@ -243,21 +241,28 @@ describe("doctor severities after initialization", () => {
 
     const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     try {
-      database.exec(`
-CREATE TABLE artifacts (
-  id TEXT PRIMARY KEY,
-  handoff_id TEXT NOT NULL,
-  storage_key TEXT NOT NULL,
-  sha256 TEXT NOT NULL,
-  materialized INTEGER NOT NULL
-);
-`);
+      database.exec("PRAGMA foreign_keys = ON");
+      // The artifacts registry arrives migrated by the TASK-027 domain migration, so
+      // the probe's columns are the live table's contract: one Handoff row carries the
+      // current Artifact while two further registry rows exist for the checksum probe.
+      database.exec("BEGIN");
+      database
+        .prepare(
+          "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES ('p-1', 'p-1', 'p-1', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        )
+        .run();
+      database
+        .prepare(
+          "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES ('h-1', NULL, NULL, 'Checksum probe', 'registered_project', 'p-1', NULL, NULL, 'p-1', 'a-1', 1, 1, 'awaiting_recipient', 0, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+        )
+        .run();
       const insert = database.prepare(
-        "INSERT INTO artifacts (id, handoff_id, storage_key, sha256, materialized) VALUES (?, 'h-1', ?, ?, 1)",
+        "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, 'h-1', ?, 'doc.md', 'doc.md', 'text/markdown', 10, ?, NULL, 1, '2026-01-01T00:00:00.000Z')",
       );
       insert.run("a-1", "artifacts/h-1/a-1/good.md", goodSha);
       insert.run("a-2", "artifacts/h-1/a-2/tampered.md", goodSha);
       insert.run("a-3", "artifacts/h-1/a-3/missing.md", goodSha);
+      database.exec("COMMIT");
     } finally {
       database.close();
     }

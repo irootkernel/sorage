@@ -67,7 +67,7 @@ describe("project registry migration", () => {
     const failing = [
       ...MIGRATIONS,
       {
-        version: 4,
+        version: 5,
         name: "broken-after-projects",
         sql: `${PROJECT_REGISTRY_MIGRATION.sql.replace(/projects/g, "orphan_projects")}; CREATE TABLE deliberately_broken (id INTEGER PRIMARY KEY);`,
       },
@@ -82,7 +82,7 @@ describe("project registry migration", () => {
     const versions = temp.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
       version: number;
     }>;
-    expect(versions.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(versions.map((row) => row.version)).toEqual([1, 2, 3, 4]);
   });
 });
 

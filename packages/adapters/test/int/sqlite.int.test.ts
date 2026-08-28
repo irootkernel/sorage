@@ -30,7 +30,7 @@ describe("migration runner", () => {
   it("applies every migration, is idempotent on a second run, and records schema_migrations", () => {
     const temp = freshDb();
     const first = migrate(temp.db, MIGRATIONS, () => "2026-01-01T00:00:00.000Z");
-    expect(first.appliedVersions).toEqual([1, 2, 3]);
+    expect(first.appliedVersions).toEqual([1, 2, 3, 4]);
     const second = migrate(temp.db, MIGRATIONS, () => "2026-01-02T00:00:00.000Z");
     expect(second.alreadyUpToDate).toBe(true);
     expect(second.appliedVersions).toEqual([]);
@@ -43,6 +43,7 @@ describe("migration runner", () => {
       { version: 1, name: "operational-baseline-v1", applied_at: "2026-01-01T00:00:00.000Z" },
       { version: 2, name: "project-registry-v1", applied_at: "2026-01-01T00:00:00.000Z" },
       { version: 3, name: "intent-log-v1", applied_at: "2026-01-01T00:00:00.000Z" },
+      { version: 4, name: "handoff-domain-v1", applied_at: "2026-01-01T00:00:00.000Z" },
     ]);
   });
 
@@ -52,7 +53,7 @@ describe("migration runner", () => {
     const failing = [
       ...MIGRATIONS,
       {
-        version: 4,
+        version: 5,
         name: "broken",
         sql: "CREATE TABLE deliberately_broken (id INTEGER PRIMARY KEY); CREATE TABLE deliberately_broken (id INTEGER);",
       },
@@ -61,7 +62,7 @@ describe("migration runner", () => {
     const versions = temp.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
       version: number;
     }>;
-    expect(versions.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(versions.map((row) => row.version)).toEqual([1, 2, 3, 4]);
     const broken = temp.db
       .prepare("SELECT name FROM sqlite_master WHERE name = 'deliberately_broken'")
       .all() as unknown[];
@@ -72,7 +73,7 @@ describe("migration runner", () => {
     const temp = freshDb();
     // Simulate the concurrent winner: another process migrates the same file first.
     const other = openAndMigrate(temp.databasePath, MIGRATIONS);
-    expect(other.outcome.appliedVersions).toEqual([1, 2, 3]);
+    expect(other.outcome.appliedVersions).toEqual([1, 2, 3, 4]);
     const loser = migrate(temp.db, MIGRATIONS);
     expect(loser.alreadyUpToDate).toBe(true);
     expect(loser.appliedVersions).toEqual([]);
@@ -87,7 +88,7 @@ describe("migration runner", () => {
     // The fixture holds the first released schema only, so replaying the full history
     // upgrades it to the current schema without data loss (the TASK-063 upgrade path).
     const replay = migrate(seeded.db, MIGRATIONS);
-    expect(replay.appliedVersions).toEqual([2, 3]);
+    expect(replay.appliedVersions).toEqual([2, 3, 4]);
     expect(replay.alreadyUpToDate).toBe(false);
     const migrated = freshDb();
     migrate(migrated.db, MIGRATIONS);
