@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
@@ -10,7 +11,11 @@ import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
-import { createNodeHandoffReadPorts, createNodeSendPorts } from "@sorage/adapters/src/handoff-command-ports";
+import {
+  createNodeHandoffReadPorts,
+  createNodeReviewPorts,
+  createNodeSendPorts,
+} from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -35,6 +40,9 @@ import {
   renameProject,
   fetchHandoff,
   getHandoff,
+  removeReviewNote,
+  setReviewNote,
+  withdrawReviewNote,
   listInbox,
   listOutbox,
   resolveCommandActor,
@@ -739,6 +747,106 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       }
     });
 
+  const review = program.command("review").description("create, withdraw, and remove Review Notes");
+
+  review
+    .command("set <handoff-id>")
+    .description("create or update this Handoff's Review Note as the recipient or the User")
+    .option("--text <text>", "the note text inline")
+    .option("--file <path>", "read the note text from a file, with ~ expansion")
+    .option("--target-revision <n>", "the Revision the note targets", parseInteger)
+    .action((id: string, options: { text?: string; file?: string; targetRevision?: number }, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if ((options.text === undefined) === (options.file === undefined)) {
+        ports.err("sorage: review set takes exactly one of --text or --file" + "\n");
+        ports.err("Run 'sorage --help' for usage." + "\n");
+        reportExitCode(2);
+        return;
+      }
+      const text = options.text !== undefined ? options.text : readNoteFile(options.file as string);
+      if (text === null) {
+        reportExitCode(
+          renderAppError(appError("CONFIG_INVALID", `the note file '${options.file}' could not be read`), ports, json),
+        );
+        return;
+      }
+      const result = setReviewNote(createNodeReviewPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        text,
+        targetRevision: options.targetRevision,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`Review Note set on ${id}; state ${result.value.handoff.reviewState}, rowVersion ${result.value.handoff.rowVersion}
+`);
+      }
+    });
+
+  review
+    .command("withdraw <handoff-id>")
+    .description("withdraw this Handoff's current Review Note as the recipient, whichever actor authored it")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = withdrawReviewNote(createNodeReviewPorts(), { ...actorInputOf(globals), handoffId: id });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`Review Note withdrawn from ${id}; state ${result.value.handoff.reviewState}
+`);
+      }
+    });
+
+  review
+    .command("remove <handoff-id>")
+    .description("remove this Handoff's Review Note administratively; a User-admin operation")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (globals.asUser !== true) {
+        reportExitCode(
+          renderAppError(
+            { code: "USER_CONTEXT_REQUIRED", message: "review remove is a User administration operation." },
+            ports,
+            json,
+          ),
+        );
+        return;
+      }
+      const result = removeReviewNote(createNodeReviewPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        confirm: globals.confirm === true,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`Review Note removed from ${id}; state ${result.value.handoff.reviewState}
+`);
+      }
+    });
+
   const vault = program.command("vault").description("inspect, verify, and relocate the Artifact Vault");
 
   vault
@@ -1026,6 +1134,20 @@ function reportListing(
     ports.out(`next page: --cursor ${value.nextCursor}
 `);
   }
+}
+
+function readNoteFile(path: string): string | null {
+  try {
+    return readFileSync(expandTilde(path), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function expandTilde(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
 }
 
 function renderUsageError(error: unknown, program: Command, ports: OutputPorts): number {

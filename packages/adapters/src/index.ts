@@ -14,6 +14,7 @@ export * from "./lockfile";
 export * from "./logging";
 export * from "./project-command-ports";
 export * from "./projects";
+export * from "./review-store";
 export * from "./sqlite/connection";
 export * from "./sqlite/migrations";
 export * from "./sqlite/migrator";

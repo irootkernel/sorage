@@ -10,6 +10,7 @@ import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
 import { createSqliteHandoffWriteStore } from "./handoffs";
 import { createSqliteHandoffReadStore } from "./handoff-read-store";
+import { createSqliteReviewStore } from "./review-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { inspectSourceFile } from "./import-source";
@@ -129,6 +130,17 @@ function expandHome(path: string, userHome: string): string {
 }
 
 /** The production read wiring of `sorage inbox`, `outbox`, `get`, and `fetch` (TASK-030). */
+export function createNodeReviewPorts(
+  options: NodeHandoffCommandPortsOptions = {},
+): ReturnType<typeof createNodeHandoffReadPorts> & { reviews: ReturnType<typeof createSqliteReviewStore> } {
+  const read = createNodeHandoffReadPorts(options);
+  const env = options.env ?? process.env;
+  const userHome = options.userHome ?? homedir();
+  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  return { ...read, reviews: createSqliteReviewStore(db, createSqliteEventLedger(db)) };
+}
+
 export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptions = {}): HandoffReadPorts {
   const send = createNodeSendPorts(options);
   const env = options.env ?? process.env;

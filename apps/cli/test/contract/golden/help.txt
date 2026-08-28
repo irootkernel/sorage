@@ -31,5 +31,6 @@ Commands:
   get <handoff-id>            read one Handoff's metadata; records nothing
   fetch <handoff-id>          read the current Artifact's metadata and local
                               path; the recipient's first fetch is recorded
+  review                      create, withdraw, and remove Review Notes
   vault                       inspect, verify, and relocate the Artifact Vault
   help [command]              display help for command
