@@ -11,20 +11,22 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  appError,
-  err,
-  ok,
   type AppError,
+  appError,
   type DrainReport,
+  err,
   type GarbageCollectionOptions,
   type GarbageCollectionReport,
   type IntentLog,
   type NewPendingFsOp,
+  ok,
   type PendingFsOp,
   type Result,
+  SYSTEM_ACTOR,
 } from "@sorage/core";
-import type { SorageSqlite } from "./sqlite/connection";
+import type { SqliteEventLedger } from "./events";
 import { vaultMoveLockHeld } from "./lockfile";
+import type { SorageSqlite } from "./sqlite/connection";
 import { openVault } from "./vault";
 
 export interface SqliteIntentLogOptions {
@@ -32,6 +34,12 @@ export interface SqliteIntentLogOptions {
   installationId: string;
   /** When provided, a live vault-move.lock pauses the drain with SERVICE_PAUSED (RUN-014). */
   runDir?: string | undefined;
+  /** When provided, the drain appends ARTIFACT_INTEGRITY_FAILED into the ledger (SEC-012). */
+  events?: SqliteEventLedger | undefined;
+  /** When provided, a deterministic clock for ledger timestamps in tests. */
+  now?: (() => string) | undefined;
+  /** When provided, a deterministic id source for ledger rows in tests. */
+  eventIds?: (() => string) | undefined;
 }
 
 interface PendingRow {
@@ -145,12 +153,38 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
           if (paused()) return err(pauseError());
           const outcome = executeIntent(intent, vaultPath);
           // The completion commit: one short transaction per intent that bumps
-          // attempts and deletes the row only when the effect is complete.
+          // attempts and deletes the row only when the effect is complete. An
+          // integrity failure appends ARTIFACT_INTEGRITY_FAILED inside this same
+          // transaction, so the ledger and the surviving intent row agree (SEC-012).
           db.exec("BEGIN IMMEDIATE");
           try {
             db.prepare("UPDATE pending_fs_ops SET attempts = attempts + 1 WHERE id = ?").run(intent.id);
             if (outcome === "done") {
               db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(intent.id);
+            } else if (options.events !== undefined) {
+              const handoffId =
+                intent.artifactId === null
+                  ? null
+                  : ((
+                      db.prepare("SELECT handoff_id FROM artifacts WHERE id = ?").get(intent.artifactId) as
+                        | { handoff_id: string }
+                        | null
+                        | undefined
+                    )?.handoff_id ?? null);
+              options.events.appendNow({
+                eventType: "ARTIFACT_INTEGRITY_FAILED",
+                actor: SYSTEM_ACTOR,
+                metadata: {
+                  intentId: intent.id,
+                  op: intent.op,
+                  toPath: intent.toPath,
+                  artifactId: intent.artifactId,
+                  reason: outcome,
+                },
+                handoffId,
+                id: options.eventIds !== undefined ? options.eventIds() : crypto.randomUUID(),
+                createdAt: options.now !== undefined ? options.now() : new Date().toISOString(),
+              });
             }
             db.exec("COMMIT");
           } catch (error) {

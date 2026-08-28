@@ -1,8 +1,8 @@
-import { appError, err, ok, type AppError, type Result } from "./errors";
-import type { ArtifactStore } from "./artifacts";
 import { verifyVaultArtifacts } from "./artifact-integrity";
-import type { DrainReport } from "./intent-log";
+import type { ArtifactStore } from "./artifacts";
+import { type AppError, appError, err, ok, type Result } from "./errors";
 import { checkVaultContainment } from "./import-policy";
+import type { DrainReport } from "./intent-log";
 import type { VaultMarker } from "./vault";
 
 /**
@@ -154,8 +154,8 @@ export interface VaultMovePorts {
     /** Atomically switches vault.path fenced on the etag the move read (CFG-014). */
     updateVaultPath(nextPath: string, etag: string): Result<void, AppError>;
   };
-  /** Emits the VAULT_MOVED audit event; the ledger append lands with TASK-028. */
-  emitMoved(fromPath: string, toPath: string, artifactsMoved: number): void;
+  /** Emits the VAULT_MOVED audit event into the append-only ledger (SEC-012). */
+  emitMoved(fromPath: string, toPath: string, artifactsMoved: number): Result<void, AppError>;
   /** Test seam for the injected mid-move failure of AJ-09. */
   afterStagedCopy?: ((relativePath: string) => void) | undefined;
 }
@@ -322,7 +322,13 @@ export function moveVault(
     lock.value.release();
   }
 
-  ports.emitMoved(ports.vaultPath, ports.targetPath, activated);
+  const emitted = ports.emitMoved(ports.vaultPath, ports.targetPath, activated);
+  if (!emitted.ok) {
+    // The relocation itself completed and the configuration already points at the
+    // target, so a failed ledger append surfaces as the error it is instead of
+    // silently losing the audit event.
+    return err(emitted.error);
+  }
   return ok({ fromPath: ports.vaultPath, toPath: ports.targetPath, artifactsMoved: activated, event: "VAULT_MOVED" });
 }
 

@@ -2,6 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkRecipientEligibility, defaultConfiguration } from "@sorage/core";
+
+const TEST_ACTOR = { kind: "user", id: null } as const;
+
 import { afterAll, describe, expect, it } from "vitest";
 import { createConfigStore } from "../../src/config-store";
 import { createHomePaths } from "../../src/home";
@@ -49,6 +52,7 @@ function register(ports: ReturnType<typeof createNodeProjectPorts>, slug: string
   const result = ports.projects.createProjectWithBinding(
     { id: ports.ids.next(), slug, displayName: slug, description: null, createdAt: "2026-01-01T00:00:00.000Z" },
     { id: ports.ids.next(), projectId: "", directory, bindingKind: "directory", createdAt: "2026-01-01T00:00:00.000Z" },
+    TEST_ACTOR,
   );
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
@@ -65,7 +69,12 @@ describe("checkRecipientEligibility through the production wiring", () => {
     const active = checkRecipientEligibility(ports, "bound-one");
     expect(active.ok && active.value.slug).toBe("bound-one");
     const archived = register(ports, "archived-one", secondDir);
-    const flipped = ports.projects.updateProjectStatus(archived.project.id, "archived", "2026-01-01T00:00:01.000Z");
+    const flipped = ports.projects.updateProjectStatus(
+      archived.project.id,
+      "archived",
+      "2026-01-01T00:00:01.000Z",
+      TEST_ACTOR,
+    );
     expect(flipped.ok && flipped.value.status).toBe("archived");
     const rejected = checkRecipientEligibility(ports, "archived-one");
     expect(rejected.ok).toBe(false);
@@ -85,9 +94,10 @@ describe("checkRecipientEligibility through the production wiring", () => {
         bindingKind: "directory",
         createdAt: "2026-01-01T00:00:00.000Z",
       },
+      TEST_ACTOR,
     );
     expect(unboundProject.ok).toBe(true);
-    const removed = ports.projects.removeBinding(unboundProject.ok ? unboundProject.value.binding.id : "");
+    const removed = ports.projects.removeBinding(unboundProject.ok ? unboundProject.value.binding.id : "", TEST_ACTOR);
     expect(removed.ok).toBe(true);
     const unbound = checkRecipientEligibility(ports, "will-unbind");
     expect(unbound.ok).toBe(false);

@@ -13,6 +13,7 @@ import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
+  type ActorRef,
   type AddProjectOutcome,
   type AppError,
   addProject,
@@ -31,12 +32,14 @@ import {
   moveVault,
   protocolVersion,
   renameProject,
+  resolveCommandActor,
   resolveWorkspaceActor,
   runDoctor,
   setConfigurationValue,
   showConfiguration,
   showProject,
   successEnvelope,
+  USER_ACTOR,
   unarchiveProject,
   unbindProject,
   validateConfigurationFile,
@@ -285,11 +288,23 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = addProject(createNodeProjectPorts(), {
+      const commandPorts = createNodeProjectPorts();
+      const actor = resolveCommandActor(commandPorts, {
+        path: process.cwd(),
+        userHome: homedir(),
+        as: typeof globals.as === "string" ? globals.as : undefined,
+        asUser: globals.asUser === true,
+      });
+      if (!actor.ok) {
+        reportExitCode(renderAppError(actor.error, ports, json));
+        return;
+      }
+      const result = addProject(commandPorts, {
         name: options.name,
         slug: options.slug,
         dir: options.dir,
         userHome: homedir(),
+        actor: actor.value,
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -376,7 +391,18 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = renameProject(createNodeProjectPorts(), { slug, name: options.name });
+      const commandPorts = createNodeProjectPorts();
+      const actor = resolveCommandActor(commandPorts, {
+        path: process.cwd(),
+        userHome: homedir(),
+        as: typeof globals.as === "string" ? globals.as : undefined,
+        asUser: globals.asUser === true,
+      });
+      if (!actor.ok) {
+        reportExitCode(renderAppError(actor.error, ports, json));
+        return;
+      }
+      const result = renameProject(commandPorts, { slug, name: options.name, actor: actor.value });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -397,7 +423,18 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = bindProject(createNodeProjectPorts(), { slug, dir: options.dir, userHome: homedir() });
+      const commandPorts = createNodeProjectPorts();
+      const actor = resolveCommandActor(commandPorts, {
+        path: process.cwd(),
+        userHome: homedir(),
+        as: typeof globals.as === "string" ? globals.as : undefined,
+        asUser: globals.asUser === true,
+      });
+      if (!actor.ok) {
+        reportExitCode(renderAppError(actor.error, ports, json));
+        return;
+      }
+      const result = bindProject(commandPorts, { slug, dir: options.dir, userHome: homedir(), actor: actor.value });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -418,11 +455,23 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = unbindProject(createNodeProjectPorts(), {
+      const commandPorts = createNodeProjectPorts();
+      const actor = resolveCommandActor(commandPorts, {
+        path: process.cwd(),
+        userHome: homedir(),
+        as: typeof globals.as === "string" ? globals.as : undefined,
+        asUser: globals.asUser === true,
+      });
+      if (!actor.ok) {
+        reportExitCode(renderAppError(actor.error, ports, json));
+        return;
+      }
+      const result = unbindProject(commandPorts, {
         slug,
         dir: options.dir,
         userHome: homedir(),
         confirm: globals.confirm === true,
+        actor: actor.value,
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -464,7 +513,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           );
           return;
         }
-        const result = run(createNodeProjectPorts(), slug);
+        const result = run(createNodeProjectPorts(), { slug, actor: USER_ACTOR });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
           return;

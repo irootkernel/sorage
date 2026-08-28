@@ -1,6 +1,8 @@
 import { type AppError, appError, err, ok, type Result } from "./errors";
+import { type ActorRef, projectActor, USER_ACTOR, workspaceActor } from "./events";
 import type { Clock, IdGenerator } from "./ids";
 import type { BindingKind, Project, ProjectBinding, ProjectRepositoryPort } from "./projects";
+import { workspaceKey } from "./workspace-identity";
 
 /**
  * The application layer behind the `sorage project` commands of section 8 of
@@ -51,6 +53,8 @@ export interface AddProjectInput {
   slug?: string | undefined;
   dir: string;
   userHome: string;
+  /** The actor recorded on the PROJECT_REGISTERED and PROJECT_BINDING_ADDED events. */
+  actor: ActorRef;
 }
 
 export interface AddProjectOutcome {
@@ -134,6 +138,7 @@ export function addProject(ports: ProjectCommandPorts, input: AddProjectInput): 
       bindingKind: directory.value.bindingKind,
       createdAt: now,
     },
+    input.actor,
   );
   if (!registered.ok) return registered;
   return ok({ project: registered.value.project, binding: registered.value.binding, derivedSlug });
@@ -165,7 +170,7 @@ export function showProject(ports: ProjectCommandPorts, slug: string): Result<Sh
 
 export function renameProject(
   ports: ProjectCommandPorts,
-  input: { slug: string; name: string },
+  input: { slug: string; name: string; actor: ActorRef },
 ): Result<Project, AppError> {
   const name = input.name.trim();
   if (name === "") {
@@ -177,7 +182,7 @@ export function renameProject(
     return err(appError("PROJECT_NOT_FOUND", `no Project matches the slug '${input.slug}'`, { slug: input.slug }));
   }
   // The slug is identity and is never renamed (PRJ-001); only the display name moves.
-  return ports.projects.updateProjectDisplayName(existing.value.id, name, ports.clock.now().toISOString());
+  return ports.projects.updateProjectDisplayName(existing.value.id, name, ports.clock.now().toISOString(), input.actor);
 }
 
 function projectBySlug(projects: ProjectRepositoryPort, slug: string): Result<Project, AppError> {
@@ -198,6 +203,7 @@ export interface BindProjectInput {
   slug: string;
   dir: string;
   userHome: string;
+  actor: ActorRef;
 }
 
 export function bindProject(ports: ProjectCommandPorts, input: BindProjectInput): Result<ProjectBinding, AppError> {
@@ -226,13 +232,16 @@ export function bindProject(ports: ProjectCommandPorts, input: BindProjectInput)
       }
     }
   }
-  return ports.projects.addBinding({
-    id: ports.ids.next(),
-    projectId: project.value.id,
-    directory: directory.value.directory,
-    bindingKind: directory.value.bindingKind,
-    createdAt: ports.clock.now().toISOString(),
-  });
+  return ports.projects.addBinding(
+    {
+      id: ports.ids.next(),
+      projectId: project.value.id,
+      directory: directory.value.directory,
+      bindingKind: directory.value.bindingKind,
+      createdAt: ports.clock.now().toISOString(),
+    },
+    input.actor,
+  );
 }
 
 export interface UnbindProjectInput {
@@ -240,6 +249,7 @@ export interface UnbindProjectInput {
   dir: string;
   userHome: string;
   confirm: boolean;
+  actor: ActorRef;
 }
 
 export function unbindProject(ports: ProjectCommandPorts, input: UnbindProjectInput): Result<ProjectBinding, AppError> {
@@ -283,21 +293,27 @@ export function unbindProject(ports: ProjectCommandPorts, input: UnbindProjectIn
       ),
     );
   }
-  return ports.projects.removeBinding(binding.id);
+  return ports.projects.removeBinding(binding.id, input.actor);
 }
 
-export function archiveProject(ports: ProjectCommandPorts, slug: string): Result<Project, AppError> {
-  const project = projectBySlug(ports.projects, slug);
+export function archiveProject(
+  ports: ProjectCommandPorts,
+  input: { slug: string; actor: ActorRef },
+): Result<Project, AppError> {
+  const project = projectBySlug(ports.projects, input.slug);
   if (!project.ok) return project;
   if (project.value.status === "archived") return ok(project.value);
-  return ports.projects.updateProjectStatus(project.value.id, "archived", ports.clock.now().toISOString());
+  return ports.projects.updateProjectStatus(project.value.id, "archived", ports.clock.now().toISOString(), input.actor);
 }
 
-export function unarchiveProject(ports: ProjectCommandPorts, slug: string): Result<Project, AppError> {
-  const project = projectBySlug(ports.projects, slug);
+export function unarchiveProject(
+  ports: ProjectCommandPorts,
+  input: { slug: string; actor: ActorRef },
+): Result<Project, AppError> {
+  const project = projectBySlug(ports.projects, input.slug);
   if (!project.ok) return project;
   if (project.value.status === "active") return ok(project.value);
-  return ports.projects.updateProjectStatus(project.value.id, "active", ports.clock.now().toISOString());
+  return ports.projects.updateProjectStatus(project.value.id, "active", ports.clock.now().toISOString(), input.actor);
 }
 
 /**
@@ -419,6 +435,30 @@ function depthOf(directory: string): number {
     .replace(/\/+$/, "")
     .split("/")
     .filter((segment) => segment !== "").length;
+}
+
+export interface CommandActorInput {
+  /** The working directory the command runs from; provenance, not authorization. */
+  path: string;
+  userHome: string;
+  as?: string | undefined;
+  asUser: boolean;
+}
+
+/**
+ * Resolves the actor recorded on ledger events for one command invocation (section 2):
+ * `--as-user` selects the User, `--as <slug>` selects that Project, and otherwise the
+ * working directory resolves to a registered Project or an unregistered Workspace whose
+ * key derives from the installation identity (PRJ-013, PRJ-014).
+ */
+export function resolveCommandActor(ports: ProjectCommandPorts, input: CommandActorInput): Result<ActorRef, AppError> {
+  if (input.asUser) return ok(USER_ACTOR);
+  const resolved = resolveWorkspaceActor(ports, { path: input.path, userHome: input.userHome, as: input.as });
+  if (!resolved.ok) return resolved;
+  if (resolved.value.kind === "registered_project") {
+    return ok(projectActor(resolved.value.project.id));
+  }
+  return ok(workspaceActor(workspaceKey(ports.installationId, resolved.value.directory)));
 }
 
 function ambiguity(bindings: ProjectBinding[], registered: Map<string, Project>): AppError {

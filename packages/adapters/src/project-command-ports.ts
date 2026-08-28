@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { ProjectCommandPorts } from "@sorage/core";
 import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createConfigStore } from "./config-store";
+import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
@@ -55,7 +56,11 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   }
   return {
     installationId: read.value.config.installationId,
-    projects: createSqliteProjectRepository(db, { installationId: read.value.config.installationId, fs }),
+    projects: createSqliteProjectRepository(db, {
+      installationId: read.value.config.installationId,
+      fs,
+      events: createSqliteEventLedger(db),
+    }),
     clock: new SystemClock(),
     ids: new UuidGenerator(),
     bindings: {

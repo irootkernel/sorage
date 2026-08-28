@@ -15,6 +15,8 @@ import {
 } from "../../src/project-commands";
 import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/projects";
 
+const TEST_ACTOR = { kind: "user", id: null } as const;
+
 /** An in-memory Project registry so the use cases stay testable without SQLite. */
 function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = []): ProjectRepositoryPort {
   const projects = [...existing];
@@ -59,9 +61,9 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
       return ok(stored);
     },
     createProjectWithBinding(project, binding) {
-      const created = repository.createProject(project);
+      const created = repository.createProject(project, { kind: "user", id: null });
       if (!created.ok) return created;
-      const added = repository.addBinding({ ...binding, projectId: project.id });
+      const added = repository.addBinding({ ...binding, projectId: project.id }, { kind: "user", id: null });
       if (!added.ok) {
         // Mirror the SQLite transaction: a failed first binding leaves no Project row.
         projects.splice(projects.indexOf(created.value), 1);
@@ -69,21 +71,21 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
       }
       return ok({ project: created.value, binding: added.value });
     },
-    updateProjectDisplayName(projectId, displayName, updatedAt) {
+    updateProjectDisplayName(projectId, displayName, updatedAt, actor) {
       const project = projects.find((candidate) => candidate.id === projectId);
       if (project === undefined) return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`));
       project.displayName = displayName;
       project.updatedAt = updatedAt;
       return ok({ ...project });
     },
-    updateProjectStatus(projectId, status, updatedAt) {
+    updateProjectStatus(projectId, status, updatedAt, actor) {
       const project = projects.find((candidate) => candidate.id === projectId);
       if (project === undefined) return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`));
       project.status = status;
       project.updatedAt = updatedAt;
       return ok({ ...project });
     },
-    removeBinding(bindingId) {
+    removeBinding(bindingId, actor) {
       const index = rows.findIndex((row) => row.id === bindingId);
       if (index === -1) return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`));
       const [removed] = rows.splice(index, 1);
@@ -141,7 +143,7 @@ function ports(
 
 describe("addProject", () => {
   it("derives the slug from the display name and creates the first binding", () => {
-    const result = addProject(ports(), { name: "Web App", dir: "/tmp/web", userHome: "/home/user" });
+    const result = addProject(ports(), { name: "Web App", dir: "/tmp/web", userHome: "/home/user", actor: TEST_ACTOR });
     expect(result.ok).toBe(true);
     expect(result.ok && result.value.project.slug).toBe("web-app");
     expect(result.ok && result.value.derivedSlug).toBe(true);
@@ -149,7 +151,13 @@ describe("addProject", () => {
   });
 
   it("stores an explicit slug case-folded, so case-only collisions cannot escape in any script", () => {
-    const explicit = addProject(ports(), { name: "Alpha", slug: "ПРОЕКТ", dir: "/tmp/a", userHome: "/home/user" });
+    const explicit = addProject(ports(), {
+      name: "Alpha",
+      slug: "ПРОЕКТ",
+      dir: "/tmp/a",
+      userHome: "/home/user",
+      actor: TEST_ACTOR,
+    });
     expect(explicit.ok && explicit.value.project.slug).toBe("проект");
     expect(explicit.ok && explicit.value.derivedSlug).toBe(false);
     const folded: Project = {
@@ -166,13 +174,20 @@ describe("addProject", () => {
       slug: "ПРОЕКТ",
       dir: "/tmp/b",
       userHome: "/home/user",
+      actor: TEST_ACTOR,
     }) as { ok: boolean; error?: AppError };
     expect(collision.ok).toBe(false);
     expect(collision.error?.code).toBe("PROJECT_SLUG_CONFLICT");
   });
 
   it("folds an explicit slug through the locale-independent mapping, so a Turkic-locale host stores the same slug", () => {
-    const explicit = addProject(ports(), { name: "Alpha", slug: "WIZARD", dir: "/tmp/a", userHome: "/home/user" });
+    const explicit = addProject(ports(), {
+      name: "Alpha",
+      slug: "WIZARD",
+      dir: "/tmp/a",
+      userHome: "/home/user",
+      actor: TEST_ACTOR,
+    });
     expect(explicit.ok && explicit.value.project.slug).toBe("wizard");
   });
 
@@ -197,7 +212,12 @@ describe("addProject", () => {
     };
     const registry = fakeRegistry([existing], [bound]);
     const withCounter = { ...ports(), projects: registry };
-    const result = addProject(withCounter, { name: "Web App", dir: "/tmp/web", userHome: "/home/user" });
+    const result = addProject(withCounter, {
+      name: "Web App",
+      dir: "/tmp/web",
+      userHome: "/home/user",
+      actor: TEST_ACTOR,
+    });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.code).toBe("BINDING_DUPLICATE");
     // The Project itself must not survive a failed first binding.
@@ -265,7 +285,7 @@ describe("renameProject and showProject", () => {
   };
 
   it("renames the display name and never the slug", () => {
-    const renamed = renameProject(ports([existing]), { slug: "WEB-APP", name: "Web App 2" });
+    const renamed = renameProject(ports([existing]), { slug: "WEB-APP", name: "Web App 2", actor: TEST_ACTOR });
     expect(renamed.ok && [renamed.value.slug, renamed.value.displayName]).toEqual(["web-app", "Web App 2"]);
   });
 
@@ -273,7 +293,7 @@ describe("renameProject and showProject", () => {
     const shown = showProject(ports([existing]), "missing") as { ok: boolean; error?: AppError };
     expect(shown.ok).toBe(false);
     expect(shown.error?.code).toBe("PROJECT_NOT_FOUND");
-    const renamed = renameProject(ports([existing]), { slug: "missing", name: "X" }) as {
+    const renamed = renameProject(ports([existing]), { slug: "missing", name: "X", actor: TEST_ACTOR }) as {
       ok: boolean;
       error?: AppError;
     };
@@ -313,12 +333,18 @@ describe("bindProject and unbindProject", () => {
   });
 
   it("binds a second directory and rejects a duplicate binding", () => {
-    const bound = bindProject(ports([project()], [binding()]), { slug: "web-app", dir: "/dirs/two", userHome: "/h" });
+    const bound = bindProject(ports([project()], [binding()]), {
+      slug: "web-app",
+      dir: "/dirs/two",
+      userHome: "/h",
+      actor: TEST_ACTOR,
+    });
     expect(bound.ok && bound.value.directory).toBe("/real/dirs/two");
     const duplicate = bindProject(ports([project()], [binding()]), {
       slug: "web-app",
       dir: "/dirs/one",
       userHome: "/h",
+      actor: TEST_ACTOR,
     }) as { ok: boolean; error?: AppError };
     expect(duplicate.ok).toBe(false);
     expect(duplicate.error?.code).toBe("BINDING_DUPLICATE");
@@ -330,6 +356,7 @@ describe("bindProject and unbindProject", () => {
       slug: "web-app",
       dir: "/repos/main/sub",
       userHome: "/h",
+      actor: TEST_ACTOR,
     }) as { ok: boolean; error?: AppError };
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("BINDING_DUPLICATE");
@@ -337,13 +364,25 @@ describe("bindProject and unbindProject", () => {
 
   it("requires confirmation for an unbind that would leave open Handoffs unbound, and honors --confirm", () => {
     const withOpen = ports([project()], [binding()], { p1: 2 });
-    const refused = unbindProject(withOpen, { slug: "web-app", dir: "/dirs/one", userHome: "/h", confirm: false }) as {
+    const refused = unbindProject(withOpen, {
+      slug: "web-app",
+      dir: "/dirs/one",
+      userHome: "/h",
+      confirm: false,
+      actor: TEST_ACTOR,
+    }) as {
       ok: boolean;
       error?: AppError;
     };
     expect(refused.ok).toBe(false);
     expect(refused.error?.code).toBe("CONFIRMATION_REQUIRED");
-    const confirmed = unbindProject(withOpen, { slug: "web-app", dir: "/dirs/one", userHome: "/h", confirm: true });
+    const confirmed = unbindProject(withOpen, {
+      slug: "web-app",
+      dir: "/dirs/one",
+      userHome: "/h",
+      confirm: true,
+      actor: TEST_ACTOR,
+    });
     expect(confirmed.ok && confirmed.value.directory).toBe("/real/dirs/one");
     const remaining = withOpen.projects.listBindingsForProject("p1");
     expect(remaining.ok && remaining.value).toHaveLength(0);
@@ -355,6 +394,7 @@ describe("bindProject and unbindProject", () => {
       dir: "/dirs/one",
       userHome: "/h",
       confirm: false,
+      actor: TEST_ACTOR,
     });
     expect(direct.ok).toBe(true);
     const missing = unbindProject(ports([project()], []), {
@@ -362,6 +402,7 @@ describe("bindProject and unbindProject", () => {
       dir: "/dirs/none",
       userHome: "/h",
       confirm: true,
+      actor: TEST_ACTOR,
     }) as { ok: boolean; error?: AppError };
     expect(missing.ok).toBe(false);
     expect(missing.error?.code).toBe("PROJECT_NOT_FOUND");
@@ -393,13 +434,20 @@ describe("bindProject and unbindProject", () => {
       dir: "/dirs/one",
       userHome: "/h",
       confirm: false,
+      actor: TEST_ACTOR,
     });
     expect(removed.ok && removed.value.directory).toBe("/real/dirs/one");
     const remaining = withVanishedFs.projects.listBindingsForProject("p1");
     expect(remaining.ok && remaining.value).toHaveLength(0);
     // The confirmation rule still guards a vanished binding.
     const withOpen: ProjectCommandPorts = { ...ports([project()], [binding()], { p1: 1 }), bindings: vanishedFs };
-    const refused = unbindProject(withOpen, { slug: "web-app", dir: "/dirs/one", userHome: "/h", confirm: false }) as {
+    const refused = unbindProject(withOpen, {
+      slug: "web-app",
+      dir: "/dirs/one",
+      userHome: "/h",
+      confirm: false,
+      actor: TEST_ACTOR,
+    }) as {
       ok: boolean;
       error?: AppError;
     };
@@ -429,11 +477,14 @@ describe("archive, unarchive, and recipient eligibility", () => {
   });
 
   it("archives and unarchives without ever deleting the row", () => {
-    const archived = archiveProject(ports([project()], [binding()]), "web-app");
+    const archived = archiveProject(ports([project()], [binding()]), { slug: "web-app", actor: TEST_ACTOR });
     expect(archived.ok && archived.value.status).toBe("archived");
-    const unarchived = unarchiveProject(ports([{ ...project(), status: "archived" }], [binding()]), "web-app");
+    const unarchived = unarchiveProject(ports([{ ...project(), status: "archived" }], [binding()]), {
+      slug: "web-app",
+      actor: TEST_ACTOR,
+    });
     expect(unarchived.ok && unarchived.value.status).toBe("active");
-    const missing = archiveProject(ports(), "nope") as { ok: boolean; error?: AppError };
+    const missing = archiveProject(ports(), { slug: "nope", actor: TEST_ACTOR }) as { ok: boolean; error?: AppError };
     expect(missing.error?.code).toBe("PROJECT_NOT_FOUND");
   });
 

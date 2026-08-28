@@ -1,4 +1,5 @@
 import type { AppError, Result } from "./errors";
+import type { ActorRef } from "./events";
 
 /**
  * The Project registry model of section 3.1 and 3.2 of domain-and-architecture.md.
@@ -51,15 +52,17 @@ export interface NewProjectBinding {
 /**
  * The persistence port for the Project registry. `installationId` comes from the
  * installation the database belongs to, never from the caller, because the sole
- * uniqueness constraint is `UNIQUE(installationId, directory)` (PRJ-016).
+ * uniqueness constraint is `UNIQUE(installationId, directory)` (PRJ-016). Every
+ * mutation carries the actor whose Project lifecycle event is appended in the same
+ * transaction (SEC-012).
  */
 export interface ProjectRepositoryPort {
   /** Fails with `PROJECT_SLUG_CONFLICT` when the slug collides case-insensitively (PRJ-005). */
-  createProject(project: NewProject): Result<Project, AppError>;
+  createProject(project: NewProject, actor: ActorRef): Result<Project, AppError>;
   findProjectBySlug(slug: string): Result<Project | null, AppError>;
   listProjects(): Result<Project[], AppError>;
   /** Fails with `BINDING_DUPLICATE` when the directory is already bound on this installation (PRJ-016). */
-  addBinding(binding: NewProjectBinding): Result<ProjectBinding, AppError>;
+  addBinding(binding: NewProjectBinding, actor: ActorRef): Result<ProjectBinding, AppError>;
   /**
    * Registers a Project and its first binding in one transaction, so a duplicate
    * binding leaves no orphan Project row behind (PRJ-003, PRJ-016).
@@ -67,13 +70,24 @@ export interface ProjectRepositoryPort {
   createProjectWithBinding(
     project: NewProject,
     binding: NewProjectBinding,
+    actor: ActorRef,
   ): Result<{ project: Project; binding: ProjectBinding }, AppError>;
   /** Renames the display name only; the slug is identity and never changes (PRJ-001). */
-  updateProjectDisplayName(projectId: string, displayName: string, updatedAt: string): Result<Project, AppError>;
+  updateProjectDisplayName(
+    projectId: string,
+    displayName: string,
+    updatedAt: string,
+    actor: ActorRef,
+  ): Result<Project, AppError>;
   /** Moves the lifecycle status between `active` and `archived`; rows are never deleted. */
-  updateProjectStatus(projectId: string, status: ProjectStatus, updatedAt: string): Result<Project, AppError>;
+  updateProjectStatus(
+    projectId: string,
+    status: ProjectStatus,
+    updatedAt: string,
+    actor: ActorRef,
+  ): Result<Project, AppError>;
   /** Removes one binding; a Project with zero bindings remains, derived unbound (PRJ-010, PRJ-022). */
-  removeBinding(bindingId: string): Result<ProjectBinding, AppError>;
+  removeBinding(bindingId: string, actor: ActorRef): Result<ProjectBinding, AppError>;
   listBindings(): Result<ProjectBinding[], AppError>;
   listBindingsForProject(projectId: string): Result<ProjectBinding[], AppError>;
 }

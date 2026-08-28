@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteProjectRepository } from "../../src/projects";
+
+const TEST_ACTOR = { kind: "user", id: null } as const;
+
 import { MIGRATIONS, PROJECT_REGISTRY_MIGRATION } from "../../src/sqlite/migrations";
 import { MigrationFailedError, migrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
@@ -35,14 +39,20 @@ function tempDir() {
 }
 
 function seedProject(temp: ReturnType<typeof migratedDb>, slug: string, id = "11111111-1111-4111-8111-111111111111") {
-  const repository = createSqliteProjectRepository(temp.db, { installationId: "00000000-0000-4000-8000-000000000001" });
-  const result = repository.createProject({
-    id,
-    slug,
-    displayName: slug,
-    description: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
+  const repository = createSqliteProjectRepository(temp.db, {
+    installationId: "00000000-0000-4000-8000-000000000001",
+    events: createSqliteEventLedger(temp.db),
   });
+  const result = repository.createProject(
+    {
+      id,
+      slug,
+      displayName: slug,
+      description: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+    TEST_ACTOR,
+  );
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
 }
@@ -91,24 +101,31 @@ describe("project repository", () => {
     const temp = migratedDb();
     const project = seedProject(temp, "web-app");
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
     const firstDir = tempDir();
     const secondDir = tempDir();
-    const first = repository.addBinding({
-      id: "21111111-1111-4111-8111-211111111111",
-      projectId: project.id,
-      directory: firstDir,
-      bindingKind: "directory",
-      createdAt: "2026-01-01T00:00:01.000Z",
-    });
-    const second = repository.addBinding({
-      id: "31111111-1111-4111-8111-311111111111",
-      projectId: project.id,
-      directory: secondDir,
-      bindingKind: "directory",
-      createdAt: "2026-01-01T00:00:02.000Z",
-    });
+    const first = repository.addBinding(
+      {
+        id: "21111111-1111-4111-8111-211111111111",
+        projectId: project.id,
+        directory: firstDir,
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      TEST_ACTOR,
+    );
+    const second = repository.addBinding(
+      {
+        id: "31111111-1111-4111-8111-311111111111",
+        projectId: project.id,
+        directory: secondDir,
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+      TEST_ACTOR,
+    );
     expect(first.ok && second.ok).toBe(true);
     const bindings = repository.listBindingsForProject(project.id);
     expect(bindings.ok && bindings.value).toHaveLength(2);
@@ -122,6 +139,7 @@ describe("project repository", () => {
     const project = seedProject(temp, "web-app");
     const directory = tempDir();
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
     const input = {
@@ -130,8 +148,8 @@ describe("project repository", () => {
       bindingKind: "directory" as const,
       createdAt: "2026-01-01T00:00:00.000Z",
     };
-    expect(repository.addBinding({ ...input, id: "41111111-1111-4111-8111-411111111111" }).ok).toBe(true);
-    const duplicate = repository.addBinding({ ...input, id: "51111111-1111-4111-8111-511111111111" });
+    expect(repository.addBinding({ ...input, id: "41111111-1111-4111-8111-411111111111" }, TEST_ACTOR).ok).toBe(true);
+    const duplicate = repository.addBinding({ ...input, id: "51111111-1111-4111-8111-511111111111" }, TEST_ACTOR);
     expect(duplicate.ok).toBe(false);
     expect(!duplicate.ok && duplicate.error.code).toBe("BINDING_DUPLICATE");
     // The database constraint itself is the authority; the port only maps it.
@@ -143,15 +161,19 @@ describe("project repository", () => {
     const temp = migratedDb();
     seedProject(temp, "web-app");
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
-    const collision = repository.createProject({
-      id: "61111111-1111-4111-8111-611111111111",
-      slug: "Web-App",
-      displayName: "Web App",
-      description: null,
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
+    const collision = repository.createProject(
+      {
+        id: "61111111-1111-4111-8111-611111111111",
+        slug: "Web-App",
+        displayName: "Web App",
+        description: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      TEST_ACTOR,
+    );
     expect(collision.ok).toBe(false);
     expect(!collision.ok && collision.error.code).toBe("PROJECT_SLUG_CONFLICT");
   });
@@ -164,15 +186,19 @@ describe("project repository", () => {
     const alias = join(tempDir(), "alias");
     symlinkSync(real, alias);
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
-    const viaSymlink = repository.addBinding({
-      id: "71111111-1111-4111-8111-711111111111",
-      projectId: project.id,
-      directory: join(alias, "nested"),
-      bindingKind: "directory",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
+    const viaSymlink = repository.addBinding(
+      {
+        id: "71111111-1111-4111-8111-711111111111",
+        projectId: project.id,
+        directory: join(alias, "nested"),
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      TEST_ACTOR,
+    );
     expect(viaSymlink.ok).toBe(true);
     expect(viaSymlink.ok && viaSymlink.value.directory).toBe(join(realpathSync(real), "nested"));
     const stored = temp.db.prepare("SELECT directory FROM project_bindings").get() as { directory: string };
@@ -184,6 +210,7 @@ describe("project repository", () => {
     seedProject(temp, "alpha", "81111111-1111-4111-8111-811111111111");
     seedProject(temp, "Beta", "91111111-1111-4111-8111-911111111111");
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
     const found = repository.findProjectBySlug("ALPHA");
@@ -198,6 +225,7 @@ describe("project repository", () => {
     const temp = migratedDb();
     seedProject(temp, "проект", "71111111-1111-4111-8111-711111111111");
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
     const found = repository.findProjectBySlug("ПРОЕКТ");
@@ -208,6 +236,7 @@ describe("project repository", () => {
     const temp = migratedDb();
     seedProject(temp, "wizard", "71111111-1111-4111-8111-711111111112");
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
     });
     const found = repository.findProjectBySlug("WIZARD");
@@ -217,6 +246,7 @@ describe("project repository", () => {
   it("maps a binding directory that vanishes before the insert to INTERNAL_ERROR instead of throwing", () => {
     const temp = migratedDb();
     const repository = createSqliteProjectRepository(temp.db, {
+      events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
       fs: {
         realpath: () => {
@@ -224,13 +254,16 @@ describe("project repository", () => {
         },
       },
     });
-    const result = repository.addBinding({
-      id: "71111111-1111-4111-8111-711111111113",
-      projectId: "81111111-1111-4111-8111-811111111111",
-      directory: "/tmp/vanished",
-      bindingKind: "directory",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    }) as { ok: boolean; error?: { code: string; message: string } };
+    const result = repository.addBinding(
+      {
+        id: "71111111-1111-4111-8111-711111111113",
+        projectId: "81111111-1111-4111-8111-811111111111",
+        directory: "/tmp/vanished",
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      TEST_ACTOR,
+    ) as { ok: boolean; error?: { code: string; message: string } };
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("INTERNAL_ERROR");
     expect(result.error?.message).toContain("vanished");

@@ -1,13 +1,22 @@
 import { realpathSync } from "node:fs";
-import type { NewProject, NewProjectBinding, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
-import { type AppError, appError, err, ok, type Result } from "@sorage/core";
+import type {
+  ActorRef,
+  NewProject,
+  NewProjectBinding,
+  Project,
+  ProjectBinding,
+  ProjectRepositoryPort,
+} from "@sorage/core";
+import { type AppError, appError, err, ok, type Result, UuidGenerator } from "@sorage/core";
+import type { SqliteEventLedger } from "./events";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**
  * The SQLite Project repository behind the core port. The installation identity is
  * read from the single `installation` row so a binding can never claim another
  * installation, and every directory is normalized to its real path before it is
- * stored (PRJ-006).
+ * stored (PRJ-006). Every mutation appends its Project lifecycle event inside the
+ * same transaction (SEC-012), so a mutation and its event land together or not at all.
  */
 
 type ProjectRow = {
@@ -44,19 +53,57 @@ export interface SqliteProjectRepositoryOptions {
    */
   installationId: string;
   fs?: ProjectRepositoryFs;
+  /** The append-only ledger every mutation's event lands in, inside the same transaction. */
+  events: SqliteEventLedger;
 }
+
+const defaultEventIds = new UuidGenerator();
 
 export function createSqliteProjectRepository(
   db: SorageSqlite,
   options: SqliteProjectRepositoryOptions,
 ): ProjectRepositoryPort {
   const fs = options.fs ?? nativeFs;
+  const ledger = options.events;
+  const emit = (
+    eventType:
+      | "PROJECT_REGISTERED"
+      | "PROJECT_BINDING_ADDED"
+      | "PROJECT_BINDING_REMOVED"
+      | "PROJECT_STATUS_ARCHIVED"
+      | "PROJECT_STATUS_ACTIVE"
+      | "PROJECT_RENAMED",
+    actor: ActorRef,
+    metadata: Record<string, unknown>,
+    createdAt: string,
+  ): void => {
+    ledger.appendNow({ eventType, actor, metadata, id: defaultEventIds.next(), createdAt });
+  };
   return {
-    createProject(project) {
+    createProject(project, actor) {
       try {
-        db.prepare(
-          "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
-        ).run(project.id, project.slug, project.displayName, project.description, project.createdAt, project.createdAt);
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.prepare(
+            "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+          ).run(
+            project.id,
+            project.slug,
+            project.displayName,
+            project.description,
+            project.createdAt,
+            project.createdAt,
+          );
+          emit("PROJECT_REGISTERED", actor, { projectId: project.id, slug: project.slug }, project.createdAt);
+          db.exec("COMMIT");
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction may already be closed; the original failure is decisive.
+          }
+          throw transactionError;
+        }
         return ok(
           toProject({
             id: project.id,
@@ -78,7 +125,7 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
-    createProjectWithBinding(project, binding) {
+    createProjectWithBinding(project, binding, actor) {
       try {
         const installationId = options.installationId;
         db.exec("BEGIN IMMEDIATE");
@@ -103,6 +150,13 @@ export function createSqliteProjectRepository(
             directory,
             binding.bindingKind,
             binding.createdAt,
+            binding.createdAt,
+          );
+          emit("PROJECT_REGISTERED", actor, { projectId: project.id, slug: project.slug }, project.createdAt);
+          emit(
+            "PROJECT_BINDING_ADDED",
+            actor,
+            { projectId: project.id, bindingId: binding.id, directory, bindingKind: binding.bindingKind },
             binding.createdAt,
           );
           db.exec("COMMIT");
@@ -145,24 +199,41 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
-    addBinding(binding) {
+    addBinding(binding, actor) {
       try {
         // Inside the try like createProjectWithBinding, so a directory that vanishes
         // between the resolveDirectory check and this insert surfaces as an error
         // result instead of a raw throw past the error envelope.
         const directory = fs.realpath(binding.directory);
         const installationId = options.installationId;
-        db.prepare(
-          "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ).run(
-          binding.id,
-          binding.projectId,
-          installationId,
-          directory,
-          binding.bindingKind,
-          binding.createdAt,
-          binding.createdAt,
-        );
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.prepare(
+            "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          ).run(
+            binding.id,
+            binding.projectId,
+            installationId,
+            directory,
+            binding.bindingKind,
+            binding.createdAt,
+            binding.createdAt,
+          );
+          emit(
+            "PROJECT_BINDING_ADDED",
+            actor,
+            { projectId: binding.projectId, bindingId: binding.id, directory, bindingKind: binding.bindingKind },
+            binding.createdAt,
+          );
+          db.exec("COMMIT");
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above: nothing left to roll back.
+          }
+          throw transactionError;
+        }
         return ok(
           toBinding({
             id: binding.id,
@@ -190,13 +261,26 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
-    updateProjectDisplayName(projectId, displayName, updatedAt) {
+    updateProjectDisplayName(projectId, displayName, updatedAt, actor) {
       try {
-        const changed = db
-          .prepare("UPDATE projects SET display_name = ?, updated_at = ? WHERE id = ?")
-          .run(displayName, updatedAt, projectId) as { changes: number };
-        if (changed.changes !== 1) {
-          return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const changed = db
+            .prepare("UPDATE projects SET display_name = ?, updated_at = ? WHERE id = ?")
+            .run(displayName, updatedAt, projectId) as { changes: number };
+          if (changed.changes !== 1) {
+            db.exec("ROLLBACK");
+            return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
+          }
+          emit("PROJECT_RENAMED", actor, { projectId, displayName }, updatedAt);
+          db.exec("COMMIT");
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
         }
         const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow | null | undefined;
         if (!row) {
@@ -207,13 +291,31 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
-    updateProjectStatus(projectId, status, updatedAt) {
+    updateProjectStatus(projectId, status, updatedAt, actor) {
       try {
-        const changed = db
-          .prepare("UPDATE projects SET status = ?, updated_at = ? WHERE id = ?")
-          .run(status, updatedAt, projectId) as { changes: number };
-        if (changed.changes !== 1) {
-          return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const changed = db
+            .prepare("UPDATE projects SET status = ?, updated_at = ? WHERE id = ?")
+            .run(status, updatedAt, projectId) as { changes: number };
+          if (changed.changes !== 1) {
+            db.exec("ROLLBACK");
+            return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
+          }
+          emit(
+            status === "archived" ? "PROJECT_STATUS_ARCHIVED" : "PROJECT_STATUS_ACTIVE",
+            actor,
+            { projectId, status },
+            updatedAt,
+          );
+          db.exec("COMMIT");
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
         }
         const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow;
         return ok(toProject(row));
@@ -221,7 +323,7 @@ export function createSqliteProjectRepository(
         return err(internal(error));
       }
     },
-    removeBinding(bindingId) {
+    removeBinding(bindingId, actor) {
       try {
         // bun:sqlite returns null for a no-row get and node:sqlite returns undefined;
         // both mean the binding is already gone.
@@ -232,7 +334,25 @@ export function createSqliteProjectRepository(
         if (!row) {
           return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`, { bindingId }));
         }
-        db.prepare("DELETE FROM project_bindings WHERE id = ?").run(bindingId);
+        const removedAt = row.updated_at;
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.prepare("DELETE FROM project_bindings WHERE id = ?").run(bindingId);
+          emit(
+            "PROJECT_BINDING_REMOVED",
+            actor,
+            { projectId: row.project_id, bindingId, directory: row.directory, bindingKind: row.binding_kind },
+            removedAt,
+          );
+          db.exec("COMMIT");
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
+        }
         return ok(toBinding(row));
       } catch (error) {
         return err(internal(error));

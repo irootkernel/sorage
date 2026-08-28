@@ -6,8 +6,8 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  realpathSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -16,24 +16,26 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  type AppError,
   appError,
+  type DrainReport,
   err,
   expandConfigurationPath,
   ok,
-  type AppError,
-  type DrainReport,
   type Result,
+  USER_ACTOR,
   type VaultMovePorts,
   type VaultStatusPorts,
   type VaultVerifyPorts,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
-import { createConfigStore, type ConfigStore } from "./config-store";
+import { type ConfigStore, createConfigStore } from "./config-store";
+import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
-import { openAndMigrate } from "./sqlite/migrator";
 import { MIGRATIONS } from "./sqlite/migrations";
+import { openAndMigrate } from "./sqlite/migrator";
 import { createVaultInitializer, openVault } from "./vault";
 
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -401,9 +403,21 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           },
         },
         emitMoved: (fromPath, toPath, artifactsMoved) => {
-          // The audit event ledger lands with TASK-028; until then the command
-          // result and the structured process log carry the event.
+          // The audit event lands in the append-only ledger; the structured process
+          // log keeps its line, and the ledger is the durable record (SEC-012).
+          const recorded = withDatabase((db) => {
+            const ledger = createSqliteEventLedger(db);
+            return ledger.appendStandalone({
+              id: crypto.randomUUID(),
+              eventType: "VAULT_MOVED",
+              actor: USER_ACTOR,
+              metadata: { fromPath, toPath, artifactsMoved },
+              createdAt: clock.now().toISOString(),
+            });
+          });
+          if (!recorded.ok) return recorded;
           logVaultMoved(fromPath, toPath, artifactsMoved);
+          return ok(undefined);
         },
         afterStagedCopy: options.afterStagedCopy,
       });
@@ -417,6 +431,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           db,
           installationId: view.value.installationId,
           runDir: home.runDir,
+          events: createSqliteEventLedger(db),
         });
         const drained = log.drain(view.value.vaultPath);
         if (!drained.ok) return drained;

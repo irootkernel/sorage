@@ -8,15 +8,14 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { type AppError, errorSpec, initializeInstallation, moveVault, vaultStatus, vaultVerify } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { errorSpec, moveVault, vaultStatus, vaultVerify, type AppError } from "@sorage/core";
-import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
-import { initializeInstallation } from "@sorage/core";
 import { FakeClock } from "../../src/testkit/fakes";
+import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 
 /**
  * The relocation failure matrix of section 7 and AJ-09: an injected mid-move
@@ -103,6 +102,24 @@ describe("moveVault", () => {
     expect(moved.value.artifactsMoved).toBe(3);
     expect(statusPathOf(home)).toBe(target);
     expect(readFileSync(join(target, "artifacts/h-3/a-1/doc.md"), "utf8")).toBe("document three");
+
+    // The VAULT_MOVED audit event lands in the append-only ledger (SEC-012).
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      const events = database
+        .prepare("SELECT event_type, actor_kind, metadata_json FROM events ORDER BY created_at")
+        .all() as Array<{ event_type: string; actor_kind: string; metadata_json: string }>;
+      expect(events).toHaveLength(1);
+      expect(events[0]?.event_type).toBe("VAULT_MOVED");
+      expect(events[0]?.actor_kind).toBe("user");
+      expect(JSON.parse(events[0]?.metadata_json ?? "{}")).toMatchObject({
+        fromPath: vault,
+        toPath: target,
+        artifactsMoved: 3,
+      });
+    } finally {
+      database.close();
+    }
   });
 
   it("refuses a foreign non-empty target with VAULT_INTEGRITY_ERROR (VLT-003)", () => {
