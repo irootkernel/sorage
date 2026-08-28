@@ -188,4 +188,36 @@ describe("sorage inbox, outbox, get, and fetch", () => {
     }
     process.chdir(original);
   });
+
+  it("lists only the current Workspace's Handoffs under outbox --current-workspace", () => {
+    const { home } = setupTwoProjects();
+    const original = process.cwd();
+    const workU = join(home, "work-u");
+    const workV = join(home, "work-v");
+    mkdirSync(workU, { recursive: true });
+    mkdirSync(workV, { recursive: true });
+    const document = join(workU, "note.md");
+    writeFileSync(document, "# From the workspace\n");
+    process.chdir(workU);
+    const send = capture();
+    expect(
+      runCli(
+        ["send", "--to", "beta", "--title", "Note", "--file", document, "--allow-unregistered", "--json"],
+        send.ports,
+      ),
+    ).toBe(0);
+
+    const ownWorkspace = capture();
+    expect(runCli(["outbox", "--current-workspace", "--json"], ownWorkspace.ports)).toBe(0);
+    const own = JSON.parse(ownWorkspace.outText()) as ListingEnvelope;
+    expect(own.data.handoffs).toHaveLength(1);
+    expect(own.data.handoffs[0]?.recipientProjectSlug).toBe("beta");
+
+    process.chdir(workV);
+    const otherWorkspace = capture();
+    expect(runCli(["outbox", "--current-workspace", "--json"], otherWorkspace.ports)).toBe(0);
+    const other = JSON.parse(otherWorkspace.outText()) as ListingEnvelope;
+    expect(other.data.handoffs).toHaveLength(0);
+    process.chdir(original);
+  });
 });
