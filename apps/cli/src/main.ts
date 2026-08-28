@@ -84,7 +84,7 @@ import { buildCompletionScript } from "./completion";
 import { Command, InvalidArgumentError } from "commander";
 
 export const CLI_NAME = "sorage" as const;
-export const CLI_VERSION = "0.0.0" as const;
+export const CLI_VERSION = "0.1.0" as const;
 
 export interface GlobalOptions {
   as?: string;

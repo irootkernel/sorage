@@ -24,7 +24,7 @@ test-int:
 test-contract:
 	$(BUN) run test:contract
 
-test-e2e:
+test-e2e: build
 	$(BUN) run test:e2e
 
 test: test-prepare test-unit test-int test-contract test-e2e

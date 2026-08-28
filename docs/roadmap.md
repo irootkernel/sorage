@@ -26,7 +26,7 @@ This section is the only place in the repository where delivery status pointers 
 - **Active Epic:** `EPIC-006`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** `TASK-041`
+- **Next eligible Task:** None
 
 ## 3. Identifier policy
 
@@ -184,7 +184,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `TASK-038` | Completed | 0.1 | Implement the derived inbox marker `.sorage/INBOX.md` behind the global `handoff.inboxMarker` key. | With the key at its default of `false` no marker file is written anywhere; with it enabled, a creation and every state change rewrite the marker under each recipient binding directory; deleting the marker and performing any state change recreates it; the marker is never read back as authority, proved by a test that corrupting it changes no command result. | `TASK-037` | HND-026 | Not required |
 | `TASK-039` | Completed | 0.1 | Write `skills/use-sorage/SKILL.md`, the agent policy this repository ships instead of changing any ecosystem tool. | The skill instructs an agent to run `sorage inbox --json` at session start and before starting a task, to act on `changes_requested` items in its outbox before beginning new work, never to edit managed Vault files directly, and to ignore `.sorage/` in Git; `scripts/sot-check` resolves every relative link it contains and `make test-prepare` exits 0; no file outside this repository is required for the skill to work. | `TASK-038` | GEN-011, GEN-014, HND-026 | Not required |
 | `TASK-040` | Completed | 0.1 | Implement shell completion generation and contextual help, including the next valid command after a common failure and the User-admin honesty clause in the `--as-user` help text. | `sorage completion zsh` exits 0 and the generated script loads in a clean shell; `sorage --help` and every subcommand help exit 0; after `NOT_INITIALIZED`, `PROJECT_UNBOUND`, `REVIEW_NOTE_PRESENT`, and `HANDOFF_TERMINAL` the help text names the next valid command; the `--as-user` help states that User-admin rows express workflow intent and that any process able to run the CLI as this operating-system user can assert User context. | `TASK-039` | GEN-001, CLI-015, CLI-016, SEC-021 | Not required |
-| `TASK-041` | Planned | 0.1 | Execute the 0.1 CLI release gate: run AJ-01 to AJ-10 against the compiled binary in an isolated temporary Installation and tag `v0.1.0`. | `make test` exits 0 and AJ-01 to AJ-10 all pass on a macOS runner with no ecosystem tool installed and a clean temporary `SORAGE_HOME`; no daemon, Web server, or Git backup is required by any of them; the tag `v0.1.0` is created only after they pass; findings become new tasks appended to `EPIC-009` before release. | `TASK-040` | GEN-002, GEN-004, GEN-007, GEN-008, GEN-010, GEN-013, SEC-013, NFR-012, NFR-013 | Not required |
+| `TASK-041` | Completed | 0.1 | Execute the 0.1 CLI release gate: run AJ-01 to AJ-10 against the compiled binary in an isolated temporary Installation and tag `v0.1.0`. | `make test` exits 0 and AJ-01 to AJ-10 all pass on a macOS runner with no ecosystem tool installed and a clean temporary `SORAGE_HOME`; no daemon, Web server, or Git backup is required by any of them; the tag `v0.1.0` is created only after they pass; findings become new tasks appended to `EPIC-009` before release. | `TASK-040` | GEN-002, GEN-004, GEN-007, GEN-008, GEN-010, GEN-013, SEC-013, NFR-012, NFR-013 | Not required |
 
 ## EPIC-007: Daemon, API, and Web
 
