@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "data": {
+    "key": "ui.defaultPageSize",
+    "value": 25,
+    "configRevision": 2
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

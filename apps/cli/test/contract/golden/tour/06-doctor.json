@@ -1,0 +1,80 @@
+{
+  "ok": true,
+  "data": {
+    "checks": [
+      {
+        "id": "home.permissions",
+        "severity": "ok",
+        "message": "The home tree exists and config.yaml is owner-only."
+      },
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "config.lock",
+        "severity": "ok",
+        "message": "No config.lock is present."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "ok",
+        "message": "The Vault marker matches this installation."
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "ok",
+        "message": "The Vault policy files match the documented bytes."
+      },
+      {
+        "id": "vault.writable",
+        "severity": "ok",
+        "message": "The Vault root, artifacts/, and staging/ are writable."
+      },
+      {
+        "id": "db.integrity",
+        "severity": "ok",
+        "message": "The database passes integrity_check in WAL mode with foreign keys enabled."
+      },
+      {
+        "id": "db.pendingIntents",
+        "severity": "ok",
+        "message": "No pending filesystem intents remain after the start drain."
+      },
+      {
+        "id": "db.migrations",
+        "severity": "ok",
+        "message": "schema_migrations is at the version this build expects."
+      },
+      {
+        "id": "artifacts.checksums",
+        "severity": "ok",
+        "message": "No Artifacts are recorded yet on this installation."
+      },
+      {
+        "id": "bindings.exist",
+        "severity": "ok",
+        "message": "Every active Project has a binding and every binding directory exists."
+      },
+      {
+        "id": "bindings.nested",
+        "severity": "ok",
+        "message": "No directory binding is nested inside another."
+      },
+      {
+        "id": "bindings.ambiguous",
+        "severity": "ok",
+        "message": "No two bindings of the same kind alias one directory."
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

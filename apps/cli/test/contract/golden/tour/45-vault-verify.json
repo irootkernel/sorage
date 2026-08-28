@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "findings": [],
+    "checked": {
+      "artifacts": 5,
+      "recordedArtifacts": 5,
+      "stagedFiles": 0
+    },
+    "blocking": false
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

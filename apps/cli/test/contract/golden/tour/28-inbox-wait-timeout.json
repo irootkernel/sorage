@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "data": {
+    "handoffs": [],
+    "nextCursor": null
+  },
+  "meta": {
+    "requestId": "<uuid>",
+    "timedOut": true
+  }
+}

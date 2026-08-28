@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, SYSTEM_ACTOR, USER_ACTOR } from "./events";
-import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
 
@@ -152,16 +152,16 @@ function apply(
   });
 }
 
-export function pinHandoff(
-  ports: RetentionPorts,
-  input: ReadActorInput & { handoffId: string },
-): Result<RetentionOutcome, AppError> {
+export function pinHandoff(ports: RetentionPorts, input: RetentionMutationInput): Result<RetentionOutcome, AppError> {
   const guard = requireUser(input);
   if (!guard.ok) return err(guard.error);
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;
-  const outcome = evaluateHandoffOperation("pin", factsOf(handoff), "user", { participant: true });
+  const outcome = evaluateHandoffOperation("pin", factsOf(handoff), "user", {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const applied = apply(ports, handoff, { pinned: 1, updated_at: now }, [
@@ -184,16 +184,16 @@ export function pinHandoff(
   });
 }
 
-export function unpinHandoff(
-  ports: RetentionPorts,
-  input: ReadActorInput & { handoffId: string },
-): Result<RetentionOutcome, AppError> {
+export function unpinHandoff(ports: RetentionPorts, input: RetentionMutationInput): Result<RetentionOutcome, AppError> {
   const guard = requireUser(input);
   if (!guard.ok) return err(guard.error);
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;
-  const outcome = evaluateHandoffOperation("unpin", factsOf(handoff), "user", { participant: true });
+  const outcome = evaluateHandoffOperation("unpin", factsOf(handoff), "user", {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const applied = apply(ports, handoff, { pinned: 0, updated_at: now }, [
@@ -218,14 +218,17 @@ export function unpinHandoff(
 
 export function archiveHandoff(
   ports: RetentionPorts,
-  input: ReadActorInput & { handoffId: string },
+  input: RetentionMutationInput,
 ): Result<RetentionOutcome, AppError> {
   const guard = requireUser(input);
   if (!guard.ok) return err(guard.error);
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;
-  const outcome = evaluateHandoffOperation("archive", factsOf(handoff), "user", { participant: true });
+  const outcome = evaluateHandoffOperation("archive", factsOf(handoff), "user", {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const applied = apply(ports, handoff, { archived_at: now, updated_at: now }, [
@@ -250,14 +253,17 @@ export function archiveHandoff(
 
 export function unarchiveHandoff(
   ports: RetentionPorts,
-  input: ReadActorInput & { handoffId: string },
+  input: RetentionMutationInput,
 ): Result<RetentionOutcome, AppError> {
   const guard = requireUser(input);
   if (!guard.ok) return err(guard.error);
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;
-  const outcome = evaluateHandoffOperation("unarchive", factsOf(handoff), "user", { participant: true });
+  const outcome = evaluateHandoffOperation("unarchive", factsOf(handoff), "user", {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const applied = apply(ports, handoff, { archived_at: null, updated_at: now }, [
@@ -282,14 +288,17 @@ export function unarchiveHandoff(
 
 export function requestDeletion(
   ports: RetentionPorts,
-  input: ReadActorInput & { handoffId: string; reason?: string | undefined },
+  input: RetentionMutationInput & { reason?: string | undefined },
 ): Result<RetentionOutcome, AppError> {
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;
   const role = participantOf(ports, input, handoff);
   if (!role.ok) return err(role.error);
-  const outcome = evaluateHandoffOperation("delete request", factsOf(handoff), role.value, { participant: true });
+  const outcome = evaluateHandoffOperation("delete request", factsOf(handoff), role.value, {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const requestedById =
@@ -340,7 +349,16 @@ export interface ApproveDeletionInput extends ReadActorInput {
   confirm: boolean;
   confirmPinned?: string | undefined;
   idempotencyKey?: string | undefined;
+  /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
+  expectedRowVersion?: number | undefined;
 }
+
+/** Every retention mutation input: one Handoff, its actor, and the optional HND-014 expectation. */
+export type RetentionMutationInput = ReadActorInput & {
+  handoffId: string;
+  /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
+  expectedRowVersion?: number | undefined;
+};
 
 /** The canonical request identity of one deletion approval, hashed for idempotency replay (section 17.3). */
 function deletionApprovalRequestHash(handoffId: string, confirmPinned: string | undefined): string {
@@ -385,7 +403,12 @@ export function approveDeletion(
     "delete approve",
     { ...factsOf(handoff), pendingDeletionRequest: pending.value !== null },
     "user",
-    { participant: true, confirmPinnedSupplied: input.confirmPinned === handoff.id, artifactChecksumOk: true },
+    {
+      participant: true,
+      confirmPinnedSupplied: input.confirmPinned === handoff.id,
+      artifactChecksumOk: true,
+      expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+    },
   );
   if (!outcome.ok) return err(outcome.error);
   // The checksum runs before any mutation: a Missing or Mismatched Artifact never
@@ -474,7 +497,7 @@ export function approveDeletion(
 
 export function rejectDeletion(
   ports: RetentionPorts,
-  input: ReadActorInput & { handoffId: string; reason?: string | undefined },
+  input: RetentionMutationInput & { reason?: string | undefined },
 ): Result<RetentionOutcome, AppError> {
   const guard = requireUser(input);
   if (!guard.ok) return err(guard.error);
@@ -487,7 +510,10 @@ export function rejectDeletion(
     "delete reject",
     { ...factsOf(handoff), pendingDeletionRequest: pending.value !== null },
     "user",
-    { participant: true },
+    {
+      participant: true,
+      expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+    },
   );
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();

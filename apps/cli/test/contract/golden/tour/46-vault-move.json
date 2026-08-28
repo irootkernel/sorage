@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "data": {
+    "fromPath": "<home>/vault",
+    "toPath": "<home>/moved-vault",
+    "artifactsMoved": 5,
+    "event": "VAULT_MOVED"
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

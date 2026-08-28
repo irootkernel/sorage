@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "data": {
+    "kind": "registered_project",
+    "project": {
+      "id": "<uuid>",
+      "slug": "alpha",
+      "displayName": "Alpha Prime",
+      "description": null,
+      "status": "active",
+      "createdAt": "<ts>",
+      "updatedAt": "<ts>"
+    },
+    "binding": {
+      "id": "<uuid>",
+      "projectId": "<uuid>",
+      "installationId": "<uuid>",
+      "directory": "/private<home>/work-a",
+      "bindingKind": "directory",
+      "createdAt": "<ts>",
+      "updatedAt": "<ts>"
+    }
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "ok": true,
+  "data": {
+    "schemaVersion": 1,
+    "configRevision": 1,
+    "installationId": "<uuid>",
+    "vault": {
+      "path": "~/.sorage/vault",
+      "importMode": "copy"
+    },
+    "server": {
+      "host": "127.0.0.1",
+      "port": 46321,
+      "autoStart": false,
+      "openBrowserOnStart": false
+    },
+    "handoff": {
+      "allowUnregisteredSenders": true,
+      "requireRegisteredRecipient": true,
+      "inboxMarker": false
+    },
+    "artifact": {
+      "maxBytes": 104857600,
+      "externalSourcePolicy": "workspace_or_explicit",
+      "verifyChecksumOnFetch": false
+    },
+    "gitBackup": {
+      "enabled": false,
+      "schedule": {
+        "type": "daily",
+        "at": "03:00",
+        "timezone": "UTC",
+        "catchUpAfterMissedRun": true
+      },
+      "commit": {
+        "messageTemplate": "sorage backup: {timestamp}"
+      },
+      "push": {
+        "enabled": false,
+        "remote": "origin",
+        "branch": "main"
+      },
+      "largeArtifactWarningBytes": 26214400,
+      "snapshot": {
+        "redactWorkspacePaths": true
+      }
+    },
+    "ui": {
+      "defaultPageSize": 50,
+      "showArchivedByDefault": false,
+      "timezone": null
+    },
+    "logging": {
+      "level": "warn",
+      "includeFullPaths": false,
+      "rotation": {
+        "maxBytes": 10485760,
+        "maxFiles": 5
+      }
+    },
+    "gc": {
+      "graceHours": 24
+    }
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

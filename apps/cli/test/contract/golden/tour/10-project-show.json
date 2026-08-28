@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "data": {
+    "project": {
+      "id": "<uuid>",
+      "slug": "alpha",
+      "displayName": "Alpha",
+      "description": null,
+      "status": "active",
+      "createdAt": "<ts>",
+      "updatedAt": "<ts>"
+    },
+    "bindings": [
+      {
+        "id": "<uuid>",
+        "projectId": "<uuid>",
+        "installationId": "<uuid>",
+        "directory": "/private<home>/work-a",
+        "bindingKind": "directory",
+        "createdAt": "<ts>",
+        "updatedAt": "<ts>"
+      }
+    ],
+    "bindingCount": 1,
+    "unbound": false
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

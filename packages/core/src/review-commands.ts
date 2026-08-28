@@ -1,7 +1,7 @@
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
-import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
 
@@ -60,6 +60,8 @@ export interface ReviewSetInput extends ReadActorInput {
   /** The note body; the CLI resolves --text or --file into this one field (CLI-011). */
   text: string;
   targetRevision?: number | undefined;
+  /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
+  expectedRowVersion?: number | undefined;
 }
 
 function roleFor(
@@ -143,6 +145,7 @@ export function setReviewNote(
   const outcome = evaluateHandoffOperation("review set", facts, role.value, {
     participant: true,
     targetRevisionCurrent: targetRevision === handoff.revision,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
   });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
@@ -183,14 +186,14 @@ export function setReviewNote(
 
 export function withdrawReviewNote(
   ports: ReviewPorts,
-  input: ReadActorInput & { handoffId: string },
+  input: ReadActorInput & { handoffId: string; expectedRowVersion?: number | undefined },
 ): Result<{ handoff: { id: string; reviewState: string; rowVersion: number; revision: number } }, AppError> {
   return removeSide(ports, input, "review withdraw");
 }
 
 export function removeReviewNote(
   ports: ReviewPorts,
-  input: ReadActorInput & { handoffId: string; confirm: boolean },
+  input: ReadActorInput & { handoffId: string; confirm: boolean; expectedRowVersion?: number | undefined },
 ): Result<{ handoff: { id: string; reviewState: string; rowVersion: number; revision: number } }, AppError> {
   if (input.confirm !== true) {
     return err(appError("CONFIRMATION_REQUIRED", "review remove is an audited User operation; pass --confirm", {}));
@@ -200,7 +203,7 @@ export function removeReviewNote(
 
 function removeSide(
   ports: ReviewPorts,
-  input: ReadActorInput & { handoffId: string },
+  input: ReadActorInput & { handoffId: string; expectedRowVersion?: number | undefined },
   operation: "review withdraw" | "review remove",
 ): Result<{ handoff: { id: string; reviewState: string; rowVersion: number; revision: number } }, AppError> {
   const found = ports.handoffs.findHandoffView(input.handoffId);
@@ -233,7 +236,10 @@ function removeSide(
     recipientProjectId: handoff.recipientProjectId,
   });
   if (!role.ok) return err(role.error);
-  const outcome = evaluateHandoffOperation(operation, facts, role.value, { participant: true });
+  const outcome = evaluateHandoffOperation(operation, facts, role.value, {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const applied = ports.reviews.applyReviewMutation({

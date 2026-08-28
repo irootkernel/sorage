@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "id": "<uuid>",
+    "slug": "alpha",
+    "displayName": "Alpha Prime",
+    "description": null,
+    "status": "archived",
+    "createdAt": "<ts>",
+    "updatedAt": "<ts>"
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

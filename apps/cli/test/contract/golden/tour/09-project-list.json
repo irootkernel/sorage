@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "data": [
+    {
+      "slug": "alpha",
+      "displayName": "Alpha",
+      "status": "active",
+      "bindingCount": 1,
+      "unbound": false
+    },
+    {
+      "slug": "beta",
+      "displayName": "Beta",
+      "status": "active",
+      "bindingCount": 1,
+      "unbound": false
+    }
+  ],
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

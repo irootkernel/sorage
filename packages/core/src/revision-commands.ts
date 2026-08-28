@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash } from "./handoff-commands";
 import { type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceActor } from "./events";
-import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
+import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash } from "./handoff-commands";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
+import { type PreparedImport, prepareArtifactImport } from "./import-policy";
+import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
-import type { NewPendingFsOp } from "./intent-log";
-import { prepareArtifactImport, type PreparedImport } from "./import-policy";
 
 /**
  * Sender revision of sections 9 and 10 (REV-008 to REV-013, REV-017, HND-015, VLT-011,
@@ -78,6 +78,8 @@ export interface ReviseInput extends ReadActorInput {
   originalName?: string | undefined;
   /** The explicit override for a replacement file outside the resolved workspace. */
   allowExternalSource?: boolean | undefined;
+  /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
+  expectedRowVersion?: number | undefined;
 }
 
 export interface ReviseOutcome {
@@ -217,6 +219,7 @@ function reviseContent(
       {
         participant: true,
         reasonSupplied: input.reason !== undefined && input.reason.trim() !== "",
+        expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
       },
     );
     if (!outcome.ok) return err(outcome.error);
@@ -276,7 +279,11 @@ function reviseContent(
     if (replayed.value !== null) return ok(replayed.value);
   }
   // The state machine answers before any content comparison (row 23, row 24).
-  const outcome = evaluateHandoffOperation("revise", facts, role, { participant: true, contentChanged: true });
+  const outcome = evaluateHandoffOperation("revise", facts, role, {
+    participant: true,
+    contentChanged: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   // The same content refuses before anything mutates or stages (HND-015).
   if (

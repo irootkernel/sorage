@@ -1,7 +1,7 @@
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
-import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
 
@@ -41,6 +41,8 @@ export interface DeclineInput extends ReadActorInput {
 
 export interface WithdrawInput extends ReadActorInput {
   handoffId: string;
+  /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
+  expectedRowVersion?: number | undefined;
 }
 
 type TerminalRole = "recipient" | "sender" | "user";
@@ -199,7 +201,10 @@ export function withdrawHandoff(ports: TerminalPorts, input: WithdrawInput): Res
   const { handoff } = loaded.value;
   const role = roleFor(ports, input, handoff);
   if (!role.ok) return err(role.error);
-  const outcome = evaluateHandoffOperation("withdraw", factsOf(handoff), role.value, { participant: true });
+  const outcome = evaluateHandoffOperation("withdraw", factsOf(handoff), role.value, {
+    participant: true,
+    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
+  });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
   const applied = ports.terminals.applyTerminalTransition({

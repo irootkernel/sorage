@@ -70,7 +70,7 @@ export interface OperationGuards {
   /** The expected Revision matches the row the client last read; mandatory on `accept` (LIFE-002). */
   expectedRevisionMatches?: boolean;
   /** The expected Row Version matches; enforced whenever supplied (HND-014). */
-  expectedRowVersionMatches?: boolean;
+  expectedRowVersionMatches?: boolean | undefined;
   /** The new content's SHA-256 differs from the current Artifact's (HND-015). */
   contentChanged?: boolean;
   /** The mandatory free-text guard: a decline reason or a no-change reason was supplied. */
@@ -125,12 +125,37 @@ function mutation(
 }
 
 /**
+ * The HND-014 guard value of one client-supplied Row Version expectation: undefined
+ * when the client supplied none, otherwise whether it matches the current row.
+ */
+export function expectedRowVersionGuard(expected: number | undefined, rowVersion: number): boolean | undefined {
+  return expected === undefined ? undefined : expected === rowVersion;
+}
+
+/**
  * Evaluates one row of the section 4.2 table. The precedence is fixed: the tombstone
  * rules (rows 24 and 25) come first, then the terminal rule (row 23), then the
  * permission matrix (section 7), then the operation's own guards, so an actor mistake
  * on a terminal row still reports `HANDOFF_TERMINAL`, exactly as the table orders it.
+ *
+ * A supplied Row Version expectation is then enforced on every row that would otherwise
+ * succeed (HND-014): the check runs after the row's own refusals so a stale value never
+ * masks a domain error, and rows whose callers pass no expectation are untouched.
  */
 export function evaluateHandoffOperation(
+  operation: HandoffOperation,
+  facts: HandoffFacts,
+  role: ActorRole,
+  guards: OperationGuards,
+): Result<TransitionOutcome, AppError> {
+  const outcome = evaluateTableRow(operation, facts, role, guards);
+  if (outcome.ok && guards.expectedRowVersionMatches === false) {
+    return err(rowVersionConflict());
+  }
+  return outcome;
+}
+
+function evaluateTableRow(
   operation: HandoffOperation,
   facts: HandoffFacts,
   role: ActorRole,

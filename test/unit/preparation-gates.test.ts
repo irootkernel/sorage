@@ -1,8 +1,8 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
 
 const tempRoots: string[] = [];
@@ -124,5 +124,40 @@ describe("dependency-boundary gate", () => {
     const result = runScript("check-dependency-boundaries.ts", root);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("@aquarium/tools");
+  });
+
+  it("accepts an app deep-importing an allowlisted adapters composition module", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(
+        join(r, "apps/cli/src/ok.ts"),
+        'import { createNodeHomePaths } from "@sorage/adapters/src/home";\nexport const p = createNodeHomePaths;\n',
+      );
+    });
+    const result = runScript("check-import-boundaries.ts", root);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("fails when the CLI deep-imports an adapters module outside the composition allowlist", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(
+        join(r, "apps/cli/src/bad.ts"),
+        'import { migrate } from "@sorage/adapters/src/sqlite/migrator";\nexport const m = migrate;\n',
+      );
+    });
+    const result = runScript("check-import-boundaries.ts", root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("composition allowlist");
+  });
+
+  it("fails when an app imports the adapters index instead of a command-port module", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(
+        join(r, "apps/daemon/src/bad.ts"),
+        'import { makeTempHome } from "@sorage/adapters";\nexport const t = makeTempHome;\n',
+      );
+    });
+    const result = runScript("check-import-boundaries.ts", root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("must not import the @sorage/adapters index");
   });
 });

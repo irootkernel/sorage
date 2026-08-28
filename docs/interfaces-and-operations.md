@@ -694,7 +694,7 @@ A tombstone rejects `fetch`, `revise`, `review set`, `review withdraw`, `review 
 | `--supersedes <handoff-id>` | 0.1 | Link a new Handoff to the one it replaces; see below |
 | `--wait [--timeout <s>] [--interval <s>]` | 0.1 | `inbox` only; see below |
 
-`--expected-row-version` is mandatory only on `accept` and `decline`; it is accepted on every other mutating command and is enforced whenever it is supplied (HND-014).
+`--expected-row-version` is mandatory only on `accept` and `decline`; it is accepted on every other mutating command and is enforced whenever it is supplied (HND-014). Commands that create a Handoff, or that mutate configuration or Projects, accept the flag for uniformity but carry no expectation, because there is no previously read Handoff row to compare against.
 
 The value passed is the Row Version the client currently holds, never the value it expects afterwards, and reads, `fetch`, preview, and their events never move it (HND-025).
 
@@ -702,7 +702,7 @@ A `--supersedes` target MUST exist and MUST be in a terminal state, otherwise th
 
 The target need not share the recipient, a tombstone may be superseded because the link is metadata rather than content, and every Handoff of one fan-out may reference the same target.
 
-`inbox --wait` in milestone 0.1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020).
+`inbox --wait` in milestone 0.1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020). The wait returns only the items that appeared after it began, so a Handoff the waiter already saw does not wake it even when it changes state, and the timeout result is the empty list rather than the items the waiter started from; because a wait lists only new items, `--wait` cannot combine with `--cursor`.
 
 ## 14. CLI envelopes
 

@@ -4,76 +4,78 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
-import { createNodeHomePaths } from "@sorage/adapters/src/home";
-// Deep import: the adapters index also exports the testkit, which is vitest-only and
-// must never load inside the shipped CLI process.
-import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
-import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
 import {
   createNodeHandoffReadPorts,
   createNodeRetentionPorts,
-  createNodeRevisionPorts,
   createNodeReviewPorts,
+  createNodeRevisionPorts,
   createNodeSendPorts,
   createNodeTerminalPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
-import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
-import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
+import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { inspectSourceFile } from "@sorage/adapters/src/import-source";
+// Deep import: the adapters index also exports the testkit, which is vitest-only and
+// must never load inside the shipped CLI process.
+import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
+import { createLogger, type Logger } from "@sorage/adapters/src/logging";
+import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import { blockingSleepMs } from "@sorage/adapters/src/sleep";
+import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type ActorRef,
   type AddProjectOutcome,
   type AppError,
+  acceptHandoff,
   addProject,
   appError,
+  approveDeletion,
+  archiveHandoff,
   archiveProject,
   bindProject,
   type DoctorReport,
+  declineHandoff,
   type Envelope,
   editConfiguration,
   errorEnvelope,
   errorSpec,
+  fetchHandoff,
+  getHandoff,
   hasBlockingCheck,
   initializeInstallation,
   type ListedProject,
-  listProjects,
-  moveVault,
-  protocolVersion,
-  renameProject,
-  acceptHandoff,
-  declineHandoff,
-  fetchHandoff,
-  getHandoff,
-  approveDeletion,
-  archiveHandoff,
-  pinHandoff,
-  rejectDeletion,
-  removeReviewNote,
-  requestDeletion,
-  reviseHandoff,
-  unarchiveHandoff,
-  unpinHandoff,
-  withdrawHandoff,
-  setReviewNote,
-  withdrawReviewNote,
   listInbox,
   listOutbox,
+  listProjects,
+  moveVault,
+  pinHandoff,
+  protocolVersion,
+  rejectDeletion,
+  removeReviewNote,
+  renameProject,
+  requestDeletion,
   resolveCommandActor,
   resolveWorkspaceActor,
-  sendHandoffs,
+  reviseHandoff,
   runDoctor,
+  sendHandoffs,
   setConfigurationValue,
+  setReviewNote,
   showConfiguration,
   showProject,
   successEnvelope,
   USER_ACTOR,
+  unarchiveHandoff,
   unarchiveProject,
   unbindProject,
+  unpinHandoff,
   validateConfigurationFile,
   vaultStatus,
   vaultVerify,
+  waitForNewInboxItems,
+  withdrawHandoff,
+  withdrawReviewNote,
   workspaceKey,
 } from "@sorage/core";
 import { Command, InvalidArgumentError } from "commander";
@@ -664,29 +666,60 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       }
     });
 
-  for (const [name, description, run] of [
-    ["inbox", "list the Handoffs sent to the resolved recipient Project", listInbox],
-  ] as const) {
-    program
-      .command(name)
-      .description(description)
-      .option("--state <state>", "filter by review state")
-      .option("--sender <slug>", "filter by sender Project slug")
-      .option("--recipient <slug>", "filter by recipient Project slug")
-      .option("--include-archived", "include archived Handoffs")
-      .option("--include-deleted", "include tombstones")
-      .action((options, command) => {
-        const globals = command.optsWithGlobals();
-        const json = globals.json === true;
-        if (!requireInitialized(ports, json, reportExitCode)) return;
-        const result = run(createNodeHandoffReadPorts(), actorInputOf(globals), listQueryOf(options, globals));
-        if (!result.ok) {
-          reportExitCode(renderAppError(result.error, ports, json));
+  program
+    .command("inbox")
+    .description("list the Handoffs sent to the resolved recipient Project")
+    .option("--state <state>", "filter by review state")
+    .option("--sender <slug>", "filter by sender Project slug")
+    .option("--recipient <slug>", "filter by recipient Project slug")
+    .option("--include-archived", "include archived Handoffs")
+    .option("--include-deleted", "include tombstones")
+    .option("--wait", "poll until a new inbox item appears for the resolved actor, then list it")
+    .option("--interval <s>", "seconds between two waits' polls; the default is 2", parseInteger, 2)
+    .option("--timeout <s>", "seconds a wait gives up after; the default is 300", parseInteger, 300)
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (options.wait === true && typeof globals.cursor === "string") {
+        ports.err("sorage: inbox --wait cannot combine with --cursor; a wait lists only new items\n");
+        ports.err("Run 'sorage inbox --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      const readPorts = createNodeHandoffReadPorts();
+      if (options.wait === true) {
+        const intervalSeconds = typeof options.interval === "number" && options.interval >= 0 ? options.interval : 2;
+        const timeoutSeconds = typeof options.timeout === "number" && options.timeout >= 0 ? options.timeout : 300;
+        const waited = waitForNewInboxItems(readPorts, actorInputOf(globals), listQueryOf(options, globals), {
+          intervalSeconds,
+          timeoutSeconds,
+          sleepMs: blockingSleepMs,
+        });
+        if (!waited.ok) {
+          reportExitCode(renderAppError(waited.error, ports, json));
           return;
         }
-        reportListing(result.value, ports, json, globals);
-      });
-  }
+        if (waited.value.timedOut) {
+          if (json) {
+            ports.out(
+              `${JSON.stringify(successEnvelope({ handoffs: [], nextCursor: null }, requestId(), { timedOut: true }), null, 2)}\n`,
+            );
+          } else {
+            ports.out(`No new Handoff appeared within ${timeoutSeconds}s\n`);
+          }
+          return;
+        }
+        reportListing({ handoffs: waited.value.handoffs, nextCursor: null }, ports, json, globals);
+        return;
+      }
+      const result = listInbox(readPorts, actorInputOf(globals), listQueryOf(options, globals));
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      reportListing(result.value, ports, json, globals);
+    });
 
   program
     .command("outbox")
@@ -792,6 +825,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         handoffId: id,
         text,
         targetRevision: options.targetRevision,
+        expectedRowVersion: expectedRowVersionOf(globals),
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -813,7 +847,11 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = withdrawReviewNote(createNodeReviewPorts(), { ...actorInputOf(globals), handoffId: id });
+      const result = withdrawReviewNote(createNodeReviewPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        expectedRowVersion: expectedRowVersionOf(globals),
+      });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -848,6 +886,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ...actorInputOf(globals),
         handoffId: id,
         confirm: globals.confirm === true,
+        expectedRowVersion: expectedRowVersionOf(globals),
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -928,6 +967,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           resolvedSourcePath,
           originalName,
           allowExternalSource: options.allowExternalSource === true,
+          expectedRowVersion: expectedRowVersionOf(globals),
         });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
@@ -1018,7 +1058,11 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = withdrawHandoff(createNodeTerminalPorts(), { ...actorInputOf(globals), handoffId: id });
+      const result = withdrawHandoff(createNodeTerminalPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        expectedRowVersion: expectedRowVersionOf(globals),
+      });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -1053,7 +1097,11 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           );
           return;
         }
-        const result = run(createNodeRetentionPorts(), { ...actorInputOf(globals), handoffId: id });
+        const result = run(createNodeRetentionPorts(), {
+          ...actorInputOf(globals),
+          handoffId: id,
+          expectedRowVersion: expectedRowVersionOf(globals),
+        });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
           return;
@@ -1087,7 +1135,11 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           );
           return;
         }
-        const result = run(createNodeRetentionPorts(), { ...actorInputOf(globals), handoffId: id });
+        const result = run(createNodeRetentionPorts(), {
+          ...actorInputOf(globals),
+          handoffId: id,
+          expectedRowVersion: expectedRowVersionOf(globals),
+        });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
           return;
@@ -1114,6 +1166,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ...actorInputOf(globals),
         handoffId: id,
         reason: options.reason,
+        expectedRowVersion: expectedRowVersionOf(globals),
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1158,6 +1211,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         confirm: globals.confirm === true,
         confirmPinned: options.confirmPinned,
         idempotencyKey: options.idempotencyKey,
+        expectedRowVersion: expectedRowVersionOf(globals),
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1195,6 +1249,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ...actorInputOf(globals),
         handoffId: id,
         reason: options.reason,
+        expectedRowVersion: expectedRowVersionOf(globals),
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1329,6 +1384,16 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
 
   program.helpOption("-h, --help", "display help for the command");
 
+  // A subcommand's --help or parse error exits through the subcommand's own Command,
+  // so the process guards must reach every level of the tree: without this propagation
+  // a subcommand help would bypass runCli's catch block and exit the process directly.
+  const propagateProcessGuards = (command: Command): void => {
+    command.exitOverride();
+    command.configureOutput({ writeOut: (str) => ports.out(str), writeErr: () => {} });
+    for (const child of command.commands) propagateProcessGuards(child);
+  };
+  propagateProcessGuards(program);
+
   return program;
 }
 
@@ -1441,6 +1506,11 @@ export function runCli(argv: string[], ports: OutputPorts = defaultPorts): numbe
     return renderUsageError(new InvalidArgumentError(`unknown command '${first}'`), program, ports);
   }
   return 0;
+}
+
+/** The optional HND-014 expectation one mutating command forwards; undefined when the global flag was not supplied. */
+function expectedRowVersionOf(globals: Record<string, unknown>): number | undefined {
+  return typeof globals.expectedRowVersion === "number" ? globals.expectedRowVersion : undefined;
 }
 
 function actorInputOf(globals: Record<string, unknown>): {

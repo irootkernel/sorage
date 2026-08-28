@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "data": {
+    "outcome": "created",
+    "installationId": "<uuid>",
+    "vaultPath": "<home>/vault",
+    "home": "<home>"
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

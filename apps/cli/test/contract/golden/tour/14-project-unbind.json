@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "id": "<uuid>",
+    "projectId": "<uuid>",
+    "installationId": "<uuid>",
+    "directory": "/private<home>/work-a-2",
+    "bindingKind": "directory",
+    "createdAt": "<ts>",
+    "updatedAt": "<ts>"
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

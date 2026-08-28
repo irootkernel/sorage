@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "data": {
+    "handoffs": [
+      {
+        "handoffId": "<uuid>",
+        "recipientSlug": "beta",
+        "artifactId": "<uuid>",
+        "storageKey": "artifacts/<uuid>/<uuid>/withdraw-case-1.md",
+        "revision": 1,
+        "rowVersion": 1,
+        "reviewState": "awaiting_recipient"
+      }
+    ],
+    "dispatchGroupId": null,
+    "replayed": false
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

@@ -1,6 +1,6 @@
+import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
-import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { deriveNextActors, type ReviewState } from "./handoffs";
 import { type ProjectCommandPorts, resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey as deriveWorkspaceKey } from "./workspace-identity";
@@ -159,12 +159,66 @@ export function listInbox(
   actorInput: ReadActorInput,
   query: ListQuery,
 ): Result<ListedHandoffs, AppError> {
+  const scope = inboxScopeOf(ports, actorInput);
+  if (!scope.ok) return err(scope.error);
+  return runListing(ports, scope.value, query);
+}
+
+/** The inbox scope of the resolved actor: the User sees every Handoff, a Project only its own inbox. */
+function inboxScopeOf(ports: HandoffReadPorts, actorInput: ReadActorInput): Result<ListingScope, AppError> {
   if (actorInput.asUser === true) {
-    return runListing(ports, { kind: "all" }, query);
+    return ok({ kind: "all" });
   }
   const resolved = resolveRegisteredProject(ports, actorInput);
   if (!resolved.ok) return err(resolved.error);
-  return runListing(ports, { kind: "inbox", recipientProjectId: resolved.value }, query);
+  return ok({ kind: "inbox", recipientProjectId: resolved.value });
+}
+
+/** The knobs of one `inbox --wait` (CLI-020); the sleep is injected so tests drive time deterministically. */
+export interface InboxWaitOptions {
+  intervalSeconds: number;
+  timeoutSeconds: number;
+  sleepMs: (ms: number) => void;
+}
+
+/** What one wait returns: the items that appeared after the wait began, or an empty list on timeout. */
+export interface WaitedInbox {
+  handoffs: HandoffView[];
+  timedOut: boolean;
+}
+
+/**
+ * `inbox --wait` (CLI-020): polls the listing every `intervalSeconds` until a Handoff
+ * that did not exist when the wait began appears for the resolved actor, or until
+ * `timeoutSeconds` elapse. A state change on an item the waiter already saw is not a
+ * new item and does not wake the wait, and the timeout result is the documented empty
+ * list, never the items the waiter started from.
+ */
+export function waitForNewInboxItems(
+  ports: HandoffReadPorts,
+  actorInput: ReadActorInput,
+  query: ListQuery,
+  options: InboxWaitOptions,
+): Result<WaitedInbox, AppError> {
+  const scope = inboxScopeOf(ports, actorInput);
+  if (!scope.ok) return err(scope.error);
+  const initial = runListing(ports, scope.value, query);
+  if (!initial.ok) return err(initial.error);
+  const known = new Set(initial.value.handoffs.map((handoff) => handoff.id));
+  const deadlineMs = ports.clock.now().getTime() + options.timeoutSeconds * 1000;
+  for (;;) {
+    const remainingMs = deadlineMs - ports.clock.now().getTime();
+    if (remainingMs <= 0) {
+      return ok({ handoffs: [], timedOut: true });
+    }
+    options.sleepMs(Math.min(options.intervalSeconds * 1000, remainingMs));
+    const page = runListing(ports, scope.value, query);
+    if (!page.ok) return err(page.error);
+    const fresh = page.value.handoffs.filter((handoff) => !known.has(handoff.id));
+    if (fresh.length > 0) {
+      return ok({ handoffs: fresh, timedOut: false });
+    }
+  }
 }
 
 export function listOutbox(

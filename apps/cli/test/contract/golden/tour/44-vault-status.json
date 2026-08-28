@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "data": {
+    "path": "<home>/vault",
+    "marker": {
+      "type": "sorage-vault",
+      "schemaVersion": 1,
+      "installationId": "<uuid>",
+      "createdAt": "<ts>"
+    },
+    "layoutProblems": [],
+    "counts": {
+      "artifacts": 5,
+      "stagedFiles": 0,
+      "pendingIntents": 0
+    },
+    "sizes": {
+      "artifactsBytes": 51,
+      "stagingBytes": 0
+    }
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

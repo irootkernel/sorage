@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "data": {
+    "handoffId": "<uuid>",
+    "revision": 2,
+    "rowVersion": 5,
+    "reviewState": "awaiting_recipient",
+    "storageKey": "artifacts/<uuid>/<key>/replacement.md",
+    "replayed": false
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

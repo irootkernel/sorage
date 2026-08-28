@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-006`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** `TASK-036`
+- **Next eligible Task:** `TASK-037`
 
 ## 3. Identifier policy
 
@@ -179,7 +179,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
-| `TASK-036` | Planned | 0.1 | Complete the CLI domain surface: `inbox --wait` with `--interval` and `--timeout`, uniform `--as`, `--as-user`, and optional `--expected-row-version` across every command that resolves an actor or mutates, the documented filters, and a golden JSON envelope snapshot for every command. | `sorage inbox --wait --timeout 3` with no new item exits 0 with an empty list and `meta.timedOut: true`; a Handoff created during the wait returns before the timeout; every command in the catalog has a golden snapshot in `make test-contract`; every User-admin command without `--as-user` exits 77 with `USER_CONTEXT_REQUIRED`; no command reaches SQLite or the Vault except through the application layer, proved by the import-boundary lint. | `EPIC-005` | RUN-003, RUN-004, CLI-001, CLI-002, CLI-003, CLI-017, CLI-018, CLI-019, CLI-020, NFR-011 | Not required |
+| `TASK-036` | Completed | 0.1 | Complete the CLI domain surface: `inbox --wait` with `--interval` and `--timeout`, uniform `--as`, `--as-user`, and optional `--expected-row-version` across every command that resolves an actor or mutates, the documented filters, and a golden JSON envelope snapshot for every command. | `sorage inbox --wait --timeout 3` with no new item exits 0 with an empty list and `meta.timedOut: true`; a Handoff created during the wait returns before the timeout; every command in the catalog has a golden snapshot in `make test-contract`; every User-admin command without `--as-user` exits 77 with `USER_CONTEXT_REQUIRED`; no command reaches SQLite or the Vault except through the application layer, proved by the import-boundary lint. | `EPIC-005` | RUN-003, RUN-004, CLI-001, CLI-002, CLI-003, CLI-017, CLI-018, CLI-019, CLI-020, NFR-011 | Not required |
 | `TASK-037` | Planned | 0.1 | Finalize the mapping from symbolic error code to exit-code category and the recovery hints, in both the human and the JSON rendering. | `make test-contract` exits 0; a golden test covers every symbolic error code with its exit-code category and both renderings; every failure that has a documented recovery carries it in the `recovery` field; no symbolic code is emitted that is absent from the error table in [interfaces-and-operations.md](interfaces-and-operations.md), and no table row lacks a test. | `TASK-036` | CLI-004, CLI-005, CLI-016, NFR-010 | Not required |
 | `TASK-038` | Planned | 0.1 | Implement the derived inbox marker `.sorage/INBOX.md` behind the global `handoff.inboxMarker` key. | With the key at its default of `false` no marker file is written anywhere; with it enabled, a creation and every state change rewrite the marker under each recipient binding directory; deleting the marker and performing any state change recreates it; the marker is never read back as authority, proved by a test that corrupting it changes no command result. | `TASK-037` | HND-026 | Not required |
 | `TASK-039` | Planned | 0.1 | Write `skills/use-sorage/SKILL.md`, the agent policy this repository ships instead of changing any ecosystem tool. | The skill instructs an agent to run `sorage inbox --json` at session start and before starting a task, to act on `changes_requested` items in its outbox before beginning new work, never to edit managed Vault files directly, and to ignore `.sorage/` in Git; `scripts/sot-check` resolves every relative link it contains and `make test-prepare` exits 0; no file outside this repository is required for the skill to work. | `TASK-038` | GEN-011, GEN-014, HND-026 | Not required |

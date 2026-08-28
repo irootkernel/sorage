@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "data": {
+    "handoffId": "<uuid>",
+    "reviewState": "accepted",
+    "rowVersion": 9,
+    "archived": true
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

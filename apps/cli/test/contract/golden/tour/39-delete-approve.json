@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "data": {
+    "handoffId": "<uuid>",
+    "reviewState": "accepted",
+    "rowVersion": 4,
+    "deleted": true,
+    "warning": "prior Git commits may retain earlier content"
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

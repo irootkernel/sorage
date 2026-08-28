@@ -12,6 +12,39 @@ const IMPORT_RULES: Record<string, string[]> = {
   "@sorage/web": ["@sorage/core"],
 };
 
+/**
+ * The composition surface an app may deep-import from `@sorage/adapters` (CLI-018): a
+ * shipped process reaches SQLite and the Vault only through these command-port and
+ * infrastructure modules, never the adapters index (which also exports the vitest-only
+ * testkit) and never a storage implementation module directly.
+ */
+const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
+  "@sorage/cli": [
+    "src/config-command-ports",
+    "src/doctor",
+    "src/home",
+    "src/init-ports",
+    "src/logging",
+    "src/handoff-command-ports",
+    "src/project-command-ports",
+    "src/vault-command-ports",
+    "src/import-source",
+    "src/sleep",
+  ],
+  "@sorage/daemon": [
+    "src/config-command-ports",
+    "src/doctor",
+    "src/home",
+    "src/init-ports",
+    "src/logging",
+    "src/handoff-command-ports",
+    "src/project-command-ports",
+    "src/vault-command-ports",
+    "src/import-source",
+    "src/sleep",
+  ],
+};
+
 const ECOSYSTEM_PACKAGES = ["aquarium", "podway", "mulgae", "gaori", "sanho", "ouroboros", "dolgorae"];
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPEC_PATTERN = /(?:from\s*|import\s*|import\(\s*|require\(\s*)["']([^"']+)["']/g;
@@ -61,6 +94,19 @@ function checkImportsForPackage(pkgDir: string, pkgName: string, allowed: string
       const target = spec.startsWith("@sorage/") ? spec.split("/").slice(0, 2).join("/") : null;
       if (target && target !== pkgName && !allowed.includes(target)) {
         violations.push(`${path}: ${pkgName} must not import ${target}`);
+      }
+      const appAllowlist = target === "@sorage/adapters" ? APP_ADAPTERS_ALLOWLIST[pkgName] : undefined;
+      if (appAllowlist !== undefined) {
+        const modulePath = spec.slice("@sorage/adapters/".length);
+        if (modulePath === "") {
+          violations.push(
+            `${path}: an app must not import the @sorage/adapters index; deep-import a command-port module instead`,
+          );
+        } else if (!appAllowlist.includes(modulePath)) {
+          violations.push(
+            `${path}: ${pkgName} must reach the adapters only through the composition allowlist, not ${spec}`,
+          );
+        }
       }
       const tool = ecosystemToolFor(spec);
       if (tool) {

@@ -1,0 +1,50 @@
+{
+  "ok": true,
+  "data": {
+    "handoffs": [
+      {
+        "id": "<uuid>",
+        "dispatchGroupId": null,
+        "supersedesHandoffId": null,
+        "title": "Golden brief",
+        "senderKind": "registered_project",
+        "senderProjectId": "<uuid>",
+        "senderProjectSlug": "alpha",
+        "senderWorkspaceKey": null,
+        "senderPathSnapshot": null,
+        "recipientProjectId": "<uuid>",
+        "recipientProjectSlug": "beta",
+        "revision": 1,
+        "rowVersion": 1,
+        "reviewState": "awaiting_recipient",
+        "nextActors": {
+          "reviewNextActor": "recipient",
+          "administrativeNextActor": null
+        },
+        "firstFetchedAt": null,
+        "reviewEngagedAt": null,
+        "pinned": false,
+        "archivedAt": null,
+        "deletedAt": null,
+        "currentArtifact": {
+          "id": "<uuid>",
+          "storageKey": "artifacts/<uuid>/<uuid>/golden-brief-1.md",
+          "originalName": "golden-brief-1.md",
+          "mimeType": "text/markdown",
+          "sizeBytes": 18,
+          "sha256": "<digest>",
+          "materialized": true
+        },
+        "createdAt": "<ts>",
+        "updatedAt": "<ts>",
+        "pendingDeletionRequest": false,
+        "hasReviewNote": false,
+        "consecutiveNoChangeResolutions": 0
+      }
+    ],
+    "nextCursor": null
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

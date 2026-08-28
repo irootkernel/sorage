@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "data": {
+    "handoff": {
+      "id": "<uuid>",
+      "reviewState": "changes_requested",
+      "rowVersion": 2,
+      "revision": 1
+    },
+    "note": {
+      "handoffId": "<uuid>",
+      "authorKind": "registered_project",
+      "authorProjectId": "<uuid>",
+      "targetRevision": 1,
+      "body": "Tighten the title",
+      "createdAt": "<ts>",
+      "updatedAt": "<ts>"
+    }
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

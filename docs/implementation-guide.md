@@ -225,7 +225,7 @@ Handlers contain no domain transitions and no SQL.
 - Full identifiers in JSON.
 - Explicit flags over positional ambiguity, and no inference of a recipient from history.
 - `--as <project-slug>` overrides working-directory resolution for a Project that has a binding, and `--as-user` selects User-admin context and records `actorKind = user`; a User-admin command invoked without it fails with `USER_CONTEXT_REQUIRED` (CLI-019, CLI-020).
-- Call application use cases directly, in-process; the daemon is contacted only by `web` and `daemon` commands, where `DAEMON_UNAVAILABLE` is meaningful (RUN-003).
+- Call application use cases directly, in-process; the daemon is contacted only by `web` and `daemon` commands, where `DAEMON_UNAVAILABLE` is meaningful (RUN-003). A shipped app process reaches the adapters only through the command-port and infrastructure modules of the import-boundary allowlist, never the adapters index or a storage implementation module (CLI-018).
 - Drain `pending_fs_ops` at process start, before executing the requested command (RUN-002).
 - Implement `inbox --wait` as a poll of SQLite every `--interval` seconds, defaulting to 2, until a new inbox item appears for the resolved actor or `--timeout` seconds, defaulting to 300, elapse; a timeout exits 0 with an empty list and `meta.timedOut: true`.
 - Require interactive confirmation or an explicit confirmation flag for destructive User operations, and treat `--confirm-pinned <id>` as a second, distinct confirmation that a blanket `--confirm` cannot satisfy.
