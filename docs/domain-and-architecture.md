@@ -362,7 +362,7 @@ The protocol SHOULD expose `reviewNextActor` and `administrativeNextActor` separ
 | Read Handoff | Own outbox | Own inbox | Yes |
 | Materialize current Artifact | Own outbox | Own inbox | Yes |
 | Create or update Review Note | No | Yes | Yes |
-| Withdraw own Review Note | No | Yes | Yes |
+| Withdraw own Review Note | No | Yes | No; the User removes a Note only through the audited administrative removal (REV-016) |
 | Remove Review Note administratively | No | No | Yes, `--as-user`, audited |
 | Revise Artifact | Yes | No | Yes |
 | No-change resolution | Yes | No | Yes |
