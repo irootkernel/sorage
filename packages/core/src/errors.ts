@@ -78,6 +78,7 @@ export const EXIT_INTERNAL = 1;
 const RECOVERY: Partial<Record<ErrorCode, string>> = {
   NOT_INITIALIZED: "sorage init",
   CONFIG_INVALID: "sorage config validate",
+  CONFIG_CONFLICT: "Reload the configuration and retry",
   DAEMON_UNAVAILABLE: "sorage daemon start",
   PROJECT_NOT_FOUND: "sorage project list",
   PROJECT_ARCHIVED: "sorage project unarchive <project> --as-user",

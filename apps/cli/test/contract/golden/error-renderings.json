@@ -1,0 +1,1178 @@
+[
+  {
+    "code": "NOT_INITIALIZED",
+    "exitCode": 78,
+    "httpStatus": 503,
+    "recovery": {
+      "suggestedCommand": "sorage init"
+    },
+    "renderedExitCode": 78,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "NOT_INITIALIZED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage init"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "NOT_INITIALIZED: rendering probe\nRecovery: sorage init\n"
+  },
+  {
+    "code": "CONFIG_INVALID",
+    "exitCode": 78,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "sorage config validate"
+    },
+    "renderedExitCode": 78,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CONFIG_INVALID",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage config validate"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CONFIG_INVALID: rendering probe\nRecovery: sorage config validate\n"
+  },
+  {
+    "code": "CONFIG_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Reload the configuration and retry"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CONFIG_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reload the configuration and retry"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CONFIG_CONFLICT: rendering probe\nRecovery: Reload the configuration and retry\n"
+  },
+  {
+    "code": "DAEMON_UNAVAILABLE",
+    "exitCode": 69,
+    "httpStatus": 503,
+    "recovery": {
+      "suggestedCommand": "sorage daemon start"
+    },
+    "renderedExitCode": 69,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "DAEMON_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage daemon start"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "DAEMON_UNAVAILABLE: rendering probe\nRecovery: sorage daemon start\n"
+  },
+  {
+    "code": "PROJECT_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "sorage project list"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PROJECT_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage project list"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PROJECT_NOT_FOUND: rendering probe\nRecovery: sorage project list\n"
+  },
+  {
+    "code": "PROJECT_ARCHIVED",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage project unarchive <project> --as-user"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PROJECT_ARCHIVED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage project unarchive <project> --as-user"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PROJECT_ARCHIVED: rendering probe\nRecovery: sorage project unarchive <project> --as-user\n"
+  },
+  {
+    "code": "PROJECT_UNBOUND",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage project bind <project> --dir <path>"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PROJECT_UNBOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage project bind <project> --dir <path>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PROJECT_UNBOUND: rendering probe\nRecovery: sorage project bind <project> --dir <path>\n"
+  },
+  {
+    "code": "PROJECT_SLUG_CONFLICT",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage project show <project>"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PROJECT_SLUG_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage project show <project>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PROJECT_SLUG_CONFLICT: rendering probe\nRecovery: sorage project show <project>\n"
+  },
+  {
+    "code": "BINDING_DUPLICATE",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage project resolve --path <path>"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "BINDING_DUPLICATE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage project resolve --path <path>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "BINDING_DUPLICATE: rendering probe\nRecovery: sorage project resolve --path <path>\n"
+  },
+  {
+    "code": "UNREGISTERED_RECIPIENT",
+    "exitCode": 65,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "sorage project add"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "UNREGISTERED_RECIPIENT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage project add"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "UNREGISTERED_RECIPIENT: rendering probe\nRecovery: sorage project add\n"
+  },
+  {
+    "code": "AMBIGUOUS_PROJECT",
+    "exitCode": 64,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Pass --as <project-slug>, or remove the aliased binding"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "AMBIGUOUS_PROJECT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Pass --as <project-slug>, or remove the aliased binding"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "AMBIGUOUS_PROJECT: rendering probe\nRecovery: Pass --as <project-slug>, or remove the aliased binding\n"
+  },
+  {
+    "code": "SENDER_IDENTITY_DOWNGRADE",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Bind the directory, or pass --allow-unregistered"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "SENDER_IDENTITY_DOWNGRADE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Bind the directory, or pass --allow-unregistered"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "SENDER_IDENTITY_DOWNGRADE: rendering probe\nRecovery: Bind the directory, or pass --allow-unregistered\n"
+  },
+  {
+    "code": "VAULT_CONTAINMENT",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Choose a directory outside the Vault, or move the Vault with sorage vault move"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_CONTAINMENT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Choose a directory outside the Vault, or move the Vault with sorage vault move"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "VAULT_CONTAINMENT: rendering probe\nRecovery: Choose a directory outside the Vault, or move the Vault with sorage vault move\n"
+  },
+  {
+    "code": "HANDOFF_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Verify the UUID with sorage inbox or sorage outbox"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the UUID with sorage inbox or sorage outbox"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_NOT_FOUND: rendering probe\nRecovery: Verify the UUID with sorage inbox or sorage outbox\n"
+  },
+  {
+    "code": "FORBIDDEN_ACTOR",
+    "exitCode": 77,
+    "httpStatus": 403,
+    "recovery": {
+      "suggestedCommand": "Run from the correct directory, or use --as or --as-user"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "FORBIDDEN_ACTOR",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Run from the correct directory, or use --as or --as-user"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "FORBIDDEN_ACTOR: rendering probe\nRecovery: Run from the correct directory, or use --as or --as-user\n"
+  },
+  {
+    "code": "USER_CONTEXT_REQUIRED",
+    "exitCode": 77,
+    "httpStatus": 403,
+    "recovery": {
+      "suggestedCommand": "Re-run with --as-user"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "USER_CONTEXT_REQUIRED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-run with --as-user"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "USER_CONTEXT_REQUIRED: rendering probe\nRecovery: Re-run with --as-user\n"
+  },
+  {
+    "code": "CONFIRMATION_REQUIRED",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Re-run with --confirm"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CONFIRMATION_REQUIRED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-run with --confirm"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CONFIRMATION_REQUIRED: rendering probe\nRecovery: Re-run with --confirm\n"
+  },
+  {
+    "code": "HOST_NOT_ALLOWED",
+    "exitCode": 77,
+    "httpStatus": 421,
+    "recovery": {
+      "suggestedCommand": "Reach the daemon as 127.0.0.1, localhost, or [::1] on the configured port"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HOST_NOT_ALLOWED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reach the daemon as 127.0.0.1, localhost, or [::1] on the configured port"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HOST_NOT_ALLOWED: rendering probe\nRecovery: Reach the daemon as 127.0.0.1, localhost, or [::1] on the configured port\n"
+  },
+  {
+    "code": "UNAUTHENTICATED",
+    "exitCode": 77,
+    "httpStatus": 401,
+    "recovery": {
+      "suggestedCommand": "sorage web"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "UNAUTHENTICATED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage web"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "UNAUTHENTICATED: rendering probe\nRecovery: sorage web\n"
+  },
+  {
+    "code": "TOKEN_INVALID",
+    "exitCode": 77,
+    "httpStatus": 401,
+    "recovery": {
+      "suggestedCommand": "sorage web"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "TOKEN_INVALID",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage web"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "TOKEN_INVALID: rendering probe\nRecovery: sorage web\n"
+  },
+  {
+    "code": "ROW_VERSION_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "ROW_VERSION_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "ROW_VERSION_CONFLICT: rendering probe\nRecovery: Re-read the Handoff and retry with the new Row Version\n"
+  },
+  {
+    "code": "REVISION_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Re-read the current Revision"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "REVISION_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-read the current Revision"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "REVISION_CONFLICT: rendering probe\nRecovery: Re-read the current Revision\n"
+  },
+  {
+    "code": "REVIEW_NOTE_PRESENT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Resolve the Note by revising, withdrawing, or removing it"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "REVIEW_NOTE_PRESENT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Resolve the Note by revising, withdrawing, or removing it"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "REVIEW_NOTE_PRESENT: rendering probe\nRecovery: Resolve the Note by revising, withdrawing, or removing it\n"
+  },
+  {
+    "code": "NO_REVIEW_NOTE",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Use revise --file <path>"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "NO_REVIEW_NOTE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Use revise --file <path>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "NO_REVIEW_NOTE: rendering probe\nRecovery: Use revise --file <path>\n"
+  },
+  {
+    "code": "NO_CONTENT_CHANGE",
+    "exitCode": 65,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Change the document, or resolve the Note with revise --no-change --reason"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "NO_CONTENT_CHANGE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Change the document, or resolve the Note with revise --no-change --reason"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "NO_CONTENT_CHANGE: rendering probe\nRecovery: Change the document, or resolve the Note with revise --no-change --reason\n"
+  },
+  {
+    "code": "NO_CHANGE_LIMIT",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "The next resolution MUST change content"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "NO_CHANGE_LIMIT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "The next resolution MUST change content"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "NO_CHANGE_LIMIT: rendering probe\nRecovery: The next resolution MUST change content\n"
+  },
+  {
+    "code": "HANDOFF_TERMINAL",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Create a superseding Handoff with --supersedes"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_TERMINAL",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Create a superseding Handoff with --supersedes"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_TERMINAL: rendering probe\nRecovery: Create a superseding Handoff with --supersedes\n"
+  },
+  {
+    "code": "HANDOFF_NOT_TERMINAL",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Reach a terminal state first with accept, decline, or withdraw"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_NOT_TERMINAL",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reach a terminal state first with accept, decline, or withdraw"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_NOT_TERMINAL: rendering probe\nRecovery: Reach a terminal state first with accept, decline, or withdraw\n"
+  },
+  {
+    "code": "HANDOFF_DELETED",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Use get or a listing with --include-deleted"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_DELETED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Use get or a listing with --include-deleted"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_DELETED: rendering probe\nRecovery: Use get or a listing with --include-deleted\n"
+  },
+  {
+    "code": "HANDOFF_ALREADY_FETCHED",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Ask the recipient to decline, or supersede the Handoff"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_ALREADY_FETCHED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Ask the recipient to decline, or supersede the Handoff"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_ALREADY_FETCHED: rendering probe\nRecovery: Ask the recipient to decline, or supersede the Handoff\n"
+  },
+  {
+    "code": "HANDOFF_ARCHIVE_INVALID",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Reach a terminal state first"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_ARCHIVE_INVALID",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reach a terminal state first"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_ARCHIVE_INVALID: rendering probe\nRecovery: Reach a terminal state first\n"
+  },
+  {
+    "code": "HANDOFF_NOT_ARCHIVED",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Nothing to do; archivedAt is already null"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_NOT_ARCHIVED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Nothing to do; archivedAt is already null"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_NOT_ARCHIVED: rendering probe\nRecovery: Nothing to do; archivedAt is already null\n"
+  },
+  {
+    "code": "DELETION_ALREADY_REQUESTED",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Wait for the User decision, or sorage delete reject <id> --as-user first"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "DELETION_ALREADY_REQUESTED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Wait for the User decision, or sorage delete reject <id> --as-user first"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "DELETION_ALREADY_REQUESTED: rendering probe\nRecovery: Wait for the User decision, or sorage delete reject <id> --as-user first\n"
+  },
+  {
+    "code": "PINNED_DELETE_CONFIRMATION",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Re-run with --confirm-pinned <id>"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PINNED_DELETE_CONFIRMATION",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-run with --confirm-pinned <id>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PINNED_DELETE_CONFIRMATION: rendering probe\nRecovery: Re-run with --confirm-pinned <id>\n"
+  },
+  {
+    "code": "IDEMPOTENCY_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Use a new key, or replay the identical request"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "IDEMPOTENCY_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Use a new key, or replay the identical request"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "IDEMPOTENCY_CONFLICT: rendering probe\nRecovery: Use a new key, or replay the identical request\n"
+  },
+  {
+    "code": "CURSOR_INVALID",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Restart the listing without --cursor"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CURSOR_INVALID",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Restart the listing without --cursor"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CURSOR_INVALID: rendering probe\nRecovery: Restart the listing without --cursor\n"
+  },
+  {
+    "code": "ARTIFACT_TOO_LARGE",
+    "exitCode": 65,
+    "httpStatus": 413,
+    "recovery": {
+      "suggestedCommand": "Reduce the file, or raise the limit deliberately"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "ARTIFACT_TOO_LARGE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reduce the file, or raise the limit deliberately"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "ARTIFACT_TOO_LARGE: rendering probe\nRecovery: Reduce the file, or raise the limit deliberately\n"
+  },
+  {
+    "code": "ARTIFACT_MATERIALIZING",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Retry; the next process start drains the intent"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "ARTIFACT_MATERIALIZING",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retry; the next process start drains the intent"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "ARTIFACT_MATERIALIZING: rendering probe\nRecovery: Retry; the next process start drains the intent\n"
+  },
+  {
+    "code": "ARTIFACT_CORRUPTED",
+    "exitCode": 73,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage vault verify, then restore from backup"
+    },
+    "renderedExitCode": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "ARTIFACT_CORRUPTED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage vault verify, then restore from backup"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "ARTIFACT_CORRUPTED: rendering probe\nRecovery: sorage vault verify, then restore from backup\n"
+  },
+  {
+    "code": "SOURCE_OUTSIDE_WORKSPACE",
+    "exitCode": 77,
+    "httpStatus": 403,
+    "recovery": {
+      "suggestedCommand": "Re-run with --allow-external-source"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "SOURCE_OUTSIDE_WORKSPACE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-run with --allow-external-source"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "SOURCE_OUTSIDE_WORKSPACE: rendering probe\nRecovery: Re-run with --allow-external-source\n"
+  },
+  {
+    "code": "VAULT_INTEGRITY_ERROR",
+    "exitCode": 73,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage vault verify"
+    },
+    "renderedExitCode": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage vault verify"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: rendering probe\nRecovery: sorage vault verify\n"
+  },
+  {
+    "code": "VAULT_SCHEMA_UNSUPPORTED",
+    "exitCode": 78,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Upgrade Sorage; Sorage never downgrades a Vault"
+    },
+    "renderedExitCode": 78,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_SCHEMA_UNSUPPORTED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Upgrade Sorage; Sorage never downgrades a Vault"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "VAULT_SCHEMA_UNSUPPORTED: rendering probe\nRecovery: Upgrade Sorage; Sorage never downgrades a Vault\n"
+  },
+  {
+    "code": "SERVICE_PAUSED",
+    "exitCode": 75,
+    "httpStatus": 423,
+    "recovery": {
+      "suggestedCommand": "Wait for that operation to finish, then retry"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "SERVICE_PAUSED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Wait for that operation to finish, then retry"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "SERVICE_PAUSED: rendering probe\nRecovery: Wait for that operation to finish, then retry\n"
+  },
+  {
+    "code": "PORT_IN_USE",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Stop the other listener, or change server.port and restart"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PORT_IN_USE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Stop the other listener, or change server.port and restart"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PORT_IN_USE: rendering probe\nRecovery: Stop the other listener, or change server.port and restart\n"
+  },
+  {
+    "code": "BACKUP_IN_PROGRESS",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Wait for the running backup to finish, then retry"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "BACKUP_IN_PROGRESS",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Wait for the running backup to finish, then retry"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "BACKUP_IN_PROGRESS: rendering probe\nRecovery: Wait for the running backup to finish, then retry\n"
+  },
+  {
+    "code": "GIT_BACKUP_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Resolve the repository state manually"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "GIT_BACKUP_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Resolve the repository state manually"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "GIT_BACKUP_CONFLICT: rendering probe\nRecovery: Resolve the repository state manually\n"
+  },
+  {
+    "code": "GIT_AUTH_REQUIRED",
+    "exitCode": 77,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Configure the credential helper or SSH key, then retry"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "GIT_AUTH_REQUIRED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Configure the credential helper or SSH key, then retry"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "GIT_AUTH_REQUIRED: rendering probe\nRecovery: Configure the credential helper or SSH key, then retry\n"
+  },
+  {
+    "code": "RESTORE_TARGET_NOT_EMPTY",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Restore into a fresh installation"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "RESTORE_TARGET_NOT_EMPTY",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Restore into a fresh installation"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "RESTORE_TARGET_NOT_EMPTY: rendering probe\nRecovery: Restore into a fresh installation\n"
+  },
+  {
+    "code": "INTERNAL_ERROR",
+    "exitCode": 1,
+    "httpStatus": 500,
+    "recovery": {
+      "suggestedCommand": "Inspect meta.requestId in ~/.sorage/logs/sorage.log"
+    },
+    "renderedExitCode": 1,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "INTERNAL_ERROR",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Inspect meta.requestId in ~/.sorage/logs/sorage.log"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "INTERNAL_ERROR: rendering probe\nRecovery: Inspect meta.requestId in ~/.sorage/logs/sorage.log\n"
+  }
+]
