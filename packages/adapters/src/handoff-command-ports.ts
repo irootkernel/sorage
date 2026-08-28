@@ -4,11 +4,16 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { HandoffReadPorts, SendPorts } from "@sorage/core";
-import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
+import { type AppError, type Result, appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
-import { createSqliteHandoffWriteStore, createSqliteRevisionStore, createSqliteTerminalStore } from "./handoffs";
+import {
+  createSqliteHandoffWriteStore,
+  createSqliteRetentionStore,
+  createSqliteRevisionStore,
+  createSqliteTerminalStore,
+} from "./handoffs";
 import { createSqliteHandoffReadStore } from "./handoff-read-store";
 import { createSqliteReviewStore } from "./review-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
@@ -127,6 +132,42 @@ function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
   if (path.startsWith("~/")) return join(userHome, path.slice(2));
   return resolve(path);
+}
+
+/** The production retention wiring of pin, archive, and deletion (TASK-034). */
+export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions = {}): ReturnType<
+  typeof createNodeReviewPorts
+> & {
+  retention: ReturnType<typeof createSqliteRetentionStore>;
+  artifact: {
+    checksum: (storageKey: string) => Result<string, AppError>;
+    remove: (storageKey: string) => Result<void, AppError>;
+  };
+} {
+  const reviews = createNodeReviewPorts(options);
+  const env = options.env ?? process.env;
+  const userHome = options.userHome ?? homedir();
+  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+  const read = config.read();
+  if (!read.ok || read.value === null) {
+    db.close();
+    throw new Error(`the configuration at ${home.configFile} could not be read`);
+  }
+  const artifactStore = createNodeArtifactStore({
+    vaultPath: read.value.config.vault.path,
+    installationId: read.value.config.installationId,
+  });
+  return {
+    ...reviews,
+    retention: createSqliteRetentionStore(db, createSqliteEventLedger(db)),
+    artifact: {
+      checksum: (key) => artifactStore.checksum(key),
+      pathOf: (key) => artifactStore.pathOf(key),
+      remove: (key) => artifactStore.remove(key),
+    },
+  };
 }
 
 /** The production terminal wiring of accept, decline, and withdraw (TASK-033). */

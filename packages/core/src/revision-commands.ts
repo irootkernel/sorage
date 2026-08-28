@@ -92,7 +92,7 @@ function roleOf(
     senderWorkspaceKey: string | null;
     recipientProjectId: string;
   },
-): Result<"sender" | "user", AppError> {
+): Result<"sender" | "recipient" | "user", AppError> {
   if (input.asUser === true) return ok("user");
   const resolved = resolveWorkspaceActor(ports.projectPorts, {
     path: input.path,
@@ -103,6 +103,11 @@ function roleOf(
   if (resolved.value.kind === "registered_project") {
     if (handoff.senderKind === "registered_project" && handoff.senderProjectId === resolved.value.project.id) {
       return ok("sender");
+    }
+    // The recipient participates: the evaluator answers FORBIDDEN_ACTOR for a living
+    // Handoff and HANDOFF_DELETED for a tombstone before the permission row runs.
+    if (resolved.value.project.id === handoff.recipientProjectId) {
+      return ok("recipient");
     }
     return err(
       appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: "" }),
@@ -183,7 +188,7 @@ function reviseContent(
   ports: RevisionPorts,
   input: ReviseInput,
   handoff: RevisionHandoff,
-  role: "sender" | "user",
+  role: "sender" | "recipient" | "user",
   facts: HandoffFacts,
 ): Result<ReviseOutcome, AppError> {
   // The no-change resolution resolves the Note without staging anything.

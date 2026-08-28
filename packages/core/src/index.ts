@@ -15,6 +15,7 @@ export * from "./import-policy";
 export * from "./init";
 export * from "./intent-log";
 export * from "./project-commands";
+export * from "./retention-commands";
 export * from "./review-commands";
 export * from "./terminal-commands";
 export * from "./revision-commands";

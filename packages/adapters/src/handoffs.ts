@@ -550,3 +550,118 @@ export function createSqliteTerminalStore(
     },
   };
 }
+
+/**
+ * The SQLite retention store behind TASK-034: one transaction per decision holding
+ * the compare-and-set, the deletion-request insert or resolution, the optional
+ * unlink intent of the approval, and the events.
+ */
+export function createSqliteRetentionStore(
+  db: SorageSqlite,
+  ledger: SqliteEventLedger,
+): import("@sorage/core").RetentionMutationPort {
+  return {
+    applyRetentionMutation(input) {
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const columns = Object.keys(input.assignments);
+          const sets = columns.map((column) => `${column} = ?`).join(", ");
+          const values = columns.map((column) => input.assignments[column]);
+          const changed = db
+            .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
+            .run(...(values as never[]), input.handoffId, input.expectedRowVersion) as { changes: number };
+          if (changed.changes !== 1) {
+            return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
+          }
+          if (input.deletionRequest?.op === "insert") {
+            db.prepare(
+              "INSERT INTO deletion_requests (id, handoff_id, requested_by_kind, requested_by_id, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            ).run(
+              input.deletionRequest.id,
+              input.handoffId,
+              input.deletionRequest.requestedByKind,
+              input.deletionRequest.requestedById,
+              input.deletionRequest.reason,
+              input.events[0]?.createdAt ?? new Date().toISOString(),
+            );
+          } else if (input.deletionRequest?.op === "resolve") {
+            db.prepare(
+              "UPDATE deletion_requests SET status = ?, resolved_at = ?, resolved_by_user = ?, resolution_note = ? WHERE handoff_id = ? AND status = 'pending'",
+            ).run(
+              input.deletionRequest.status,
+              input.events[0]?.createdAt ?? new Date().toISOString(),
+              input.deletionRequest.resolvedByUser,
+              input.deletionRequest.resolutionNote,
+              input.handoffId,
+            );
+          }
+          if (input.unlinkIntent !== undefined) {
+            db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
+            db.prepare("DELETE FROM artifacts WHERE handoff_id = ?").run(input.handoffId);
+            db.prepare(
+              "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, 'unlink', NULL, ?, ?, ?, 0)",
+            ).run(
+              input.unlinkIntent.id,
+              input.unlinkIntent.toPath,
+              input.unlinkIntent.artifactId,
+              input.events[0]?.createdAt ?? new Date().toISOString(),
+            );
+          }
+          for (const event of input.events) {
+            ledger.append(event);
+          }
+          db.exec("COMMIT");
+          return ok({ rowVersion: input.expectedRowVersion + 1 });
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
+        }
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Applying the retention decision failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+    findPendingRequest(handoffId) {
+      try {
+        const row = db
+          .prepare("SELECT id FROM deletion_requests WHERE handoff_id = ? AND status = 'pending'")
+          .get(handoffId) as { id: string } | null | undefined;
+        return ok(row ? { id: row.id } : null);
+      } catch (error) {
+        return err(appError("INTERNAL_ERROR", `Reading the deletion request failed: ${messageOf(error)}`));
+      }
+    },
+    completeUnlink(input) {
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(input.intentId);
+          ledger.append(input.event);
+          db.exec("COMMIT");
+          return ok({ completed: 1 });
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
+        }
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Completing the deletion unlink failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+  };
+}

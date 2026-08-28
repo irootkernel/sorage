@@ -42,6 +42,15 @@ Commands:
                                   recorded reason
   withdraw <handoff-id>           withdraw the Handoff as the sender before the
                                   recipient has engaged
+  pin <handoff-id>                pin the Handoff against deletion; a User-admin
+                                  operation
+  unpin <handoff-id>              release a pinned Handoff; a User-admin
+                                  operation
+  archive <handoff-id>            archive a terminal Handoff out of the default
+                                  listings; a User-admin operation
+  unarchive <handoff-id>          return an archived Handoff to the default
+                                  listings; a User-admin operation
+  delete                          request and decide Handoff deletion
   vault                           inspect, verify, and relocate the Artifact
                                   Vault
   help [command]                  display help for command

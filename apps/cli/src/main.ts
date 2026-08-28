@@ -13,6 +13,7 @@ import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 // must never load inside the shipped CLI process.
 import {
   createNodeHandoffReadPorts,
+  createNodeRetentionPorts,
   createNodeRevisionPorts,
   createNodeReviewPorts,
   createNodeSendPorts,
@@ -45,8 +46,15 @@ import {
   declineHandoff,
   fetchHandoff,
   getHandoff,
+  approveDeletion,
+  archiveHandoff,
+  pinHandoff,
+  rejectDeletion,
   removeReviewNote,
+  requestDeletion,
   reviseHandoff,
+  unarchiveHandoff,
+  unpinHandoff,
   withdrawHandoff,
   setReviewNote,
   withdrawReviewNote,
@@ -1014,6 +1022,170 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       } else {
         ports.out(`Withdrew ${id}
 `);
+      }
+    });
+
+  for (const [name, description, run] of [
+    ["pin", "pin the Handoff against deletion; a User-admin operation", pinHandoff],
+    ["unpin", "release a pinned Handoff; a User-admin operation", unpinHandoff],
+  ] as const) {
+    program
+      .command(`${name} <handoff-id>`)
+      .description(description)
+      .action((id: string, _options: unknown, command: Command) => {
+        const globals = command.optsWithGlobals();
+        const json = globals.json === true;
+        if (!requireInitialized(ports, json, reportExitCode)) return;
+        if (globals.asUser !== true) {
+          reportExitCode(
+            renderAppError(
+              { code: "USER_CONTEXT_REQUIRED", message: `Handoff ${name} is a User administration operation.` },
+              ports,
+              json,
+            ),
+          );
+          return;
+        }
+        const result = run(createNodeRetentionPorts(), { ...actorInputOf(globals), handoffId: id });
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json));
+          return;
+        }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+        } else {
+          ports.out(`${name === "pin" ? "Pinned" : "Unpinned"} ${id}\n`);
+        }
+      });
+  }
+
+  for (const [name, description, run] of [
+    ["archive", "archive a terminal Handoff out of the default listings; a User-admin operation", archiveHandoff],
+    ["unarchive", "return an archived Handoff to the default listings; a User-admin operation", unarchiveHandoff],
+  ] as const) {
+    program
+      .command(`${name} <handoff-id>`)
+      .description(description)
+      .action((id: string, _options: unknown, command: Command) => {
+        const globals = command.optsWithGlobals();
+        const json = globals.json === true;
+        if (!requireInitialized(ports, json, reportExitCode)) return;
+        if (globals.asUser !== true) {
+          reportExitCode(
+            renderAppError(
+              { code: "USER_CONTEXT_REQUIRED", message: `Handoff ${name} is a User administration operation.` },
+              ports,
+              json,
+            ),
+          );
+          return;
+        }
+        const result = run(createNodeRetentionPorts(), { ...actorInputOf(globals), handoffId: id });
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json));
+          return;
+        }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+        } else {
+          ports.out(`${name === "archive" ? "Archived" : "Unarchived"} ${id}\n`);
+        }
+      });
+  }
+
+  const remove = program.command("delete").description("request and decide Handoff deletion");
+
+  remove
+    .command("request <handoff-id>")
+    .description("ask the User to delete this Handoff in any non-deleted state")
+    .option("--reason <text>", "why the deletion is requested")
+    .action((id: string, options: { reason?: string }, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = requestDeletion(createNodeRetentionPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        reason: options.reason,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Deletion requested for ${id}\n`);
+      }
+    });
+
+  remove
+    .command("approve <handoff-id>")
+    .description("approve a pending deletion as the User; the tombstone keeps no content")
+    .option("--confirm-pinned <handoff-id>", "the distinct confirmation a pinned Handoff requires")
+    .option("--idempotency-key <uuid>", "replay an identical approval instead of applying it again")
+    .action((id: string, options: { confirmPinned?: string }, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (globals.asUser !== true) {
+        reportExitCode(
+          renderAppError(
+            { code: "USER_CONTEXT_REQUIRED", message: "Deletion approval is a User administration operation." },
+            ports,
+            json,
+          ),
+        );
+        return;
+      }
+      const result = approveDeletion(createNodeRetentionPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        confirm: globals.confirm === true,
+        confirmPinned: options.confirmPinned,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Deleted ${id}; prior Git commits may retain earlier content\n`);
+      }
+    });
+
+  remove
+    .command("reject <handoff-id>")
+    .description("reject a pending deletion as the User; the Handoff is retained")
+    .option("--reason <text>", "why the deletion was rejected")
+    .action((id: string, options: { reason?: string }, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (globals.asUser !== true) {
+        reportExitCode(
+          renderAppError(
+            { code: "USER_CONTEXT_REQUIRED", message: "Deletion rejection is a User administration operation." },
+            ports,
+            json,
+          ),
+        );
+        return;
+      }
+      const result = rejectDeletion(createNodeRetentionPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        reason: options.reason,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Deletion rejected for ${id}\n`);
       }
     });
 
