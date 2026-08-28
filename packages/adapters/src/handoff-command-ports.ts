@@ -8,7 +8,7 @@ import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
-import { createSqliteHandoffWriteStore, createSqliteRevisionStore } from "./handoffs";
+import { createSqliteHandoffWriteStore, createSqliteRevisionStore, createSqliteTerminalStore } from "./handoffs";
 import { createSqliteHandoffReadStore } from "./handoff-read-store";
 import { createSqliteReviewStore } from "./review-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
@@ -127,6 +127,20 @@ function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
   if (path.startsWith("~/")) return join(userHome, path.slice(2));
   return resolve(path);
+}
+
+/** The production terminal wiring of accept, decline, and withdraw (TASK-033). */
+export function createNodeTerminalPorts(options: NodeHandoffCommandPortsOptions = {}): ReturnType<
+  typeof createNodeReviewPorts
+> & {
+  terminals: ReturnType<typeof createSqliteTerminalStore>;
+} {
+  const reviews = createNodeReviewPorts(options);
+  const env = options.env ?? process.env;
+  const userHome = options.userHome ?? homedir();
+  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  return { ...reviews, terminals: createSqliteTerminalStore(db, createSqliteEventLedger(db)) };
 }
 
 /** The production revision wiring of `sorage revise` (TASK-032). */

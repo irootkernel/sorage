@@ -263,6 +263,10 @@ function reviseContent(
     if (!replayed.ok) return err(replayed.error);
     if (replayed.value !== null) return ok(replayed.value);
   }
+  // The state machine answers first: a terminal or deleted Handoff refuses with its
+  // own code before the content comparison runs (row 23, row 24).
+  const outcome = evaluateHandoffOperation("revise", facts, role, { participant: true, contentChanged: true });
+  if (!outcome.ok) return err(outcome.error);
   // The same content refuses before anything mutates (HND-015).
   if (
     handoff.currentArtifact !== null &&
@@ -276,8 +280,6 @@ function reviseContent(
       ),
     );
   }
-  const outcome = evaluateHandoffOperation("revise", facts, role, { participant: true, contentChanged: true });
-  if (!outcome.ok) return err(outcome.error);
 
   const now = ports.clock.now().toISOString();
   const artifactId = `a${createHash("sha1")

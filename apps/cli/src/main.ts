@@ -16,6 +16,7 @@ import {
   createNodeRevisionPorts,
   createNodeReviewPorts,
   createNodeSendPorts,
+  createNodeTerminalPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
@@ -40,10 +41,13 @@ import {
   moveVault,
   protocolVersion,
   renameProject,
+  acceptHandoff,
+  declineHandoff,
   fetchHandoff,
   getHandoff,
   removeReviewNote,
   reviseHandoff,
+  withdrawHandoff,
   setReviewNote,
   withdrawReviewNote,
   listInbox,
@@ -923,6 +927,95 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         }
       },
     );
+
+  program
+    .command("accept <handoff-id>")
+    .description("accept the exact Revision as the recipient, closing the exchange")
+    .requiredOption("--expected-revision <n>", "the Revision being accepted", parseInteger)
+    .action((id: string, options: { expectedRevision: number }, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      // --expected-row-version is a root-level global, so its requiredness is
+      // enforced here rather than by a subcommand-local requiredOption (CLI-013).
+      if (typeof globals.expectedRowVersion !== "number") {
+        ports.err("sorage: accept requires --expected-row-version <n>\n");
+        ports.err("Run 'sorage accept --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      const result = acceptHandoff(createNodeTerminalPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        expectedRevision: options.expectedRevision,
+        expectedRowVersion: globals.expectedRowVersion,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`Accepted ${id} at revision ${result.value.acceptedRevision}
+`);
+      }
+    });
+
+  program
+    .command("decline <handoff-id>")
+    .description("decline the Handoff as the recipient with a recorded reason")
+    .requiredOption("--reason <text>", "the recorded decline reason")
+    .action((id: string, options: { reason: string }, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (typeof globals.expectedRowVersion !== "number") {
+        ports.err("sorage: decline requires --expected-row-version <n>\n");
+        ports.err("Run 'sorage decline --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      const result = declineHandoff(createNodeTerminalPorts(), {
+        ...actorInputOf(globals),
+        handoffId: id,
+        reason: options.reason,
+        expectedRowVersion: globals.expectedRowVersion,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`Declined ${id}: ${options.reason}
+`);
+      }
+    });
+
+  program
+    .command("withdraw <handoff-id>")
+    .description("withdraw the Handoff as the sender before the recipient has engaged")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = withdrawHandoff(createNodeTerminalPorts(), { ...actorInputOf(globals), handoffId: id });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`Withdrew ${id}
+`);
+      }
+    });
 
   const vault = program.command("vault").description("inspect, verify, and relocate the Artifact Vault");
 

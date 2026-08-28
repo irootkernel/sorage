@@ -3,39 +3,45 @@ Usage: sorage [options] [command]
 Local document-handoff broker for AI coding sessions.
 
 Options:
-  --as <project-slug>            resolve the acting Project by slug instead of
-                                 the working directory
-  --as-user                      assert the local User as the actor for a
-                                 User-admin operation
-  --confirm                      confirm a state-conditional operation
-  --expected-row-version <n>     compare-and-set against this Row Version
-  --limit <n>                    page size for list commands
-  --cursor <cursor>              resume a listing from an opaque cursor
-  --json                         emit the versioned JSON envelope on standard
-                                 output
-  -h, --help                     display help for the command
+  --as <project-slug>             resolve the acting Project by slug instead of
+                                  the working directory
+  --as-user                       assert the local User as the actor for a
+                                  User-admin operation
+  --confirm                       confirm a state-conditional operation
+  --expected-row-version <n>      compare-and-set against this Row Version
+  --limit <n>                     page size for list commands
+  --cursor <cursor>               resume a listing from an opaque cursor
+  --json                          emit the versioned JSON envelope on standard
+                                  output
+  -h, --help                      display help for the command
 
 Commands:
-  version                        print the CLI, product, and protocol versions
-  init [options]                 create the Sorage installation: home tree,
-                                 configuration, database, and Vault
-  config                         inspect and change the installation
-                                 configuration
-  doctor                         run the milestone-scoped installation checks
-                                 and report the catalog
-  project                        register and inspect Projects and their
-                                 bindings
-  send [options]                 hand one current document to one or more
-                                 recipient Projects, one Handoff each
-  inbox [options]                list the Handoffs sent to the resolved
-                                 recipient Project
-  outbox [options]               list the Handoffs the resolved sender sent
-  get <handoff-id>               read one Handoff's metadata; records nothing
-  fetch <handoff-id>             read the current Artifact's metadata and local
-                                 path; the recipient's first fetch is recorded
-  review                         create, withdraw, and remove Review Notes
-  revise [options] <handoff-id>  replace the current Artifact or resolve the
-                                 Review Note without changing content
-  vault                          inspect, verify, and relocate the Artifact
-                                 Vault
-  help [command]                 display help for command
+  version                         print the CLI, product, and protocol versions
+  init [options]                  create the Sorage installation: home tree,
+                                  configuration, database, and Vault
+  config                          inspect and change the installation
+                                  configuration
+  doctor                          run the milestone-scoped installation checks
+                                  and report the catalog
+  project                         register and inspect Projects and their
+                                  bindings
+  send [options]                  hand one current document to one or more
+                                  recipient Projects, one Handoff each
+  inbox [options]                 list the Handoffs sent to the resolved
+                                  recipient Project
+  outbox [options]                list the Handoffs the resolved sender sent
+  get <handoff-id>                read one Handoff's metadata; records nothing
+  fetch <handoff-id>              read the current Artifact's metadata and local
+                                  path; the recipient's first fetch is recorded
+  review                          create, withdraw, and remove Review Notes
+  revise [options] <handoff-id>   replace the current Artifact or resolve the
+                                  Review Note without changing content
+  accept [options] <handoff-id>   accept the exact Revision as the recipient,
+                                  closing the exchange
+  decline [options] <handoff-id>  decline the Handoff as the recipient with a
+                                  recorded reason
+  withdraw <handoff-id>           withdraw the Handoff as the sender before the
+                                  recipient has engaged
+  vault                           inspect, verify, and relocate the Artifact
+                                  Vault
+  help [command]                  display help for command

@@ -506,3 +506,47 @@ function rollbackWithConflict(
     ),
   );
 }
+
+/**
+ * The SQLite terminal store behind TASK-033: one transaction per transition holding
+ * the compare-and-set with its domain assignments and the ledger append.
+ */
+export function createSqliteTerminalStore(
+  db: SorageSqlite,
+  ledger: SqliteEventLedger,
+): import("@sorage/core").TerminalMutationPort {
+  return {
+    applyTerminalTransition(input) {
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const columns = Object.keys(input.assignments);
+          const sets = columns.map((column) => `${column} = ?`).join(", ");
+          const values = columns.map((column) => input.assignments[column]);
+          const changed = db
+            .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
+            .run(...(values as never[]), input.handoffId, input.expectedRowVersion) as { changes: number };
+          if (changed.changes !== 1) {
+            return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
+          }
+          ledger.append(input.event);
+          db.exec("COMMIT");
+          return ok({ rowVersion: input.expectedRowVersion + 1 });
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
+        }
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Applying the terminal transition failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+  };
+}
