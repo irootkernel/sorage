@@ -3,12 +3,13 @@ import { closeSync, mkdtempSync, openSync, readSync, rmSync, writeSync } from "n
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import type { SendPorts } from "@sorage/core";
+import type { HandoffReadPorts, SendPorts } from "@sorage/core";
 import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
 import { createSqliteHandoffWriteStore } from "./handoffs";
+import { createSqliteHandoffReadStore } from "./handoff-read-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { inspectSourceFile } from "./import-source";
@@ -125,6 +126,30 @@ function expandHome(path: string, userHome: string): string {
   if (path === "~") return userHome;
   if (path.startsWith("~/")) return join(userHome, path.slice(2));
   return resolve(path);
+}
+
+/** The production read wiring of `sorage inbox`, `outbox`, `get`, and `fetch` (TASK-030). */
+export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptions = {}): HandoffReadPorts {
+  const send = createNodeSendPorts(options);
+  const env = options.env ?? process.env;
+  const userHome = options.userHome ?? homedir();
+  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+  const read = config.read();
+  if (!read.ok || read.value === null) {
+    db.close();
+    throw new Error(`the configuration at ${home.configFile} could not be read`);
+  }
+  const effective = read.value.config;
+  return {
+    projectPorts: send.projectPorts,
+    handoffs: createSqliteHandoffReadStore(db, createSqliteEventLedger(db)),
+    config: { vaultPath: effective.vault.path, verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch },
+    artifact: send.artifactStore,
+    ids: send.ids,
+    clock: send.clock,
+  };
 }
 
 /** The resolved binding directories the Vault containment check runs against (VLT-017). */

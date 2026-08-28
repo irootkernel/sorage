@@ -10,7 +10,7 @@ import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
-import { createNodeSendPorts } from "@sorage/adapters/src/handoff-command-ports";
+import { createNodeHandoffReadPorts, createNodeSendPorts } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -33,6 +33,10 @@ import {
   moveVault,
   protocolVersion,
   renameProject,
+  fetchHandoff,
+  getHandoff,
+  listInbox,
+  listOutbox,
   resolveCommandActor,
   resolveWorkspaceActor,
   sendHandoffs,
@@ -637,6 +641,104 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       }
     });
 
+  for (const [name, description, run] of [
+    ["inbox", "list the Handoffs sent to the resolved recipient Project", listInbox],
+  ] as const) {
+    program
+      .command(name)
+      .description(description)
+      .option("--state <state>", "filter by review state")
+      .option("--sender <slug>", "filter by sender Project slug")
+      .option("--recipient <slug>", "filter by recipient Project slug")
+      .option("--include-archived", "include archived Handoffs")
+      .option("--include-deleted", "include tombstones")
+      .action((options, command) => {
+        const globals = command.optsWithGlobals();
+        const json = globals.json === true;
+        if (!requireInitialized(ports, json, reportExitCode)) return;
+        const result = run(createNodeHandoffReadPorts(), actorInputOf(globals), listQueryOf(options, globals));
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json));
+          return;
+        }
+        reportListing(result.value, ports, json, globals);
+      });
+  }
+
+  program
+    .command("outbox")
+    .description("list the Handoffs the resolved sender sent")
+    .option("--current-workspace", "list the Workspace's Handoffs instead of the Project's")
+    .option("--state <state>", "filter by review state")
+    .option("--sender <slug>", "filter by sender Project slug")
+    .option("--recipient <slug>", "filter by recipient Project slug")
+    .option("--include-archived", "include archived Handoffs")
+    .option("--include-deleted", "include tombstones")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = listOutbox(
+        createNodeHandoffReadPorts(),
+        actorInputOf(globals),
+        listQueryOf(options, globals),
+        options.currentWorkspace === true,
+      );
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      reportListing(result.value, ports, json, globals);
+    });
+
+  program
+    .command("get <handoff-id>")
+    .description("read one Handoff's metadata; records nothing")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = getHandoff(createNodeHandoffReadPorts(), actorInputOf(globals), id);
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else {
+        ports.out(`${result.value.title} (${result.value.id})
+`);
+        ports.out(`  state ${result.value.reviewState}, revision ${result.value.revision}, rowVersion ${result.value.rowVersion}
+`);
+      }
+    });
+
+  program
+    .command("fetch <handoff-id>")
+    .description("read the current Artifact's metadata and local path; the recipient's first fetch is recorded")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = fetchHandoff(createNodeHandoffReadPorts(), actorInputOf(globals), id);
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(
+          `${JSON.stringify(successEnvelope({ handoff: result.value.handoff, artifact: result.value.artifact, localPath: result.value.localPath }, requestId()), null, 2)}
+`,
+        );
+      } else {
+        ports.out(`${result.value.artifact.originalName} (${result.value.artifact.sizeBytes} bytes)
+`);
+        ports.out(`  ${result.value.localPath}
+`);
+      }
+    });
+
   const vault = program.command("vault").description("inspect, verify, and relocate the Artifact Vault");
 
   vault
@@ -871,6 +973,59 @@ export function runCli(argv: string[], ports: OutputPorts = defaultPorts): numbe
     return renderUsageError(new InvalidArgumentError(`unknown command '${first}'`), program, ports);
   }
   return 0;
+}
+
+function actorInputOf(globals: Record<string, unknown>): {
+  path: string;
+  userHome: string;
+  as: string | undefined;
+  asUser: boolean | undefined;
+} {
+  return {
+    path: process.cwd(),
+    userHome: homedir(),
+    as: typeof globals.as === "string" ? globals.as : undefined,
+    asUser: globals.asUser === true,
+  };
+}
+
+function listQueryOf(options: Record<string, unknown>, globals: Record<string, unknown>) {
+  return {
+    limit: typeof globals.limit === "number" && globals.limit > 0 ? globals.limit : 50,
+    cursor: typeof globals.cursor === "string" ? globals.cursor : undefined,
+    filters: {
+      state: typeof options.state === "string" ? options.state : undefined,
+      senderSlug: typeof options.sender === "string" ? options.sender : undefined,
+      recipientSlug: typeof options.recipient === "string" ? options.recipient : undefined,
+      includeArchived: options.includeArchived === true,
+      includeDeleted: options.includeDeleted === true,
+    },
+  };
+}
+
+function reportListing(
+  value: { handoffs: unknown[]; nextCursor: string | null },
+  ports: OutputPorts,
+  json: boolean,
+  globals: Record<string, unknown>,
+): void {
+  if (json) {
+    const payload =
+      typeof globals.cursor === "string"
+        ? { handoffs: value.handoffs, nextCursor: value.nextCursor }
+        : { handoffs: value.handoffs, nextCursor: value.nextCursor };
+    ports.out(`${JSON.stringify(successEnvelope(payload, requestId()), null, 2)}
+`);
+    return;
+  }
+  for (const handoff of value.handoffs as Array<{ title: string; id: string; reviewState: string }>) {
+    ports.out(`${handoff.id}  ${handoff.reviewState.padEnd(18)} ${handoff.title}
+`);
+  }
+  if (value.nextCursor !== null) {
+    ports.out(`next page: --cursor ${value.nextCursor}
+`);
+  }
 }
 
 function renderUsageError(error: unknown, program: Command, ports: OutputPorts): number {
