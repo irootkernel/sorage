@@ -1145,6 +1145,13 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         );
         return;
       }
+      // RUN-002: an intent-recording command drains at start before it approves anything.
+      const vaultPorts = createNodeVaultCommandPorts();
+      const drained = vaultPorts.drainAtStart();
+      if (!drained.ok) {
+        reportExitCode(renderAppError(drained.error, ports, json));
+        return;
+      }
       const result = approveDeletion(createNodeRetentionPorts(), {
         ...actorInputOf(globals),
         handoffId: id,

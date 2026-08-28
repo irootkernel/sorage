@@ -109,6 +109,8 @@ export interface RetentionOutcome {
   pinned?: boolean | undefined;
   archived?: boolean | undefined;
   deleted?: boolean | undefined;
+  /** Presented by every deletion approval so no rendering claims a purge (LIFE-015). */
+  warning?: string | undefined;
 }
 
 function load(ports: RetentionPorts, handoffId: string) {
@@ -417,6 +419,7 @@ export function approveDeletion(
     reviewState: handoff.reviewState,
     rowVersion: applied.value.rowVersion,
     deleted: true,
+    warning: "prior Git commits may retain earlier content",
   });
 }
 

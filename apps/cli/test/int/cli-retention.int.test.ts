@@ -172,7 +172,7 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm", "--json"], pinned.ports)).toBe(64);
     expect((JSON.parse(pinned.errText()) as { error: { code: string } }).error.code).toBe("PINNED_DELETE_CONFIRMATION");
 
-    // Step 7: approve with the distinct confirmation; the message names the Git caveat.
+    // Step 7: approve with the distinct confirmation; every rendering names the Git caveat.
     const approved = capture();
     expect(
       runCli(
@@ -180,7 +180,9 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
         approved.ports,
       ),
     ).toBe(0);
-    expect(approved.outText()).toContain("deleted");
+    const approval = JSON.parse(approved.outText()) as { data: { deleted: boolean; warning: string } };
+    expect(approval.data.deleted).toBe(true);
+    expect(approval.data.warning).toContain("prior Git commits may retain earlier content");
 
     // Step 8: the tombstone answers content operations with HANDOFF_DELETED.
     const fetched = capture();
@@ -271,6 +273,47 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     const defaultListing = capture();
     expect(runCli(["inbox", "--json"], defaultListing.ports)).toBe(0);
     expect(defaultListing.outText()).not.toContain(handoffId);
+    process.chdir(original);
+  });
+
+  it("drains pending intents at start before approving a deletion, and the human message names the Git caveat", () => {
+    const original = process.cwd();
+    const { home, workA, workB } = setup();
+    const handoffId = sendOne(home);
+
+    process.chdir(workB);
+    expect(
+      runCli(
+        ["accept", handoffId, "--expected-revision", "1", "--expected-row-version", "1", "--json"],
+        capture().ports,
+      ),
+    ).toBe(0);
+    process.chdir(workA);
+    expect(runCli(["delete", "request", handoffId, "--json"], capture().ports)).toBe(0);
+
+    // A stale intent from an earlier crashed process waits in the log (CP-6 shape).
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      database
+        .prepare(
+          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('i-stale', 'unlink', NULL, 'artifacts/gone/none', NULL, '2026-01-01T00:00:00.000Z', 0)",
+        )
+        .run();
+    } finally {
+      database.close();
+    }
+
+    const approved = capture();
+    expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm"], approved.ports)).toBe(0);
+    expect(approved.outText()).toContain("prior Git commits may retain earlier content");
+
+    // The approval drained the stale intent at start (RUN-002): nothing is left pending.
+    const after = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      expect(after.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
+    } finally {
+      after.close();
+    }
     process.chdir(original);
   });
 });
