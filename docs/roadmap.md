@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-005`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-036`
@@ -73,7 +73,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `EPIC-002` | Minimal installation and configuration core | 0.1 | Completed | `TASK-009` to `TASK-014` |
 | `EPIC-003` | Project registry and identity | 0.1 | Completed | `TASK-015` to `TASK-020` |
 | `EPIC-004` | Vault and Artifact store | 0.1 | Completed | `TASK-021` to `TASK-026` |
-| `EPIC-005` | Handoff domain and workflow | 0.1 | Planned | `TASK-027` to `TASK-035` |
+| `EPIC-005` | Handoff domain and workflow | 0.1 | Completed | `TASK-027` to `TASK-035` |
 | `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Planned | `TASK-036` to `TASK-041` |
 | `EPIC-007` | Daemon, API, and Web | 0.2 | Planned | `TASK-042` to `TASK-051` |
 | `EPIC-008` | Git backup and restore | 0.3 | Planned | `TASK-052` to `TASK-058` |
@@ -153,8 +153,10 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-005: Handoff domain and workflow
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.1
+- **Validation record (whole-epic review, 2026-08-28):** the whole-epic review ran its three remediation rounds plus the confirmation pass: round one found three valid seam findings (the administrative next actor hardcoded null, the vault-move fence missing from the revision and retention intent commits, and the review-set text contract), all remediated with regressions in `526bde9`; round two found three more (the revise import bypassing the external-source policy with an interpolated storage key, and the workspace sender answered `HANDOFF_NOT_FOUND` instead of `FORBIDDEN_ACTOR` on the review side), remediated in `dba85b1`; round three found one (the revise staging copy preceding the replay, state, and same-content guards), remediated in `2958cb7`; the confirmation round `r_01a04812-d8cd-7567-a686-6048f37f65ae` was committed with `coverage_status=complete`, `ci_decision=pass`, and zero findings. `make test` exits 0 with 404 tests and `scripts/sot-check` exits 0 on the audited snapshot; the loop of send, inbox, review set, revise, and accept runs end to end from two working directories (the loop AJ-04 accepts), and AJ-06, AJ-07, AJ-08, and AJ-10 are covered by the epic's suites. Every member task closed with a clean committed round-1 Mulgae run and no hardening deferral; nothing was pushed, and publication remains local.
+- **Seams for EPIC-006:** the CLI surface this epic ships covers the domain commands without `inbox --wait`, the uniform `--expected-row-version` enforcement outside accept and decline, and the per-command golden envelopes, all of which land with `TASK-036` and `TASK-037`; the delegated `--expected-row-version` on revise is accepted by the acting session when supplied and enforced by the compare-and-set rather than a CLI-local required option.
 - **Objective:** Deliver the whole review lifecycle as vertical slices, each shipping its use case together with the CLI command that exercises it, so that the loop AJ-04 accepts, namely send, inbox, review set, revise, and accept, is executable at `TASK-033`, and so that AJ-06, AJ-07, AJ-08, and AJ-10 are covered.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
