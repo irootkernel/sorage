@@ -621,6 +621,8 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 | `sorage get <handoff-id>` | 0.1 | Metadata only; never sets `firstFetchedAt` and never emits an event |
 | `sorage fetch <handoff-id>` | 0.1 | Section 11.3 |
 
+The derived inbox marker (HND-026): when `handoff.inboxMarker` is `true`, every Handoff creation and every state change — including the recipient's first `fetch` and the User-admin retention decisions — rewrites `.sorage/INBOX.md` under each binding directory of the recipient Project. The marker is a rendered view of that recipient's current inbox, one line per non-archived, non-deleted Handoff as `- <handoff-id> <review-state> "<title>" revision <n>` under a header that states the file is derived, must never be edited, and is never read back as authority; corrupting or deleting it changes no command result, and the next state change recreates it. A marker that cannot be written — a read-only binding directory, for example — prints a warning on standard error and never fails the command, because the marker is advisory. Projects that enable the marker should ignore `.sorage/` in Git, which the shipped `use-sorage` skill instructs.
+
 ### 13.6 Review, revision, and terminal outcomes
 
 | Command | Milestone | Notes |

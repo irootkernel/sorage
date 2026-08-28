@@ -1,0 +1,144 @@
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { runCli } from "../../src/main";
+
+/**
+ * The derived inbox marker of TASK-038 (HND-026) through the real CLI: the default
+ * `false` writes nothing anywhere, enabling the key rewrites `.sorage/INBOX.md`
+ * under every recipient binding directory on each creation and state change, a
+ * deleted marker is recreated by the next state change, a corrupted marker changes
+ * no command result, and a marker that cannot be written only warns.
+ */
+const homes: string[] = [];
+afterEach(() => {
+  while (homes.length > 0) {
+    const home = homes.pop();
+    if (home !== undefined) {
+      chmodSync(join(home, "work-b2"), 0o755);
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+  delete process.env.SORAGE_HOME;
+});
+
+function tempHome(prefix: string): string {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  homes.push(home);
+  process.env.SORAGE_HOME = home;
+  return home;
+}
+
+function capture() {
+  const out: string[] = [];
+  const err: string[] = [];
+  return {
+    ports: { out: (text: string) => out.push(text), err: (text: string) => err.push(text) },
+    outText(): string {
+      return out.join("");
+    },
+    errText(): string {
+      return err.join("");
+    },
+  };
+}
+
+function run(args: string[]): { exit: number; err: string } {
+  const cap = capture();
+  const exit = runCli(args, cap.ports);
+  return { exit, err: cap.errText() };
+}
+
+function fixture(): { home: string; workA: string; workB1: string; workB2: string } {
+  const home = tempHome("sorage-marker-");
+  const workA = join(home, "work-a");
+  const workB1 = join(home, "work-b1");
+  const workB2 = join(home, "work-b2");
+  mkdirSync(workA, { recursive: true });
+  mkdirSync(workB1, { recursive: true });
+  mkdirSync(workB2, { recursive: true });
+  expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+  expect(runCli(["project", "add", "--name", "Alpha", "--dir", workA], capture().ports)).toBe(0);
+  expect(runCli(["project", "add", "--name", "Beta", "--dir", workB1], capture().ports)).toBe(0);
+  expect(runCli(["project", "bind", "beta", "--dir", workB2], capture().ports)).toBe(0);
+  return { home, workA, workB1, workB2 };
+}
+
+function send(title: string): string {
+  const cap = capture();
+  const exit = runCli(
+    ["send", "--as", "alpha", "--to", "beta", "--title", title, "--body", `# ${title}`, "--json"],
+    cap.ports,
+  );
+  expect(exit).toBe(0);
+  return (JSON.parse(cap.outText()) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
+    ?.handoffId as string;
+}
+
+const markerOf = (dir: string): string => join(dir, ".sorage", "INBOX.md");
+
+describe("the derived inbox marker behind handoff.inboxMarker", () => {
+  it("writes nothing anywhere while the key is at its default of false", () => {
+    const { home, workB1, workB2 } = fixture();
+    send("Default off");
+    expect(existsSync(markerOf(workB1))).toBe(false);
+    expect(existsSync(markerOf(workB2))).toBe(false);
+    expect(existsSync(join(home, "work-a", ".sorage"))).toBe(false);
+  });
+
+  it("rewrites the marker under every recipient binding on creation and each state change", () => {
+    const { workB1, workB2 } = fixture();
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const id = send("Marker case");
+    for (const dir of [workB1, workB2]) {
+      const marker = readFileSync(markerOf(dir), "utf8");
+      expect(marker).toContain(`${id} awaiting_recipient "Marker case" revision 1`);
+    }
+    expect(run(["review", "set", id, "--as", "beta", "--text", "Rework"]).exit).toBe(0);
+    expect(readFileSync(markerOf(workB1), "utf8")).toContain(`${id} changes_requested "Marker case" revision 1`);
+    expect(run(["revise", id, "--as", "alpha", "--no-change", "--reason", "Done elsewhere"]).exit).toBe(0);
+    // A no-change resolution resolves the Note without moving the Revision (REV-017).
+    expect(readFileSync(markerOf(workB1), "utf8")).toContain(`${id} awaiting_recipient "Marker case" revision 1`);
+    expect(run(["accept", id, "--as", "beta", "--expected-revision", "1", "--expected-row-version", "3"]).exit).toBe(0);
+    expect(readFileSync(markerOf(workB1), "utf8")).toContain(`${id} accepted "Marker case" revision 1`);
+    expect(readFileSync(markerOf(workB2), "utf8")).toBe(readFileSync(markerOf(workB1), "utf8"));
+  });
+
+  it("recreates a deleted marker on the next state change", () => {
+    const { workB1 } = fixture();
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const id = send("Recreate case");
+    rmSync(markerOf(workB1));
+    expect(existsSync(markerOf(workB1))).toBe(false);
+    expect(run(["pin", id, "--as-user"]).exit).toBe(0);
+    expect(existsSync(markerOf(workB1))).toBe(true);
+    expect(readFileSync(markerOf(workB1), "utf8")).toContain(id);
+  });
+
+  it("never becomes authority: a corrupted marker changes no command result", () => {
+    const { workB1 } = fixture();
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const id = send("Corrupt case");
+    writeFileSync(markerOf(workB1), "\x00 totally garbage \x00", "utf8");
+    const inbox = capture();
+    expect(runCli(["inbox", "--as", "beta", "--json"], inbox.ports)).toBe(0);
+    expect(inbox.outText()).toContain(id);
+    expect(run(["accept", id, "--as", "beta", "--expected-revision", "1", "--expected-row-version", "1"]).exit).toBe(0);
+    expect(run(["get", id, "--as", "beta"]).exit).toBe(0);
+  });
+
+  it("warns without failing the command when a binding directory rejects the write", () => {
+    const { workB2 } = fixture();
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    chmodSync(workB2, 0o500);
+    const id = send("Read-only case");
+    expect(existsSync(markerOf(workB2))).toBe(false);
+    expect(run(["review", "set", id, "--as", "beta", "--text", "Note"]).exit).toBe(0);
+    expect(run(["review", "withdraw", id, "--as", "beta"]).exit).toBe(0);
+    const accept = run(["accept", id, "--as", "beta", "--expected-revision", "1", "--expected-row-version", "3"]);
+    expect(accept.exit).toBe(0);
+    expect(accept.err).toContain("warning:");
+    expect(accept.err).toContain("inbox marker");
+  });
+});

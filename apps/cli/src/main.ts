@@ -21,6 +21,7 @@ import { inspectSourceFile } from "@sorage/adapters/src/import-source";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -73,6 +74,7 @@ import {
   validateConfigurationFile,
   vaultStatus,
   vaultVerify,
+  refreshInboxMarker,
   waitForNewInboxItems,
   withdrawHandoff,
   withdrawReviewNote,
@@ -646,6 +648,9 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      for (const handoff of result.value.handoffs) {
+        refreshMarker(handoff.handoffId, ports);
+      }
       if (json) {
         ports.out(
           `${JSON.stringify(successEnvelope({ handoffs: result.value.handoffs, dispatchGroupId: result.value.dispatchGroupId, replayed: result.value.replayed }, requestId()), null, 2)}
@@ -782,6 +787,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(
           `${JSON.stringify(successEnvelope({ handoff: result.value.handoff, artifact: result.value.artifact, localPath: result.value.localPath }, requestId()), null, 2)}
@@ -831,6 +837,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -856,6 +863,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -892,6 +900,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -973,6 +982,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           reportExitCode(renderAppError(result.error, ports, json));
           return;
         }
+        refreshMarker(id, ports);
         if (json) {
           ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -1009,6 +1019,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -1042,6 +1053,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -1067,6 +1079,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
@@ -1106,6 +1119,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           reportExitCode(renderAppError(result.error, ports, json));
           return;
         }
+        refreshMarker(id, ports);
         if (json) {
           ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
         } else {
@@ -1144,6 +1158,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
           reportExitCode(renderAppError(result.error, ports, json));
           return;
         }
+        refreshMarker(id, ports);
         if (json) {
           ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
         } else {
@@ -1172,6 +1187,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
       } else {
@@ -1217,6 +1233,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
       } else {
@@ -1255,6 +1272,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshMarker(id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
       } else {
@@ -1585,6 +1603,14 @@ function expandTilde(path: string): string {
   if (path === "~") return homedir();
   if (path.startsWith("~/")) return join(homedir(), path.slice(2));
   return path;
+}
+
+/** Rewrites the derived inbox marker (HND-026); a failure warns and never fails the command. */
+function refreshMarker(handoffId: string, ports: OutputPorts): void {
+  const refreshed = refreshInboxMarker(createNodeInboxMarkerPorts(), handoffId);
+  if (!refreshed.ok) {
+    ports.err(`warning: ${refreshed.error.message}\n`);
+  }
 }
 
 function renderUsageError(error: unknown, program: Command, ports: OutputPorts): number {
