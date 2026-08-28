@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-006`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-042`
 
 ## 3. Identifier policy
 
@@ -74,7 +74,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `EPIC-003` | Project registry and identity | 0.1 | Completed | `TASK-015` to `TASK-020` |
 | `EPIC-004` | Vault and Artifact store | 0.1 | Completed | `TASK-021` to `TASK-026` |
 | `EPIC-005` | Handoff domain and workflow | 0.1 | Completed | `TASK-027` to `TASK-035` |
-| `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Planned | `TASK-036` to `TASK-041` |
+| `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Completed | `TASK-036` to `TASK-041` |
 | `EPIC-007` | Daemon, API, and Web | 0.2 | Planned | `TASK-042` to `TASK-051` |
 | `EPIC-008` | Git backup and restore | 0.3 | Planned | `TASK-052` to `TASK-058` |
 | `EPIC-009` | Hardening, packaging, and MVP release | 0.3 | Planned | `TASK-059` to `TASK-065` |
@@ -173,9 +173,10 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-006: CLI, `use-sorage` skill, and 0.1 release
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.1
 - **Objective:** Complete and freeze the CLI surface, ship the discovery skill that makes recipients look at their inbox, and pass the 0.1 CLI release gate with AJ-01 to AJ-10.
+- **Validation record (whole-epic review, 2026-08-29):** the whole-epic review ran three remediation rounds over `64a31a0` to the tagged snapshot and converged clean: round one found two seam findings (the inbox wait seeded its known set from only the first listing page, so an off-page state change falsely woke it, and an `--interval` of zero busy-looped the poll), both remediated with regressions in `2b01842`; round two found one (a full page of churned known items could hide a new item until the timeout), remediated with the wait-start cutoff paging in `24b6d7d`; round three `r_01a049d7-317a-719d-aa91-ac635b4bcc9b` was committed with complete coverage, `ci_decision=pass`, and zero findings. `make test` exits 0 with 474 tests, being 193 unit, 242 integration, 17 contract, and 22 e2e, and AJ-01 to AJ-10 pass against the compiled binary in isolated temporary installations that spawn only `dist/sorage` with no daemon, Web server, Git backup, or ecosystem tool involved. Every member task closed with a committed clean round-1 Mulgae run and no hardening deferral; the annotated `v0.1.0` tag was created only after the journeys and the gate passed; nothing was pushed, and publication remains local.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
