@@ -310,6 +310,21 @@ export function createSqliteRevisionStore(
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
+          // The vault-move fence pauses revision exactly as it pauses creation: a
+          // committed intent is a promise about the current Vault (RUN-002).
+          const pausedRevision = liveFencePaused(db);
+          if (pausedRevision) {
+            db.exec("ROLLBACK");
+            return err(
+              appError(
+                "SERVICE_PAUSED",
+                "A Vault move or restore is in progress; the revision paused instead of racing it.",
+                {
+                  moveFencePid: pausedRevision.pid,
+                },
+              ),
+            );
+          }
           const changed = db
             .prepare(
               "UPDATE handoffs SET revision = revision + 1, review_state = ?, current_artifact_id = ?, consecutive_no_change_resolutions = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
@@ -565,6 +580,23 @@ export function createSqliteRetentionStore(
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
+          // The vault-move fence pauses the intent-committing decisions: the
+          // deletion approval records an unlink intent, so it races the mover the
+          // same way a creation or revision does, while a pin or archive that
+          // records no intent may proceed (RUN-002).
+          const pausedRetention = input.unlinkIntent !== undefined ? liveFencePaused(db) : null;
+          if (pausedRetention) {
+            db.exec("ROLLBACK");
+            return err(
+              appError(
+                "SERVICE_PAUSED",
+                "A Vault move or restore is in progress; the retention decision paused instead of racing it.",
+                {
+                  moveFencePid: pausedRetention.pid,
+                },
+              ),
+            );
+          }
           const columns = Object.keys(input.assignments);
           const sets = columns.map((column) => `${column} = ?`).join(", ");
           const values = columns.map((column) => input.assignments[column]);

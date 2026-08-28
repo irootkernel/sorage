@@ -97,6 +97,11 @@ export function createSqliteHandoffReadStore(db: SorageSqlite, ledger: SqliteEve
     const tombstone = row.deleted_at !== null;
     const terminal =
       row.review_state === "accepted" || row.review_state === "declined" || row.review_state === "withdrawn";
+    // Section 6: a pending Deletion Request adds the User beside the review next
+    // actor, and an integrity failure — a current Artifact that never materialized —
+    // belongs to the User as well.
+    const currentArtifact = artifactOf(row.current_artifact_id);
+    const integrityFailure = currentArtifact !== null && currentArtifact.materialized !== true;
     const nextActors = {
       reviewNextActor:
         tombstone || terminal
@@ -104,7 +109,7 @@ export function createSqliteHandoffReadStore(db: SorageSqlite, ledger: SqliteEve
           : row.review_state === "awaiting_recipient"
             ? ("recipient" as const)
             : ("sender" as const),
-      administrativeNextActor: null as "user" | null,
+      administrativeNextActor: pendingDeletion(row.id) || integrityFailure ? ("user" as const) : null,
     };
     return {
       id: row.id,
@@ -127,7 +132,7 @@ export function createSqliteHandoffReadStore(db: SorageSqlite, ledger: SqliteEve
       pinned: row.pinned === 1,
       archivedAt: row.archived_at,
       deletedAt: row.deleted_at,
-      currentArtifact: artifactOf(row.current_artifact_id),
+      currentArtifact,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       pendingDeletionRequest: pendingDeletion(row.id),

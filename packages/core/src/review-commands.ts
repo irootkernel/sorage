@@ -56,8 +56,8 @@ export interface ReviewPorts extends HandoffReadPorts {
 
 export interface ReviewSetInput extends ReadActorInput {
   handoffId: string;
-  text?: string | undefined;
-  file?: string | undefined;
+  /** The note body; the CLI resolves --text or --file into this one field (CLI-011). */
+  text: string;
   targetRevision?: number | undefined;
 }
 
@@ -95,10 +95,7 @@ export function setReviewNote(
   { handoff: { id: string; reviewState: string; rowVersion: number; revision: number }; note: ReviewNoteView },
   AppError
 > {
-  if ((input.text === undefined) === (input.file === undefined)) {
-    return err(appError("CONFIG_INVALID", "review set takes exactly one of --text or --file"));
-  }
-  if (input.text !== undefined && input.text.trim() === "") {
+  if (input.text.trim() === "") {
     return err(appError("CONFIG_INVALID", "the review note text must not be empty"));
   }
   const found = ports.handoffs.findHandoffView(input.handoffId);
@@ -138,7 +135,7 @@ export function setReviewNote(
   });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
-  const body = input.text as string;
+  const body = input.text;
   const authorKind = role.value === "user" ? ("user" as const) : ("registered_project" as const);
   const authorProjectId = role.value === "user" ? null : handoff.recipientProjectId;
   const applied = ports.reviews.applyReviewMutation({
