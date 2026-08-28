@@ -7,6 +7,7 @@ export * from "./cursor";
 export * from "./doctor";
 export * from "./errors";
 export * from "./events";
+export * from "./handoff-commands";
 export * from "./handoffs";
 export * from "./ids";
 export * from "./import-policy";

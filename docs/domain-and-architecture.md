@@ -903,6 +903,7 @@ Every binding has a workspace root, which is the directory the binding claims on
 
 - For `bindingKind = directory`, the workspace root is the stored `directory` itself.
 - For `bindingKind = git_repository`, the stored `directory` is the git common directory and the workspace root is the main working tree, that is the parent of the common directory. Linked worktrees lie outside that root and are matched through the common directory instead, which is why they never need their own binding.
+- A binding must name a working tree, so a bare Git repository cannot be bound (ADR-0020): its common directory is itself and has no parent working tree, and `project add` and `project bind` refuse it with a configuration error rather than leaving the workspace root undefined.
 
 ### 22.2 Resolution order
 

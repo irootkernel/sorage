@@ -32,7 +32,13 @@ import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
-import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
+import {
+  clearMoveFence,
+  collectVaultGarbage,
+  createSqliteIntentLog,
+  fsyncDirectory,
+  setMoveFenceAndCountPending,
+} from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
@@ -271,7 +277,9 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             const log = createSqliteIntentLog({ db, installationId });
             return log.drain(vaultPath);
           }),
-        pendingIntentCount,
+        fenceAndCountPendingIntents: () =>
+          withDatabase((db) => setMoveFenceAndCountPending(db, process.pid, clock.now().toISOString())),
+        releaseSwitchFence: () => withDatabase((db) => clearMoveFence(db)),
         bindingDirectories: () =>
           withDatabase((db) => {
             const table = db

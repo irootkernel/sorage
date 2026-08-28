@@ -24,10 +24,22 @@ export interface NodeProjectPortsOptions {
   env?: HomeEnvironment | undefined;
   userHome?: string | undefined;
   git?: GitProbe | undefined;
+  gitIsBare?: BareProbe | undefined;
   fs?: ProjectRepositoryFs | undefined;
 }
 
 export type GitProbe = (directory: string) => string | null;
+
+/** Reports whether a directory is a bare Git repository (ADR-0020). */
+export type BareProbe = (directory: string) => boolean;
+
+const nativeIsBare: BareProbe = (directory) => {
+  const result = spawnSync("git", ["-C", directory, "rev-parse", "--is-bare-repository"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  return result.status === 0 && (result.stdout ?? "").trim() === "true";
+};
 
 const nativeGit: GitProbe = (directory) => {
   const result = spawnSync("git", ["-C", directory, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
@@ -45,6 +57,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
   const git = options.git ?? nativeGit;
+  const isBare = options.gitIsBare ?? nativeIsBare;
   const fs = options.fs ?? { realpath: (path) => realpathSync(path) };
   // The canonical installation identity is the generated key in the effective
   // configuration; the repository never trusts a caller-supplied identity.
@@ -107,6 +120,18 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
         const real = fs.realpath(absolute);
         const common = git(real);
         if (common !== null) {
+          if (isBare(real)) {
+            // A bare repository has no working tree, so the workspace root of a
+            // git_repository binding would be undefined; binding refuses instead
+            // (ADR-0020, PRJ-019).
+            return err(
+              appError(
+                "CONFIG_INVALID",
+                `the directory '${real}' is a bare Git repository and has no working tree to bind; bind a non-bare clone instead`,
+                { directory: real, bare: true },
+              ),
+            );
+          }
           // Every worktree of one repository shares the git common directory, so the
           // binding stores that one directory and records `git_repository` (PRJ-017).
           return ok({ directory: fs.realpath(common), bindingKind: "git_repository" });

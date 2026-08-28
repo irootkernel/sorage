@@ -99,20 +99,42 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
       }
       try {
         db.exec("BEGIN IMMEDIATE");
-        const insert = db.prepare(
-          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
-        );
-        for (const intent of intents) {
-          insert.run(intent.id, intent.op, intent.fromPath, intent.toPath, intent.artifactId, intent.createdAt);
-        }
-        db.exec("COMMIT");
-        return ok({ recorded: intents.length });
-      } catch (error) {
         try {
-          db.exec("ROLLBACK");
-        } catch {
-          // The transaction never opened or the connection already rolled back.
+          // The vault-move fence is read inside the transaction so the mover's
+          // fence-and-count and this commit serialize on the database write lock:
+          // whichever wins, the other sees it, and a promise can never land between
+          // the mover's re-count and the configuration switch. A fence whose pid is
+          // dead is stale and ignored, exactly like a stale lockfile.
+          const paused = liveFencePaused(db);
+          if (paused) {
+            db.exec("ROLLBACK");
+            return err(
+              appError(
+                "SERVICE_PAUSED",
+                "A Vault move or restore is in progress; the intent commit paused instead of racing it.",
+                {
+                  moveFencePid: paused.pid,
+                },
+              ),
+            );
+          }
+          const insert = db.prepare(
+            "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
+          );
+          for (const intent of intents) {
+            insert.run(intent.id, intent.op, intent.fromPath, intent.toPath, intent.artifactId, intent.createdAt);
+          }
+          db.exec("COMMIT");
+          return ok({ recorded: intents.length });
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction never opened or the connection already rolled back.
+          }
+          throw transactionError;
         }
+      } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Recording filesystem intents failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -246,6 +268,88 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
 }
 
 /** One intent's filesystem effect, evaluated from current state; never runs inside a transaction. */
+interface FenceRow {
+  move_fence_pid: number | null;
+  move_fence_at: string | null;
+}
+
+/** True when a process with this pid is alive; a dead fence pid is stale. */
+export function pidIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** The live fence that must pause intent commits, or null when absent or stale. */
+export function liveFencePaused(db: SorageSqlite): { pid: number } | null {
+  const row = db.prepare("SELECT move_fence_pid, move_fence_at FROM vault_state WHERE id = 1").get() as
+    | FenceRow
+    | null
+    | undefined;
+  const pid = row?.move_fence_pid ?? null;
+  if (pid === null) return null;
+  return pidIsAlive(pid) ? { pid } : null;
+}
+
+/**
+ * The mover's fence-and-count (TASK-029, the EPIC-004 accepted seam): one write
+ * transaction sets the fence row and counts the outstanding intents, so an intent
+ * commit either lands before it and is counted, or waits on the write lock and then
+ * sees the fence and pauses. Returns the count the switch decision needs.
+ */
+export function setMoveFenceAndCountPending(db: SorageSqlite, pid: number, at: string): Result<number, AppError> {
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(
+        "INSERT INTO vault_state (id, move_fence_pid, move_fence_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET move_fence_pid = excluded.move_fence_pid, move_fence_at = excluded.move_fence_at",
+      ).run(pid, at);
+      const row = db.prepare("SELECT COUNT(*) AS count FROM pending_fs_ops").get() as { count: number };
+      db.exec("COMMIT");
+      return ok(row.count);
+    } catch (transactionError) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Nothing left to roll back.
+      }
+      throw transactionError;
+    }
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Fencing the Vault switch failed: ${messageOf(error)}.`, { cause: String(error) }),
+    );
+  }
+}
+
+/** Clears the fence after the switch completes or the move abandons the switch. */
+export function clearMoveFence(db: SorageSqlite): Result<void, AppError> {
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE vault_state SET move_fence_pid = NULL, move_fence_at = NULL WHERE id = 1").run();
+      db.exec("COMMIT");
+      return ok(undefined);
+    } catch (transactionError) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Nothing left to roll back.
+      }
+      throw transactionError;
+    }
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Clearing the Vault switch fence failed: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+}
+
 export function executeIntent(
   intent: PendingFsOp,
   vaultPath: string,

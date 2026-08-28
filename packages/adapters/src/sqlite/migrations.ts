@@ -204,9 +204,30 @@ CREATE INDEX idx_idempotency_keys_expires ON idempotency_keys(expires_at);
 `,
 };
 
+/**
+ * The vault-move fence of TASK-029 (RUN-002, the EPIC-004 accepted seam): the mover
+ * sets the single fence row in the same write transaction as its pre-switch intent
+ * re-count, and every intent commit reads the row inside its own transaction, so the
+ * two serialize on the database write lock and a promise can never land between the
+ * re-count and the configuration switch. The row carries the mover's pid, and a fence
+ * whose pid is dead is stale and ignored, matching the lockfile staleness philosophy.
+ */
+export const VAULT_MOVE_FENCE_MIGRATION: Migration = {
+  version: 5,
+  name: "vault-move-fence-v1",
+  sql: `
+CREATE TABLE vault_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  move_fence_pid INTEGER,
+  move_fence_at TEXT
+);
+`,
+};
+
 export const MIGRATIONS: Migration[] = [
   FIRST_RELEASED_SCHEMA,
   PROJECT_REGISTRY_MIGRATION,
   INTENT_LOG_MIGRATION,
   HANDOFF_DOMAIN_MIGRATION,
+  VAULT_MOVE_FENCE_MIGRATION,
 ];

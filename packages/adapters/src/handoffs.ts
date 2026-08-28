@@ -1,4 +1,6 @@
-import { type AppError, appError, err, ok, type Result } from "@sorage/core";
+import { type AppError, appError, err, type FanoutCommit, type HandoffWritePort, ok, type Result } from "@sorage/core";
+import type { SqliteEventLedger } from "./events";
+import { liveFencePaused } from "./intent-log";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**
@@ -7,6 +9,10 @@ import type { SorageSqlite } from "./sqlite/connection";
  * `row_version` together, the driver's affected-row count is the verdict, and a stale
  * expectation fails with `ROW_VERSION_CONFLICT` without retrying. Domain column
  * assignments join the same statement, so the check and the write cannot separate.
+ * The same module carries the creation transaction: `createFanout` commits every
+ * Handoff row, Artifact row, intent, event, and idempotency response of one send in
+ * a single all-or-nothing transaction (HND-008), and `completeActivations` is the
+ * short completion transaction of ADR-0013.
  */
 
 export interface HandoffRowSnapshot {
@@ -120,4 +126,164 @@ export function createSqliteHandoffRowStore(db: SorageSqlite): SqliteHandoffRowS
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The SQLite write port behind Handoff creation (TASK-029). `createFanout` inserts
+ * every row of the fan-out and appends every event inside one transaction, so the
+ * dispatch group is all-or-nothing in the database (HND-008) and a duplicate
+ * idempotency key in one scope surfaces as the database's own rejection.
+ */
+export function createSqliteHandoffWriteStore(db: SorageSqlite, ledger: SqliteEventLedger): HandoffWritePort {
+  const insertIntent = () =>
+    db.prepare(
+      "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
+    );
+  return {
+    createFanout(commit: FanoutCommit): Result<{ recorded: number }, AppError> {
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          // The vault-move fence pauses creation exactly as it pauses intent records:
+          // a fan-out's committed intents are promises about the current Vault
+          // (RUN-002, the closed EPIC-004 seam).
+          const paused = liveFencePaused(db);
+          if (paused) {
+            db.exec("ROLLBACK");
+            return err(
+              appError(
+                "SERVICE_PAUSED",
+                "A Vault move or restore is in progress; the Handoff creation paused instead of racing it.",
+                {
+                  moveFencePid: paused.pid,
+                },
+              ),
+            );
+          }
+          const insertHandoff = db.prepare(
+            "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'awaiting_recipient', 0, 0, ?, ?)",
+          );
+          for (const handoff of commit.handoffs) {
+            insertHandoff.run(
+              handoff.id,
+              handoff.dispatchGroupId,
+              handoff.supersedesHandoffId,
+              handoff.title,
+              handoff.senderKind,
+              handoff.senderProjectId,
+              handoff.senderWorkspaceKey,
+              handoff.senderPathSnapshot,
+              handoff.recipientProjectId,
+              handoff.currentArtifactId,
+              handoff.createdAt,
+              handoff.createdAt,
+            );
+          }
+          const insertArtifact = db.prepare(
+            "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+          );
+          for (const artifact of commit.artifacts) {
+            insertArtifact.run(
+              artifact.id,
+              artifact.handoffId,
+              artifact.storageKey,
+              artifact.originalName,
+              artifact.storedName,
+              artifact.mimeType,
+              artifact.sizeBytes,
+              artifact.sha256,
+              artifact.importedFromPath,
+              artifact.createdAt,
+            );
+          }
+          const intents = insertIntent();
+          for (const intent of commit.intents) {
+            intents.run(intent.id, intent.op, intent.fromPath, intent.toPath, intent.artifactId, intent.createdAt);
+          }
+          for (const event of commit.events) {
+            ledger.append(event);
+          }
+          if (commit.idempotency !== undefined) {
+            db.prepare(
+              "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ).run(
+              commit.idempotency.key,
+              commit.idempotency.scope,
+              commit.idempotency.requestHash,
+              commit.idempotency.responseJson,
+              commit.events[0]?.createdAt ?? new Date().toISOString(),
+              commit.idempotency.expiresAt,
+            );
+          }
+          db.exec("COMMIT");
+          return ok({ recorded: commit.handoffs.length });
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction never opened or the connection already rolled back.
+          }
+          throw transactionError;
+        }
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Creating the Handoff fan-out failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+
+    completeActivations(completions): Result<{ completed: number }, AppError> {
+      if (completions.length === 0) return ok({ completed: 0 });
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          for (const completion of completions) {
+            db.prepare("UPDATE artifacts SET materialized = 1 WHERE id = ?").run(completion.artifactId);
+            db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId);
+            ledger.append(completion.event);
+          }
+          db.exec("COMMIT");
+          return ok({ completed: completions.length });
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // As above.
+          }
+          throw transactionError;
+        }
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Completing Artifact activations failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+
+    findSupersedesTarget(id) {
+      try {
+        const row = db.prepare("SELECT review_state, deleted_at FROM handoffs WHERE id = ?").get(id) as
+          | { review_state: string; deleted_at: string | null }
+          | null
+          | undefined;
+        return ok(row ? { reviewState: row.review_state, deletedAt: row.deleted_at } : null);
+      } catch (error) {
+        return err(appError("INTERNAL_ERROR", `Reading the supersedes target failed: ${messageOf(error)}`));
+      }
+    },
+
+    idempotencyLookup(key, scope) {
+      try {
+        const row = db
+          .prepare("SELECT request_hash, response_json FROM idempotency_keys WHERE key = ? AND scope = ?")
+          .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;
+        return ok(row ? { requestHash: row.request_hash, responseJson: row.response_json } : null);
+      } catch (error) {
+        return err(appError("INTERNAL_ERROR", `Reading the idempotency key failed: ${messageOf(error)}`));
+      }
+    },
+  };
 }

@@ -137,7 +137,8 @@ export interface PreparedImport extends StagedFile {
   storedName: string;
   mimeType: string;
   storageKey: string;
-  importedFromPath: string;
+  /** Null for a `--body` send, which is explicit content rather than a file import (HND-023). */
+  importedFromPath: string | null;
 }
 
 /**

@@ -125,12 +125,19 @@ export interface VaultMovePorts {
    */
   drainUnderLock(): Result<DrainReport, AppError>;
   /**
-   * Counts intents again immediately before the configuration switch: an intent
-   * whose commit raced the lock acquisition landed after the mover's drain, and
-   * relocating past it would strand its staged bytes in the abandoned Vault, so
-   * a non-zero count refuses the switch instead.
+   * Fences the database and counts intents again immediately before the
+   * configuration switch: one write transaction sets the move fence and counts, so
+   * an intent commit either landed before it and is counted — refusing the switch —
+   * or waits on the write lock and then sees the fence and pauses. Relocating past
+   * a counted intent would strand its staged bytes in the abandoned Vault.
    */
-  pendingIntentCount(): Result<number, AppError>;
+  fenceAndCountPendingIntents(): Result<number, AppError>;
+  /**
+   * Releases the move fence after the switch completes or the move abandons it; a
+   * mover that dies between the two leaves a stale fence whose dead pid the intent
+   * commits ignore.
+   */
+  releaseSwitchFence(): Result<void, AppError>;
   lock: {
     /** Acquires vault-move.lock; a live holder fails with SERVICE_PAUSED (RUN-014). */
     acquire(): Result<{ release: () => void }, AppError>;
@@ -278,11 +285,12 @@ export function moveVault(
 
     // The switch is the point of no return, so a promise that landed after the
     // mover's drain must refuse it: relocating past a pending intent would
-    // strand its staged bytes in the abandoned Vault and surface afterwards as
-    // a both-gone integrity failure for a commit the database made. The check
-    // runs before the target is finalized, so a refused attempt leaves the
-    // target as clearable scratch rather than a complete second Vault.
-    const outstanding = ports.pendingIntentCount();
+    // strand its staged bytes in the abandoned Vault and surface afterwards as a
+    // both-gone integrity failure for a commit the database made. The fence and
+    // the count share one write transaction, and the check runs before the target
+    // is finalized, so a refused attempt leaves the target as clearable scratch
+    // rather than a complete second Vault.
+    const outstanding = ports.fenceAndCountPendingIntents();
     if (!outstanding.ok) return err(outstanding.error);
     if (outstanding.value > 0) {
       return err(
@@ -310,8 +318,8 @@ export function moveVault(
     const switched = ports.config.updateVaultPath(ports.targetPath, current.value.etag);
     if (!switched.ok) return err(switched.error);
   } catch (error) {
-    // An unexpected throw mid-move (an injected failure, an fs surprise) keeps
-    // the original Vault active and the configuration untouched, because the
+    // An unexpected throw mid-move (an injected failure, an fs surprise) keeps the
+    // original Vault active and the configuration untouched, because the
     // switch has not run; it surfaces as one typed error.
     return err(
       appError("INTERNAL_ERROR", `The Vault move failed before the configuration switch: ${messageOf(error)}.`, {
@@ -319,6 +327,10 @@ export function moveVault(
       }),
     );
   } finally {
+    // The fence comes down with the lock on every exit path — success, refusal, and
+    // failure alike — or intent commits would pause on a move that is no longer
+    // switching; a dead mover leaves a stale fence the commits ignore by pid.
+    ports.releaseSwitchFence();
     lock.value.release();
   }
 

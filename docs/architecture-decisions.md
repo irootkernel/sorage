@@ -558,3 +558,28 @@ The task table carries `Milestone`, `Requirements`, and `Design Gate impact` col
 - Each milestone has an observable release gate, and the MVP is complete only when the 0.3 gate passes.
 - Every requirement carries a milestone, so scope is a column rather than an argument.
 - Task status lives in exactly one place, which keeps status-only edits reviewable.
+
+## ADR-0020: A binding requires a working tree, so a bare Git repository cannot be bound
+
+- **Status:** Accepted
+- **Date:** 2026-08-28
+
+### Context
+
+Section 22.1 defines the workspace root of a `git_repository` binding as the main working tree, that is the parent of the stored git common directory. The EPIC-003 cold validation accepted the residual risk that the Source of Truth never defined binding a bare repository: a bare repository's common directory is itself, it has no parent working tree, and the downgrade guard that ships with `send` (PRJ-019) would evaluate a workspace root derived from a path with no meaning. EPIC-005 must settle the semantics before the guard ships with `send`.
+
+### Decision
+
+A directory binding must name a working tree. `project add` and `project bind` refuse a directory that is a bare Git repository with a `CONFIG_INVALID` error naming the reason and the recovery of binding a non-bare clone, and the workspace root of every `git_repository` binding is therefore always a real directory. Section 22.1 of `domain-and-architecture.md` records the same rule normatively.
+
+### Alternatives considered
+
+- Allow bare-repository bindings and define the workspace root as the bare directory itself | a bare repository holds no working files, so a sender workspace rooted there can never source a document, while the fold of every future worktree question would still be undefined.
+- Allow bare-repository bindings and leave the workspace root undefined for them | an undefined root makes the two-case downgrade guard of section 22.3 unanswerable exactly where it must decide.
+- Reject at send time instead of bind time | the guard would then depend on runtime state that configuration already had, and the invalid binding would sit accepted in the registry until the first send fails.
+
+### Consequences
+
+- The workspace-root derivation stays total: the parent of a stored common directory is always a real working tree.
+- Binding a bare repository fails with a clear configuration error instead of an undefined workspace identity at send time.
+- A user who keeps documents in a bare repository's sibling checkout binds that checkout, which is the directory the working tree actually lives in.

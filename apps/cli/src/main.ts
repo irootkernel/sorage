@@ -10,6 +10,7 @@ import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
+import { createNodeSendPorts } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -34,6 +35,7 @@ import {
   renameProject,
   resolveCommandActor,
   resolveWorkspaceActor,
+  sendHandoffs,
   runDoctor,
   setConfigurationValue,
   showConfiguration,
@@ -89,6 +91,11 @@ function parseInteger(value: string): number {
     throw new InvalidArgumentError("expected a non-negative integer");
   }
   return parsed;
+}
+
+/** Collects a repeatable option value, so `--to a --to b` becomes ["a", "b"]. */
+function collectRepeatable(value: string, previous: string[]): string[] {
+  return [...(previous ?? []), value];
 }
 
 /** Runs one CLI action and remembers its exit code for `runCli` to return. */
@@ -555,6 +562,78 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ports.out(`${actor.project.slug} (${actor.binding.bindingKind} ${actor.binding.directory})\n`);
       } else {
         ports.out(`unregistered workspace: ${actor.directory}\n`);
+      }
+    });
+
+  program
+    .command("send")
+    .description("hand one current document to one or more recipient Projects, one Handoff each")
+    .requiredOption("--to <project>", "recipient Project slug; repeat for a fan-out", collectRepeatable, [])
+    .requiredOption("--title <title>", "the Handoff title, in any script")
+    .option("--file <path>", "the document to hand over, with ~ expansion")
+    .option("--body <text>", "inline Markdown text materialized as the document")
+    .option("--supersedes <handoff-id>", "link this Handoff to a terminal predecessor")
+    .option("--allow-external-source", "import a source outside the resolved sender workspace")
+    .option("--allow-unregistered", "send as an unregistered Workspace despite the downgrade guard")
+    .option("--idempotency-key <uuid>", "replay an identical send instead of creating a new one")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if ((options.file === undefined) === (options.body === undefined)) {
+        ports.err("sorage: send takes exactly one of --file or --body\n");
+        ports.err("Run 'sorage --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      if (options.body !== undefined && options.body.trim() === "") {
+        ports.err("sorage: the --body text must not be empty\n");
+        ports.err("Run 'sorage --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      // RUN-002: an intent-recording command drains at start before it creates anything.
+      const vaultPorts = createNodeVaultCommandPorts();
+      const drained = vaultPorts.drainAtStart();
+      if (!drained.ok) {
+        reportExitCode(renderAppError(drained.error, ports, json));
+        return;
+      }
+      const result = sendHandoffs(createNodeSendPorts(), {
+        to: options.to as string[],
+        title: options.title,
+        file: options.file,
+        body: options.body,
+        supersedes: options.supersedes,
+        allowExternalSource: options.allowExternalSource === true,
+        allowUnregistered: options.allowUnregistered === true,
+        idempotencyKey: options.idempotencyKey,
+        path: process.cwd(),
+        userHome: homedir(),
+        as: typeof globals.as === "string" ? globals.as : undefined,
+        asUser: globals.asUser === true,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(
+          `${JSON.stringify(successEnvelope({ handoffs: result.value.handoffs, dispatchGroupId: result.value.dispatchGroupId, replayed: result.value.replayed }, requestId()), null, 2)}
+`,
+        );
+      } else {
+        for (const handoff of result.value.handoffs) {
+          ports.out(`Handoff ${handoff.handoffId} → ${handoff.recipientSlug} (revision 1, awaiting_recipient)
+`);
+        }
+        if (result.value.dispatchGroupId !== null) {
+          ports.out(`Dispatch group ${result.value.dispatchGroupId} (${result.value.handoffs.length} Handoffs)
+`);
+        }
+        if (result.value.replayed) {
+          ports.out("Replayed the recorded idempotent send\n");
+        }
       }
     });
 

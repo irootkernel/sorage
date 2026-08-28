@@ -389,3 +389,22 @@ describe("doctor binding checks", () => {
     expect(ambiguous?.recovery?.suggestedCommand).toContain("unbind");
   });
 });
+
+describe("sorage project add (ADR-0020)", () => {
+  it("refuses to bind a bare Git repository because it has no working tree", () => {
+    const home = mkdtempSync(join(tmpdir(), "sorage-bare-"));
+    homes.push(home);
+    process.env.SORAGE_HOME = home;
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const bare = join(home, "bare.git");
+    const initialized = spawnSync("git", ["init", "--bare", bare], { encoding: "utf8" });
+    expect(initialized.status).toBe(0);
+
+    const refused = capture();
+    expect(runCli(["project", "add", "--name", "Bare", "--dir", bare, "--json"], refused.ports)).toBe(78);
+    const report = JSON.parse(refused.errText()) as { error: { code: string; message: string } };
+    expect(report.error.code).toBe("CONFIG_INVALID");
+    expect(report.error.message).toContain("bare Git repository");
+    expect(report.error.message).toContain("no working tree");
+  });
+});
