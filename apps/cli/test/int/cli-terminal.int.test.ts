@@ -153,6 +153,16 @@ describe("the AJ-04 loop and the terminal guards", () => {
     const accepted = JSON.parse(accept.outText()) as { data: { reviewState: string; acceptedRevision: number } };
     expect(accepted.data.reviewState).toBe("accepted");
     expect(accepted.data.acceptedRevision).toBe(2);
+    // LIFE-004: the acceptance timestamp is recorded with the Revision (acceptedAt).
+    const acceptedRow = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      const row = acceptedRow.prepare("SELECT accepted_at FROM handoffs WHERE id = ?").get(handoffId) as {
+        accepted_at: string | null;
+      };
+      expect(row.accepted_at).not.toBeNull();
+    } finally {
+      acceptedRow.close();
+    }
 
     // Step 10: terminal content operations refuse with HANDOFF_TERMINAL, from the sender side.
     process.chdir(workA);
@@ -163,6 +173,122 @@ describe("the AJ-04 loop and the terminal guards", () => {
     expect((JSON.parse(reviseRefused.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_TERMINAL");
     const noteRefused = capture();
     expect(runCli(["review", "set", handoffId, "--text", "late", "--json"], noteRefused.ports)).toBe(65);
+    process.chdir(original);
+  });
+
+  it("runs the AJ-06 fan-out loop: divergent reviews on siblings stay independent", () => {
+    const original = process.cwd();
+    const home = tempHome("sorage-terminal-cli-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const workA = join(home, "work-a");
+    const workB = join(home, "work-b");
+    const workC = join(home, "work-c");
+    const workD = join(home, "work-d");
+    mkdirSync(workA, { recursive: true });
+    mkdirSync(workB, { recursive: true });
+    mkdirSync(workC, { recursive: true });
+    mkdirSync(workD, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", workA], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", workB], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Gamma", "--dir", workC], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Delta", "--dir", workD], capture().ports)).toBe(0);
+    const document = join(home, "brief.md");
+    writeFileSync(document, "# Shared\n");
+
+    // Step 1: one fan-out to three recipients — three UUIDs, one Dispatch Group.
+    process.chdir(workA);
+    const send = capture();
+    const sendExit = runCli(
+      [
+        "send",
+        "--as",
+        "alpha",
+        "--to",
+        "beta",
+        "--to",
+        "gamma",
+        "--to",
+        "delta",
+        "--title",
+        "Brief",
+        "--file",
+        document,
+        "--allow-external-source",
+        "--json",
+      ],
+      send.ports,
+    );
+    if (sendExit !== 0) throw new Error(`fan-out send failed: ${send.errText()}`);
+    const sent = JSON.parse(send.outText()) as {
+      data: { handoffs: Array<{ handoffId: string }>; dispatchGroupId: string | null };
+    };
+    expect(sent.data.handoffs).toHaveLength(3);
+    expect(sent.data.dispatchGroupId).not.toBeNull();
+    const [forBeta, forGamma, forDelta] = sent.data.handoffs.map((handoff) => handoff.handoffId) as [
+      string,
+      string,
+      string,
+    ];
+
+    // Steps 2-3: B and C request different changes while D accepts at Revision 1.
+    process.chdir(workB);
+    expect(runCli(["review", "set", forBeta, "--text", "tighten the intro", "--json"], capture().ports)).toBe(0);
+    process.chdir(workC);
+    expect(runCli(["review", "set", forGamma, "--text", "add a section", "--json"], capture().ports)).toBe(0);
+    process.chdir(workD);
+    expect(
+      runCli(
+        ["accept", forDelta, "--expected-revision", "1", "--expected-row-version", "1", "--json"],
+        capture().ports,
+      ),
+    ).toBe(0);
+
+    // Independence: B's own inbox holds B's review request and neither sibling's.
+    process.chdir(workB);
+    const betaInbox = capture();
+    expect(runCli(["inbox", "--state", "changes_requested", "--json"], betaInbox.ports)).toBe(0);
+    expect(betaInbox.outText()).toContain(forBeta);
+    expect(betaInbox.outText()).not.toContain(forGamma);
+    expect(betaInbox.outText()).not.toContain(forDelta);
+
+    // Step 4: the sender revises B and C independently, then B accepts and C declines.
+    const betaReplacement = join(home, "brief-beta.md");
+    writeFileSync(betaReplacement, "# Shared, revised for Beta\n");
+    const gammaReplacement = join(home, "brief-gamma.md");
+    writeFileSync(gammaReplacement, "# Shared, revised for Gamma\n");
+    process.chdir(workA);
+    expect(
+      runCli(["revise", forBeta, "--file", betaReplacement, "--allow-external-source", "--json"], capture().ports),
+    ).toBe(0);
+    const gammaRevised = capture();
+    expect(
+      runCli(["revise", forGamma, "--file", gammaReplacement, "--allow-external-source", "--json"], gammaRevised.ports),
+    ).toBe(0);
+    const gammaReport = JSON.parse(gammaRevised.outText()) as { data: { revision: number; reviewState: string } };
+    expect(gammaReport.data.revision).toBe(2);
+    expect(gammaReport.data.reviewState).toBe("awaiting_recipient");
+
+    process.chdir(workB);
+    expect(
+      runCli(["accept", forBeta, "--expected-revision", "2", "--expected-row-version", "3", "--json"], capture().ports),
+    ).toBe(0);
+    process.chdir(workC);
+    expect(
+      runCli(["decline", forGamma, "--reason", "not needed", "--expected-row-version", "3", "--json"], capture().ports),
+    ).toBe(0);
+
+    // Expected: no operation on one Handoff changed another — D stayed accepted at
+    // Revision 1 from before the reviews, B accepted at Revision 2, C declined.
+    process.chdir(workA);
+    const deltaTerminal = capture();
+    expect(
+      runCli(["revise", forDelta, "--file", document, "--allow-external-source", "--json"], deltaTerminal.ports),
+    ).toBe(65);
+    expect((JSON.parse(deltaTerminal.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_TERMINAL");
+    process.chdir(workB);
+    const betaInboxFinal = capture();
+    expect(runCli(["inbox", "--json"], betaInboxFinal.ports)).toBe(0);
+    expect(betaInboxFinal.outText()).toContain(forBeta);
     process.chdir(original);
   });
 

@@ -86,6 +86,46 @@ function eventsOf(home: string, type: string): number {
 }
 
 describe("sorage review", () => {
+  it("answers an unregistered workspace sender with FORBIDDEN_ACTOR, not a missing Handoff (REV-004)", () => {
+    const original = process.cwd();
+    const home = tempHome("sorage-review-workspace-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const workB = join(home, "work-b");
+    mkdirSync(workB, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", workB], capture().ports)).toBe(0);
+    const document = join(home, "brief.md");
+    writeFileSync(document, "# Shared\n");
+    const unbound = mkdtempSync(join(tmpdir(), "sorage-review-unbound-"));
+    homes.push(unbound);
+    process.chdir(unbound);
+    const send = capture();
+    const sendExit = runCli(
+      [
+        "send",
+        "--to",
+        "beta",
+        "--title",
+        "Brief",
+        "--file",
+        document,
+        "--allow-external-source",
+        "--allow-unregistered",
+        "--json",
+      ],
+      send.ports,
+    );
+    if (sendExit !== 0) throw new Error(`workspace send failed: ${send.errText()}`);
+    const handoffId = (JSON.parse(send.outText()) as { data: { handoffs: Array<{ handoffId: string }> } }).data
+      .handoffs[0]?.handoffId as string;
+
+    // The workspace sender participates, so the permission matrix owes it FORBIDDEN_ACTOR
+    // instead of hiding the Handoff behind HANDOFF_NOT_FOUND (the dba85b1 round-2 fix).
+    const refused = capture();
+    expect(runCli(["review", "set", handoffId, "--text", "no", "--json"], refused.ports)).toBe(77);
+    expect((JSON.parse(refused.errText()) as { error: { code: string } }).error.code).toBe("FORBIDDEN_ACTOR");
+    process.chdir(original);
+  });
+
   it("sets, updates, withdraws, and removes the one Review Note", () => {
     const original = process.cwd();
     const { home, workA, workB, handoffId } = setup();

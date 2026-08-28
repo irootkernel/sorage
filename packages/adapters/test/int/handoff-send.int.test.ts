@@ -322,6 +322,54 @@ describe("sorage send", () => {
     expect(through.ok).toBe(true);
     expect(handoffRows(fixture)).toHaveLength(1);
   });
+
+  it("completes the AJ-06 scale variant: one fan-out to one hundred recipients is all-or-nothing", () => {
+    const fixture = makeFixture();
+    const recipients: string[] = [];
+    for (let index = 0; index < 100; index += 1) {
+      const slug = `team-${index.toString().padStart(3, "0")}`;
+      seedProject(fixture, `p-${index.toString().padStart(3, "0")}`, slug);
+      recipients.push(slug);
+    }
+    const sent = sendHandoffs(fixture.ports, baseInput(fixture, { to: recipients }));
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) return;
+    expect(sent.value.handoffs).toHaveLength(100);
+    expect(sent.value.dispatchGroupId).not.toBeNull();
+
+    const rows = handoffRows(fixture);
+    expect(rows).toHaveLength(100);
+    expect(new Set(rows.map((row) => row.dispatch_group_id)).size).toBe(1);
+    expect(new Set(rows.map((row) => row.supersedes_handoff_id)).size).toBe(1);
+    const artifacts = fixture.db.prepare("SELECT * FROM artifacts").all() as Array<Record<string, unknown>>;
+    expect(artifacts).toHaveLength(100);
+    expect(new Set(artifacts.map((row) => row.storage_key)).size).toBe(100);
+    for (const artifact of artifacts) {
+      expect(artifact.materialized).toBe(1);
+      expect(existsSync(join(fixture.vaultPath, artifact.storage_key as string))).toBe(true);
+    }
+    expect(fixture.db.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
+  });
+
+  it("cites one supersedes target from every Handoff of a fan-out (section 13.9)", () => {
+    const fixture = makeFixture();
+    seedProject(fixture, "p-1", "alpha");
+    seedProject(fixture, "p-2", "beta");
+    seedTerminalHandoff(fixture, "h-old-accepted", "accepted", null);
+
+    const sent = sendHandoffs(
+      fixture.ports,
+      baseInput(fixture, { to: ["alpha", "beta"], supersedes: "h-old-accepted" }),
+    );
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) return;
+    expect(sent.value.handoffs).toHaveLength(2);
+    const newer = handoffRows(fixture).filter((row) => row.id !== "h-old-accepted");
+    expect(newer).toHaveLength(2);
+    for (const row of newer) {
+      expect(row.supersedes_handoff_id).toBe("h-old-accepted");
+    }
+  });
 });
 
 function stagingEntries(stagingDir: string): string[] {

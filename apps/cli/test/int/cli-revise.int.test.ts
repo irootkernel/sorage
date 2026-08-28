@@ -303,4 +303,79 @@ describe("the round-2 remediation regressions", () => {
     expect(existsSync(staging) ? readdirSync(staging) : []).toHaveLength(0);
     process.chdir(original);
   });
+
+  it("replays an identical revise under an idempotency key instead of failing on content or Row Version (AJ-08 step 4)", () => {
+    const original = process.cwd();
+    const home = tempHome("sorage-revise-replay-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const work = join(home, "work");
+    mkdirSync(work, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", work], capture().ports)).toBe(0);
+    const document = join(home, "brief.md");
+    writeFileSync(document, "# Shared\n");
+    const send = capture();
+    const sendExit = runCli(
+      [
+        "send",
+        "--as",
+        "alpha",
+        "--to",
+        "alpha",
+        "--title",
+        "Brief",
+        "--file",
+        document,
+        "--allow-external-source",
+        "--json",
+      ],
+      send.ports,
+    );
+    if (sendExit !== 0) throw new Error(`fixture send failed: ${send.errText()}`);
+    const handoffId = handoffIdOf(send.outText());
+
+    process.chdir(work);
+    const replacement = join(home, "brief-v2.md");
+    writeFileSync(replacement, "# Shared, revised\n");
+    const first = capture();
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement,
+          "--allow-external-source",
+          "--idempotency-key",
+          "k-rev-1",
+          "--json",
+        ],
+        first.ports,
+      ),
+    ).toBe(0);
+    const firstReport = JSON.parse(first.outText()) as { data: { revision: number; replayed: boolean } };
+    expect(firstReport.data.revision).toBe(2);
+    expect(firstReport.data.replayed).toBe(false);
+
+    // The identical retry would otherwise fail on NO_CONTENT_CHANGE; replay answers first.
+    const second = capture();
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement,
+          "--allow-external-source",
+          "--idempotency-key",
+          "k-rev-1",
+          "--json",
+        ],
+        second.ports,
+      ),
+    ).toBe(0);
+    const replayReport = JSON.parse(second.outText()) as { data: { revision: number; replayed: boolean } };
+    expect(replayReport.data.replayed).toBe(true);
+    expect(replayReport.data.revision).toBe(2);
+    process.chdir(original);
+  });
 });
