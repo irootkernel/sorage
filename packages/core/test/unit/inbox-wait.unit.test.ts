@@ -145,6 +145,50 @@ describe("waitForNewInboxItems", () => {
     }
   });
 
+  it("does not wake when an off-page item only changes state, because the seed pages through the whole inbox", () => {
+    resetClock();
+    // Three items with a page size of two: h3 lives on the second page of the seed.
+    const items = [view("h1", 1_000), view("h2", 900), view("h3", 800)];
+    const ports = portsOf(() => items);
+    // The stub returns everything in one call, so simulate paging by slicing in the
+    // test through a wrapper that respects the limit: the seed walks both pages.
+    const paged = portsOf(() => items);
+    paged.handoffs.listPage = (_scope, filters, limit, after) => {
+      const all = items
+        .filter((item) => filters.state === undefined || item.reviewState === filters.state)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const start = after === null ? 0 : all.findIndex((item) => `${item.updatedAt}|${item.id}` === after) + 1;
+      const slice = all.slice(start, start + limit);
+      const last = slice[slice.length - 1];
+      return ok({
+        items: slice,
+        lastSortKey: slice.length === limit && last !== undefined ? `${last.updatedAt}|${last.id}` : null,
+      });
+    };
+    const result = waitForNewInboxItems(
+      { ...paged, handoffs: paged.handoffs },
+      userActor,
+      { ...query, limit: 2 },
+      {
+        intervalSeconds: 1,
+        timeoutSeconds: 3,
+        sleepMs: (ms) => {
+          nowMs += ms;
+          // h3 changes state and jumps to the head of the listing on the next poll.
+          const h3 = items[2];
+          if (h3 !== undefined) {
+            items[2] = { ...h3, rowVersion: 2, updatedAt: new Date(nowMs).toISOString() };
+          }
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.timedOut).toBe(true);
+      expect(result.value.handoffs).toEqual([]);
+    }
+  });
+
   it("never sees items its query filters out, and times out", () => {
     resetClock();
     const items: HandoffView[] = [];

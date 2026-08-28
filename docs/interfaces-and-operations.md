@@ -704,7 +704,7 @@ A `--supersedes` target MUST exist and MUST be in a terminal state, otherwise th
 
 The target need not share the recipient, a tombstone may be superseded because the link is metadata rather than content, and every Handoff of one fan-out may reference the same target.
 
-`inbox --wait` in milestone 0.1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020). The wait returns only the items that appeared after it began, so a Handoff the waiter already saw does not wake it even when it changes state, and the timeout result is the empty list rather than the items the waiter started from; because a wait lists only new items, `--wait` cannot combine with `--cursor`.
+`inbox --wait` in milestone 0.1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020). The wait returns only the items that appeared after it began, so a Handoff the waiter already saw does not wake it even when it changes state, and the timeout result is the empty list rather than the items the waiter started from; because a wait lists only new items, `--wait` cannot combine with `--cursor`, and an `--interval` below one second is a usage error rather than an unthrottled poll.
 
 ## 14. CLI envelopes
 

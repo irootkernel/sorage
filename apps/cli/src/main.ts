@@ -690,6 +690,12 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (options.wait === true && typeof options.interval === "number" && options.interval < 1) {
+        ports.err("sorage: inbox --wait polls at whole-second intervals; pass --interval 1 or more\n");
+        ports.err("Run 'sorage inbox --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
       if (options.wait === true && typeof globals.cursor === "string") {
         ports.err("sorage: inbox --wait cannot combine with --cursor; a wait lists only new items\n");
         ports.err("Run 'sorage inbox --help' for usage.\n");

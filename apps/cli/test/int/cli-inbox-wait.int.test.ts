@@ -113,6 +113,14 @@ describe("sorage inbox --wait", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
+  it("refuses an --interval below one second as a usage error at exit 2", () => {
+    fixture();
+    const wait = capture();
+    const exit = runCli(["inbox", "--as", "beta", "--wait", "--interval", "0", "--json"], wait.ports);
+    expect(exit).toBe(2);
+    expect(wait.errText()).toContain("whole-second intervals");
+  });
+
   it("refuses --wait together with --cursor as a usage error at exit 2", () => {
     fixture();
     const wait = capture();

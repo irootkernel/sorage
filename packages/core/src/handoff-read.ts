@@ -194,6 +194,25 @@ export interface WaitedInbox {
  * new item and does not wake the wait, and the timeout result is the documented empty
  * list, never the items the waiter started from.
  */
+function pageThrough(
+  ports: HandoffReadPorts,
+  scope: ListingScope,
+  filters: HandoffListFilters,
+  pageSize: number,
+): Result<HandoffView[], AppError> {
+  const items: HandoffView[] = [];
+  let afterSortKey: string | null = null;
+  for (;;) {
+    const page = ports.handoffs.listPage(scope, filters, pageSize, afterSortKey);
+    if (!page.ok) return page;
+    items.push(...page.value.items);
+    if (page.value.items.length < pageSize || page.value.lastSortKey === null) {
+      return ok(items);
+    }
+    afterSortKey = page.value.lastSortKey;
+  }
+}
+
 export function waitForNewInboxItems(
   ports: HandoffReadPorts,
   actorInput: ReadActorInput,
@@ -202,9 +221,12 @@ export function waitForNewInboxItems(
 ): Result<WaitedInbox, AppError> {
   const scope = inboxScopeOf(ports, actorInput);
   if (!scope.ok) return err(scope.error);
-  const initial = runListing(ports, scope.value, query);
+  // The known set must cover the whole filtered inbox, not only the first page:
+  // an off-page item that changes state resurfaces at the head of a later poll,
+  // and without the full seed it would falsely wake the wait as new.
+  const initial = pageThrough(ports, scope.value, query.filters, query.limit);
   if (!initial.ok) return err(initial.error);
-  const known = new Set(initial.value.handoffs.map((handoff) => handoff.id));
+  const known = new Set(initial.value.map((handoff) => handoff.id));
   const deadlineMs = ports.clock.now().getTime() + options.timeoutSeconds * 1000;
   for (;;) {
     const remainingMs = deadlineMs - ports.clock.now().getTime();
