@@ -221,6 +221,8 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
         if (pausedNow()) return err(pauseError());
         mkdirSync(dirname(destination), { recursive: true });
         renameSync(request.stagingPath, destination);
+        // The parent must be durable before any caller commits materialized = 1 (VLT-022).
+        fsyncDirectory(dirname(destination));
       } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Placing ${request.storageKey} failed: ${messageOf(error)}.`, {
