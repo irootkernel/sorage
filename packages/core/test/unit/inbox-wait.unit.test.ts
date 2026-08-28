@@ -189,6 +189,53 @@ describe("waitForNewInboxItems", () => {
     }
   });
 
+  it("pages past churned known items to find a new item hidden below the first page", () => {
+    resetClock();
+    const items = [view("h1", 1_000), view("h2", 900), view("h3", 800)];
+    const paged = portsOf(() => items);
+    paged.handoffs.listPage = (_scope, filters, limit, after) => {
+      const all = items
+        .filter((item) => filters.state === undefined || item.reviewState === filters.state)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const start = after === null ? 0 : all.findIndex((item) => `${item.updatedAt}|${item.id}` === after) + 1;
+      const slice = all.slice(start, start + limit);
+      const last = slice[slice.length - 1];
+      return ok({
+        items: slice,
+        lastSortKey: slice.length === limit && last !== undefined ? `${last.updatedAt}|${last.id}` : null,
+      });
+    };
+    const result = waitForNewInboxItems(
+      { ...paged, handoffs: paged.handoffs },
+      userActor,
+      { ...query, limit: 2 },
+      {
+        intervalSeconds: 1,
+        timeoutSeconds: 30,
+        sleepMs: (ms) => {
+          nowMs += ms;
+          if (nowMs === 1_000) {
+            // Both first-page items churn while the new h4 lands below them.
+            const first = items[0];
+            const second = items[1];
+            if (first !== undefined) {
+              items[0] = { ...first, rowVersion: 2, updatedAt: new Date(nowMs + 5).toISOString() };
+            }
+            if (second !== undefined) {
+              items[1] = { ...second, rowVersion: 2, updatedAt: new Date(nowMs + 4).toISOString() };
+            }
+            items.push(view("h4", nowMs + 3));
+          }
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.timedOut).toBe(false);
+      expect(result.value.handoffs.map((handoff) => handoff.id)).toEqual(["h4"]);
+    }
+  });
+
   it("never sees items its query filters out, and times out", () => {
     resetClock();
     const items: HandoffView[] = [];

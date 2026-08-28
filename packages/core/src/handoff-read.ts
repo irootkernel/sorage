@@ -221,6 +221,10 @@ export function waitForNewInboxItems(
 ): Result<WaitedInbox, AppError> {
   const scope = inboxScopeOf(ports, actorInput);
   if (!scope.ok) return err(scope.error);
+  // The wait began now: no Handoff created after this instant can sort below an
+  // item that has not changed since, which is what lets each poll stop paging at
+  // the first item older than the wait.
+  const startedAtIso = ports.clock.now().toISOString();
   // The known set must cover the whole filtered inbox, not only the first page:
   // an off-page item that changes state resurfaces at the head of a later poll,
   // and without the full seed it would falsely wake the wait as new.
@@ -234,9 +238,25 @@ export function waitForNewInboxItems(
       return ok({ handoffs: [], timedOut: true });
     }
     options.sleepMs(Math.min(options.intervalSeconds * 1000, remainingMs));
-    const page = runListing(ports, scope.value, query);
-    if (!page.ok) return err(page.error);
-    const fresh = page.value.handoffs.filter((handoff) => !known.has(handoff.id));
+    // A poll pages past churned known items, because enough of them can fill the
+    // first page and hide a genuinely new item one page deeper until the timeout.
+    let afterSortKey: string | null = null;
+    let fresh: HandoffView[] = [];
+    for (;;) {
+      const page = ports.handoffs.listPage(scope.value, query.filters, query.limit, afterSortKey);
+      if (!page.ok) return page;
+      fresh = fresh.concat(page.value.items.filter((handoff) => !known.has(handoff.id)));
+      const last = page.value.items[page.value.items.length - 1];
+      if (fresh.length > 0 || page.value.items.length < query.limit || page.value.lastSortKey === null) {
+        break;
+      }
+      // The first item last touched before the wait began is a safe cutoff:
+      // nothing sorting below it can be new.
+      if (last !== undefined && last.updatedAt < startedAtIso) {
+        break;
+      }
+      afterSortKey = page.value.lastSortKey;
+    }
     if (fresh.length > 0) {
       return ok({ handoffs: fresh, timedOut: false });
     }
