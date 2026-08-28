@@ -183,6 +183,11 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
             db.prepare("UPDATE pending_fs_ops SET attempts = attempts + 1 WHERE id = ?").run(intent.id);
             if (outcome === "done") {
               db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(intent.id);
+              if (intent.op === "activate" && intent.artifactId !== null) {
+                // The activation reached its storageKey, so the Artifact is
+                // materialized exactly when the completion commit lands (VLT-021).
+                db.prepare("UPDATE artifacts SET materialized = 1 WHERE id = ?").run(intent.artifactId);
+              }
             } else if (options.events !== undefined) {
               const handoffId =
                 intent.artifactId === null
