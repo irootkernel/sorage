@@ -643,6 +643,18 @@ export function createSqliteRetentionStore(
           for (const event of input.events) {
             ledger.append(event);
           }
+          if (input.idempotency !== undefined) {
+            db.prepare(
+              "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ).run(
+              input.idempotency.key,
+              input.idempotency.scope,
+              input.idempotency.requestHash,
+              input.idempotency.responseJson,
+              input.events[0]?.createdAt ?? new Date().toISOString(),
+              input.idempotency.expiresAt,
+            );
+          }
           db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
         } catch (transactionError) {
@@ -656,6 +668,20 @@ export function createSqliteRetentionStore(
       } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Applying the retention decision failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+    idempotencyLookup(key, scope) {
+      try {
+        const row = db
+          .prepare("SELECT request_hash, response_json FROM idempotency_keys WHERE key = ? AND scope = ?")
+          .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;
+        return ok(row ? { requestHash: row.request_hash, responseJson: row.response_json } : null);
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading the idempotency record failed: ${messageOf(error)}`, {
             cause: String(error),
           }),
         );

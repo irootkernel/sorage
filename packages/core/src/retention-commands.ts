@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, SYSTEM_ACTOR, USER_ACTOR } from "./events";
 import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
@@ -25,7 +26,12 @@ export interface RetentionMutationPort {
       | { op: "resolve"; status: "approved" | "rejected"; resolvedByUser: string; resolutionNote: string | null }
       | undefined;
     unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
+    idempotency?:
+      | { key: string; scope: string; requestHash: string; responseJson: string; expiresAt: string }
+      | undefined;
   }): Result<{ rowVersion: number }, AppError>;
+  /** Looks up one recorded idempotency key in its scope (section 17.3). */
+  idempotencyLookup(key: string, scope: string): Result<{ requestHash: string; responseJson: string } | null, AppError>;
   /** The pending deletion request of one Handoff, or null. */
   findPendingRequest(handoffId: string): Result<{ id: string } | null, AppError>;
   /** Marks the executed unlink complete and appends ARTIFACT_UNLINKED. */
@@ -111,6 +117,8 @@ export interface RetentionOutcome {
   deleted?: boolean | undefined;
   /** Presented by every deletion approval so no rendering claims a purge (LIFE-015). */
   warning?: string | undefined;
+  /** True when an idempotency replay returned the recorded approval (section 17.3). */
+  replayed?: boolean | undefined;
 }
 
 function load(ports: RetentionPorts, handoffId: string) {
@@ -130,6 +138,7 @@ function apply(
   extras: {
     deletionRequest?: Parameters<RetentionMutationPort["applyRetentionMutation"]>[0]["deletionRequest"];
     unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
+    idempotency?: Parameters<RetentionMutationPort["applyRetentionMutation"]>[0]["idempotency"];
   } = {},
 ): Result<{ rowVersion: number }, AppError> {
   return ports.retention.applyRetentionMutation({
@@ -139,6 +148,7 @@ function apply(
     events,
     deletionRequest: extras.deletionRequest === undefined ? undefined : extras.deletionRequest,
     unlinkIntent: extras.unlinkIntent === undefined ? undefined : extras.unlinkIntent,
+    idempotency: extras.idempotency === undefined ? undefined : extras.idempotency,
   });
 }
 
@@ -329,6 +339,13 @@ export interface ApproveDeletionInput extends ReadActorInput {
   handoffId: string;
   confirm: boolean;
   confirmPinned?: string | undefined;
+  idempotencyKey?: string | undefined;
+}
+
+/** The canonical request identity of one deletion approval, hashed for idempotency replay (section 17.3). */
+function deletionApprovalRequestHash(handoffId: string, confirmPinned: string | undefined): string {
+  const canonical = JSON.stringify({ kind: "deletion-approve", handoffId, confirmPinned: confirmPinned ?? null });
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 export function approveDeletion(
@@ -339,6 +356,25 @@ export function approveDeletion(
   if (!guard.ok) return err(guard.error);
   if (input.confirm !== true) {
     return err(appError("CONFIRMATION_REQUIRED", "deletion approval is destructive; pass --confirm", {}));
+  }
+  // Replay is evaluated before every other guard, so a retried approval returns the
+  // recorded outcome instead of HANDOFF_DELETED on the tombstone it created (section 17.3).
+  const requestHash = deletionApprovalRequestHash(input.handoffId, input.confirmPinned);
+  if (input.idempotencyKey !== undefined) {
+    const seen = ports.retention.idempotencyLookup(input.idempotencyKey, "deletion-approve");
+    if (!seen.ok) return err(seen.error);
+    if (seen.value !== null) {
+      if (seen.value.requestHash !== requestHash) {
+        return err(
+          appError(
+            "IDEMPOTENCY_CONFLICT",
+            "this idempotency key was used with a different request; use a new key or replay the identical request",
+            { idempotencyKey: input.idempotencyKey },
+          ),
+        );
+      }
+      return ok({ ...(JSON.parse(seen.value.responseJson) as RetentionOutcome), replayed: true });
+    }
   }
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
@@ -371,6 +407,15 @@ export function approveDeletion(
   }
   const now = ports.clock.now().toISOString();
   const intentId = ports.ids.next();
+  // The recorded response is built before the transaction so the row and the returned
+  // approval are the same object; the compare-and-set makes the Row Version deterministic.
+  const approval: RetentionOutcome = {
+    handoffId: handoff.id,
+    reviewState: handoff.reviewState,
+    rowVersion: handoff.rowVersion + 1,
+    deleted: true,
+    warning: "prior Git commits may retain earlier content",
+  };
   const applied = apply(
     ports,
     handoff,
@@ -391,6 +436,16 @@ export function approveDeletion(
       unlinkIntent:
         handoff.currentArtifact !== null
           ? { id: intentId, toPath: handoff.currentArtifact.storageKey, artifactId: handoff.currentArtifact.id }
+          : undefined,
+      idempotency:
+        input.idempotencyKey !== undefined
+          ? {
+              key: input.idempotencyKey,
+              scope: "deletion-approve",
+              requestHash,
+              responseJson: JSON.stringify(approval),
+              expiresAt: new Date(ports.clock.now().getTime() + 24 * 3_600_000).toISOString(),
+            }
           : undefined,
     },
   );
@@ -414,13 +469,7 @@ export function approveDeletion(
       if (!completed.ok) return err(completed.error);
     }
   }
-  return ok({
-    handoffId: handoff.id,
-    reviewState: handoff.reviewState,
-    rowVersion: applied.value.rowVersion,
-    deleted: true,
-    warning: "prior Git commits may retain earlier content",
-  });
+  return ok(approval);
 }
 
 export function rejectDeletion(

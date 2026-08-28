@@ -1131,7 +1131,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     .description("approve a pending deletion as the User; the tombstone keeps no content")
     .option("--confirm-pinned <handoff-id>", "the distinct confirmation a pinned Handoff requires")
     .option("--idempotency-key <uuid>", "replay an identical approval instead of applying it again")
-    .action((id: string, options: { confirmPinned?: string }, command: Command) => {
+    .action((id: string, options: { confirmPinned?: string; idempotencyKey?: string }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
@@ -1157,6 +1157,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         handoffId: id,
         confirm: globals.confirm === true,
         confirmPinned: options.confirmPinned,
+        idempotencyKey: options.idempotencyKey,
       });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1166,6 +1167,9 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
       } else {
         ports.out(`Deleted ${id}; prior Git commits may retain earlier content\n`);
+        if (result.value.replayed === true) {
+          ports.out("Replayed the recorded deletion approval\n");
+        }
       }
     });
 

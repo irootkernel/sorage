@@ -233,6 +233,60 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     process.chdir(original);
   });
 
+  it("replays a deletion approval under an idempotency key and refuses a different request (section 17.3)", () => {
+    const original = process.cwd();
+    const { home, workB } = setup();
+    const first = sendOne(home);
+    const second = sendOne(home);
+
+    process.chdir(workB);
+    expect(
+      runCli(["accept", first, "--expected-revision", "1", "--expected-row-version", "1", "--json"], capture().ports),
+    ).toBe(0);
+    expect(runCli(["delete", "request", first, "--json"], capture().ports)).toBe(0);
+    const approved = capture();
+    expect(
+      runCli(
+        ["delete", "approve", first, "--as-user", "--confirm", "--idempotency-key", "k-approve-1", "--json"],
+        approved.ports,
+      ),
+    ).toBe(0);
+    expect(eventsOf(home, "DELETION_APPROVED")).toHaveLength(1);
+
+    // The identical retry replays the recorded approval instead of meeting HANDOFF_DELETED
+    // on the tombstone the first call created, because replay is evaluated first.
+    const replayed = capture();
+    expect(
+      runCli(
+        ["delete", "approve", first, "--as-user", "--confirm", "--idempotency-key", "k-approve-1", "--json"],
+        replayed.ports,
+      ),
+    ).toBe(0);
+    const report = JSON.parse(replayed.outText()) as {
+      data: { handoffId: string; deleted: boolean; warning: string; replayed: boolean };
+    };
+    expect(report.data.handoffId).toBe(first);
+    expect(report.data.deleted).toBe(true);
+    expect(report.data.warning).toContain("prior Git commits may retain earlier content");
+    expect(report.data.replayed).toBe(true);
+    expect(eventsOf(home, "DELETION_APPROVED")).toHaveLength(1);
+
+    // The same key naming a different Handoff is a different request.
+    expect(
+      runCli(["accept", second, "--expected-revision", "1", "--expected-row-version", "1", "--json"], capture().ports),
+    ).toBe(0);
+    expect(runCli(["delete", "request", second, "--json"], capture().ports)).toBe(0);
+    const conflict = capture();
+    expect(
+      runCli(
+        ["delete", "approve", second, "--as-user", "--confirm", "--idempotency-key", "k-approve-1", "--json"],
+        conflict.ports,
+      ),
+    ).toBe(75);
+    expect((JSON.parse(conflict.errText()) as { error: { code: string } }).error.code).toBe("IDEMPOTENCY_CONFLICT");
+    process.chdir(original);
+  });
+
   it("enforces the archive and unarchive rules and the duplicate request", () => {
     const original = process.cwd();
     const { home, workA, workB } = setup();
