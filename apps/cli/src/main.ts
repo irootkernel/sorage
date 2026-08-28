@@ -1457,9 +1457,16 @@ function actorInputOf(globals: Record<string, unknown>): {
   };
 }
 
+/** The page-size default of section 13.9: the configured `ui.defaultPageSize`, never a CLI-local constant. */
+function defaultPageSize(): number {
+  const gate = createNodeConfigCommandPorts();
+  const current = gate.store.read();
+  return current.ok && current.value !== null ? current.value.config.ui.defaultPageSize : 50;
+}
+
 function listQueryOf(options: Record<string, unknown>, globals: Record<string, unknown>) {
   return {
-    limit: typeof globals.limit === "number" && globals.limit > 0 ? globals.limit : 50,
+    limit: typeof globals.limit === "number" && globals.limit > 0 ? globals.limit : defaultPageSize(),
     cursor: typeof globals.cursor === "string" ? globals.cursor : undefined,
     filters: {
       state: typeof options.state === "string" ? options.state : undefined,

@@ -104,6 +104,49 @@ describe("sorage inbox, outbox, get, and fetch", () => {
     process.chdir(originalA);
   });
 
+  it("defaults the page size to the configured ui.defaultPageSize (section 13.9)", () => {
+    const { home, workB } = setupTwoProjects();
+    const original = process.cwd();
+    const document = join(home, "brief.md");
+
+    // Ten more sends join the fixture's one: eleven items for Beta's inbox.
+    for (let index = 2; index <= 11; index += 1) {
+      const send = capture();
+      const exit = runCli(
+        [
+          "send",
+          "--as",
+          "alpha",
+          "--to",
+          "beta",
+          "--title",
+          `Brief ${index}`,
+          "--file",
+          document,
+          "--allow-external-source",
+          "--json",
+        ],
+        send.ports,
+      );
+      if (exit !== 0) throw new Error(`send ${index} failed: ${send.errText()}`);
+    }
+    expect(runCli(["config", "set", "ui.defaultPageSize", "10", "--as-user"], capture().ports)).toBe(0);
+
+    process.chdir(workB);
+    const firstPage = capture();
+    expect(runCli(["inbox", "--json"], firstPage.ports)).toBe(0);
+    const page = JSON.parse(firstPage.outText()) as ListingEnvelope;
+    expect(page.data.handoffs).toHaveLength(10);
+    expect(page.data.nextCursor).not.toBeNull();
+
+    // An explicit --limit still wins over the configured default.
+    const explicit = capture();
+    expect(runCli(["inbox", "--limit", "3", "--json"], explicit.ports)).toBe(0);
+    const smallPage = JSON.parse(explicit.outText()) as ListingEnvelope;
+    expect(smallPage.data.handoffs).toHaveLength(3);
+    process.chdir(original);
+  });
+
   it("records the recipient's first fetch exactly once and leaves get silent", () => {
     const { workB } = setupTwoProjects();
     const original = process.cwd();
