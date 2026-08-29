@@ -382,14 +382,20 @@ const PUBLIC_PATHS = new Set([
   "/assets/app.js",
 ]);
 
-const MAX_SESSION_BODY_BYTES = 8192;
+const MAX_JSON_BODY_BYTES = 1_048_576;
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(
+  request: IncomingMessage,
+  limits: { maxBytes?: number; code?: Parameters<typeof appError>[0]; message?: string } = {},
+): Promise<Record<string, unknown>> {
+  const maxBytes = limits.maxBytes ?? MAX_JSON_BODY_BYTES;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > MAX_SESSION_BODY_BYTES) throw appError("UNAUTHENTICATED", "the session exchange body is too large");
+    if (size > maxBytes) {
+      throw appError(limits.code ?? "CONFIG_INVALID", limits.message ?? "the request body is too large");
+    }
     chunks.push(chunk as Buffer);
   }
   if (chunks.length === 0) return {};
@@ -492,7 +498,11 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
           sendError(response, requestId, appError("NOT_FOUND", `no endpoint at ${sessionPath}`, { path: sessionPath }));
           return;
         }
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, {
+          maxBytes: 8192,
+          code: "UNAUTHENTICATED",
+          message: "the session exchange body is too large",
+        });
         const secret = typeof body.secret === "string" ? body.secret : "";
         const exchange = options.auth.exchange(secret);
         if (!exchange.ok) {
@@ -579,16 +589,23 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               ? (request.headers["idempotency-key"] as string)
               : undefined;
           if (matched.route.idempotent === true) {
-            const chunks: Buffer[] = [];
-            request.on("data", (chunk: Buffer) => chunks.push(chunk));
-            await new Promise<void>((resolve) => request.on("end", resolve));
-            const requestIdentity = `${method} ${url.pathname} ${Buffer.concat(chunks).toString("utf8")}`;
+            // The body is spooled to disk and hashed in flight, so an idempotent
+            // upload never sits whole in memory and the identity covers the bytes.
+            const spool = spoolRequestBody(request);
+            await spool.finished;
+            if (spool.error !== undefined) {
+              sendError(response, requestId, spool.error);
+              return;
+            }
+            const requestIdentity = `${method} ${url.pathname} ${spool.hash}`;
             const replay = evaluateIdempotency(idempotencyStore, idempotencyKey, requestIdentity);
             if (replay.error !== undefined) {
+              spool.discard();
               sendError(response, requestId, replay.error);
               return;
             }
             if (replay.replayed) {
+              spool.discard();
               sendJson(response, replay.status ?? 200, requestId, replay.body);
               return;
             }
@@ -606,7 +623,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               }
               return originalEnd(chunk as never, ...(rest as never[]));
             }) as typeof response.end;
-            await matched.route.handler(replayableRequest(request, chunks), response, {
+            await matched.route.handler(replayableRequest(request, spool.path), response, {
               requestId,
               auth: auth.context,
               params: matched.params,
@@ -675,10 +692,58 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
 
 const idempotencyStore = new Map<string, { requestHash: string; status: number; body: unknown }>();
 
-/** Rebuilds a consumed request around its buffered body so a handler can re-read it. */
-function replayableRequest(request: IncomingMessage, chunks: Buffer[]): IncomingMessage {
-  const { Readable } = require("node:stream") as typeof import("node:stream");
-  const body = Readable.from(chunks.length === 0 ? [] : [Buffer.concat(chunks)]);
+/** Spools one request body to disk, hashing it in flight; memory stays bounded. */
+function spoolRequestBody(request: IncomingMessage): {
+  finished: Promise<void>;
+  path: string;
+  hash: string;
+  error: AppError | undefined;
+  discard(): void;
+} {
+  const { createHash } = require("node:crypto") as typeof import("node:crypto");
+  const { createWriteStream, mkdtempSync, rmSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "sorage-idem-"));
+  const path = join(dir, "body");
+  const digest = createHash("sha256");
+  const spoolState: { error?: AppError } = {};
+  const stream = createWriteStream(path);
+  const finished = new Promise<void>((resolve) => {
+    request.on("data", (chunk: Buffer) => {
+      if (spoolState.error !== undefined) return;
+      digest.update(chunk);
+      stream.write(chunk);
+    });
+    request.on("end", () => stream.end(() => resolve()));
+    request.on("error", () => {
+      spoolState.error = appError("INTERNAL_ERROR", "the request stream failed");
+      stream.end(() => resolve());
+    });
+  });
+  return {
+    finished,
+    path,
+    get hash() {
+      return digest.digest("hex");
+    },
+    get error() {
+      return spoolState.error;
+    },
+    discard() {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Best effort; the OS temp cleaner is the backstop.
+      }
+    },
+  };
+}
+
+/** Rebuilds a consumed request around its spooled body so a handler can re-read it. */
+function replayableRequest(request: IncomingMessage, spoolPath: string): IncomingMessage {
+  const { createReadStream } = require("node:fs") as typeof import("node:fs");
+  const body = createReadStream(spoolPath);
   return Object.assign(body, {
     method: request.method,
     url: request.url,

@@ -123,7 +123,10 @@ export function runWebCommand(
     output.err(`INTERNAL_ERROR: ${secret.error.message}\n`);
     return 1;
   }
-  const url = `http://127.0.0.1:${port}/#s=${secret.value.secret}`;
+  // The URL must name the address the daemon actually bound: an IPv6 loopback bind
+  // is only reachable in bracketed form.
+  const authority = config.value.server.host === "::1" ? `[::1]:${port}` : `127.0.0.1:${port}`;
+  const url = `http://${authority}/#s=${secret.value.secret}`;
   if (options.openBrowser) ports.openBrowser(url);
   output.out(
     `${JSON.stringify(

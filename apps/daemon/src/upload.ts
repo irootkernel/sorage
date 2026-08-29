@@ -90,6 +90,11 @@ export function consumeMultipartUpload(
           if (index === -1) {
             // No delimiter in sight: everything before a tail guard is file data;
             // a text part stays buffered because its value is small by contract.
+            if (stage === "preamble" && buffer.length > 65_536) {
+              fail(appError("CONFIG_INVALID", "the multipart preamble exceeded its bound"));
+              stage = "done";
+              return;
+            }
             if (stage === "body" && currentFilename !== null) {
               const keep = delimiter.length + 3;
               const emit = buffer.length > keep ? buffer.subarray(0, buffer.length - keep) : Buffer.alloc(0);

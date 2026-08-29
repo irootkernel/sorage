@@ -73,6 +73,8 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
 
   let draining = false;
   let inFlight = 0;
+  // Late-bound so the restart hook and the listen callback share one drain.
+  let drain: () => Promise<void> = async () => {};
   const serverFactory = options.serverFactory ?? createDaemonServer;
   const configService = createDaemonConfigService({
     host,
@@ -92,15 +94,11 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
     }),
     vaultPath: () => ports.vaultPath(),
     onRestartRequest: () => {
-      // The controlled restart of RUN-008: answer, then drain; the supervisor or
-      // the User brings the daemon back with `sorage daemon start`.
+      // The controlled restart of RUN-008: answer, then run the same graceful
+      // drain SEC-015 mandates for a stop - refuse mutations, let in-flight
+      // requests finish - before the listener, the record, and the lock go.
       setTimeout(() => {
-        draining = true;
-        stopSweep();
-        server.close();
-        ports.removeDaemonRecord();
-        lock.release?.();
-        process.exit(0);
+        void drain().then(() => process.exit(0));
       }, 50);
     },
     isDraining: () => draining,
@@ -152,7 +150,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
       };
       // The record is the bind marker: written atomically only after listen succeeded.
       ports.writeDaemonRecord(record);
-      const drain = async () => {
+      drain = async () => {
         // Refuse new mutations first; the requests already in flight finish, and
         // only then do the listener and the storage close (SEC-015).
         draining = true;

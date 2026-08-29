@@ -100,12 +100,12 @@ describe("the bounded checksum batch", () => {
 
     const store = createNodeArtifactStore({ vaultPath: vault, installationId: INSTALLATION });
     const handoff = "2f0ac9a0-0000-4000-8000-0000000000h1" as string;
-    const dir = join(vault, "artifacts", handoff, "a");
+    const key1 = `artifacts/${handoff}/a/one.md`;
+    const key2 = `artifacts/${handoff}/a/two.md`;
+    const dir = join(vault, key1.slice(0, key1.lastIndexOf("/")));
     mkdirSync(dir, { recursive: true });
-    const key1 = `${handoff}/a/one.md`;
-    const key2 = `${handoff}/a/two.md`;
-    writeFileSync(join(vault, "artifacts", key1), "a".repeat(10));
-    writeFileSync(join(vault, "artifacts", key2), "b".repeat(10));
+    writeFileSync(join(vault, key1), "a".repeat(10));
+    writeFileSync(join(vault, key2), "b".repeat(10));
     const project = "3f0ac9a0-0000-4000-8000-0000000000p1";
     db.prepare(
       "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES (?,?,?,'active',?,?)",

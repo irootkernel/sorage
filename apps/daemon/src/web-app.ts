@@ -490,8 +490,25 @@ export const WEB_APP_JS = `(function () {
         headers: { "if-match": loadedEtag, "content-type": "application/json" },
         body: JSON.stringify({ key: "ui.defaultPageSize", value: pageSize.value }),
       }).then(function (saved) {
-        saveNote.textContent = saved.body.ok ? "Saved." : "Save failed: " + saved.body.error.code;
-        if (saved.body.ok) loadedEtag = saved.body.data.etag;
+        if (!saved.body.ok) {
+          saveNote.textContent = "Save failed: " + saved.body.error.code;
+          return;
+        }
+        loadedEtag = saved.body.data.etag;
+        // The inbox-marker toggle saves under the same loaded basis; its failure
+        // is reported without undoing the page-size save.
+        api("/api/v1/config", {
+          method: "PUT",
+          headers: { "if-match": loadedEtag, "content-type": "application/json" },
+          body: JSON.stringify({ key: "handoff.inboxMarker", value: marker.value }),
+        }).then(function (second) {
+          if (second.body.ok) {
+            loadedEtag = second.body.data.etag;
+            saveNote.textContent = "Saved.";
+          } else {
+            saveNote.textContent = "Saved the page size; the marker save failed: " + second.body.error.code;
+          }
+        });
       });
     });
     view().appendChild(form);

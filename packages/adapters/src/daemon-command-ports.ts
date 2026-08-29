@@ -181,8 +181,9 @@ function vaultPathOf(store: ReturnType<typeof createConfigStore>): string | null
 }
 
 function artifactSize(vault: string, storageKey: string): number | null {
+  // A storage key is vault-relative and already carries its artifacts/ segment.
   try {
-    return statSync(join(vault, "artifacts", storageKey)).size;
+    return statSync(join(vault, storageKey)).size;
   } catch {
     return null;
   }

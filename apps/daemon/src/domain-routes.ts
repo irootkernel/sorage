@@ -728,6 +728,25 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   return routes;
 }
 
+/** Rejects a missing or non-numeric expectation honestly instead of letting NaN silently fail every comparison. */
+function numericExpectations(
+  body: Record<string, unknown>,
+  keys: string[],
+): CoreResult<Record<string, number>, AppError> {
+  const parsed: Record<string, number> = {};
+  for (const key of keys) {
+    const value = body[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return {
+        ok: false,
+        error: appError("CONFIG_INVALID", `${key} must be supplied as a number`, { key }),
+      };
+    }
+    parsed[key] = value;
+  }
+  return { ok: true, value: parsed };
+}
+
 function securityHeaders(): Record<string, string> {
   return {
     "Content-Security-Policy":

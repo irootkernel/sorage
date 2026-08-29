@@ -90,8 +90,12 @@ export function evaluateIdempotency(
     return { replayed: false };
   }
   if (stored.status === -1) {
-    // A response is still being produced; treat a concurrent duplicate as a conflict.
-    return { replayed: false };
+    // A response is still being produced: a concurrent duplicate must not execute
+    // the mutation a second time (API-012).
+    return {
+      replayed: false,
+      error: appError("IDEMPOTENCY_CONFLICT", "the same Idempotency-Key is still in flight; retry after it completes"),
+    };
   }
   if (stored.requestHash !== requestHash) {
     return {
