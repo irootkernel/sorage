@@ -11,6 +11,7 @@ import {
   createNodeWebSecretStore,
 } from "@sorage/adapters/src/token-store";
 import { createSessionService } from "./auth";
+import { createDomainRoutes } from "./domain-routes";
 import { createDaemonServer, DAEMON_VERSION } from "./index";
 import type { DaemonConfigService, DaemonServerOptions } from "./index";
 import { createHash } from "node:crypto";
@@ -85,6 +86,11 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
     auth,
     tokenRotate: () => token.rotate(),
     config: configService,
+    domainRoutes: createDomainRoutes({
+      vaultPath: () => ports.vaultPath(),
+      config: configService,
+    }),
+    vaultPath: () => ports.vaultPath(),
     onRestartRequest: () => {
       // The controlled restart of RUN-008: answer, then drain; the supervisor or
       // the User brings the daemon back with `sorage daemon start`.

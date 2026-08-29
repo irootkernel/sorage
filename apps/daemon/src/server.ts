@@ -11,6 +11,8 @@ import {
   successEnvelope,
 } from "@sorage/core";
 import { bearerValue, type AuthenticatedContext, type SessionService } from "./auth";
+import { allowedMethods, evaluateIdempotency, matchRoute, storeReplay, type RouteEntryInternal } from "./route-kit";
+import { createHash } from "node:crypto";
 
 /**
  * The daemon HTTP skeleton of TASK-042: loopback-only bind, the `Host` allowlist of
@@ -51,6 +53,14 @@ export interface DaemonRequestContext {
   requestId: string;
   /** The authenticated bearer kind; present on every route that requires authentication. */
   auth?: AuthenticatedContext;
+  /** Path parameters captured by the domain routing kit. */
+  params?: Record<string, string>;
+  /** The acting Project slug named by the request, mirroring the CLI's `--as`. */
+  as?: string | undefined;
+  /** True when the request asserts the local User, mirroring `--as-user`. */
+  asUser?: boolean | undefined;
+  /** The `Idempotency-Key` header of an idempotent route (API-012). */
+  idempotencyKey?: string | undefined;
 }
 
 export type DaemonRouteHandler = (
@@ -95,6 +105,10 @@ export interface DaemonServerOptions {
   config?: DaemonConfigService;
   /** Called after a successful runtime/restart response; the runtime drains and exits. */
   onRestartRequest?: () => void;
+  /** The `/api/v1` domain routes of TASK-046, supplied by the daemon runtime. */
+  domainRoutes?: RouteEntryInternal[];
+  /** The daemon's Vault root, for serving Artifact content. */
+  vaultPath?: () => string | null;
 }
 
 export interface DaemonConfigSnapshot {
@@ -622,6 +636,93 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
         return;
       }
 
+      // The domain routes of TASK-046: pattern-matched, actor-named, and replay-aware.
+      if (options.domainRoutes !== undefined) {
+        const matched = matchRoute(options.domainRoutes, method, url.pathname);
+        if (matched !== null) {
+          if (matched.route.cliTokenOnly === true && auth.context.kind !== "api-token") {
+            sendError(
+              response,
+              requestId,
+              appError(
+                "FORBIDDEN_ACTOR",
+                "path-based imports are accepted only from the authenticated local CLI context",
+              ),
+            );
+            return;
+          }
+          const as = url.searchParams.get("as") ?? undefined;
+          const asUser = url.searchParams.get("asUser") === "true";
+          const idempotencyKey =
+            typeof request.headers["idempotency-key"] === "string"
+              ? (request.headers["idempotency-key"] as string)
+              : undefined;
+          if (matched.route.idempotent === true) {
+            const chunks: Buffer[] = [];
+            request.on("data", (chunk: Buffer) => chunks.push(chunk));
+            await new Promise<void>((resolve) => request.on("end", resolve));
+            const requestIdentity = `${method} ${url.pathname} ${Buffer.concat(chunks).toString("utf8")}`;
+            const replay = evaluateIdempotency(idempotencyStore, idempotencyKey, requestIdentity);
+            if (replay.error !== undefined) {
+              sendError(response, requestId, replay.error);
+              return;
+            }
+            if (replay.replayed) {
+              sendJson(response, replay.status ?? 200, requestId, replay.body);
+              return;
+            }
+            // Capture the response bytes so a retry with the same key replays them.
+            const captured: { status: number; body: unknown } = { status: 200, body: null };
+            const originalEnd = response.end.bind(response);
+            response.end = ((chunk?: unknown, ...rest: unknown[]) => {
+              captured.status = response.statusCode;
+              if (typeof chunk === "string") {
+                try {
+                  captured.body = JSON.parse(chunk);
+                } catch {
+                  captured.body = chunk;
+                }
+              }
+              return originalEnd(chunk as never, ...(rest as never[]));
+            }) as typeof response.end;
+            await matched.route.handler(replayableRequest(request, chunks), response, {
+              requestId,
+              auth: auth.context,
+              params: matched.params,
+              as,
+              asUser,
+              idempotencyKey,
+            });
+            storeReplay(idempotencyStore, idempotencyKey, requestIdentity, captured.status, captured.body);
+            return;
+          }
+          await matched.route.handler(request, response, {
+            requestId,
+            auth: auth.context,
+            params: matched.params,
+            as,
+            asUser,
+            idempotencyKey,
+          });
+          return;
+        }
+        for (const entry of options.domainRoutes) {
+          if (entry.pattern === url.pathname) paths.add(url.pathname);
+        }
+        const domainAllowed = allowedMethods(options.domainRoutes, url.pathname);
+        if (domainAllowed.length > 0) {
+          sendError(
+            response,
+            requestId,
+            appError("METHOD_NOT_ALLOWED", `${method} is not accepted by ${url.pathname}`, {
+              path: url.pathname,
+              allow: domainAllowed.join(", "),
+            }),
+          );
+          return;
+        }
+      }
+
       if (route !== undefined) {
         await route.handler(request, response, { requestId, auth: auth.context });
         return;
@@ -649,6 +750,19 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
       sendError(response, requestId, error);
     }
   };
+}
+
+const idempotencyStore = new Map<string, { requestHash: string; status: number; body: unknown }>();
+
+/** Rebuilds a consumed request around its buffered body so a handler can re-read it. */
+function replayableRequest(request: IncomingMessage, chunks: Buffer[]): IncomingMessage {
+  const { Readable } = require("node:stream") as typeof import("node:stream");
+  const body = Readable.from(chunks.length === 0 ? [] : [Buffer.concat(chunks)]);
+  return Object.assign(body, {
+    method: request.method,
+    url: request.url,
+    headers: request.headers,
+  }) as unknown as IncomingMessage;
 }
 
 function isAppError(value: unknown): value is AppError {

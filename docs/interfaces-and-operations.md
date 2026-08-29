@@ -917,6 +917,8 @@ POST /api/v1/vault/move
 
 `POST /api/v1/vault/move` exists for parity with the CLI; no MVP Web screen calls it, because Web relocation is deferred (WEB-016).
 
+Every domain route names its acting context explicitly, because an HTTP request has no working directory to resolve: `as=<project-slug>` for a Project, or `asUser=true` for the User, as a query parameter or a body field; a request that names neither is `FORBIDDEN_ACTOR`. Path-based imports additionally carry the CLI caller's working directory as `senderPath`, which defaults to the imported file's directory, and are refused for a browser session token (API-004). The `Idempotency-Key` header on create, revise, and deletion approval replays the stored response before any Row Version precondition is evaluated (API-012).
+
 ### 18.3 Projects
 
 ```text
