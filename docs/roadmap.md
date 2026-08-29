@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-007`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-052`
@@ -75,7 +75,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `EPIC-004` | Vault and Artifact store | 0.1 | Completed | `TASK-021` to `TASK-026` |
 | `EPIC-005` | Handoff domain and workflow | 0.1 | Completed | `TASK-027` to `TASK-035` |
 | `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Completed | `TASK-036` to `TASK-041` |
-| `EPIC-007` | Daemon, API, and Web | 0.2 | Planned | `TASK-042` to `TASK-051` |
+| `EPIC-007` | Daemon, API, and Web | 0.2 | Completed | `TASK-042` to `TASK-051` |
 | `EPIC-008` | Git backup and restore | 0.3 | Planned | `TASK-052` to `TASK-058` |
 | `EPIC-009` | Hardening, packaging, and MVP release | 0.3 | Planned | `TASK-059` to `TASK-065` |
 
@@ -189,9 +189,10 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-007: Daemon, API, and Web
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.2
 - **Objective:** Add the daemon, the local HTTP API, and the Web control plane with the network boundary of ADR-0017 enforced from the first request, and pass the 0.2 daemon and Web release gate with AJ-11 to AJ-13.
+- **Validation record (whole-epic review, 2026-08-30):** the whole-epic review over `cb81f77` to the first gate snapshot ran two rounds: round one found eleven valid cross-task seam findings (run `r_01a04f1f-38de-7486-adb8-a0189d49507e`), all remediated with the full gate green in `c1c1b4a` - the idempotent routes now spool to disk and hash in flight instead of buffering a body in memory, an in-flight duplicate `Idempotency-Key` is refused rather than executed twice, the periodic Artifact sweep resolves the vault-relative storage key so Artifacts stop reporting `ARTIFACT_CORRUPTED` against a doubled `artifacts/` prefix, the controlled restart runs the same graceful drain a stop runs, `sorage web` names the bound address so an IPv6 loopback yields a reachable URL, the multipart preamble is bounded, upload cleanup no longer deletes the shared spool directory of a concurrent upload, suffix byte ranges serve the final bytes, accept and decline reject missing expectations honestly, an oversized configuration body reports `CONFIG_INVALID`, and the settings page saves the inbox-marker toggle it shows; round two `r_01a04f29-7910-7572-8b50-85617edf0ee6` was committed with `coverage_status=complete`, `ci_decision=pass`, and zero findings over the remediated tree. `make test` exits 0 with 229 unit, 306 integration, 24 contract, and 30 e2e tests, and AJ-01 to AJ-13 pass, AJ-11 to AJ-13 under Playwright against the compiled binary with a real daemon and a real browser; the axe-core findings are recorded as engineering practice rather than a gate condition. Every member task closed with a committed clean round-1 Mulgae run and no hardening deferral; the `v0.2.0` tag was re-pointed to the converged closeout snapshot because the first placement preceded the validation that exposed the sweep defect; nothing was pushed, and publication remains local.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
