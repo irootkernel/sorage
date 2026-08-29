@@ -19,6 +19,7 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <p id="session-note">This is the Sorage control plane. Run <code>sorage web</code> to open it with a one-time session secret.</p>
 <nav>
 <a href="#/dashboard" data-nav>Dashboard</a>
+<a href="#/projects" data-nav>Projects</a>
 <a href="#/compose" data-nav>Compose</a>
 <a href="#/inbox" data-nav>Inbox</a>
 <a href="#/outbox" data-nav>Outbox</a>
@@ -260,6 +261,106 @@ export const WEB_APP_JS = `(function () {
     });
   }
 
+  var projectsRender = 0;
+  function projects() {
+    var ticket = ++projectsRender;
+    var stale = function (payload) { projectsRender !== ticket ? null : payload(); };
+    view().replaceChildren();
+    view().appendChild(el("h2", { text: "Projects" }));
+    var status = el("p", {});
+    var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Slug" }), el("th", { text: "Name" }), el("th", { text: "Bindings" }), el("th", { text: "State" }), el("th", { text: "" })])])]);
+    var body = el("tbody", {});
+    table.appendChild(body);
+    view().appendChild(table);
+    view().appendChild(status);
+    view().appendChild(el("h3", { text: "Register a Project" }));
+    var form = el("form", {});
+    var name = el("input", { placeholder: "display name", size: "30" });
+    var dir = el("input", { placeholder: "directory", size: "40" });
+    form.appendChild(el("p", {}, [el("label", { text: "Name " }), name]));
+    form.appendChild(el("p", {}, [el("label", { text: "Directory " }), dir]));
+    form.appendChild(el("button", { type: "submit", text: "Register" }));
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      api("/api/v1/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name.value, dir: dir.value, asUser: true }) })
+        .then(function (outcome) { status.textContent = outcome.body.ok ? "Registered " + outcome.body.data.project.slug : outcome.body.error.code; projects(); });
+    });
+    view().appendChild(form);
+    api("/api/v1/projects").then(function (result) {
+      stale(function () {
+      if (result.status !== 200) { status.textContent = "Projects could not load."; return; }
+      result.body.data.forEach(function (entry) {
+        var project = entry.project;
+        var row = el("tr", {}, [
+          el("td", { text: project.slug }),
+          el("td", { text: project.displayName }),
+          el("td", { text: String(entry.bindingCount) + (entry.unbound ? " (unbound)" : "") }),
+          el("td", { text: project.status }),
+        ]);
+        var cell = el("td", {});
+        var rename = el("input", { placeholder: "new name", size: "18" });
+        var bindDir = el("input", { placeholder: "bind directory", size: "24" });
+        function action(label, path, init) {
+          var button = el("button", { text: label });
+          button.addEventListener("click", function () {
+            // Path and body are built at click time so the row's inputs are read
+            // live rather than captured empty at render.
+            api(typeof path === "function" ? path() : path, typeof init === "function" ? init() : init).then(function (outcome) {
+              status.textContent = outcome.body.ok ? label + " done" : outcome.body.error.code;
+              projects();
+            });
+          });
+          return button;
+        }
+        var renameButton = el("button", { text: "Rename" });
+        renameButton.addEventListener("click", function () {
+          if (rename.value === "") return;
+          api("/api/v1/projects/" + project.slug, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: rename.value, asUser: true }) })
+            .then(function () { projects(); });
+        });
+        cell.appendChild(renameButton);
+        cell.appendChild(document.createTextNode(" "));
+        cell.appendChild(action("Bind", "/api/v1/projects/" + project.slug + "/bindings", function () {
+          return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dir: bindDir.value, asUser: true }) };
+        }));
+        cell.appendChild(document.createTextNode(" "));
+        cell.appendChild(action("Unbind", function () {
+          return "/api/v1/projects/" + project.slug + "/bindings/x?dir=" + encodeURIComponent(bindDir.value) + "&confirm=true";
+        }, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+        cell.appendChild(document.createTextNode(" "));
+        cell.appendChild(action("Archive", "/api/v1/projects/" + project.slug + "/archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+        cell.appendChild(document.createTextNode(" "));
+        cell.appendChild(action("Unarchive", "/api/v1/projects/" + project.slug + "/unarchive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+        cell.appendChild(el("p", {}, [rename, bindDir]));
+        row.appendChild(cell);
+        body.appendChild(row);
+      });
+      });
+    });
+
+    // Unregistered Workspaces: senders with no Project, listed separately and never
+    // offered as recipients.
+    view().appendChild(el("h3", { text: "Unregistered Workspaces" }));
+    var unregistered = el("ul", {});
+    view().appendChild(unregistered);
+    api("/api/v1/handoffs?asUser=true&includeArchived=true").then(function (result) {
+      if (result.status !== 200) return;
+      stale(function () {
+      var seen = {};
+      result.body.data.handoffs.forEach(function (handoff) {
+        if (handoff.senderKind !== "unregistered_workspace") return;
+        var key = handoff.senderWorkspaceKey || handoff.senderPathSnapshot || "unknown";
+        if (seen[key] !== undefined) { seen[key] += 1; return; }
+        seen[key] = 1;
+      });
+      Object.keys(seen).forEach(function (key) {
+        unregistered.appendChild(el("li", { text: key + " — " + seen[key] + " sent Handoff(s); not a recipient" }));
+      });
+      if (Object.keys(seen).length === 0) unregistered.appendChild(el("li", { text: "None recorded." }));
+      });
+    });
+  }
+
   function compose() {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "New Handoff" }));
@@ -418,6 +519,7 @@ export const WEB_APP_JS = `(function () {
     var hash = location.hash.replace(/^#/, "") || "/dashboard";
     var path = hash.split("?")[0];
     if (path === "/" || path === "/dashboard") dashboard();
+    else if (path === "/projects") projects();
     else if (path === "/compose") compose();
     else if (path === "/inbox") listing("inbox");
     else if (path === "/outbox") listing("outbox");
