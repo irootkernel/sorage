@@ -10,6 +10,7 @@ import { createNodeLockProbePorts, type LockClock } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
 import { createVaultInitializer } from "./vault";
+import { createNodeApiTokenStore } from "./token-store";
 
 /**
  * The production wiring of the initialization use case: the home path service, the
@@ -36,6 +37,7 @@ export function createNodeInitPorts(options: NodeInitPortsOptions = {}): InitPor
     config: createConfigStore({ home, lockPorts: createNodeLockProbePorts(clock), userHome, fs: options.configFs }),
     database: databasePort(join(home.stateDir, "sorage.sqlite3")),
     vault: createVaultInitializer(clock),
+    token: createNodeApiTokenStore({ stateDir: home.stateDir }),
     filesystem: {
       ensureDirectory: (path) => {
         // Node's recursive mkdir ignores existing directories, which is the contract.

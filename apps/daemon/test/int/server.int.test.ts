@@ -164,12 +164,13 @@ describe("the Host allowlist before routing (SEC-017)", () => {
 });
 
 describe("the error middleware (API-006)", () => {
-  it("renders an unknown route as a 404 NOT_FOUND envelope", async () => {
+  it("renders an unknown route without credentials as a 401 UNAUTHENTICATED envelope", async () => {
+    // Authentication precedes routing (section 17.2), so an unauthenticated probe
+    // learns nothing about which routes exist; the 404 needs a valid bearer token.
     const response = await request("/api/v1/does-not-exist");
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(401);
     const body = json(response);
-    expect(body).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
-    expect(body.error.message).toContain("/api/v1/does-not-exist");
+    expect(body).toMatchObject({ ok: false, error: { code: "UNAUTHENTICATED" } });
     expect(typeof body.meta.requestId).toBe("string");
   });
 

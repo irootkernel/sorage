@@ -58,4 +58,8 @@ Commands:
                                   Vault
   completion <shell>              print the shell completion script for zsh or
                                   bash; source it from the shell's profile
+  daemon                          run and control the local daemon
+  web                             start the daemon when needed and open the Web
+                                  control plane with a one-time session secret
+  token                           manage the Installation API token
   help [command]                  display help for command

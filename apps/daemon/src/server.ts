@@ -10,6 +10,7 @@ import {
   newRequestId,
   successEnvelope,
 } from "@sorage/core";
+import { bearerValue, type AuthenticatedContext, type SessionService } from "./auth";
 
 /**
  * The daemon HTTP skeleton of TASK-042: loopback-only bind, the `Host` allowlist of
@@ -48,6 +49,8 @@ export interface ReadinessReport {
 
 export interface DaemonRequestContext {
   requestId: string;
+  /** The authenticated bearer kind; present on every route that requires authentication. */
+  auth?: AuthenticatedContext;
 }
 
 export type DaemonRouteHandler = (
@@ -72,6 +75,13 @@ export interface DaemonServerOptions {
   readiness?: () => ReadinessReport | Promise<ReadinessReport>;
   /** Request identifier generation; tests inject a deterministic generator. */
   idGenerator?: IdGenerator;
+  /**
+   * The bearer authentication layer of section 17.1. When absent, only the public
+   * meta endpoints answer; every protected route requires it from TASK-043 on.
+   */
+  auth?: SessionService;
+  /** Rotates the Installation API token for `POST /api/v1/token/rotate`. */
+  tokenRotate?: () => { ok: true; value: { rotated: true } } | { ok: false; error: AppError };
 }
 
 /** True only for the loopback literals; a name is never a valid bind address (SEC-001). */
@@ -179,15 +189,46 @@ export function daemonRoutes(options: {
 export type DaemonRequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
 /**
- * Builds the full request pipeline: request identifier, `Host` allowlist before routing,
- * route dispatch, and the error middleware that renders an API-006 body for every failure.
+ * The paths the section 18.1 catalog exposes without a bearer token: the three meta
+ * endpoints a daemon-discovery probe needs before any credential exists in context.
+ */
+const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/readiness", "/api/v1/version"]);
+
+const MAX_SESSION_BODY_BYTES = 8192;
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > MAX_SESSION_BODY_BYTES) throw appError("UNAUTHENTICATED", "the session exchange body is too large");
+    chunks.push(chunk as Buffer);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Builds the full request pipeline: request identifier, `Host` allowlist before routing
+ * and before authentication (SEC-017), bearer authentication (SEC-019, SEC-020), route
+ * dispatch, and the error middleware that renders an API-006 body for every failure.
  */
 export function createDaemonRequestHandler(options: DaemonServerOptions): DaemonRequestHandler {
-  const routes = daemonRoutes({
-    endpoints: options.endpoints,
-    readiness: options.readiness ?? (() => ({ ready: true })),
-  });
-  const paths = new Set(routes.map((route) => route.path));
+  const routes = [
+    ...daemonRoutes({
+      endpoints: options.endpoints,
+      readiness: options.readiness ?? (() => ({ ready: true })),
+    }),
+  ];
+  const sessionPath = "/api/v1/session";
+  const rotatePath = "/api/v1/token/rotate";
+  const paths = new Set([...routes.map((route) => route.path), sessionPath, rotatePath]);
+
   return async (request, response) => {
     const requestId = newRequestId(options.idGenerator ?? idGenerator);
     try {
@@ -207,13 +248,123 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
       }
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const method = request.method ?? "GET";
+      const isPublicPath = PUBLIC_PATHS.has(url.pathname);
       const route = routes.find((entry) => entry.path === url.pathname && entry.method === method);
+
+      // The public meta endpoints answer without a credential; their method rule is
+      // still enforced, so a wrong verb on a public path is a 405, not a 401.
+      if (isPublicPath) {
+        if (route !== undefined) {
+          await route.handler(request, response, { requestId });
+          return;
+        }
+        sendError(
+          response,
+          requestId,
+          appError("METHOD_NOT_ALLOWED", `${method} is not accepted by ${url.pathname}`, {
+            path: url.pathname,
+            allow: routes
+              .filter((entry) => entry.path === url.pathname)
+              .map((entry) => entry.method)
+              .join(", "),
+          }),
+        );
+        return;
+      }
+
+      // The session exchange is the only endpoint that takes the one-time fragment
+      // secret instead of a bearer token (SEC-019); every other non-public route
+      // authenticates strictly before its handler runs.
+      if (url.pathname === sessionPath) {
+        if (method !== "POST") {
+          sendError(
+            response,
+            requestId,
+            appError("METHOD_NOT_ALLOWED", `${method} is not accepted by ${sessionPath}`, {
+              path: sessionPath,
+              allow: "POST",
+            }),
+          );
+          return;
+        }
+        if (options.auth === undefined) {
+          sendError(response, requestId, appError("NOT_FOUND", `no endpoint at ${sessionPath}`, { path: sessionPath }));
+          return;
+        }
+        const body = await readJsonBody(request);
+        const secret = typeof body.secret === "string" ? body.secret : "";
+        const exchange = options.auth.exchange(secret);
+        if (!exchange.ok) {
+          sendError(response, requestId, exchange.error);
+          return;
+        }
+        sendJson(response, 200, requestId, successEnvelope({ token: exchange.token, tokenType: "session" }, requestId));
+        return;
+      }
+
+      // Authentication precedes routing for every other path (section 17.2), so an
+      // unauthenticated probe learns nothing about which routes exist.
+      const presented = bearerValue(request.headers.authorization);
+      if (presented === null) {
+        sendError(
+          response,
+          requestId,
+          appError("UNAUTHENTICATED", "no Authorization header was presented", { path: url.pathname }),
+        );
+        return;
+      }
+      if (options.auth === undefined) {
+        sendError(response, requestId, appError("NOT_FOUND", `no endpoint at ${url.pathname}`, { path: url.pathname }));
+        return;
+      }
+      const auth = options.auth.authenticate(presented);
+      if (!auth.ok) {
+        sendError(response, requestId, auth.error);
+        return;
+      }
+
+      if (url.pathname === rotatePath) {
+        if (method !== "POST") {
+          sendError(
+            response,
+            requestId,
+            appError("METHOD_NOT_ALLOWED", `${method} is not accepted by ${rotatePath}`, {
+              path: rotatePath,
+              allow: "POST",
+            }),
+          );
+          return;
+        }
+        if (auth.context.kind !== "api-token") {
+          sendError(
+            response,
+            requestId,
+            appError("TOKEN_INVALID", "token rotation is a CLI operation and requires the Installation API token"),
+          );
+          return;
+        }
+        if (options.tokenRotate === undefined) {
+          sendError(response, requestId, appError("NOT_FOUND", `no endpoint at ${rotatePath}`, { path: rotatePath }));
+          return;
+        }
+        const rotated = options.tokenRotate();
+        if (!rotated.ok) {
+          sendError(response, requestId, rotated.error);
+          return;
+        }
+        sendJson(response, 200, requestId, successEnvelope({ rotated: true }, requestId));
+        return;
+      }
+
       if (route !== undefined) {
-        await route.handler(request, response, { requestId });
+        await route.handler(request, response, { requestId, auth: auth.context });
         return;
       }
       if (paths.has(url.pathname)) {
-        const allowed = routes.filter((entry) => entry.path === url.pathname).map((entry) => entry.method);
+        const allowed = routes
+          .filter((entry) => entry.path === url.pathname)
+          .map((entry) => entry.method)
+          .concat(url.pathname === sessionPath ? ["POST"] : []);
         sendError(
           response,
           requestId,

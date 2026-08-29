@@ -19,6 +19,7 @@ export * from "./project-commands";
 export * from "./retention-commands";
 export * from "./review-commands";
 export * from "./terminal-commands";
+export * from "./tokens";
 export * from "./revision-commands";
 export * from "./projects";
 export * from "./protocol";

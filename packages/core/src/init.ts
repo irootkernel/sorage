@@ -1,6 +1,7 @@
 import { defaultConfiguration, expandConfigurationPath, type Configuration } from "./config";
 import { ok, type AppError, type Result } from "./errors";
 import type { Clock, IdGenerator } from "./ids";
+import type { ApiTokenStorePort } from "./tokens";
 
 /**
  * The non-interactive initialization use case (INIT-003, INIT-005, INIT-006,
@@ -48,6 +49,8 @@ export interface InitPorts {
   database: InitDatabasePort;
   vault: InitVaultPort;
   filesystem: InitFilesystemPort;
+  /** From milestone 0.2, init also creates the API token at `state/api-token` (INIT-003). */
+  token?: ApiTokenStorePort | undefined;
 }
 
 export interface InitOptions {
@@ -75,6 +78,8 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
       // Explicit repair: backfill directories, migrations, and Vault files without
       // touching the configuration, the identity, or any existing Vault content.
       ensureHomeTree(ports);
+      const token = ports.token?.ensure();
+      if (token !== undefined && !token.ok) return token;
       const migrated = ports.database.migrate();
       if (!migrated.ok) return migrated;
       const vaultPath = expandConfigurationPath(existing.vault.path, ports.userHome, ports.paths.home);
@@ -96,6 +101,8 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
   }
 
   ensureHomeTree(ports);
+  const token = ports.token?.ensure();
+  if (token !== undefined && !token.ok) return token;
   const migrated = ports.database.migrate();
   if (!migrated.ok) return migrated;
   const vaultPath = expandConfigurationPath(config.vault.path, ports.userHome, ports.paths.home);

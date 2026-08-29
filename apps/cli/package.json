@@ -8,6 +8,7 @@
   "dependencies": {
     "commander": "14.0.2",
     "@sorage/core": "0.1.0",
-    "@sorage/adapters": "0.1.0"
+    "@sorage/adapters": "0.1.0",
+    "@sorage/daemon": "0.1.0"
   }
 }

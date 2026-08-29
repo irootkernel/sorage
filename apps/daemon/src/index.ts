@@ -1,6 +1,15 @@
 export const DAEMON_VERSION = "0.1.0";
 
 export type {
+  AuthenticatedContext,
+  AuthResult,
+  SessionService,
+  SessionServiceOptions,
+} from "./auth";
+export { bearerValue, createSessionService } from "./auth";
+export { serveDaemon } from "./runtime";
+
+export type {
   DaemonEndpoints,
   DaemonRequestContext,
   DaemonRequestHandler,

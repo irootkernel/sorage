@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
@@ -19,6 +20,7 @@ import { inspectSourceFile } from "@sorage/adapters/src/import-source";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
+import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
@@ -63,6 +65,7 @@ import {
   sendHandoffs,
   setConfigurationValue,
   setReviewNote,
+  rotateApiToken,
   showConfiguration,
   showProject,
   successEnvelope,
@@ -81,6 +84,8 @@ import {
   workspaceKey,
 } from "@sorage/core";
 import { buildCompletionScript } from "./completion";
+import { createWebRuntimePorts, runWebCommand } from "./web";
+import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError } from "commander";
 
 export const CLI_NAME = "sorage" as const;
@@ -1426,6 +1431,48 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
 
   program.helpOption("-h, --help", "display help for the command");
 
+  program
+    .command("daemon")
+    .description("run and control the local daemon")
+    .command("serve", { hidden: true })
+    .description("internal entry point that runs the daemon in the foreground until stopped");
+
+  program
+    .command("web")
+    .description("start the daemon when needed and open the Web control plane with a one-time session secret")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
+      const home = createNodeHomePaths();
+      const code = runWebCommand(createWebRuntimePorts(home.stateDir), ports, { openBrowser: true });
+      reportExitCode(code);
+    });
+
+  const token = program.command("token").description("manage the Installation API token");
+  token
+    .command("rotate")
+    .description("replace the Installation API token, invalidating every live browser session")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const home = createNodeHomePaths();
+      const result = rotateApiToken(
+        { token: createNodeApiTokenStore({ stateDir: home.stateDir }) },
+        { asUser: globals.asUser === true },
+      );
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      const payload = { rotated: true, note: "run sorage web again for a fresh browser session" };
+      if (json) ports.out(`${JSON.stringify(successEnvelope(payload, requestId()), null, 2)}\n`);
+      else
+        ports.out(
+          `API token rotated; every live browser session is invalidated.\nRun 'sorage web' again for a fresh session.\n`,
+        );
+    });
+
   // A subcommand's --help or parse error exits through the subcommand's own Command,
   // so the process guards must reach every level of the tree: without this propagation
   // a subcommand help would bypass runCli's catch block and exit the process directly.
@@ -1690,7 +1737,59 @@ export function renderAppError(error: AppError, ports: OutputPorts, json: boolea
 }
 
 export function main(argv: string[] = process.argv.slice(2)): number {
+  // The health probe is a synchronous subprocess helper for `sorage web`: it answers
+  // 0 when a daemon responds at the address and 1 when nothing does.
+  if (argv[0] === "__health-probe") {
+    const host = argv[1] ?? "127.0.0.1";
+    const port = Number.parseInt(argv[2] ?? "46321", 10);
+    void probeHealthOnce(host, port)
+      .then((healthy) => {
+        process.exitCode = healthy ? 0 : 1;
+      })
+      .catch(() => {
+        process.exitCode = 1;
+      });
+    return 0;
+  }
+  // `daemon serve` runs the long-lived daemon process; it is spawned detached by
+  // `sorage web` and by the lifecycle commands of TASK-044, so it owns the event loop
+  // rather than fitting the synchronous command pipeline.
+  if (argv[0] === "daemon" && argv[1] === "serve") {
+    const { serveDaemon } = daemonRuntime();
+    serveDaemon()
+      .then(() => {
+        process.stdout.write(`sorage daemon serving\n`);
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`the daemon could not start: ${message}\n`);
+        process.exitCode = 78;
+      });
+    return 0;
+  }
   return runCli(argv);
+}
+
+function daemonRuntime(): typeof import("@sorage/daemon") {
+  return daemonModule;
+}
+
+function probeHealthOnce(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const outgoing = httpRequest(
+      { host, port, path: "/api/v1/health", method: "GET", headers: { host: `127.0.0.1:${port}` } },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode === 200);
+      },
+    );
+    outgoing.setTimeout(2000, () => {
+      outgoing.destroy();
+      resolve(false);
+    });
+    outgoing.on("error", () => resolve(false));
+    outgoing.end();
+  });
 }
 
 export type { Envelope };

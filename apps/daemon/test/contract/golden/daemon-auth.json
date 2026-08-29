@@ -1,109 +1,16 @@
 {
   "port": "<ephemeral>",
   "responses": {
-    "health": {
-      "status": 200,
-      "headers": {
-        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-        "x-content-type-options": "nosniff",
-        "referrer-policy": "no-referrer",
-        "content-type": "application/json; charset=utf-8",
-        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
-        "keep-alive": "timeout=5",
-        "content-length": "201"
-      },
-      "body": {
-        "ok": true,
-        "data": {
-          "installationId": "1a2b3c4d-0000-4000-8000-000000000042",
-          "version": "0.2.0-contract"
-        },
-        "meta": {
-          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
-        }
-      }
-    },
-    "readiness": {
-      "status": 200,
-      "headers": {
-        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-        "x-content-type-options": "nosniff",
-        "referrer-policy": "no-referrer",
-        "content-type": "application/json; charset=utf-8",
-        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
-        "keep-alive": "timeout=5",
-        "content-length": "125"
-      },
-      "body": {
-        "ok": true,
-        "data": {
-          "ready": true
-        },
-        "meta": {
-          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
-        }
-      }
-    },
-    "version": {
-      "status": 200,
-      "headers": {
-        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-        "x-content-type-options": "nosniff",
-        "referrer-policy": "no-referrer",
-        "content-type": "application/json; charset=utf-8",
-        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
-        "keep-alive": "timeout=5",
-        "content-length": "170"
-      },
-      "body": {
-        "ok": true,
-        "data": {
-          "daemon": "sorage-daemon",
-          "version": "0.2.0-contract"
-        },
-        "meta": {
-          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
-        }
-      }
-    },
-    "rejectedHost": {
-      "status": 421,
-      "headers": {
-        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-        "x-content-type-options": "nosniff",
-        "referrer-policy": "no-referrer",
-        "content-type": "application/json; charset=utf-8",
-        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
-        "keep-alive": "timeout=5",
-        "content-length": "416"
-      },
-      "body": {
-        "ok": false,
-        "error": {
-          "code": "HOST_NOT_ALLOWED",
-          "message": "the Host header \"attacker.example:<port>\" is outside the allowlist",
-          "details": {
-            "host": "attacker.example:<port>"
-          },
-          "recovery": {
-            "suggestedCommand": "Reach the daemon as 127.0.0.1, localhost, or [::1] on the configured port"
-          }
-        },
-        "meta": {
-          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
-        }
-      }
-    },
-    "unknownRoute": {
+    "unauthenticated": {
       "status": 401,
       "headers": {
         "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
         "content-type": "application/json; charset=utf-8",
-        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
         "keep-alive": "timeout=5",
-        "content-length": "312"
+        "content-length": "320"
       },
       "body": {
         "ok": false,
@@ -111,44 +18,157 @@
           "code": "UNAUTHENTICATED",
           "message": "no Authorization header was presented",
           "details": {
-            "path": "/api/v1/nope"
+            "path": "/api/v1/token/rotate"
           },
           "recovery": {
             "suggestedCommand": "sorage web"
           }
         },
         "meta": {
-          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
         }
       }
     },
-    "wrongMethod": {
-      "status": 405,
+    "tokenInvalid": {
+      "status": 401,
       "headers": {
-        "allow": "GET",
         "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
         "content-type": "application/json; charset=utf-8",
-        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
         "keep-alive": "timeout=5",
-        "content-length": "373"
+        "content-length": "290"
       },
       "body": {
         "ok": false,
         "error": {
-          "code": "METHOD_NOT_ALLOWED",
-          "message": "POST is not accepted by /api/v1/health",
-          "details": {
-            "path": "/api/v1/health",
-            "allow": "GET"
-          },
+          "code": "TOKEN_INVALID",
+          "message": "the presented token is unknown, rotated, or expired",
+          "details": {},
           "recovery": {
-            "suggestedCommand": "Use the documented method for this endpoint"
+            "suggestedCommand": "sorage web"
           }
         },
         "meta": {
-          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
+        }
+      }
+    },
+    "sessionExchange": {
+      "status": 200,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
+        "keep-alive": "timeout=5",
+        "content-length": "199"
+      },
+      "body": {
+        "ok": true,
+        "data": {
+          "token": "KKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK",
+          "tokenType": "session"
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
+        }
+      }
+    },
+    "sessionReplay": {
+      "status": 401,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
+        "keep-alive": "timeout=5",
+        "content-length": "304"
+      },
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "UNAUTHENTICATED",
+          "message": "the one-time browser secret is absent, expired, or already used",
+          "details": {},
+          "recovery": {
+            "suggestedCommand": "sorage web"
+          }
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
+        }
+      }
+    },
+    "sessionOnCliOnlyRoute": {
+      "status": 401,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
+        "keep-alive": "timeout=5",
+        "content-length": "312"
+      },
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "TOKEN_INVALID",
+          "message": "token rotation is a CLI operation and requires the Installation API token",
+          "details": {},
+          "recovery": {
+            "suggestedCommand": "sorage web"
+          }
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
+        }
+      }
+    },
+    "rotateWithApiToken": {
+      "status": 200,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
+        "keep-alive": "timeout=5",
+        "content-length": "127"
+      },
+      "body": {
+        "ok": true,
+        "data": {
+          "rotated": true
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
+        }
+      }
+    },
+    "healthWithoutBearer": {
+      "status": 200,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000ee",
+        "keep-alive": "timeout=5",
+        "content-length": "201"
+      },
+      "body": {
+        "ok": true,
+        "data": {
+          "installationId": "1a2b3c4d-0000-4000-8000-000000000043",
+          "version": "0.2.0-contract"
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"
         }
       }
     }

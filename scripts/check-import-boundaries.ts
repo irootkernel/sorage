@@ -7,7 +7,7 @@ import { join } from "node:path";
 const IMPORT_RULES: Record<string, string[]> = {
   "@sorage/core": [],
   "@sorage/adapters": ["@sorage/core"],
-  "@sorage/cli": ["@sorage/core", "@sorage/adapters"],
+  "@sorage/cli": ["@sorage/core", "@sorage/adapters", "@sorage/daemon"],
   "@sorage/daemon": ["@sorage/core", "@sorage/adapters"],
   "@sorage/web": ["@sorage/core"],
 };
@@ -21,6 +21,7 @@ const IMPORT_RULES: Record<string, string[]> = {
 const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
   "@sorage/cli": [
     "src/config-command-ports",
+    "src/token-store",
     "src/inbox-marker-ports",
     "src/doctor",
     "src/home",
@@ -34,6 +35,7 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
   ],
   "@sorage/daemon": [
     "src/config-command-ports",
+    "src/token-store",
     "src/inbox-marker-ports",
     "src/doctor",
     "src/home",

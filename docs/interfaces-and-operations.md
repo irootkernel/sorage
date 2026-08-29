@@ -277,7 +277,7 @@ The daemon applies reloadable fields after its successful write; `POST /api/v1/r
 | `server.host` | Daemon restart (RUN-008) |
 | `server.port` | Daemon restart (RUN-008) |
 | `server.autoStart` | Reload; affects the next start |
-| `server.openBrowserOnStart` | Reload; affects the next `sorage web` |
+| `server.openBrowserOnStart` | Reload; affects the automatic browser opening of a daemon start (RUN-012) |
 | `handoff.*` | Reload |
 | `artifact.*` | Reload |
 | `gitBackup.*` | Reload; the scheduler recomputes `nextDueAt` on its next tick |
@@ -898,7 +898,9 @@ POST /api/v1/token/rotate
 
 `GET /api/v1/diagnostics` returns the `doctor` check catalog of section 35 in the same JSON shape the CLI emits, which is what the Web Diagnostics screen renders; it is the API surface named by API-007.
 
-`POST /api/v1/session` is the only endpoint that accepts the one-time fragment secret instead of a bearer token.
+`POST /api/v1/session` is the only endpoint that accepts the one-time fragment secret instead of a bearer token. The secret is posted as a JSON body of the shape `{"secret": "<one-time-secret>"}`, and a successful exchange returns `{token, tokenType: "session"}` for the SPA to hold in `sessionStorage`; the pending secret is a single record, so any exchange attempt — matching, wrong, or replayed — spends it, and a refused attempt leaves the holder running `sorage web` again. `POST /api/v1/token/rotate` performs the same replacement as `sorage token rotate --as-user` and accepts only the Installation API token, never a browser session.
+
+The health, readiness, and version endpoints are the only unauthenticated endpoints: they answer before any credential exists in a discovery probe's context, expose no Handoff or Project data, and remain behind the Host allowlist and the security headers like every other response.
 
 ### 18.2 Configuration and Vault
 
