@@ -2,7 +2,8 @@ import { createReadStream } from "node:fs";
 import { statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { createHash, randomUUID } from "node:crypto";
 import type { Result as CoreResult } from "@sorage/core";
 import {
@@ -60,6 +61,7 @@ import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-comman
 import { successEnvelope } from "@sorage/core";
 import type { DaemonConfigService } from "./index";
 import type { RouteEntryInternal } from "./route-kit";
+import { consumeMultipartUpload } from "./upload";
 import type { DaemonRequestContext } from "./server";
 
 /**
@@ -82,6 +84,7 @@ export interface DomainRouteDeps {
 export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] {
   const userHome = homedir();
   const configCommandPortsForValidation = createNodeConfigCommandPorts;
+  const homeOf = () => createNodeHomePaths().home;
   const idempotency = new Map<string, { requestHash: string; status: number; body: unknown }>();
 
   const actorInputOf = (
@@ -358,6 +361,41 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const fetched = fetchHandoff(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
       if (!fetched.ok) return void respondError(response, context, fetched.error);
       return void respond(response, context, { ok: true, value: { localPath: fetched.value.localPath } });
+    },
+  });
+
+  // ---- Browser streaming upload (API-003, NFR-005) --------------------------
+  add({
+    method: "POST",
+    pattern: "/api/v1/handoffs/upload",
+    idempotent: true,
+    handler: async (request, response, context) => {
+      const configPorts = createNodeConfigCommandPorts();
+      const current = configPorts.store.read();
+      if (!current.ok || current.value === null) {
+        return void respondError(response, context, appError("NOT_INITIALIZED", "Sorage has not been initialized."));
+      }
+      const maxBytes = current.value.config.artifact.maxBytes;
+      const upload = await consumeMultipartUpload(request, { maxBytes, spoolDir: join(homeOf(), "state", "uploads") });
+      if (!upload.ok) return void respondError(response, context, upload.error);
+      const file = upload.value.file;
+      if (file === null)
+        return void respondError(response, context, appError("CONFIG_INVALID", "the upload carried no file part"));
+      const to = upload.value.fields.to ?? [];
+      const title = (upload.value.fields.title ?? [file.filename])[0] ?? file.filename;
+      const result = sendHandoffs(createNodeSendPorts(), {
+        to,
+        title,
+        file: file.path,
+        allowExternalSource: true, // the browser upload is already the authenticated source
+        allowUnregistered: false,
+        ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+        path: "",
+        userHome,
+        asUser: true,
+      });
+      upload.value.cleanup();
+      return void respond(response, context, result, 201);
     },
   });
 

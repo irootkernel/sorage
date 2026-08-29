@@ -62,7 +62,6 @@ const routes: FlatRoute[] = [
 
 /** Routes that later tasks or milestones own; the catalog row exists, the route does not yet. */
 const DEFERRED = new Set([
-  "POST /api/v1/handoffs/upload", // TASK-047 streaming upload
   "GET /api/v1/backup/status", // milestone 0.3
   "POST /api/v1/backup/run",
   "POST /api/v1/backup/enable",
