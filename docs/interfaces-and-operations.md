@@ -913,7 +913,7 @@ POST /api/v1/vault/verify
 POST /api/v1/vault/move
 ```
 
-`GET /api/v1/config` returns an `ETag` that is the SHA-256 of the canonical file bytes, and `PUT /api/v1/config` requires a matching `If-Match` (CFG-019).
+`GET /api/v1/config` returns an `ETag` that is the SHA-256 of the canonical file bytes, and `PUT /api/v1/config` requires a matching `If-Match` (CFG-019). The `PUT` body names exactly one typed leaf, `{"key": "<dotted-key>", "value": "<raw value>"}`, applies the same parse and protection rules as `sorage config set`, and returns the new `ETag` with the advanced `configRevision`; a stale `If-Match` returns `CONFIG_CONFLICT` at 409 before any write. While the daemon runs it is the only writer of `config.yaml` (CFG-016): the CLI's `config set` routes through this endpoint, and `config edit` — which writes the file through an editor — is refused until the daemon stops. The daemon serves the settings page at `/settings` as plain HTML with an external script, so the daemon's own CSP holds: the typed form saves through this endpoint, the canonical YAML view is read-only, and no editor exists anywhere in the Web UI.
 
 `POST /api/v1/vault/move` exists for parity with the CLI; no MVP Web screen calls it, because Web relocation is deferred (WEB-016).
 

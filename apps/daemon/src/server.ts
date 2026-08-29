@@ -87,6 +87,44 @@ export interface DaemonServerOptions {
   /** In-flight bookkeeping the graceful drain waits on. */
   onRequestStart?: () => void;
   onRequestEnd?: () => void;
+  /**
+   * The configuration surface of TASK-045 (CFG-016, CFG-019, RUN-008, API-005): the
+   * daemon is the only writer of `config.yaml` while it runs, so every read, write,
+   * and reload goes through these ports instead of the file.
+   */
+  config?: DaemonConfigService;
+  /** Called after a successful runtime/restart response; the runtime drains and exits. */
+  onRestartRequest?: () => void;
+}
+
+export interface DaemonConfigSnapshot {
+  config: Record<string, unknown>;
+  /** The canonical YAML text, for the read-only file view the settings page renders. */
+  yaml: string;
+  /** The SHA-256 content hash the `If-Match` of a write must carry (CFG-019). */
+  etag: string;
+  configRevision: number;
+  configFile: string;
+}
+
+export interface DaemonConfigService {
+  /** The current snapshot with its content-hash ETag, or null before initialization. */
+  get(): { ok: true; value: DaemonConfigSnapshot } | { ok: false; error: AppError };
+  /**
+   * Applies one typed leaf change fenced on the supplied ETag; a stale ETag fails
+   * with `CONFIG_CONFLICT` exactly like the CLI's revision fence does.
+   */
+  set(input: {
+    key: string;
+    rawValue: string;
+    etag: string;
+  }): { ok: true; value: { key: string; configRevision: number; etag: string } } | { ok: false; error: AppError };
+  /** Re-reads and re-validates the file, applying every reloadable field. */
+  reload(): { ok: true; value: { applied: string[]; restartRequired: string[] } } | { ok: false; error: AppError };
+  /** The runtime view of the running configuration versus the file. */
+  status():
+    | { ok: true; value: { startedAt: string; host: string; port: number; restartRequired: string[] } }
+    | { ok: false; error: AppError };
 }
 
 /** True only for the loopback literals; a name is never a valid bind address (SEC-001). */
@@ -191,13 +229,223 @@ export function daemonRoutes(options: {
   ];
 }
 
+function sendRaw(response: ServerResponse, status: number, requestId: string, contentType: string, body: string): void {
+  response.statusCode = status;
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(name, value);
+  response.setHeader("Content-Type", contentType);
+  response.setHeader("X-Request-Id", requestId);
+  response.end(body);
+}
+
+/**
+ * The TASK-045 configuration and runtime routes plus the pre-SPA static shell: the
+ * settings page is plain HTML with an external script so the daemon's own CSP holds,
+ * and direct navigation without a session renders the run-`sorage web` refusal that
+ * SEC-019 requires. TASK-048 replaces these assets with the real SPA.
+ */
+export function configRoutes(options: {
+  config?: DaemonConfigService | undefined;
+  onRestartRequest?: (() => void) | undefined;
+}): RouteEntry[] {
+  const { config } = options;
+  return [
+    {
+      method: "GET",
+      path: "/",
+      handler: (_request, response, context) => {
+        sendRaw(response, 200, context.requestId, "text/html; charset=utf-8", STATIC_INDEX_HTML);
+      },
+    },
+    {
+      method: "GET",
+      path: "/settings",
+      handler: (_request, response, context) => {
+        sendRaw(response, 200, context.requestId, "text/html; charset=utf-8", STATIC_SETTINGS_HTML);
+      },
+    },
+    {
+      method: "GET",
+      path: "/assets/settings.js",
+      handler: (_request, response, context) => {
+        sendRaw(response, 200, context.requestId, "text/javascript; charset=utf-8", STATIC_SETTINGS_JS);
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/v1/config",
+      handler: (_request, response, context) => {
+        if (config === undefined) return sendError(response, context.requestId, notReady("GET /api/v1/config"));
+        const snapshot = config.get();
+        if (!snapshot.ok) return sendError(response, context.requestId, snapshot.error);
+        response.setHeader("ETag", snapshot.value.etag);
+        sendJson(response, 200, context.requestId, successEnvelope(snapshot.value, context.requestId));
+      },
+    },
+    {
+      method: "PUT",
+      path: "/api/v1/config",
+      handler: async (request, response, context) => {
+        if (config === undefined) return sendError(response, context.requestId, notReady("PUT /api/v1/config"));
+        const etag = request.headers["if-match"];
+        if (typeof etag !== "string" || etag === "") {
+          return sendError(
+            response,
+            context.requestId,
+            appError(
+              "CONFIG_INVALID",
+              "PUT /api/v1/config requires the If-Match content hash of the configuration being changed",
+              { header: "If-Match" },
+            ),
+          );
+        }
+        const body = await readJsonBody(request);
+        const key = typeof body.key === "string" ? body.key : "";
+        const rawValue = typeof body.value === "string" ? body.value : "";
+        if (key === "") {
+          return sendError(
+            response,
+            context.requestId,
+            appError("CONFIG_INVALID", "the configuration change must name exactly one key", { key: body.key ?? null }),
+          );
+        }
+        const changed = config.set({ key, rawValue, etag });
+        if (!changed.ok) return sendError(response, context.requestId, changed.error);
+        response.setHeader("ETag", changed.value.etag);
+        sendJson(response, 200, context.requestId, successEnvelope(changed.value, context.requestId));
+      },
+    },
+    {
+      method: "POST",
+      path: "/api/v1/runtime/reload",
+      handler: (_request, response, context) => {
+        if (config === undefined)
+          return sendError(response, context.requestId, notReady("POST /api/v1/runtime/reload"));
+        const reloaded = config.reload();
+        if (!reloaded.ok) return sendError(response, context.requestId, reloaded.error);
+        sendJson(response, 200, context.requestId, successEnvelope(reloaded.value, context.requestId));
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/v1/runtime/status",
+      handler: (_request, response, context) => {
+        if (config === undefined) return sendError(response, context.requestId, notReady("GET /api/v1/runtime/status"));
+        const status = config.status();
+        if (!status.ok) return sendError(response, context.requestId, status.error);
+        sendJson(response, 200, context.requestId, successEnvelope(status.value, context.requestId));
+      },
+    },
+    {
+      method: "POST",
+      path: "/api/v1/runtime/restart",
+      handler: (_request, response, context) => {
+        sendJson(response, 200, context.requestId, successEnvelope({ restarting: true }, context.requestId));
+        // The response is flushed by sendJson before the drain begins.
+        options.onRestartRequest?.();
+      },
+    },
+  ];
+}
+
+function notReady(path: string): AppError {
+  return appError("NOT_FOUND", `no endpoint at ${path}`, { path });
+}
+
+const STATIC_INDEX_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sorage</title><link rel="stylesheet" href="/assets/settings.css"></head>
+<body>
+<main>
+<h1>Sorage</h1>
+<p>This is the Sorage control plane. Sessions are issued by the local CLI.</p>
+<p>Run <code>sorage web</code> to open this page with a one-time session secret.</p>
+<p><a href="/settings">Settings</a></p>
+</main>
+</body>
+</html>
+`;
+
+const STATIC_SETTINGS_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sorage settings</title><link rel="stylesheet" href="/assets/settings.css"></head>
+<body>
+<main>
+<h1>Settings</h1>
+<p id="session-note">This page needs a session. Run <code>sorage web</code> to open it with a one-time secret.</p>
+<form id="settings-form"><fieldset>
+<legend>Typed settings</legend>
+<label>Default page size <input name="ui.defaultPageSize" type="number" min="1"></label>
+<label>Inbox marker <select name="handoff.inboxMarker"><option value="false">off</option><option value="true">on</option></select></label>
+<label>Log level <select name="logging.level"><option>warn</option><option>info</option><option>debug</option><option>error</option></select></label>
+<button type="submit">Save</button>
+</fieldset></form>
+<p id="save-note"></p>
+<section>
+<h2>Canonical configuration</h2>
+<p id="config-path"></p>
+<pre id="yaml-view"></pre>
+</section>
+</main>
+<script src="/assets/settings.js"></script>
+</body>
+</html>
+`;
+
+const STATIC_SETTINGS_JS = `(function () {
+  "use strict";
+  var fragment = location.hash.match(/[#&]s=([^&]+)/);
+  function exchange(secret) {
+    return fetch("/api/v1/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret: secret }) })
+      .then(function (response) { return response.ok ? response.json() : null; });
+  }
+  function start(token) {
+    if (token !== null) { try { sessionStorage.setItem("sorage-session", token); } catch (error) { /* storage is optional */ } }
+    var stored = null; try { stored = sessionStorage.getItem("sorage-session"); } catch (error) { /* optional */ }
+    if (stored === null) return;
+    if (fragment !== null) { history.replaceState(null, "", location.pathname); }
+    document.getElementById("session-note").textContent = "";
+    var headers = { authorization: "Bearer " + stored };
+    fetch("/api/v1/config", { headers: headers })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (body) {
+        if (body === null) return;
+        document.getElementById("yaml-view").textContent = body.data.yaml;
+        document.getElementById("config-path").textContent = body.data.configFile;
+        var form = document.getElementById("settings-form");
+        form.elements["ui.defaultPageSize"].value = body.data.config.ui.defaultPageSize;
+        form.elements["handoff.inboxMarker"].value = String(body.data.config.handoff.inboxMarker);
+        form.elements["logging.level"].value = body.data.config.logging.level;
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          var etag = body.data.etag;
+          var key = "ui.defaultPageSize";
+          var rawValue = form.elements[key].value;
+          fetch("/api/v1/config", { method: "PUT", headers: { authorization: "Bearer " + stored, "if-match": etag, "content-type": "application/json" }, body: JSON.stringify({ key: key, value: rawValue }) })
+            .then(function (response) { return response.json(); })
+            .then(function (result) { document.getElementById("save-note").textContent = result.ok ? "Saved." : "Save failed: " + result.error.code; });
+        });
+      });
+  }
+  if (fragment !== null) { exchange(fragment[1]).then(function (body) { start(body === null ? null : body.data.token); }); }
+  else { start(null); }
+})();
+`;
+
 export type DaemonRequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
 /**
  * The paths the section 18.1 catalog exposes without a bearer token: the three meta
- * endpoints a daemon-discovery probe needs before any credential exists in context.
+ * endpoints a daemon-discovery probe needs before any credential exists in context,
+ * plus the static shell whose data loads only through the authenticated API.
  */
-const PUBLIC_PATHS = new Set(["/api/v1/health", "/api/v1/readiness", "/api/v1/version"]);
+const PUBLIC_PATHS = new Set([
+  "/api/v1/health",
+  "/api/v1/readiness",
+  "/api/v1/version",
+  "/",
+  "/settings",
+  "/assets/settings.js",
+]);
 
 const MAX_SESSION_BODY_BYTES = 8192;
 
@@ -229,6 +477,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
       endpoints: options.endpoints,
       readiness: options.readiness ?? (() => ({ ready: true })),
     }),
+    ...configRoutes({ config: options.config, onRestartRequest: options.onRestartRequest }),
   ];
   const sessionPath = "/api/v1/session";
   const rotatePath = "/api/v1/token/rotate";

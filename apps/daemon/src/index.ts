@@ -10,6 +10,8 @@ export { bearerValue, createSessionService } from "./auth";
 export { serveDaemon } from "./runtime";
 
 export type {
+  DaemonConfigService,
+  DaemonConfigSnapshot,
   DaemonEndpoints,
   DaemonRequestContext,
   DaemonRequestHandler,

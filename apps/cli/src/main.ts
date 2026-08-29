@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
@@ -88,6 +89,8 @@ import { buildCompletionScript } from "./completion";
 import { createWebRuntimePorts, runWebCommand } from "./web";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import * as daemonModule from "@sorage/daemon";
+import * as daemonCommandPorts from "@sorage/adapters/src/daemon-command-ports";
+import * as webBindings from "./web";
 import { Command, InvalidArgumentError } from "commander";
 
 export const CLI_NAME = "sorage" as const;
@@ -270,6 +273,13 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
+      // While the daemon runs it is the only writer of config.yaml (CFG-016): the
+      // change routes through PUT /api/v1/config instead of the file store.
+      const owned = liveDaemonAddress();
+      if (owned !== null) {
+        reportExitCode(routedConfigSet(owned, key, value, ports));
+        return;
+      }
       const result = setConfigurationValue(createNodeConfigCommandPorts(), {
         key,
         rawValue: value,
@@ -296,6 +306,21 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
+      // An editor writes the file directly, which the daemon's exclusive writer rule
+      // forbids while it runs (CFG-016).
+      if (liveDaemonAddress() !== null) {
+        reportExitCode(
+          renderAppError(
+            appError(
+              "SERVICE_PAUSED",
+              "the running daemon is the only writer of config.yaml; stop it before editing the file, or change settings through the Web settings page",
+            ),
+            ports,
+            json,
+          ),
+        );
+        return;
+      }
       const result = editConfiguration(createNodeConfigCommandPorts(), { asUser: globals.asUser === true });
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1637,6 +1662,42 @@ function expectedRowVersionOf(globals: Record<string, unknown>): number | undefi
 
 type DaemonAction = "start" | "stop" | "restart" | "status";
 
+/** The address of a daemon whose record is live, or null when none runs (CFG-016). */
+function liveDaemonAddress(): { host: string; port: number } | null {
+  const ports = createNodeDaemonPortsForCli();
+  const record = ports.readDaemonRecord();
+  if (record === null || !ports.isPidAlive(record.pid)) return null;
+  return { host: record.host, port: record.port };
+}
+
+function createNodeDaemonPortsForCli() {
+  return daemonCommandPorts.createNodeDaemonPorts();
+}
+
+/** Runs one routed configuration change through the daemon as a subprocess (CFG-016). */
+function routedConfigSet(
+  address: { host: string; port: number },
+  key: string,
+  value: string,
+  ports: OutputPorts,
+): number {
+  const scriptArgs =
+    process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
+      ? [process.argv[1] as string, "__config-put", address.host, String(address.port), key, value]
+      : ["__config-put", address.host, String(address.port), key, value];
+  const result = spawnSync(process.execPath, scriptArgs, { encoding: "utf8", timeout: 15000 });
+  if (result.stdout) ports.out(result.stdout);
+  if (result.stderr) ports.err(result.stderr);
+  if (result.status === null) {
+    return renderAppError(
+      appError("DAEMON_UNAVAILABLE", "the daemon did not answer the routed configuration change"),
+      ports,
+      false,
+    );
+  }
+  return result.status;
+}
+
 function runDaemonCommand(action: DaemonAction, ports: OutputPorts, options = { json: false }): number {
   const runtime = createDaemonRuntimePorts();
   const sinks = { out: ports.out, err: ports.err };
@@ -1797,6 +1858,23 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     // The probe owns the process until its answer exists; nothing else may run.
     return -1;
   }
+  if (argv[0] === "__config-put") {
+    const host = argv[1] ?? "127.0.0.1";
+    const port = Number.parseInt(argv[2] ?? "46321", 10);
+    const key = argv[3] ?? "";
+    const value = argv[4] ?? "";
+    void configPutOnce(host, port, key, value).then((outcome) => {
+      if (outcome !== null) process.stdout.write(`${JSON.stringify(outcome.body, null, 2)}\n`);
+      process.exit(
+        outcome === null
+          ? 1
+          : (outcome.body as { ok: boolean }).ok
+            ? 0
+            : errorSpec((outcome.body as { error: { code: Parameters<typeof errorSpec>[0] } }).error.code).exitCode,
+      );
+    });
+    return -1;
+  }
   if (argv[0] === "__port-probe") {
     const host = argv[1] ?? "127.0.0.1";
     const port = Number.parseInt(argv[2] ?? "46321", 10);
@@ -1868,6 +1946,67 @@ function probeHealthOnce(host: string, port: number): Promise<{ installationId: 
     outgoing.on("error", () => resolve(null));
     outgoing.end();
   });
+}
+
+interface ConfigPutOutcome {
+  ok: boolean;
+  body: unknown;
+}
+
+function configPutOnce(host: string, port: number, key: string, value: string): Promise<ConfigPutOutcome | null> {
+  const { readApiToken } = webModule();
+  const token = readApiToken(join(createNodeHomePaths().stateDir));
+  if (token === null) {
+    return Promise.resolve({
+      ok: false,
+      body: { ok: false, error: { code: "TOKEN_INVALID", message: "the Installation API token is missing" } },
+    });
+  }
+  const headers = { host: `127.0.0.1:${port}`, authorization: `Bearer ${token}`, "content-type": "application/json" };
+  return new Promise((resolve) => {
+    const getOutgoing = httpRequest({ host, port, path: "/api/v1/config", method: "GET", headers }, (getResponse) => {
+      const chunks: Buffer[] = [];
+      getResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
+      getResponse.on("end", () => {
+        const etag = String(getResponse.headers.etag ?? "");
+        const putOutgoing = httpRequest(
+          {
+            host,
+            port,
+            path: "/api/v1/config",
+            method: "PUT",
+            headers: { ...headers, "if-match": etag },
+          },
+          (putResponse) => {
+            const putChunks: Buffer[] = [];
+            putResponse.on("data", (chunk: Buffer) => putChunks.push(chunk));
+            putResponse.on("end", () => {
+              try {
+                resolve({
+                  ok: putResponse.statusCode === 200,
+                  body: JSON.parse(Buffer.concat(putChunks).toString("utf8")),
+                });
+              } catch {
+                resolve(null);
+              }
+            });
+          },
+        );
+        putOutgoing.on("error", () => resolve(null));
+        putOutgoing.end(JSON.stringify({ key, value }));
+      });
+    });
+    getOutgoing.setTimeout(5000, () => {
+      getOutgoing.destroy();
+      resolve(null);
+    });
+    getOutgoing.on("error", () => resolve(null));
+    getOutgoing.end();
+  });
+}
+
+function webModule(): typeof import("./web") {
+  return webBindings;
 }
 
 function portHeldOnce(host: string, port: number): Promise<boolean> {

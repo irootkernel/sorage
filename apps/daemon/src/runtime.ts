@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import { join } from "node:path";
-import { appError, showConfiguration } from "@sorage/core";
+import { appError, setConfigurationValue, showConfiguration } from "@sorage/core";
+import type { Configuration } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
 import { createLogger } from "@sorage/adapters/src/logging";
@@ -11,7 +12,8 @@ import {
 } from "@sorage/adapters/src/token-store";
 import { createSessionService } from "./auth";
 import { createDaemonServer, DAEMON_VERSION } from "./index";
-import type { DaemonServerOptions } from "./index";
+import type { DaemonConfigService, DaemonServerOptions } from "./index";
+import { createHash } from "node:crypto";
 
 /**
  * The in-process daemon runtime behind `daemon serve`, `sorage daemon start`, and
@@ -71,12 +73,30 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
   let draining = false;
   let inFlight = 0;
   const serverFactory = options.serverFactory ?? createDaemonServer;
+  const configService = createDaemonConfigService({
+    host,
+    port,
+    startedAt: new Date().toISOString(),
+  });
   const server = serverFactory({
     host,
     port,
     endpoints: { installationId: config.value.installationId, version: DAEMON_VERSION },
     auth,
     tokenRotate: () => token.rotate(),
+    config: configService,
+    onRestartRequest: () => {
+      // The controlled restart of RUN-008: answer, then drain; the supervisor or
+      // the User brings the daemon back with `sorage daemon start`.
+      setTimeout(() => {
+        draining = true;
+        stopSweep();
+        server.close();
+        ports.removeDaemonRecord();
+        lock.release?.();
+        process.exit(0);
+      }, 50);
+    },
     isDraining: () => draining,
     onRequestStart: () => {
       inFlight += 1;
@@ -159,6 +179,118 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
       });
     });
   });
+}
+
+/**
+ * The daemon-side configuration service (CFG-016, CFG-019): while the daemon runs it
+ * is the only writer of `config.yaml`, so reads return the canonical text and the
+ * content-hash ETag, writes are fenced on that hash exactly like the CLI's revision
+ * fence, and a reload reports which fields still require a restart (RUN-008).
+ */
+export function createDaemonConfigService(running: {
+  host: string;
+  port: number;
+  startedAt: string;
+}): DaemonConfigService {
+  const ports = createNodeConfigCommandPorts();
+  const restartRequiredOf = (config: Configuration): string[] => {
+    const fields: string[] = [];
+    if (config.server.host !== running.host) fields.push("server.host");
+    if (config.server.port !== running.port) fields.push("server.port");
+    return fields;
+  };
+  return {
+    get: () => {
+      const current = ports.store.read();
+      if (!current.ok) return current;
+      if (current.value === null) {
+        return { ok: false, error: appError("NOT_INITIALIZED", "Sorage has not been initialized.") };
+      }
+      const yaml = ports.store.readText();
+      if (yaml === null) {
+        return { ok: false, error: appError("NOT_INITIALIZED", "Sorage has not been initialized.") };
+      }
+      return {
+        ok: true,
+        value: {
+          config: current.value.config as unknown as Record<string, unknown>,
+          yaml,
+          etag: `sha256:${createHash("sha256").update(yaml).digest("hex")}`,
+          configRevision: current.value.config.configRevision,
+          configFile: ports.configFile,
+        },
+      };
+    },
+    set: (input) => {
+      // The If-Match fence: a caller holding an older content hash conflicts exactly
+      // like a stale revision does (CFG-019), before any write is attempted.
+      const current = ports.store.read();
+      if (!current.ok) return current;
+      if (current.value === null) {
+        return { ok: false, error: appError("NOT_INITIALIZED", "Sorage has not been initialized.") };
+      }
+      if (current.value.etag !== input.etag.replace(/^sha256:/, "")) {
+        return {
+          ok: false,
+          error: appError("CONFIG_CONFLICT", "the configuration changed since it was read; reload it and retry", {
+            expected: input.etag,
+          }),
+        };
+      }
+      const changed = setConfigurationValue(ports, { key: input.key, rawValue: input.rawValue, asUser: true });
+      if (!changed.ok) return changed;
+      const snapshot = ports.store.readText();
+      if (snapshot === null) {
+        return { ok: false, error: appError("INTERNAL_ERROR", "the configuration vanished after the write") };
+      }
+      return {
+        ok: true,
+        value: {
+          key: changed.value.key,
+          configRevision: changed.value.configRevision,
+          etag: `sha256:${createHash("sha256").update(snapshot).digest("hex")}`,
+        },
+      };
+    },
+    reload: () => {
+      const current = ports.store.read();
+      if (!current.ok) return current;
+      if (current.value === null) {
+        return { ok: false, error: appError("NOT_INITIALIZED", "Sorage has not been initialized.") };
+      }
+      return {
+        ok: true,
+        value: {
+          applied: [
+            "handoff.*",
+            "artifact.*",
+            "gitBackup.*",
+            "ui.*",
+            "logging.*",
+            "server.autoStart",
+            "server.openBrowserOnStart",
+          ],
+          restartRequired: restartRequiredOf(current.value.config),
+        },
+      };
+    },
+    status: () => {
+      const current = ports.store.read();
+      if (!current.ok) return current;
+      if (current.value === null) {
+        return { ok: false, error: appError("NOT_INITIALIZED", "Sorage has not been initialized.") };
+      }
+      return {
+        ok: true,
+        value: {
+          startedAt: running.startedAt,
+          host: running.host,
+          port: running.port,
+          restartRequired: restartRequiredOf(current.value.config),
+        },
+      };
+    },
+  };
 }
 
 function scheduleTimer(run: () => void): () => void {
