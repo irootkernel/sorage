@@ -767,6 +767,8 @@ The mapping from symbolic code to HTTP status is published here and verified by 
 | `USER_CONTEXT_REQUIRED` | 403 | A User-admin operation was invoked without `--as-user` | Re-run with `--as-user` |
 | `CONFIRMATION_REQUIRED` | 422 | A state-conditional confirmation is missing, such as `project unbind` that would leave open Handoffs unbound | Re-run with `--confirm` |
 | `HOST_NOT_ALLOWED` | 421 | The `Host` header is outside the allowlist; rejected before authentication and before routing | Reach the daemon as `127.0.0.1`, `localhost`, or `[::1]` on the configured port |
+| `NOT_FOUND` | 404 | The request targets no endpoint in the section 18 catalog | Check the endpoint path against the API catalog of interfaces-and-operations.md |
+| `METHOD_NOT_ALLOWED` | 405 | The endpoint exists but does not accept the request method | Use the documented method for this endpoint |
 | `UNAUTHENTICATED` | 401 | No `Authorization` header was presented, or the one-time-secret exchange at `POST /api/v1/session` was refused | `sorage web` for a fresh browser session, or send the Installation API token |
 | `TOKEN_INVALID` | 401 | A token was presented but is unknown, rotated, or expired | `sorage web` for a fresh browser session, or re-read the API token |
 | `ROW_VERSION_CONFLICT` | 409 | The Handoff changed since the client last read it | Re-read the Handoff and retry with the new Row Version |
@@ -808,7 +810,7 @@ Event type names and error codes never share a token, so `HANDOFF_ACCEPTED` is o
 | 0 | Success | none |
 | 1 | Unexpected internal failure | `INTERNAL_ERROR` |
 | 2 | CLI usage or parsing error | none; the parser rejects the invocation before a symbolic code exists |
-| 64 | Invalid input | `AMBIGUOUS_PROJECT`, `VAULT_CONTAINMENT`, `CONFIRMATION_REQUIRED`, `PINNED_DELETE_CONFIRMATION`, `CURSOR_INVALID` |
+| 64 | Invalid input | `AMBIGUOUS_PROJECT`, `VAULT_CONTAINMENT`, `CONFIRMATION_REQUIRED`, `PINNED_DELETE_CONFIRMATION`, `CURSOR_INVALID`, `NOT_FOUND`, `METHOD_NOT_ALLOWED` |
 | 65 | Domain validation failure | `PROJECT_ARCHIVED`, `PROJECT_UNBOUND`, `PROJECT_SLUG_CONFLICT`, `BINDING_DUPLICATE`, `UNREGISTERED_RECIPIENT`, `SENDER_IDENTITY_DOWNGRADE`, `NO_REVIEW_NOTE`, `NO_CONTENT_CHANGE`, `NO_CHANGE_LIMIT`, `HANDOFF_TERMINAL`, `HANDOFF_NOT_TERMINAL`, `HANDOFF_DELETED`, `HANDOFF_ALREADY_FETCHED`, `HANDOFF_ARCHIVE_INVALID`, `HANDOFF_NOT_ARCHIVED`, `ARTIFACT_TOO_LARGE` |
 | 66 | Entity not found | `PROJECT_NOT_FOUND`, `HANDOFF_NOT_FOUND` |
 | 69 | Daemon unavailable | `DAEMON_UNAVAILABLE` |
@@ -892,7 +894,7 @@ POST /api/v1/session
 POST /api/v1/token/rotate
 ```
 
-`GET /api/v1/health` returns `installationId`, so a CLI that found a stale `daemon.json` can detect that the listener belongs to a different Installation.
+`GET /api/v1/health` returns `installationId`, so a CLI that found a stale `daemon.json` can detect that the listener belongs to a different Installation; it also returns the daemon build `version`. `GET /api/v1/version` returns `{daemon, version}` and `GET /api/v1/readiness` returns `{ready}`, with `503` instead of `200` while the daemon reports not ready. Every success and failure body is the versioned protocol envelope, and a request whose path is absent from this catalog or whose method the endpoint does not accept is answered with `NOT_FOUND` at `404` or `METHOD_NOT_ALLOWED` at `405` with an `Allow` header, before any later milestone's authentication middleware could matter.
 
 `GET /api/v1/diagnostics` returns the `doctor` check catalog of section 35 in the same JSON shape the CLI emits, which is what the Web Diagnostics screen renders; it is the API surface named by API-007.
 

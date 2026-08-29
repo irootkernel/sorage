@@ -1,2 +1,19 @@
-// apps/daemon is a stub until EPIC-007; it exists so the workspace layout is fixed from TASK-001.
-export const DAEMON_STUB = true as const;
+export const DAEMON_VERSION = "0.1.0";
+
+export type {
+  DaemonEndpoints,
+  DaemonRequestContext,
+  DaemonRequestHandler,
+  DaemonRouteHandler,
+  DaemonServerOptions,
+  ReadinessReport,
+} from "./server";
+export {
+  CONTENT_SECURITY_POLICY,
+  createDaemonRequestHandler,
+  createDaemonServer,
+  daemonRoutes,
+  isHostAllowed,
+  isLoopbackBindAddress,
+  SECURITY_HEADERS,
+} from "./server";

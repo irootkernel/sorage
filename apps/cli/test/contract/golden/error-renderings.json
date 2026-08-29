@@ -432,6 +432,54 @@
     "human": "HOST_NOT_ALLOWED: rendering probe\nRecovery: Reach the daemon as 127.0.0.1, localhost, or [::1] on the configured port\n"
   },
   {
+    "code": "NOT_FOUND",
+    "exitCode": 64,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Check the endpoint path against the API catalog of interfaces-and-operations.md"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the endpoint path against the API catalog of interfaces-and-operations.md"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "NOT_FOUND: rendering probe\nRecovery: Check the endpoint path against the API catalog of interfaces-and-operations.md\n"
+  },
+  {
+    "code": "METHOD_NOT_ALLOWED",
+    "exitCode": 64,
+    "httpStatus": 405,
+    "recovery": {
+      "suggestedCommand": "Use the documented method for this endpoint"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "METHOD_NOT_ALLOWED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Use the documented method for this endpoint"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "METHOD_NOT_ALLOWED: rendering probe\nRecovery: Use the documented method for this endpoint\n"
+  },
+  {
     "code": "UNAUTHENTICATED",
     "exitCode": 77,
     "httpStatus": 401,

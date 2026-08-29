@@ -1,0 +1,156 @@
+{
+  "port": "<ephemeral>",
+  "responses": {
+    "health": {
+      "status": 200,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "keep-alive": "timeout=5",
+        "content-length": "201"
+      },
+      "body": {
+        "ok": true,
+        "data": {
+          "installationId": "1a2b3c4d-0000-4000-8000-000000000042",
+          "version": "0.2.0-contract"
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+        }
+      }
+    },
+    "readiness": {
+      "status": 200,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "keep-alive": "timeout=5",
+        "content-length": "125"
+      },
+      "body": {
+        "ok": true,
+        "data": {
+          "ready": true
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+        }
+      }
+    },
+    "version": {
+      "status": 200,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "keep-alive": "timeout=5",
+        "content-length": "170"
+      },
+      "body": {
+        "ok": true,
+        "data": {
+          "daemon": "sorage-daemon",
+          "version": "0.2.0-contract"
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+        }
+      }
+    },
+    "rejectedHost": {
+      "status": 421,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "keep-alive": "timeout=5",
+        "content-length": "416"
+      },
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "HOST_NOT_ALLOWED",
+          "message": "the Host header \"attacker.example:<port>\" is outside the allowlist",
+          "details": {
+            "host": "attacker.example:<port>"
+          },
+          "recovery": {
+            "suggestedCommand": "Reach the daemon as 127.0.0.1, localhost, or [::1] on the configured port"
+          }
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+        }
+      }
+    },
+    "unknownRoute": {
+      "status": 404,
+      "headers": {
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "keep-alive": "timeout=5",
+        "content-length": "365"
+      },
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "NOT_FOUND",
+          "message": "no endpoint at /api/v1/nope",
+          "details": {
+            "path": "/api/v1/nope"
+          },
+          "recovery": {
+            "suggestedCommand": "Check the endpoint path against the API catalog of interfaces-and-operations.md"
+          }
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+        }
+      }
+    },
+    "wrongMethod": {
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-type": "application/json; charset=utf-8",
+        "x-request-id": "2f0ac9a0-0000-4000-8000-0000000000dd",
+        "keep-alive": "timeout=5",
+        "content-length": "373"
+      },
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "METHOD_NOT_ALLOWED",
+          "message": "POST is not accepted by /api/v1/health",
+          "details": {
+            "path": "/api/v1/health",
+            "allow": "GET"
+          },
+          "recovery": {
+            "suggestedCommand": "Use the documented method for this endpoint"
+          }
+        },
+        "meta": {
+          "requestId": "2f0ac9a0-0000-4000-8000-0000000000dd"
+        }
+      }
+    }
+  }
+}
