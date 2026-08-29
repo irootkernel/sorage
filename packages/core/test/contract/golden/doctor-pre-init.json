@@ -111,6 +111,14 @@
       "recovery": {
         "suggestedCommand": "sorage init"
       }
+    },
+    {
+      "id": "daemon.port",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
     }
   ]
 }

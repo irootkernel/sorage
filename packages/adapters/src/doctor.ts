@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +43,7 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "bindings.nested": "Pass --as <project-slug> wherever the deepest match is not the intended Project",
   "bindings.ambiguous": "sorage project unbind the aliased path, or always pass --as <project-slug> from it",
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
+  "daemon.port": "Change server.port in the configuration, then restart the daemon",
 };
 
 const GITATTRIBUTES = vaultGitattributesContent();
@@ -51,10 +53,24 @@ const GITIGNORE = vaultGitignoreContent();
 export interface NodeDoctorPortsOptions {
   env?: HomeEnvironment | undefined;
   userHome?: string | undefined;
+  /** True when something already accepts connections at the address; tests inject a fake. */
+  portProbe?: ((host: string, port: number) => boolean) | undefined;
 }
 
 export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): DoctorPorts {
   const env = options.env ?? process.env;
+  const portProbe =
+    options.portProbe ??
+    ((host: string, port: number) => {
+      // The CLI process blocks synchronously (CLI-020), so the connect attempt runs
+      // as the command's own `__port-probe` subprocess exactly like the web probe.
+      const scriptArgs =
+        process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
+          ? [process.argv[1] as string, "__port-probe", host, String(port)]
+          : ["__port-probe", host, String(port)];
+      const probe = spawnSync(process.execPath, scriptArgs, { timeout: 5000 });
+      return probe.status === 0;
+    });
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const store = createConfigStore({
@@ -431,6 +447,26 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         }
         return ok("The Vault is readable without a privacy prompt.");
       }
+
+      case "daemon.port": {
+        const config = configuration();
+        if (config === null) return warning("The daemon port cannot be checked without a valid configuration.");
+        if (!portProbe(config.server.host, config.server.port)) {
+          return ok(`Nothing is listening on ${config.server.host}:${config.server.port} yet.`);
+        }
+        const daemon = readDaemonRecord(join(home.runDir, "daemon.json"));
+        if (
+          daemon !== null &&
+          isPidAlive(daemon.pid) &&
+          daemon.host === config.server.host &&
+          daemon.port === config.server.port
+        ) {
+          return ok("This installation's daemon is listening on the configured port.");
+        }
+        return warning(
+          `Another process is listening on ${config.server.host}:${config.server.port}, so the daemon cannot bind it.`,
+        );
+      }
     }
   }
 
@@ -449,6 +485,19 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
 function attachRecovery(id: DoctorCheckId, outcome: CheckOutcome): CheckOutcome {
   if (outcome.severity === "ok") return outcome;
   return { ...outcome, recovery: { suggestedCommand: RECOVERIES[id] } };
+}
+
+/** Reads `run/daemon.json`; null when absent or malformed. */
+function readDaemonRecord(path: string): { pid: number; host: string; port: number } | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown; host?: unknown; port?: unknown };
+    if (typeof parsed.pid !== "number" || typeof parsed.host !== "string" || typeof parsed.port !== "number") {
+      return null;
+    }
+    return parsed as { pid: number; host: string; port: number };
+  } catch {
+    return null;
+  }
 }
 
 function ok(message: string): CheckOutcome {

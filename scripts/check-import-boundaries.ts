@@ -21,6 +21,7 @@ const IMPORT_RULES: Record<string, string[]> = {
 const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
   "@sorage/cli": [
     "src/config-command-ports",
+    "src/daemon-command-ports",
     "src/token-store",
     "src/inbox-marker-ports",
     "src/doctor",
@@ -35,6 +36,7 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
   ],
   "@sorage/daemon": [
     "src/config-command-ports",
+    "src/daemon-command-ports",
     "src/token-store",
     "src/inbox-marker-ports",
     "src/doctor",

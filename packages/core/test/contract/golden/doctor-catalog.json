@@ -54,5 +54,9 @@
   {
     "id": "platform.tcc",
     "worst": "warning"
+  },
+  {
+    "id": "daemon.port",
+    "worst": "warning"
   }
 ]

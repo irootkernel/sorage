@@ -10,20 +10,13 @@ import {
 } from "../../src/doctor";
 
 describe("the 0.1 doctor catalog", () => {
-  it("holds exactly fourteen check identifiers", () => {
-    expect(DOCTOR_CATALOG_0_1).toHaveLength(14);
-    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(14);
+  it("holds exactly fifteen unique check identifiers", () => {
+    expect(DOCTOR_CATALOG_0_1).toHaveLength(15);
+    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(15);
   });
 
-  it("contains no 0.2 or 0.3 check identifier", () => {
-    const laterIds = [
-      "daemon.reachable",
-      "daemon.port",
-      "token.permissions",
-      "service.installed",
-      "backup.schedule",
-      "git.state",
-    ];
+  it("contains no 0.3 check identifier", () => {
+    const laterIds = ["daemon.reachable", "token.permissions", "service.installed", "backup.schedule", "git.state"];
     for (const id of laterIds) {
       expect(DOCTOR_CATALOG_0_1).not.toContain(id);
     }
@@ -50,7 +43,7 @@ describe("the 0.1 doctor catalog", () => {
 describe("the pre-initialization report", () => {
   it("marks every check blocking with the init recovery", () => {
     const report = notInitializedReport("/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(14);
+    expect(report.checks).toHaveLength(15);
     for (const check of report.checks) {
       expect(check.severity).toBe("blocking");
       if (check.id !== "config.schema") {
@@ -100,7 +93,7 @@ describe("runDoctor", () => {
       },
     };
     const report = runDoctor(ports, "/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(14);
+    expect(report.checks).toHaveLength(15);
     expect(report.checks.every((check) => check.severity === "blocking")).toBe(true);
   });
 });

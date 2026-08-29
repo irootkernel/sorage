@@ -167,6 +167,47 @@ describe("the session exchange (SEC-019)", () => {
   });
 });
 
+describe("a draining daemon refuses new mutations (SEC-015)", () => {
+  it("answers a mutation with SERVICE_PAUSED at 423 while reads still answer", async () => {
+    const drainPort = await freePort();
+    let draining = false;
+    const server = createDaemonServer({
+      host: "127.0.0.1",
+      port: drainPort,
+      endpoints: { installationId, version },
+      isDraining: () => draining,
+    });
+    await new Promise<void>((resolve) => server.listen(drainPort, "127.0.0.1", resolve));
+    closer.push(() => server.close());
+    draining = true;
+    const mutation = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: drainPort,
+          path: "/api/v1/session",
+          method: "POST",
+          headers: { host: `127.0.0.1:${drainPort}` },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () =>
+            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+          );
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.end("{}");
+    });
+    expect(mutation.status).toBe(423);
+    expect(JSON.parse(mutation.body)).toMatchObject({ error: { code: "SERVICE_PAUSED" } });
+    // A read-only request during the same drain still answers.
+    const health = await request("/api/v1/health");
+    expect(health.status).toBe(200);
+  });
+});
+
 describe("rotation invalidates every live session (SEC-020)", () => {
   it("rotates for the Installation token and kills the pre-rotation material", async () => {
     const stale = tokenStore.read() as string;

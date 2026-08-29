@@ -71,6 +71,11 @@
         "id": "platform.tcc",
         "severity": "ok",
         "message": "The Vault is readable without a privacy prompt."
+      },
+      {
+        "id": "daemon.port",
+        "severity": "ok",
+        "message": "Nothing is listening on 127.0.0.1:46321 yet."
       }
     ]
   },

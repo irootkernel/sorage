@@ -82,6 +82,11 @@ export interface DaemonServerOptions {
   auth?: SessionService;
   /** Rotates the Installation API token for `POST /api/v1/token/rotate`. */
   tokenRotate?: () => { ok: true; value: { rotated: true } } | { ok: false; error: AppError };
+  /** True while the daemon drains: new mutations are refused with SERVICE_PAUSED (SEC-015). */
+  isDraining?: () => boolean;
+  /** In-flight bookkeeping the graceful drain waits on. */
+  onRequestStart?: () => void;
+  onRequestEnd?: () => void;
 }
 
 /** True only for the loopback literals; a name is never a valid bind address (SEC-001). */
@@ -231,7 +236,20 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
 
   return async (request, response) => {
     const requestId = newRequestId(options.idGenerator ?? idGenerator);
+    options.onRequestStart?.();
+    response.on("close", () => options.onRequestEnd?.());
     try {
+      // A draining daemon refuses new mutations before storage shutdown, while the
+      // requests already in flight finish normally (SEC-015).
+      const method = request.method ?? "GET";
+      if (options.isDraining?.() === true && method !== "GET" && method !== "HEAD") {
+        sendError(
+          response,
+          requestId,
+          appError("SERVICE_PAUSED", "the daemon is draining and refuses new mutations before it stops"),
+        );
+        return;
+      }
       // Host validation runs before routing and before authentication (SEC-017), so a
       // DNS-rebinding request is turned away before any handler or credential check.
       if (!isHostAllowed(request.headers.host, options.port)) {
@@ -247,7 +265,6 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
         return;
       }
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      const method = request.method ?? "GET";
       const isPublicPath = PUBLIC_PATHS.has(url.pathname);
       const route = routes.find((entry) => entry.path === url.pathname && entry.method === method);
 

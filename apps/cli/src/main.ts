@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { connect } from "node:net";
 import { request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -85,6 +86,7 @@ import {
 } from "@sorage/core";
 import { buildCompletionScript } from "./completion";
 import { createWebRuntimePorts, runWebCommand } from "./web";
+import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError } from "commander";
 
@@ -1431,9 +1433,40 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
 
   program.helpOption("-h, --help", "display help for the command");
 
-  program
-    .command("daemon")
-    .description("run and control the local daemon")
+  const daemon = program.command("daemon").description("run and control the local daemon");
+  daemon
+    .command("start")
+    .description("start the daemon and confirm it through health")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("start", ports));
+    });
+  daemon
+    .command("stop")
+    .description("stop the daemon after a graceful drain of in-flight requests")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("stop", ports));
+    });
+  daemon
+    .command("restart")
+    .description("stop and start again; required after a server.host or server.port change")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("restart", ports));
+    });
+  daemon
+    .command("status")
+    .description("read run/daemon.json and verify installationId through health")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("status", ports, { json: globals.json === true }));
+    });
+  daemon
     .command("serve", { hidden: true })
     .description("internal entry point that runs the daemon in the foreground until stopped");
 
@@ -1602,6 +1635,17 @@ function expectedRowVersionOf(globals: Record<string, unknown>): number | undefi
   return typeof globals.expectedRowVersion === "number" ? globals.expectedRowVersion : undefined;
 }
 
+type DaemonAction = "start" | "stop" | "restart" | "status";
+
+function runDaemonCommand(action: DaemonAction, ports: OutputPorts, options = { json: false }): number {
+  const runtime = createDaemonRuntimePorts();
+  const sinks = { out: ports.out, err: ports.err };
+  if (action === "start") return daemonStart(runtime, sinks);
+  if (action === "stop") return daemonStop(runtime, sinks);
+  if (action === "restart") return daemonRestart(runtime, sinks);
+  return daemonStatus(runtime, sinks, { json: options.json });
+}
+
 function actorInputOf(globals: Record<string, unknown>): {
   path: string;
   userHome: string;
@@ -1742,21 +1786,40 @@ export function main(argv: string[] = process.argv.slice(2)): number {
   if (argv[0] === "__health-probe") {
     const host = argv[1] ?? "127.0.0.1";
     const port = Number.parseInt(argv[2] ?? "46321", 10);
+    const expected = argv[3];
     void probeHealthOnce(host, port)
-      .then((healthy) => {
-        process.exitCode = healthy ? 0 : 1;
+      .then((body) => {
+        process.exit(body !== null && (expected === undefined || body.installationId === expected) ? 0 : 1);
       })
       .catch(() => {
-        process.exitCode = 1;
+        process.exit(1);
       });
-    return 0;
+    // The probe owns the process until its answer exists; nothing else may run.
+    return -1;
+  }
+  if (argv[0] === "__port-probe") {
+    const host = argv[1] ?? "127.0.0.1";
+    const port = Number.parseInt(argv[2] ?? "46321", 10);
+    void portHeldOnce(host, port)
+      .then((held) => {
+        process.exit(held ? 0 : 1);
+      })
+      .catch(() => {
+        process.exit(1);
+      });
+    return -1;
   }
   // `daemon serve` runs the long-lived daemon process; it is spawned detached by
   // `sorage web` and by the lifecycle commands of TASK-044, so it owns the event loop
   // rather than fitting the synchronous command pipeline.
   if (argv[0] === "daemon" && argv[1] === "serve") {
     const { serveDaemon } = daemonRuntime();
-    serveDaemon()
+    serveDaemon({
+      armSignals: (drain) => {
+        process.on("SIGTERM", drain);
+        process.on("SIGINT", drain);
+      },
+    })
       .then(() => {
         process.stdout.write(`sorage daemon serving\n`);
       })
@@ -1765,7 +1828,8 @@ export function main(argv: string[] = process.argv.slice(2)): number {
         process.stderr.write(`the daemon could not start: ${message}\n`);
         process.exitCode = 78;
       });
-    return 0;
+    // The daemon owns the process until it stops; the serve promise keeps it alive.
+    return -1;
   }
   return runCli(argv);
 }
@@ -1774,26 +1838,56 @@ function daemonRuntime(): typeof import("@sorage/daemon") {
   return daemonModule;
 }
 
-function probeHealthOnce(host: string, port: number): Promise<boolean> {
+function probeHealthOnce(host: string, port: number): Promise<{ installationId: string } | null> {
   return new Promise((resolve) => {
     const outgoing = httpRequest(
       { host, port, path: "/api/v1/health", method: "GET", headers: { host: `127.0.0.1:${port}` } },
       (response) => {
-        response.resume();
-        resolve(response.statusCode === 200);
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => {
+          if (response.statusCode !== 200) {
+            resolve(null);
+            return;
+          }
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { data?: { installationId?: string } };
+            resolve(
+              typeof body.data?.installationId === "string" ? { installationId: body.data.installationId } : null,
+            );
+          } catch {
+            resolve(null);
+          }
+        });
       },
     );
     outgoing.setTimeout(2000, () => {
       outgoing.destroy();
+      resolve(null);
+    });
+    outgoing.on("error", () => resolve(null));
+    outgoing.end();
+  });
+}
+
+function portHeldOnce(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(port, host, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.setTimeout(2000, () => {
+      socket.destroy();
       resolve(false);
     });
-    outgoing.on("error", () => resolve(false));
-    outgoing.end();
+    socket.on("error", () => resolve(false));
   });
 }
 
 export type { Envelope };
 
 if (import.meta.main) {
-  process.exit(main());
+  const code = main();
+  // A negative code means an internal probe owns the process and exits itself.
+  if (code >= 0) process.exit(code);
 }
