@@ -19,6 +19,7 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <p id="session-note">This is the Sorage control plane. Run <code>sorage web</code> to open it with a one-time session secret.</p>
 <nav>
 <a href="#/dashboard" data-nav>Dashboard</a>
+<a href="#/compose" data-nav>Compose</a>
 <a href="#/inbox" data-nav>Inbox</a>
 <a href="#/outbox" data-nav>Outbox</a>
 <a href="#/settings" data-nav>Settings</a>
@@ -57,7 +58,9 @@ export const WEB_APP_JS = `(function () {
   try { store.token = sessionStorage.getItem("sorage-session"); } catch (error) { store.token = null; }
 
   function api(path, init) {
-    return fetch(path, Object.assign({ headers: { authorization: "Bearer " + store.token } }, init || {}))
+    var options = Object.assign({}, init || {});
+    options.headers = Object.assign({ authorization: "Bearer " + store.token }, (init || {}).headers || {});
+    return fetch(path, options)
       .then(function (response) { return response.json().then(function (body) { return { status: response.status, body: body }; }); });
   }
 
@@ -124,6 +127,7 @@ export const WEB_APP_JS = `(function () {
         if (handoff.pinned === true) retention.pinned += 1;
         if (handoff.archivedAt !== null) retention.archived += 1;
         if (handoff.pendingDeletionRequest !== null && handoff.pendingDeletionRequest !== undefined) retention.deletionRequested += 1;
+        if (handoff.deletedAt !== null && handoff.deletedAt !== undefined) retention.deleted += 1;
       });
       Object.keys(states).sort().forEach(function (state) {
         counts.appendChild(el("div", {}, [el("strong", { text: String(states[state]) }), el("span", { text: state })]));
@@ -131,6 +135,7 @@ export const WEB_APP_JS = `(function () {
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.pinned) }), el("span", { text: "pinned" })]));
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.archived) }), el("span", { text: "archived" })]));
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.deletionRequested) }), el("span", { text: "deletion requested" })]));
+      counts.appendChild(el("div", {}, [el("strong", { text: String(retention.deleted) }), el("span", { text: "deleted" })]));
       var recent = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Updated" }), el("th", { text: "Title" }), el("th", { text: "State" })])])]);
       var body = el("tbody", {});
       result.body.data.handoffs.slice(0, 10).forEach(function (handoff) {
@@ -243,6 +248,7 @@ export const WEB_APP_JS = `(function () {
         noteCard.appendChild(el("p", { text: handoff.reviewNote.body || "" }));
         view().appendChild(noteCard);
       }
+      view().appendChild(actionsCard(handoff));
       var timelineCard = el("div", { class: "card" });
       timelineCard.appendChild(el("h3", { text: "Timeline" }));
       var list = el("ul", {});
@@ -252,6 +258,88 @@ export const WEB_APP_JS = `(function () {
       timelineCard.appendChild(list);
       view().appendChild(timelineCard);
     });
+  }
+
+  function compose() {
+    view().replaceChildren();
+    view().appendChild(el("h2", { text: "New Handoff" }));
+    var form = el("form", {});
+    var title = el("input", { placeholder: "title", size: "40" });
+    var recipients = el("input", { placeholder: "recipient slugs, comma-separated", size: "40" });
+    var file = el("input", { type: "file" });
+    var result = el("p", {});
+    form.appendChild(el("p", {}, [el("label", { text: "Title " }), title]));
+    form.appendChild(el("p", {}, [el("label", { text: "To " }), recipients]));
+    form.appendChild(el("p", {}, [el("label", { text: "Document " }), file]));
+    form.appendChild(el("button", { type: "submit", text: "Send" }));
+    form.appendChild(result);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (file.files.length === 0) { result.textContent = "Choose a document."; return; }
+      var data = new FormData();
+      data.append("title", title.value);
+      recipients.value.split(",").map(function (slug) { return slug.trim(); }).filter(function (slug) { return slug !== ""; }).forEach(function (slug) { data.append("to", slug); });
+      data.append("file", file.files[0]);
+      fetch("/api/v1/handoffs/upload", { method: "POST", headers: { authorization: "Bearer " + store.token }, body: data })
+        .then(function (response) { return response.json(); })
+        .then(function (body) {
+          if (!body.ok) { result.textContent = "Send failed: " + body.error.code; return; }
+          result.textContent = "";
+          var list = el("ul", {});
+          body.data.handoffs.forEach(function (sent) { list.appendChild(el("li", { text: sent.handoffId + " → " + sent.recipientSlug + " (group " + (body.data.dispatchGroupId || "none") + ")" })); });
+          result.appendChild(list);
+        });
+    });
+    view().appendChild(form);
+  }
+
+  function actionsCard(handoff) {
+    var card = el("div", { class: "card" });
+    card.appendChild(el("h3", { text: "Actions" }));
+    var status = el("p", {});
+    function act(label, path, body, method) {
+      var button = el("button", { text: label });
+      button.addEventListener("click", function () {
+        status.textContent = "";
+        var payload = typeof body === "function" ? body() : body || { asUser: true };
+        api(path, { method: method || "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })
+          .then(function (outcome) {
+            if (!outcome.body.ok) {
+              status.textContent = outcome.body.error.code + ": " + outcome.body.error.message;
+              if (outcome.body.error.code === "ROW_VERSION_CONFLICT") detail(handoff.id);
+              return;
+            }
+            detail(handoff.id);
+          });
+      });
+      return button;
+    }
+    var note = el("textarea", { rows: "2", cols: "40", placeholder: "User proxy review note" });
+    card.appendChild(note);
+    card.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, asUser: true }; }, "PUT"));
+    card.appendChild(document.createTextNode(" "));
+    card.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { asUser: true }, "DELETE"));
+    card.appendChild(el("p", { text: "" }));
+    card.appendChild(act("Accept", "/api/v1/handoffs/" + handoff.id + "/accept?asUser=true", { expectedRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }));
+    card.appendChild(document.createTextNode(" "));
+    card.appendChild(act("Decline", "/api/v1/handoffs/" + handoff.id + "/decline?asUser=true", { reason: "Declined from the Web UI", expectedRowVersion: handoff.rowVersion, asUser: true }));
+    card.appendChild(el("p", { text: "" }));
+    card.appendChild(act(handoff.pinned === true ? "Unpin" : "Pin", "/api/v1/handoffs/" + handoff.id + "/" + (handoff.pinned === true ? "unpin" : "pin") + "?asUser=true", { asUser: true }));
+    card.appendChild(document.createTextNode(" "));
+    card.appendChild(act("Archive", "/api/v1/handoffs/" + handoff.id + "/archive?asUser=true", { asUser: true }));
+    card.appendChild(document.createTextNode(" "));
+    card.appendChild(act("Unarchive", "/api/v1/handoffs/" + handoff.id + "/unarchive?asUser=true", { asUser: true }));
+    card.appendChild(el("p", { text: "" }));
+    card.appendChild(act("Request deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-request?asUser=true", { asUser: true }));
+    card.appendChild(document.createTextNode(" "));
+    card.appendChild(act("Reject deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-reject?asUser=true", { asUser: true }));
+    card.appendChild(document.createTextNode(" "));
+    var pinnedConfirm = el("input", { placeholder: "type the Handoff id to confirm pinned deletion", size: "36" });
+    card.appendChild(pinnedConfirm);
+    card.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, confirmPinned: pinnedConfirm.value }; }));
+    card.appendChild(el("p", { text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
+    card.appendChild(status);
+    return card;
   }
 
   function nextActorOf(handoff) {
@@ -290,17 +378,19 @@ export const WEB_APP_JS = `(function () {
     var saveNote = el("p", {});
     form.appendChild(el("button", { type: "submit", text: "Save" }));
     form.appendChild(saveNote);
+    // The form saves against the ETag it was loaded with: a save after an
+    // out-of-band write conflicts instead of silently overwriting (CFG-019).
+    var loadedEtag = null;
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      api("/api/v1/config").then(function (current) {
-        if (current.status !== 200) { saveNote.textContent = "Load failed: " + current.body.error.code; return; }
-        api("/api/v1/config", {
-          method: "PUT",
-          headers: { authorization: "Bearer " + store.token, "if-match": current.body.data.etag, "content-type": "application/json" },
-          body: JSON.stringify({ key: "ui.defaultPageSize", value: pageSize.value }),
-        }).then(function (saved) {
-          saveNote.textContent = saved.body.ok ? "Saved." : "Save failed: " + saved.body.error.code;
-        });
+      if (loadedEtag === null) { saveNote.textContent = "The configuration has not loaded."; return; }
+      api("/api/v1/config", {
+        method: "PUT",
+        headers: { "if-match": loadedEtag, "content-type": "application/json" },
+        body: JSON.stringify({ key: "ui.defaultPageSize", value: pageSize.value }),
+      }).then(function (saved) {
+        saveNote.textContent = saved.body.ok ? "Saved." : "Save failed: " + saved.body.error.code;
+        if (saved.body.ok) loadedEtag = saved.body.data.etag;
       });
     });
     view().appendChild(form);
@@ -315,6 +405,7 @@ export const WEB_APP_JS = `(function () {
       yaml.textContent = result.body.data.yaml;
       pageSize.value = result.body.data.config.ui.defaultPageSize;
       marker.value = String(result.body.data.config.handoff.inboxMarker);
+      loadedEtag = result.body.data.etag;
     });
   }
 
@@ -327,6 +418,7 @@ export const WEB_APP_JS = `(function () {
     var hash = location.hash.replace(/^#/, "") || "/dashboard";
     var path = hash.split("?")[0];
     if (path === "/" || path === "/dashboard") dashboard();
+    else if (path === "/compose") compose();
     else if (path === "/inbox") listing("inbox");
     else if (path === "/outbox") listing("outbox");
     else if (path.indexOf("/handoff/") === 0) detail(path.slice("/handoff/".length));
