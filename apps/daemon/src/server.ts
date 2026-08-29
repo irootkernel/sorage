@@ -11,6 +11,7 @@ import {
   successEnvelope,
 } from "@sorage/core";
 import { bearerValue, type AuthenticatedContext, type SessionService } from "./auth";
+import { WEB_APP_JS, WEB_CSS, WEB_INDEX_HTML } from "./web-app";
 import { allowedMethods, evaluateIdempotency, matchRoute, storeReplay, type RouteEntryInternal } from "./route-kit";
 import { createHash } from "node:crypto";
 
@@ -267,21 +268,21 @@ export function configRoutes(options: {
       method: "GET",
       path: "/",
       handler: (_request, response, context) => {
-        sendRaw(response, 200, context.requestId, "text/html; charset=utf-8", STATIC_INDEX_HTML);
+        sendRaw(response, 200, context.requestId, "text/html; charset=utf-8", WEB_INDEX_HTML);
       },
     },
     {
       method: "GET",
-      path: "/settings",
+      path: "/assets/app.css",
       handler: (_request, response, context) => {
-        sendRaw(response, 200, context.requestId, "text/html; charset=utf-8", STATIC_SETTINGS_HTML);
+        sendRaw(response, 200, context.requestId, "text/css; charset=utf-8", WEB_CSS);
       },
     },
     {
       method: "GET",
-      path: "/assets/settings.js",
+      path: "/assets/app.js",
       handler: (_request, response, context) => {
-        sendRaw(response, 200, context.requestId, "text/javascript; charset=utf-8", STATIC_SETTINGS_JS);
+        sendRaw(response, 200, context.requestId, "text/javascript; charset=utf-8", WEB_APP_JS);
       },
     },
     {
@@ -365,86 +366,6 @@ function notReady(path: string): AppError {
   return appError("NOT_FOUND", `no endpoint at ${path}`, { path });
 }
 
-const STATIC_INDEX_HTML = `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Sorage</title><link rel="stylesheet" href="/assets/settings.css"></head>
-<body>
-<main>
-<h1>Sorage</h1>
-<p>This is the Sorage control plane. Sessions are issued by the local CLI.</p>
-<p>Run <code>sorage web</code> to open this page with a one-time session secret.</p>
-<p><a href="/settings">Settings</a></p>
-</main>
-</body>
-</html>
-`;
-
-const STATIC_SETTINGS_HTML = `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Sorage settings</title><link rel="stylesheet" href="/assets/settings.css"></head>
-<body>
-<main>
-<h1>Settings</h1>
-<p id="session-note">This page needs a session. Run <code>sorage web</code> to open it with a one-time secret.</p>
-<form id="settings-form"><fieldset>
-<legend>Typed settings</legend>
-<label>Default page size <input name="ui.defaultPageSize" type="number" min="1"></label>
-<label>Inbox marker <select name="handoff.inboxMarker"><option value="false">off</option><option value="true">on</option></select></label>
-<label>Log level <select name="logging.level"><option>warn</option><option>info</option><option>debug</option><option>error</option></select></label>
-<button type="submit">Save</button>
-</fieldset></form>
-<p id="save-note"></p>
-<section>
-<h2>Canonical configuration</h2>
-<p id="config-path"></p>
-<pre id="yaml-view"></pre>
-</section>
-</main>
-<script src="/assets/settings.js"></script>
-</body>
-</html>
-`;
-
-const STATIC_SETTINGS_JS = `(function () {
-  "use strict";
-  var fragment = location.hash.match(/[#&]s=([^&]+)/);
-  function exchange(secret) {
-    return fetch("/api/v1/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret: secret }) })
-      .then(function (response) { return response.ok ? response.json() : null; });
-  }
-  function start(token) {
-    if (token !== null) { try { sessionStorage.setItem("sorage-session", token); } catch (error) { /* storage is optional */ } }
-    var stored = null; try { stored = sessionStorage.getItem("sorage-session"); } catch (error) { /* optional */ }
-    if (stored === null) return;
-    if (fragment !== null) { history.replaceState(null, "", location.pathname); }
-    document.getElementById("session-note").textContent = "";
-    var headers = { authorization: "Bearer " + stored };
-    fetch("/api/v1/config", { headers: headers })
-      .then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (body) {
-        if (body === null) return;
-        document.getElementById("yaml-view").textContent = body.data.yaml;
-        document.getElementById("config-path").textContent = body.data.configFile;
-        var form = document.getElementById("settings-form");
-        form.elements["ui.defaultPageSize"].value = body.data.config.ui.defaultPageSize;
-        form.elements["handoff.inboxMarker"].value = String(body.data.config.handoff.inboxMarker);
-        form.elements["logging.level"].value = body.data.config.logging.level;
-        form.addEventListener("submit", function (event) {
-          event.preventDefault();
-          var etag = body.data.etag;
-          var key = "ui.defaultPageSize";
-          var rawValue = form.elements[key].value;
-          fetch("/api/v1/config", { method: "PUT", headers: { authorization: "Bearer " + stored, "if-match": etag, "content-type": "application/json" }, body: JSON.stringify({ key: key, value: rawValue }) })
-            .then(function (response) { return response.json(); })
-            .then(function (result) { document.getElementById("save-note").textContent = result.ok ? "Saved." : "Save failed: " + result.error.code; });
-        });
-      });
-  }
-  if (fragment !== null) { exchange(fragment[1]).then(function (body) { start(body === null ? null : body.data.token); }); }
-  else { start(null); }
-})();
-`;
-
 export type DaemonRequestHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
 
 /**
@@ -457,8 +378,8 @@ const PUBLIC_PATHS = new Set([
   "/api/v1/readiness",
   "/api/v1/version",
   "/",
-  "/settings",
-  "/assets/settings.js",
+  "/assets/app.css",
+  "/assets/app.js",
 ]);
 
 const MAX_SESSION_BODY_BYTES = 8192;

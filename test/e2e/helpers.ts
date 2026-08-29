@@ -38,7 +38,10 @@ export function makeTempDir(prefix: string): string {
   return dir;
 }
 
-export function sorage(args: string[], options: { home?: string | undefined; cwd?: string | undefined } = {}): Run {
+export function sorage(
+  args: string[],
+  options: { home?: string | undefined; cwd?: string | undefined; env?: Record<string, string> | undefined } = {},
+): Run {
   if (!existsSync(BINARY)) {
     throw new Error(`the compiled binary is missing at ${BINARY}; run make build first`);
   }
@@ -50,6 +53,7 @@ export function sorage(args: string[], options: { home?: string | undefined; cwd
       SORAGE_HOME: options.home ?? makeTempDir("sorage-e2e-home-"),
       // The release journeys exercise the product as shipped: no test hooks.
       SORAGE_TEST_REQUEST_ID: undefined,
+      ...(options.env ?? {}),
     },
   });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };

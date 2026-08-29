@@ -189,9 +189,9 @@ describe("the runtime endpoints (RUN-008)", () => {
   });
 });
 
-describe("the static settings shell (SEC-018, SEC-019)", () => {
-  it("serves the root refusal, the settings page, and the external script with the security headers", async () => {
-    for (const path of ["/", "/settings", "/assets/settings.js"]) {
+describe("the static Web shell (SEC-018, SEC-019)", () => {
+  it("serves the SPA document and its external assets with the security headers", async () => {
+    for (const path of ["/", "/assets/app.css", "/assets/app.js"]) {
       const response = await authed(path);
       expect(response.status).toBe(200);
       expect(response.headers["content-security-policy"]).toBeDefined();
@@ -199,9 +199,10 @@ describe("the static settings shell (SEC-018, SEC-019)", () => {
     }
     const root = await authed("/");
     expect(root.body).toContain("sorage web");
-    const settings = await authed("/settings");
-    expect(settings.body).not.toContain("<script>"); // the CSP allows only external scripts
-    expect(settings.body).toContain("Canonical configuration");
-    expect(settings.body).toContain('script src="/assets/settings.js"');
+    // The CSP allows only external scripts: no inline code anywhere in the shell.
+    expect(root.body).not.toContain("<script>");
+    expect(root.body).toContain('script src="/assets/app.js"');
+    const script = await authed("/assets/app.js");
+    expect(script.body).toContain("renderMarkdownSafe");
   });
 });

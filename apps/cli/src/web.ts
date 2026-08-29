@@ -67,6 +67,10 @@ export function createWebRuntimePorts(stateDir: string): WebRuntimePorts {
       child.unref();
     },
     openBrowser: (url) => {
+      // Automation guard: a test or script that drives the URL itself suppresses
+      // the system browser, which would otherwise race the driver for the
+      // single-use secret; the URL and the exit path are unchanged.
+      if (process.env.SORAGE_WEB_SUPPRESS_OPEN === "1") return;
       if (process.platform === "darwin") {
         const opener = spawn("open", [url], { detached: true, stdio: "ignore" });
         opener.unref();

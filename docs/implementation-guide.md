@@ -24,7 +24,7 @@ The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 - Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone 0.2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.
 - The `yaml` package used through its Document API rather than `parse`/`stringify`, because only the document tree preserves existing comments and key order across a write (CFG-018).
-- Vite with Preact for `apps/web`, built to static assets the daemon serves.
+- The Web control plane ships as a no-build static SPA served by the daemon under `apps/daemon/src/web-app.ts`: one HTML document, one external script, and one external stylesheet, all CSP-safe by construction. A Vite and Preact build remains a candidate if the SPA outgrows this shape; the required behavior (WEB-001 to WEB-018) is framework-independent.
 - `bun build --compile` for release binaries, followed by ad-hoc codesigning, distributed through a Homebrew tap so Gatekeeper never quarantines a downloaded binary.
 - `make test` as the single verification gate, over the targets `test-prepare`, `test-unit`, `test-int`, `test-contract`, and `test-e2e`; `make build` compiles `dist/sorage` and `make package` produces the signed binary and the Homebrew formula inputs (NFR-016).
 - Verification is local: the same `make` targets a developer runs are the whole gate, because this repository uses no hosted continuous-integration service.
