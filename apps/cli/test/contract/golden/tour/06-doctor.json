@@ -76,6 +76,11 @@
         "id": "daemon.port",
         "severity": "ok",
         "message": "Nothing is listening on 127.0.0.1:46321 yet."
+      },
+      {
+        "id": "backup.schedule",
+        "severity": "ok",
+        "message": "The backup schedule is disabled."
       }
     ]
   },

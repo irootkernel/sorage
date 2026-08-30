@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import { join } from "node:path";
-import { appError, setConfigurationValue, showConfiguration } from "@sorage/core";
+import { appError, backupTickDecision, runBackupOnce, setConfigurationValue, showConfiguration } from "@sorage/core";
+import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import type { Configuration } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
@@ -35,6 +36,10 @@ export interface ServeDaemonOptions {
   serverFactory?: (options: DaemonServerOptions) => Server;
   /** The tick driver; production uses a timer, tests drive ticks by hand. */
   scheduleSweep?: (run: () => void) => () => void;
+  /** The backup tick driver; production uses a 60-second timer, tests drive it by hand. */
+  scheduleBackup?: (run: () => void) => () => void;
+  /** The clock the backup tick decides against; tests drive it across DST days and sleep gaps. */
+  now?: () => Date;
   /** The drain signal to arm; production arms SIGTERM and SIGINT. */
   armSignals?: (drain: () => void) => void;
   /** How the process ends after a controlled restart; tests keep the runner alive. */
@@ -47,6 +52,8 @@ export interface RunningDaemon {
   record: DaemonRunRecord;
   /** Performs one bounded sweep tick immediately. */
   runSweepTick(): { checked: number; mismatches: string[]; bytes: number };
+  /** Performs one backup scheduler tick immediately and reports what it decided. */
+  runBackupTick(): { action: string; triggeredBy?: string; nextDueAt: string | null; run?: unknown };
   /** Drains: refuses mutations, waits for in-flight requests, then closes storage. */
   drain(): Promise<void>;
 }
@@ -136,6 +143,53 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
   const stopSweep =
     options.scheduleSweep === undefined ? scheduleTimer(runSweepTick) : options.scheduleSweep(runSweepTick);
 
+  // The backup scheduler of section 29 (RUN-002): only the daemon schedules.
+  // Every tick re-reads the configuration so a reloaded gitBackup.* key takes
+  // effect on the next tick, and every run it triggers goes through the same
+  // engine and backup.lock a manual run uses.
+  const runBackupTick = () => {
+    const current = showConfiguration(createNodeConfigCommandPorts());
+    if (!current.ok) return { action: "none", nextDueAt: null };
+    const spec = {
+      enabled: current.value.gitBackup.enabled,
+      at: current.value.gitBackup.schedule.at,
+      timezone: current.value.gitBackup.schedule.timezone,
+      catchUpAfterMissedRun: current.value.gitBackup.schedule.catchUpAfterMissedRun,
+    };
+    const backupPorts = createNodeBackupCommandPorts();
+    const statusPorts = backupPorts.statusPorts();
+    const lastRunAt = statusPorts.ok ? statusPorts.value.lastRunAt() : { ok: false as const };
+    const decision = backupTickDecision(
+      spec,
+      (options.now ?? (() => new Date()))(),
+      lastRunAt.ok ? lastRunAt.value : null,
+    );
+    if (decision.action !== "run") {
+      return { action: "none", nextDueAt: decision.nextDueAt };
+    }
+    const runPorts = backupPorts.runPorts(decision.triggeredBy);
+    if (!runPorts.ok) {
+      sweepLogger().warn("daemon.backup_run_refused", { code: runPorts.error.code });
+      return { action: "refused", triggeredBy: decision.triggeredBy, nextDueAt: decision.nextDueAt };
+    }
+    const run = runBackupOnce(runPorts.value);
+    if (!run.ok) {
+      // BACKUP_IN_PROGRESS from a concurrent holder is an expected refusal;
+      // the next tick re-evaluates coverage once that run finishes.
+      sweepLogger().warn("daemon.backup_run_failed", { code: run.error.code, triggeredBy: decision.triggeredBy });
+      return { action: "failed", triggeredBy: decision.triggeredBy, nextDueAt: decision.nextDueAt };
+    }
+    return {
+      action: "ran",
+      triggeredBy: decision.triggeredBy,
+      nextDueAt: decision.nextDueAt,
+      run: run.value,
+    };
+  };
+
+  const stopBackup =
+    options.scheduleBackup === undefined ? scheduleTimer(runBackupTick) : options.scheduleBackup(runBackupTick);
+
   return new Promise((resolve, reject) => {
     server.once("error", (error: Error) => {
       lock.release?.();
@@ -157,6 +211,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
         // only then do the listener and the storage close (SEC-015).
         draining = true;
         stopSweep();
+        stopBackup();
         // Yield once so requests already queued in the event loop are admitted and
         // answered with SERVICE_PAUSED rather than losing their connection.
         await new Promise((wake) => setImmediate(wake));
@@ -178,6 +233,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
         port,
         record,
         runSweepTick,
+        runBackupTick,
         drain: async () => {
           await drain();
           server.closeAllConnections?.();

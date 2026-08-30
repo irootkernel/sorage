@@ -4,7 +4,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
 import {
+  type BackupRunRow,
   type Configuration,
+  nextDueAt,
   parseConfigurationFile,
   parseVaultMarker,
   validateVaultMarkerForInstallation,
@@ -44,6 +46,7 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "bindings.ambiguous": "sorage project unbind the aliased path, or always pass --as <project-slug> from it",
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
   "daemon.port": "Change server.port in the configuration, then restart the daemon",
+  "backup.schedule": "sorage backup run, then read sorage backup status",
 };
 
 const GITATTRIBUTES = vaultGitattributesContent();
@@ -467,6 +470,41 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           `Another process is listening on ${config.server.host}:${config.server.port}, so the daemon cannot bind it.`,
         );
       }
+
+      case "backup.schedule": {
+        const config = configuration();
+        if (config === null) return warning("The backup schedule cannot be checked without a valid configuration.");
+        const spec = {
+          enabled: config.gitBackup.enabled,
+          at: config.gitBackup.schedule.at,
+          timezone: config.gitBackup.schedule.timezone,
+          catchUpAfterMissedRun: config.gitBackup.schedule.catchUpAfterMissedRun,
+        };
+        if (!spec.enabled) return ok("The backup schedule is disabled.");
+        let due: string | null;
+        try {
+          due = nextDueAt(spec, new Date());
+        } catch {
+          return warning(
+            `The next due time is not computable in the configured zone ${spec.timezone}; sorage config validate names the accepted zones.`,
+          );
+        }
+        if (due === null) {
+          return warning("The next due time is not computable; check the schedule configuration.");
+        }
+        const history = backupRunRows(home);
+        const lastFailure = history.findLast((row) => row.outcome === "failure");
+        if (lastFailure !== undefined) {
+          return warning(`The last backup run failed with ${String(lastFailure.failureCode)}.`);
+        }
+        const lastSuccess = history.findLast((row) => row.outcome !== "failure");
+        if (lastSuccess !== undefined && Date.now() - Date.parse(lastSuccess.startedAt) > 25 * 3_600_000) {
+          return warning(
+            `The last successful backup is older than the configured cadence (last success ${lastSuccess.startedAt}).`,
+          );
+        }
+        return ok(`The next backup is due at ${due}.`);
+      }
     }
   }
 
@@ -488,6 +526,32 @@ function attachRecovery(id: DoctorCheckId, outcome: CheckOutcome): CheckOutcome 
 }
 
 /** Reads `run/daemon.json`; null when absent or malformed. */
+function backupRunRows(home: { stateDir: string }): BackupRunRow[] {
+  try {
+    const db = openSorageDatabase(join(home.stateDir, "sorage.sqlite3"));
+    try {
+      const rows = db.prepare("SELECT * FROM backup_runs").all() as unknown as Array<Record<string, unknown>>;
+      return rows.map((row) => ({
+        id: String(row["id"] ?? ""),
+        triggeredBy: (row["triggered_by"] ?? "manual") as BackupRunRow["triggeredBy"],
+        startedAt: String(row["started_at"] ?? ""),
+        finishedAt: row["finished_at"] === null ? null : String(row["finished_at"] ?? ""),
+        outcome: (row["outcome"] ?? "failure") as BackupRunRow["outcome"],
+        snapshotOutcome: (row["snapshot_outcome"] ?? "failure") as BackupRunRow["snapshotOutcome"],
+        commitOutcome: (row["commit_outcome"] ?? "failure") as BackupRunRow["commitOutcome"],
+        pushOutcome: (row["push_outcome"] ?? "disabled") as BackupRunRow["pushOutcome"],
+        commitSha: row["commit_sha"] === null ? null : String(row["commit_sha"]),
+        failureCode: row["failure_code"] === null ? null : String(row["failure_code"]),
+        failureMessage: row["failure_message"] === null ? null : String(row["failure_message"]),
+      }));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+}
+
 function readDaemonRecord(path: string): { pid: number; host: string; port: number } | null {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown; host?: unknown; port?: unknown };

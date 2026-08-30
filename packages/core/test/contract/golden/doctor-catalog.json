@@ -58,5 +58,9 @@
   {
     "id": "daemon.port",
     "worst": "warning"
+  },
+  {
+    "id": "backup.schedule",
+    "worst": "warning"
   }
 ]

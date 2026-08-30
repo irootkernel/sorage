@@ -32,6 +32,7 @@ import {
   expandConfigurationPath,
   exportSnapshot,
   type GitClient,
+  nextDueAt,
   ok,
   parseSnapshotManifest,
   parseVaultMarker,
@@ -79,7 +80,9 @@ export interface NodeBackupCommandPorts {
   exportPorts(): Result<BackupExportPorts, AppError>;
   restorePorts(): Result<BackupRestorePorts, AppError>;
   verifyPorts(): Result<BackupVerifyPorts, AppError>;
-  runPorts(): Result<import("@sorage/core").BackupRunCommandPorts, AppError>;
+  runPorts(
+    triggeredBy?: "manual" | "scheduled" | "catch-up",
+  ): Result<import("@sorage/core").BackupRunCommandPorts, AppError>;
   statusPorts(): Result<import("@sorage/core").BackupStatusPorts, AppError>;
   /** The RUN-002 process-start obligation every backup command runs first. */
   drainAtStart(): Result<DrainReport, AppError>;
@@ -813,7 +816,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       });
     },
 
-    runPorts(): Result<import("@sorage/core").BackupRunCommandPorts, AppError> {
+    runPorts(
+      triggeredBy: "manual" | "scheduled" | "catch-up" = "manual",
+    ): Result<import("@sorage/core").BackupRunCommandPorts, AppError> {
       const view = installation();
       if (!view.ok) return err(view.error);
       const vaultPath = view.value.vaultPath;
@@ -821,7 +826,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       return ok({
         vaultPath,
         messageTemplate: view.value.commitMessageTemplate,
-        triggeredBy: "manual",
+        triggeredBy,
         pushEnabled: false,
         configuredBranch: view.value.backupBranch,
         lock: { acquire: acquireBackupLock },
@@ -938,6 +943,19 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             }
           }),
         schedule: view.value.schedule,
+        nextDueAt: () =>
+          nextDueAt(
+            view.value.schedule.enabled ? view.value.schedule : { ...view.value.schedule, enabled: false },
+            clock.now(),
+          ),
+        lastRunAt: () =>
+          withDatabase((db) => {
+            const row = db.prepare("SELECT started_at FROM backup_runs ORDER BY started_at DESC LIMIT 1").get() as
+              | { started_at: string }
+              | null
+              | undefined;
+            return ok(row?.["started_at"] ?? null);
+          }),
         repositoryBytes: () => {
           const gitDir = join(vaultPath, ".git");
           if (!existsSync(gitDir)) return ok(null);

@@ -9,14 +9,15 @@ import {
   type DoctorPorts,
 } from "../../src/doctor";
 
-describe("the 0.1 doctor catalog", () => {
-  it("holds exactly fifteen unique check identifiers", () => {
-    expect(DOCTOR_CATALOG_0_1).toHaveLength(15);
-    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(15);
+describe("the doctor catalog", () => {
+  it("holds exactly sixteen unique check identifiers after 0.3 adds backup.schedule", () => {
+    expect(DOCTOR_CATALOG_0_1).toHaveLength(16);
+    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(16);
   });
 
-  it("contains no 0.3 check identifier", () => {
-    const laterIds = ["daemon.reachable", "token.permissions", "service.installed", "backup.schedule", "git.state"];
+  it("contains the 0.3 backup check and none of the later unscheduled ones", () => {
+    expect(DOCTOR_CATALOG_0_1).toContain("backup.schedule");
+    const laterIds = ["daemon.reachable", "token.permissions", "service.installed", "git.state"];
     for (const id of laterIds) {
       expect(DOCTOR_CATALOG_0_1).not.toContain(id);
     }
@@ -37,13 +38,14 @@ describe("the 0.1 doctor catalog", () => {
     expect(DOCTOR_CATALOG_SEVERITY["bindings.nested"]).toBe("warning");
     expect(DOCTOR_CATALOG_SEVERITY["bindings.ambiguous"]).toBe("warning");
     expect(DOCTOR_CATALOG_SEVERITY["platform.tcc"]).toBe("warning");
+    expect(DOCTOR_CATALOG_SEVERITY["backup.schedule"]).toBe("warning");
   });
 });
 
 describe("the pre-initialization report", () => {
   it("marks every check blocking with the init recovery", () => {
     const report = notInitializedReport("/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(15);
+    expect(report.checks).toHaveLength(16);
     for (const check of report.checks) {
       expect(check.severity).toBe("blocking");
       if (check.id !== "config.schema") {
@@ -93,7 +95,7 @@ describe("runDoctor", () => {
       },
     };
     const report = runDoctor(ports, "/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(15);
+    expect(report.checks).toHaveLength(16);
     expect(report.checks.every((check) => check.severity === "blocking")).toBe(true);
   });
 });

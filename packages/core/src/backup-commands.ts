@@ -787,6 +787,10 @@ export interface BackupStatusPorts {
   vaultPath: string;
   history(): Result<BackupRunRow[], AppError>;
   schedule: { enabled: boolean; at: string; timezone: string; catchUpAfterMissedRun: boolean };
+  /** The computed next due time in the schedule zone, or null while disabled (section 31). */
+  nextDueAt(): string | null;
+  /** The most recent run's start, whatever triggered it, for coverage decisions. */
+  lastRunAt(): Result<string | null, AppError>;
   /** Total bytes under the Vault's `.git`, or null when no repository exists. */
   repositoryBytes(): Result<number | null, AppError>;
 }
@@ -819,7 +823,7 @@ export function backupStatus(ports: BackupStatusPorts): Result<BackupStatusRepor
     lastCommit,
     lastPush,
     lastFailure,
-    nextDueAt: null,
+    nextDueAt: ports.nextDueAt(),
     schedule: ports.schedule,
     repositorySizeBytes: bytes.value,
   });

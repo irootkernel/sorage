@@ -159,6 +159,8 @@ describe("backupStatus", () => {
       vaultPath: "/vault",
       history: () => ok(rows),
       schedule: { enabled: false, at: "03:00", timezone: "UTC", catchUpAfterMissedRun: true },
+      nextDueAt: () => null,
+      lastRunAt: () => ok(null),
       repositoryBytes: () => ok(1024),
     };
   }
