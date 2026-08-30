@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createNodeArtifactStore } from "../../src/artifact-store";
@@ -133,7 +134,12 @@ describe("the bounded checksum batch", () => {
     const second = ports.nextArtifactBatch(first.nextCursor, 10);
     expect(second.records).toHaveLength(1);
     expect(second.nextCursor).toBeNull();
-    // Hashing reports the mismatch against the planted zero digest.
-    expect(ports.hashArtifact(key1)).not.toBe("0".repeat(64));
+    // Hashing resolves the vault-relative key itself, so the digest is the real
+    // SHA-256 of the planted bytes; the doubled artifacts/ prefix would miss the
+    // file and return null, which the equality below would catch.
+    const digestOf = (text: string) => createHash("sha256").update(text).digest("hex");
+    expect(ports.hashArtifact(key1)).toBe(digestOf("a".repeat(10)));
+    expect(ports.hashArtifact(key2)).toBe(digestOf("b".repeat(10)));
+    expect(ports.hashArtifact(`artifacts/${handoff}/a/missing.md`)).toBeNull();
   });
 });

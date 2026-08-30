@@ -163,9 +163,9 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
       const vault = vaultPathOf(store);
       if (vault === null) return null;
       try {
-        const digest = createHash("sha256")
-          .update(readFileSync(join(vault, "artifacts", storageKey)))
-          .digest("hex");
+        // A storage key is vault-relative and already carries its artifacts/ segment,
+        // the same resolution rule artifactSize applies below.
+        const digest = createHash("sha256").update(readFileSync(join(vault, storageKey))).digest("hex");
         return digest;
       } catch {
         return null;

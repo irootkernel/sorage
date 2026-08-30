@@ -1,7 +1,8 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initializeInstallation } from "@sorage/core";
@@ -104,5 +105,66 @@ describe("the daemon runtime", () => {
     expect(ports.acquireDaemonLock().ok).toBe(true);
     expect(armed).not.toBeNull();
     expect(sweepTicks).toBe(1);
+  }, 15000);
+
+  it("sweep ticks verify real artifact bytes and only report true mismatches (SEC-014)", async () => {
+    // Seed one materialized artifact whose planted bytes hash to the recorded digest.
+    const { openAndMigrate } = await import("@sorage/adapters/src/sqlite/migrator");
+    const { MIGRATIONS } = await import("@sorage/adapters/src/sqlite/migrations");
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    const handoff = "2f0ac9a0-0000-4000-8000-0000000000s1";
+    const storageKey = `artifacts/${handoff}/s1/sweep.md`;
+    const content = "sweep me";
+    const digest = createHash("sha256").update(content).digest("hex");
+    const project = "3f0ac9a0-0000-4000-8000-0000000000p2";
+    const now = new Date().toISOString();
+    mkdirSync(dirname(join(home, "vault", storageKey)), { recursive: true });
+    writeFileSync(join(home, "vault", storageKey), content);
+    db.exec("BEGIN");
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES (?,?,?,'active',?,?)",
+    ).run(project, "sweepproj", "Sweep Proj", now, now);
+    db.prepare(
+      "INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version, review_state, created_at, updated_at) VALUES (?,?,?,?,?,1,1,'awaiting_recipient',?,?)",
+    ).run(handoff, "Sweep probe", "user", project, "s1", now, now);
+    db.prepare(
+      "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, materialized, created_at) VALUES (?,?,?,?,?,?,?, ?,1,?)",
+    ).run("s1", handoff, storageKey, "sweep.md", "sweep.md", "text/markdown", content.length, digest, now);
+    db.exec("COMMIT");
+    db.close();
+
+    let tick: (() => void) | null = null;
+    // The first test's "lock is free" probe re-acquired daemon.lock and left it
+    // held by this same process; clear our own leftover record before serving.
+    rmSync(join(home, "run", "daemon.lock"), { force: true });
+    const port = await freePort();
+    const write = createNodeConfigCommandPorts().store;
+    const config = write.read();
+    expect(config.ok && config.value !== null).toBe(true);
+    if (!config.ok || config.value === null) return;
+    config.value.config.server.port = port;
+    expect(write.write(config.value.config, { revision: config.value.revision }).ok).toBe(true);
+    running = await serveDaemon({
+      serverFactory: createDaemonServer,
+      scheduleSweep: (run) => {
+        tick = run;
+        return () => {};
+      },
+      armSignals: () => {},
+    });
+
+    const first = (tick as unknown as () => { checked: number; mismatches: string[] })();
+    // The vault-relative key resolves to the planted bytes, so a healthy artifact
+    // is not reported: this is exactly the false positive the doubled artifacts/
+    // prefix used to produce on every tick.
+    expect(first.checked).toBe(1);
+    expect(first.mismatches).toEqual([]);
+
+    writeFileSync(join(home, "vault", storageKey), "corrupted");
+    const second = (tick as unknown as () => { checked: number; mismatches: string[] })();
+    expect(second.checked).toBe(1);
+    expect(second.mismatches).toEqual([storageKey]);
+
+    await running.drain();
   }, 15000);
 });
