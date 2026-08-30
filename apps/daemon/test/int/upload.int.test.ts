@@ -203,6 +203,29 @@ describe("browser upload (API-003, NFR-005)", () => {
     const storageKey = outcome.data.handoffs[0].storageKey as string;
     const stored = readFileSync(join(home, "vault", storageKey));
     expect(stored.toString("utf8")).toBe(content);
+    // The browser's filename survives as the recorded original name, so the
+    // Artifact metadata matches a CLI import of the same file (VLT-007).
+    const detail = await new Promise<string>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: `/api/v1/handoffs/${outcome.data.handoffs[0].handoffId}?asUser=true`,
+          method: "GET",
+          headers: { host: `127.0.0.1:${port}`, authorization: `Bearer ${apiToken}` },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.end();
+    });
+    const artifact = json({ body: detail }).data.currentArtifact;
+    expect(artifact.originalName).toBe("source.md");
+    expect(artifact.mimeType).toBe("text/markdown");
     // The spool is cleaned up after the import: no upload residue survives.
     const uploads = join(home, "state", "uploads");
     expect(existsSync(uploads) ? readdirSync(uploads) : []).toHaveLength(0);

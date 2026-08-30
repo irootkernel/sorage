@@ -28,6 +28,8 @@ export interface SendInput {
   userHome: string;
   as?: string | undefined;
   asUser?: boolean | undefined;
+  /** Names the caller's original file when `file` points at an opaque spool (VLT-007). */
+  originalName?: string | undefined;
 }
 
 export interface SentHandoff {
@@ -349,7 +351,9 @@ function sendStaged(
               {
                 sourcePath: file,
                 resolvedSourcePath: inspected.value.resolvedSourcePath,
-                originalName: inspected.value.originalName,
+                // A browser upload hands over an opaque spool path, so the route
+                // names the user's file; a path import keeps the inspected name.
+                originalName: input.originalName ?? inspected.value.originalName,
                 workspaceRoot: workspaceRoot.value,
                 externalPolicy: "workspace_or_explicit",
                 allowExternalSource: input.allowExternalSource,

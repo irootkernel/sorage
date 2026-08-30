@@ -317,6 +317,59 @@ describe("the handoff lifecycle", () => {
     });
     expect(terminal.status).toBe(200);
   });
+
+  it("revises through a browser multipart upload and records the uploaded filename", async () => {
+    // A fresh User-sent Handoff so the same actor may revise it.
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Revise me", body: "first", asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+    expect(id).not.toBe("");
+
+    const noted = await call(`/api/v1/handoffs/${id}/review-note`, {
+      method: "PUT",
+      bearer: apiToken,
+      body: { text: "Tighten", as: "web-app" },
+    });
+    expect(noted.status).toBe(200);
+
+    // A browser session token: section 18.5 documents the multipart shape for the
+    // browser, so the route must accept it rather than the CLI token only.
+    const secret = createNodeWebSecretStore({
+      stateDir: join(home, "state"),
+      clock: { now: () => new Date() },
+    }).issue();
+    expect(secret.ok).toBe(true);
+    if (!secret.ok) return;
+    const exchanged = await call("/api/v1/session", { method: "POST", body: { secret: secret.value.secret } });
+    const browser = json(exchanged).data.token as string;
+
+    const boundary = "revise-boundary-1a";
+    const multipartBody = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="revision.md"\r\nContent-Type: text/markdown\r\n\r\n`,
+      ),
+      Buffer.from("# revised through the browser\n"),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const revised = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
+      method: "POST",
+      bearer: browser,
+      rawBody: multipartBody,
+      extra: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    });
+    expect(revised.status).toBe(200);
+    expect(json(revised).data.revision).toBe(2);
+    expect(json(revised).data.reviewState).toBe("awaiting_recipient");
+
+    // The spool path is opaque, so the browser's filename is what gets recorded.
+    const detail = await call(`/api/v1/handoffs/${id}?asUser=true`, { bearer: apiToken });
+    expect(json(detail).data.currentArtifact.originalName).toBe("revision.md");
+    expect(json(detail).data.currentArtifact.mimeType).toBe("text/markdown");
+  });
 });
 
 describe("the Idempotency-Key replay (API-012)", () => {

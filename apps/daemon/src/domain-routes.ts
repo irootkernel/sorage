@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { createHash, randomUUID } from "node:crypto";
 import type { Result as CoreResult } from "@sorage/core";
@@ -402,6 +402,9 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         to,
         title,
         file: file.path,
+        // The spool path is an opaque UUID, so the browser's filename is the
+        // original name the Artifact must record (VLT-007).
+        originalName: file.filename,
         allowExternalSource: true, // the browser upload is already the authenticated source
         allowUnregistered: false,
         ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
@@ -509,15 +512,64 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "POST",
     pattern: "/api/v1/handoffs/{id}/revise",
     idempotent: true,
-    cliTokenOnly: true,
     handler: async (request, response, context) => {
+      // Section 18.5: revise accepts a streaming multipart upload for the browser
+      // session, a JSON body naming a local path for the CLI context, and the
+      // no-change JSON resolution - so the route must not be CLI-token-only.
+      const contentType = String(request.headers["content-type"] ?? "");
+      if (contentType.startsWith("multipart/form-data")) {
+        const configPorts = createNodeConfigCommandPorts();
+        const current = configPorts.store.read();
+        if (!current.ok || current.value === null) {
+          return void respondError(response, context, appError("NOT_INITIALIZED", "Sorage has not been initialized."));
+        }
+        const upload = await consumeMultipartUpload(request, {
+          maxBytes: current.value.config.artifact.maxBytes,
+          spoolDir: join(homeOf(), "state", "uploads"),
+        });
+        if (!upload.ok) return void respondError(response, context, upload.error);
+        const file = upload.value.file;
+        if (file === null) {
+          return void respondError(response, context, appError("CONFIG_INVALID", "the revise upload carried no file part"));
+        }
+        const fields = upload.value.fields;
+        const query = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
+        const asField = fields.as?.[0];
+        const asUserField = fields.asUser?.[0] === "true";
+        const actor = actorInputOf(query, {
+          ...(typeof asField === "string" ? { as: asField } : {}),
+          ...(asUserField ? { asUser: true } : {}),
+        });
+        if (!actor.ok) {
+          upload.value.cleanup();
+          return void respondError(response, context, actor.error);
+        }
+        const rowVersionField = Number(fields.expectedRowVersion?.[0] ?? NaN);
+        const result = reviseHandoff(createNodeRevisionPorts(), {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          file: file.path,
+          // The spool path is an opaque UUID, so the browser's filename is the
+          // original name the replacement Artifact must record (VLT-007).
+          originalName: file.filename,
+          allowExternalSource: true, // the browser upload is already the authenticated source
+          ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
+          ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
+          ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+          ...(Number.isFinite(rowVersionField) ? { expectedRowVersion: rowVersionField } : {}),
+        });
+        upload.value.cleanup();
+        return void respond(response, context, result);
+      }
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
       const result = reviseHandoff(createNodeRevisionPorts(), {
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
-        ...(typeof body.path === "string" ? { file: body.path } : {}),
+        ...(typeof body.path === "string"
+          ? { file: body.path, originalName: basename(body.path) }
+          : {}),
         ...(body.noChange === true ? { noChange: true } : {}),
         ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
         ...(typeof body.idempotencyKey === "string"
