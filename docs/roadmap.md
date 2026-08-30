@@ -76,7 +76,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `EPIC-005` | Handoff domain and workflow | 0.1 | Completed | `TASK-027` to `TASK-035` |
 | `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Completed | `TASK-036` to `TASK-041` |
 | `EPIC-007` | Daemon, API, and Web | 0.2 | Completed | `TASK-042` to `TASK-051` |
-| `EPIC-008` | Git backup and restore | 0.3 | Planned | `TASK-052` to `TASK-058` |
+| `EPIC-008` | Git backup and restore | 0.3 | Completed | `TASK-052` to `TASK-058` |
 | `EPIC-009` | Hardening, packaging, and MVP release | 0.3 | Planned | `TASK-059` to `TASK-065` |
 
 ## EPIC-001: Foundation and toolchain
@@ -210,7 +210,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-008: Git backup and restore
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** 0.3
 - **Objective:** Make the Vault genuinely restorable on another machine, with a deterministic snapshot, a real importer, and a scheduler that survives sleep and daylight-saving transitions, delivering AJ-14 and AJ-15.
 
