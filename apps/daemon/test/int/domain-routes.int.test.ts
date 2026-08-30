@@ -220,7 +220,10 @@ describe("the handoff lifecycle", () => {
     const etag = String(content.headers.etag);
     expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
     expect(content.headers["accept-ranges"]).toBe("bytes");
-    expect(String(content.headers["content-disposition"])).toContain("attachment");
+    // Section 11.2: a .md Artifact serves as inline UTF-8 text for preview, so it
+    // carries no attachment disposition; only non-previewable bytes do.
+    expect(content.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    expect(content.headers["content-disposition"]).toBeUndefined();
 
     const partial = await call(`/api/v1/handoffs/${handoffId}/artifact/content?as=web-app`, {
       bearer: apiToken,
@@ -229,6 +232,44 @@ describe("the handoff lifecycle", () => {
     expect(partial.status).toBe(206);
     expect(partial.body).toBe("# Th");
     expect(partial.headers["content-range"]).toBe(`bytes 0-3/${content.body.length}`);
+
+    // A suffix range serves the final N bytes, never a range from zero (section 18.4).
+    const size = content.body.length;
+    const suffix = await call(`/api/v1/handoffs/${handoffId}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: `bytes=-${Math.min(6, size)}` },
+    });
+    expect(suffix.status).toBe(206);
+    expect(suffix.body).toBe(content.body.slice(-6));
+    expect(suffix.headers["content-range"]).toBe(`bytes ${size - 6}-${size - 1}/${size}`);
+
+    // A suffix that covers the whole file serves it all; bytes=-0 is unsatisfiable.
+    const whole = await call(`/api/v1/handoffs/${handoffId}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: `bytes=-${size + 100}` },
+    });
+    expect(whole.status).toBe(206);
+    expect(whole.body).toBe(content.body);
+    expect(whole.headers["content-range"]).toBe(`bytes 0-${size - 1}/${size}`);
+    const unsatisfiable = await call(`/api/v1/handoffs/${handoffId}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=-0" },
+    });
+    expect(unsatisfiable.status).toBe(416);
+
+    // A non-previewable Artifact serves as an attachment under its original name.
+    writeFileSync(join(senderDir, "render.png"), "\u0089PNG-render-bytes");
+    const binary = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Render", path: join(senderDir, "render.png"), asUser: true },
+    });
+    expect(binary.status).toBe(201);
+    const binaryId = json(binary).data.handoffs[0].handoffId as string;
+    const served = await call(`/api/v1/handoffs/${binaryId}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(served.status).toBe(200);
+    expect(served.headers["content-type"]).toBe("application/octet-stream");
+    expect(String(served.headers["content-disposition"])).toContain('attachment; filename="render.png"');
 
     // A non-participant read discloses nothing.
     const outsider = await call(`/api/v1/handoffs/${handoffId}?asUser=true`, { bearer: apiToken });

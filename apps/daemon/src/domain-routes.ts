@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { createHash, randomUUID } from "node:crypto";
 import type { Result as CoreResult } from "@sorage/core";
@@ -324,16 +324,31 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       response.setHeader("X-Request-Id", context.requestId);
       response.setHeader("ETag", etag);
       response.setHeader("Accept-Ranges", "bytes");
-      response.setHeader("Content-Type", fetched.value.artifact.mimeType || "application/octet-stream");
-      response.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${basename(fetched.value.artifact.storageKey)}"`,
-      );
+      // Section 11.2: .md and .txt serve as inline UTF-8 text for preview; every
+      // other extension serves as an octet-stream attachment under its original name.
+      const originalName = fetched.value.artifact.originalName;
+      if (/\.(md|txt)$/i.test(originalName)) {
+        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+      } else {
+        response.setHeader("Content-Type", "application/octet-stream");
+        response.setHeader("Content-Disposition", `attachment; filename="${headerSafeFilename(originalName)}"`);
+      }
       const range = request.headers.range;
       const match = range !== undefined ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
-      if (match !== null) {
-        const start = match[1] === "" ? 0 : Number(match[1]);
-        const end = match[2] === "" ? size - 1 : Number(match[2]);
+      if (match !== null && !(match[1] === "" && match[2] === "")) {
+        let start: number;
+        let end: number;
+        if (match[1] === "") {
+          // A suffix range serves the final N bytes (section 18.4, RFC 9110); a
+          // suffix covering the whole file serves it all, and bytes=-0 is
+          // unsatisfiable, like any range on an empty file.
+          const suffix = Number(match[2]);
+          start = suffix <= 0 ? Number.NaN : Math.max(0, size - suffix);
+          end = size - 1;
+        } else {
+          start = Number(match[1]);
+          end = match[2] === "" ? size - 1 : Number(match[2]);
+        }
         if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= size) {
           response.statusCode = 416;
           response.setHeader("Content-Range", `bytes */${size}`);
@@ -745,6 +760,11 @@ function numericExpectations(
     parsed[key] = value;
   }
   return { ok: true, value: parsed };
+}
+
+/** Keeps an original name safe to quote inside a Content-Disposition filename. */
+function headerSafeFilename(name: string): string {
+  return name.replace(/[\\"\r\n]/g, "_");
 }
 
 function securityHeaders(): Record<string, string> {
