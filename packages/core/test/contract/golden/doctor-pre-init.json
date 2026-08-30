@@ -127,6 +127,14 @@
       "recovery": {
         "suggestedCommand": "sorage init"
       }
+    },
+    {
+      "id": "git.state",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
     }
   ]
 }

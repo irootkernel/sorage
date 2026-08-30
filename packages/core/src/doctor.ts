@@ -2,7 +2,8 @@
  * The doctor check catalog (INIT-014, INIT-017, NFR-010): the 0.1 snapshot held
  * exactly fourteen check identifiers, and the catalog grows only as later
  * milestones land; milestone 0.2 adds `daemon.port`.
- * milestone 0.2 adds `daemon.port`, and milestone 0.3 adds `backup.schedule`.
+ * milestone 0.2 adds `daemon.port`, and milestone 0.3 adds `backup.schedule` and
+ * `git.state`.
  * Each check carries a dotted id, a severity of ok, warning, or blocking, a message, and
  * an optional recovery. The catalog is a versioned part of the CLI JSON contract;
  * adding, renaming, or re-scoping a check is a contract change. Before
@@ -40,6 +41,7 @@ export const DOCTOR_CATALOG_0_1 = [
   "platform.tcc",
   "daemon.port",
   "backup.schedule",
+  "git.state",
 ] as const;
 
 export type DoctorCheckId = (typeof DOCTOR_CATALOG_0_1)[number];
@@ -62,6 +64,7 @@ export const DOCTOR_CATALOG_SEVERITY: Record<DoctorCheckId, DoctorSeverity> = {
   "platform.tcc": "warning",
   "daemon.port": "warning",
   "backup.schedule": "warning",
+  "git.state": "warning",
 };
 
 export type CheckOutcome = {

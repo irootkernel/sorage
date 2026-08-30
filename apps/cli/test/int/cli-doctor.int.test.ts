@@ -91,7 +91,7 @@ describe("AJ-01: fresh non-interactive initialization and doctor", () => {
     expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(16);
+    expect(report.data.checks).toHaveLength(17);
     for (const check of report.data.checks) {
       expect(check.severity).toBe("ok");
       expect(check.recovery).toBeUndefined();
@@ -133,7 +133,7 @@ describe("AJ-02: pre-initialization guidance", () => {
     expect(code).toBe(1);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(16);
+    expect(report.data.checks).toHaveLength(17);
     const expectedIds = [
       "home.permissions",
       "config.schema",
@@ -151,6 +151,7 @@ describe("AJ-02: pre-initialization guidance", () => {
       "platform.tcc",
       "daemon.port",
       "backup.schedule",
+      "git.state",
     ];
     expect(report.data.checks.map((check) => check.id)).toEqual(expectedIds);
     for (const check of report.data.checks) {

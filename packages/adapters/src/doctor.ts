@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
@@ -11,6 +11,7 @@ import {
   parseVaultMarker,
   validateVaultMarkerForInstallation,
   verifyVaultArtifacts,
+  isManagedVaultPath,
   vaultGitattributesContent,
   vaultGitignoreContent,
 } from "@sorage/core";
@@ -47,6 +48,7 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
   "daemon.port": "Change server.port in the configuration, then restart the daemon",
   "backup.schedule": "sorage backup run, then read sorage backup status",
+  "git.state": "Resolve the repository state manually; Sorage never rebases or merges",
 };
 
 const GITATTRIBUTES = vaultGitattributesContent();
@@ -504,6 +506,49 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           );
         }
         return ok(`The next backup is due at ${due}.`);
+      }
+
+      case "git.state": {
+        const config = configuration();
+        if (config === null) return warning("The Vault repository cannot be checked without a valid configuration.");
+        const vault = vaultPath(config);
+        if (vault === null) return warning("The Vault repository cannot be checked without a valid configuration.");
+        if (!existsSync(join(vault, ".git"))) return ok("The Vault has no Git repository yet.");
+        const completed = spawnSync("git", ["-C", vault, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" });
+        const branch = completed.status === 0 ? String(completed.stdout ?? "").trim() : "";
+        if (branch !== config.gitBackup.push.branch) {
+          return warning(
+            `The Vault repository is on '${branch === "" ? "a detached HEAD" : branch}', not the configured branch '${config.gitBackup.push.branch}'.`,
+          );
+        }
+        if (
+          existsSync(join(vault, ".git", "MERGE_HEAD")) ||
+          existsSync(join(vault, ".git", "rebase-merge")) ||
+          existsSync(join(vault, ".git", "rebase-apply"))
+        ) {
+          return warning("The Vault repository has a merge or rebase in progress.");
+        }
+        const staged = spawnSync("git", ["-C", vault, "diff", "--cached", "--name-only"], { encoding: "utf8" });
+        const stagedPaths = String(staged.stdout ?? "")
+          .split("\n")
+          .filter((line) => line !== "");
+        const unmanaged = stagedPaths.filter((path) => !isManagedVaultPath(path));
+        if (unmanaged.length > 0) {
+          return warning(`The index holds staged work outside the managed pathspecs: ${unmanaged.join(", ")}.`);
+        }
+        const listed = spawnSync("git", ["-C", vault, "remote"], { encoding: "utf8" });
+        const remotes =
+          listed.status === 0
+            ? String(listed.stdout ?? "")
+                .split("\n")
+                .filter((line) => line !== "")
+            : [];
+        if (config.gitBackup.push.enabled && !remotes.includes(config.gitBackup.push.remote)) {
+          return warning(
+            `Push is enabled for remote '${config.gitBackup.push.remote}' but the repository does not know that remote.`,
+          );
+        }
+        return ok(`The Vault repository is on '${branch}' with a clean index.`);
       }
     }
   }

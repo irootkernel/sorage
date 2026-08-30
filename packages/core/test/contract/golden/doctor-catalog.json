@@ -62,5 +62,9 @@
   {
     "id": "backup.schedule",
     "worst": "warning"
+  },
+  {
+    "id": "git.state",
+    "worst": "warning"
   }
 ]

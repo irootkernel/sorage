@@ -81,6 +81,11 @@
         "id": "backup.schedule",
         "severity": "ok",
         "message": "The backup schedule is disabled."
+      },
+      {
+        "id": "git.state",
+        "severity": "ok",
+        "message": "The Vault has no Git repository yet."
       }
     ]
   },
