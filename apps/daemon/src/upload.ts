@@ -1,6 +1,5 @@
 import { closeSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { dirname } from "node:path";
 import { appError } from "@sorage/core";
 import type { AppError } from "@sorage/core";
 import type { IncomingMessage } from "node:http";
@@ -52,7 +51,7 @@ export function consumeMultipartUpload(
   return new Promise((resolve) => {
     const fail = (error: AppError) => {
       try {
-        if (spool !== null) closeSync(spooloolSafe(spool));
+        if (spool !== null) closeSync(spool);
         if (file !== null) rmSync(file.path, { force: true });
         rmSync(spoolPath, { force: true });
       } catch {
@@ -61,10 +60,6 @@ export function consumeMultipartUpload(
       request.resume();
       resolve({ ok: false, error });
     };
-
-    function spooloolSafe(fd: number): number {
-      return fd;
-    }
 
     // A tiny state machine over the raw byte stream: the buffer never holds more
     // than the current part's framing plus one incoming chunk.
@@ -240,9 +235,10 @@ export function consumeMultipartUpload(
           fields,
           file: file as UploadedPart,
           cleanup: () => {
+            // Only this upload's own spool file: the shared state/uploads directory
+            // holds the spools of every concurrent upload and must survive (TASK-047).
             try {
               rmSync(spoolPath, { force: true });
-              rmSync(dirname(spoolPath), { recursive: true, force: true });
             } catch {
               // Best effort.
             }
