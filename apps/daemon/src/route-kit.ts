@@ -117,3 +117,16 @@ export function storeReplay(
   const requestHash = createHash("sha256").update(requestIdentity).digest("hex");
   store.set(key, { requestHash, status, body });
 }
+
+/**
+ * Releases an in-flight marker so a failed execution leaves the key retryable: a
+ * handler that throws must not pin its Idempotency-Key as permanently in flight.
+ */
+export function discardReplay(
+  store: Map<string, { requestHash: string; status: number; body: unknown }>,
+  key: string | undefined,
+): void {
+  if (key === undefined) return;
+  const stored = store.get(key);
+  if (stored !== undefined && stored.status === -1) store.delete(key);
+}

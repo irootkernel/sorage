@@ -12,7 +12,14 @@ import {
 } from "@sorage/core";
 import { bearerValue, type AuthenticatedContext, type SessionService } from "./auth";
 import { WEB_APP_JS, WEB_CSS, WEB_INDEX_HTML } from "./web-app";
-import { allowedMethods, evaluateIdempotency, matchRoute, storeReplay, type RouteEntryInternal } from "./route-kit";
+import {
+  allowedMethods,
+  discardReplay,
+  evaluateIdempotency,
+  matchRoute,
+  storeReplay,
+  type RouteEntryInternal,
+} from "./route-kit";
 import { createHash } from "node:crypto";
 
 /**
@@ -623,15 +630,22 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               }
               return originalEnd(chunk as never, ...(rest as never[]));
             }) as typeof response.end;
-            await matched.route.handler(replayableRequest(request, spool.path), response, {
-              requestId,
-              auth: auth.context,
-              params: matched.params,
-              as,
-              asUser,
-              idempotencyKey,
-            });
-            storeReplay(idempotencyStore, idempotencyKey, requestIdentity, captured.status, captured.body);
+            try {
+              await matched.route.handler(replayableRequest(request, spool.path), response, {
+                requestId,
+                auth: auth.context,
+                params: matched.params,
+                as,
+                asUser,
+                idempotencyKey,
+              });
+              storeReplay(idempotencyStore, idempotencyKey, requestIdentity, captured.status, captured.body);
+            } catch (error) {
+              // A failed execution must not pin the key as in flight forever: the
+              // client retrying after the failure would meet a permanent conflict.
+              discardReplay(idempotencyStore, idempotencyKey);
+              throw error;
+            }
             return;
           }
           await matched.route.handler(request, response, {
