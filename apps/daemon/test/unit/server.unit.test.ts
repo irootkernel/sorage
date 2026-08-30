@@ -1,10 +1,12 @@
 import { appError } from "@sorage/core";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
   CONTENT_SECURITY_POLICY,
   createDaemonServer,
   isHostAllowed,
   isLoopbackBindAddress,
+  readJsonBody,
   SECURITY_HEADERS,
 } from "../../src/server";
 
@@ -94,5 +96,26 @@ describe("the error surface", () => {
       expect(error.code).toBe(code);
       expect(status).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("the JSON body reader cap", () => {
+  async function* streamOf(chunks: Buffer[]): AsyncGenerator<Buffer> {
+    for (const chunk of chunks) yield chunk;
+  }
+
+  it("refuses a body over the cap as CONFIG_INVALID and keeps smaller ones parseable", async () => {
+    // One megabyte plus one byte crosses the cap; the reader must throw the
+    // configured code instead of buffering the whole stream (API-006, CFG-019).
+    const oversized = readJsonBody(streamOf([Buffer.alloc(1_048_577, 0x61)]) as unknown as IncomingMessage);
+    await expect(oversized).rejects.toMatchObject({
+      code: "CONFIG_INVALID",
+      message: expect.stringContaining("too large"),
+    });
+
+    const parsed = await readJsonBody(
+      streamOf([Buffer.from('{"key":"ui.defaultPageSize","value":"30"}')]) as unknown as IncomingMessage,
+    );
+    expect(parsed).toEqual({ key: "ui.defaultPageSize", value: "30" });
   });
 });

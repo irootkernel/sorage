@@ -391,7 +391,7 @@ const PUBLIC_PATHS = new Set([
 
 const MAX_JSON_BODY_BYTES = 1_048_576;
 
-async function readJsonBody(
+export async function readJsonBody(
   request: IncomingMessage,
   limits: { maxBytes?: number; code?: Parameters<typeof appError>[0]; message?: string } = {},
 ): Promise<Record<string, unknown>> {

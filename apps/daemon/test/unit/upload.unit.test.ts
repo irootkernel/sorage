@@ -80,4 +80,26 @@ describe("upload cleanup isolation", () => {
       rmSync(spoolDir, { recursive: true, force: true });
     }
   });
+
+  it("refuses a multipart preamble that never finds its boundary", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const hostile = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(hostile as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      // A boundary-less preamble larger than the bound must fail instead of
+      // buffering an endless stream in memory.
+      hostile.emit("data", Buffer.alloc(70_000, 0x61));
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(result.error.message).toContain("preamble");
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
 });

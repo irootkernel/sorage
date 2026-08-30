@@ -833,11 +833,11 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
 }
 
 /** Rejects a missing or non-numeric expectation honestly instead of letting NaN silently fail every comparison. */
-function numericExpectations(
+function numericExpectations<K extends string>(
   body: Record<string, unknown>,
-  keys: string[],
-): CoreResult<Record<string, number>, AppError> {
-  const parsed: Record<string, number> = {};
+  keys: K[],
+): CoreResult<Record<K, number>, AppError> {
+  const parsed = {} as Record<K, number>;
   for (const key of keys) {
     const value = body[key];
     if (typeof value !== "number" || !Number.isFinite(value)) {

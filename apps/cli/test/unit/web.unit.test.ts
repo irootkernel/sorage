@@ -97,4 +97,19 @@ describe("runWebCommand", () => {
     expect(opened).toEqual([]);
     expect(harness.out.join("")).toContain("#s=");
   });
+
+  it("names the bound address so an IPv6 loopback yields a reachable URL", () => {
+    const opened: string[] = [];
+    const harness = sink();
+    const ipv6 = defaultConfiguration("1f0ac9a0-0000-4000-8000-0000000000c");
+    ipv6.server.host = "::1";
+    const code = runWebCommand(
+      ports({ probeDaemon: () => true, openBrowser: (url) => opened.push(url), readConfig: () => ok(ipv6) }),
+      harness.ports,
+      { openBrowser: true },
+    );
+    expect(code).toBe(0);
+    // The bracketed literal is reachable in a browser; a dead 127.0.0.1 URL is not.
+    expect(opened).toEqual([`http://[::1]:46321/#s=${SECRET}`]);
+  });
 });

@@ -37,6 +37,8 @@ export interface ServeDaemonOptions {
   scheduleSweep?: (run: () => void) => () => void;
   /** The drain signal to arm; production arms SIGTERM and SIGINT. */
   armSignals?: (drain: () => void) => void;
+  /** How the process ends after a controlled restart; tests keep the runner alive. */
+  restartExit?: (code: number) => void;
 }
 
 export interface RunningDaemon {
@@ -98,7 +100,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
       // drain SEC-015 mandates for a stop - refuse mutations, let in-flight
       // requests finish - before the listener, the record, and the lock go.
       setTimeout(() => {
-        void drain().then(() => process.exit(0));
+        void drain().then(() => (options.restartExit ?? ((code: number) => process.exit(code)))(0));
       }, 50);
     },
     isDraining: () => draining,

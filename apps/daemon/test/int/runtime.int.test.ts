@@ -1,5 +1,5 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -48,7 +48,7 @@ function freePort(): Promise<number> {
   });
 }
 
-function post(path: string): Promise<{ status: number; body: string }> {
+function post(path: string, bearer?: string): Promise<{ status: number; body: string }> {
   const port = running?.record.port ?? 0;
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest(
@@ -57,7 +57,11 @@ function post(path: string): Promise<{ status: number; body: string }> {
         port,
         path,
         method: "POST",
-        headers: { host: `127.0.0.1:${port}`, "content-type": "application/json" },
+        headers: {
+          host: `127.0.0.1:${port}`,
+          "content-type": "application/json",
+          ...(bearer !== undefined ? { authorization: `Bearer ${bearer}` } : {}),
+        },
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -165,6 +169,42 @@ describe("the daemon runtime", () => {
     expect(second.checked).toBe(1);
     expect(second.mismatches).toEqual([storageKey]);
 
+    await running.drain();
+  }, 15000);
+
+  it("answers a controlled restart and then runs the same graceful drain (RUN-008, SEC-015)", async () => {
+    rmSync(join(home, "run", "daemon.lock"), { force: true });
+    const port = await freePort();
+    const write = createNodeConfigCommandPorts().store;
+    const config = write.read();
+    expect(config.ok && config.value !== null).toBe(true);
+    if (!config.ok || config.value === null) return;
+    config.value.config.server.port = port;
+    expect(write.write(config.value.config, { revision: config.value.revision }).ok).toBe(true);
+    running = await serveDaemon({
+      serverFactory: createDaemonServer,
+      scheduleSweep: () => () => {},
+      armSignals: () => {},
+      // The in-process harness must survive the restart drain that ends a real
+      // daemon process; only the drain behavior is under test here.
+      restartExit: () => {},
+    });
+    expect(existsSync(join(home, "run", "daemon.json"))).toBe(true);
+    const token = readFileSync(join(home, "state", "api-token"), "utf8").trim();
+    const restart = await post("/api/v1/runtime/restart", token);
+    expect(restart.status).toBe(200);
+    // The endpoint answers first; the restart then drains exactly like a stop,
+    // refusing new mutations before storage closes and removing the record.
+    const gone = await new Promise<boolean>((resolve) => {
+      const started = Date.now();
+      const check = () => {
+        if (!existsSync(join(home, "run", "daemon.json"))) resolve(true);
+        else if (Date.now() - started > 5000) resolve(false);
+        else setTimeout(check, 25);
+      };
+      check();
+    });
+    expect(gone).toBe(true);
     await running.drain();
   }, 15000);
 });

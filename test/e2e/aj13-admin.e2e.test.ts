@@ -184,12 +184,25 @@ describe("AJ-13 web administration", () => {
     await page.waitForFunction(() =>
       (document.querySelector(".preview")?.textContent ?? "").includes("installationId"),
     );
+    // The inbox-marker toggle the page shows is saved by the same submit, not
+    // silently dropped: flip it, save, and confirm the configuration moved.
+    await page.selectOption("select", "true");
+    await page.fill('input[type="number"]', "33");
+    await page.click('button[type="submit"]');
+    await page.waitForFunction(() => document.body.textContent?.includes("Saved."));
+    const markerSet = sorage(["config", "show", "--json"], { home });
+    expect(jsonBody(markerSet.stdout).data.handoff.inboxMarker).toBe(true);
+    await page.selectOption("select", "false");
+    await page.click('button[type="submit"]');
+    await page.waitForFunction(() => document.body.textContent?.includes("Saved."));
+    const markerReset = sorage(["config", "show", "--json"], { home });
+    expect(jsonBody(markerReset.stdout).data.handoff.inboxMarker).toBe(false);
     // Move the file underneath the loaded ETag first.
     expect(sorage(["config", "set", "logging.level", "info", "--as-user", "--json"], { home }).status).toBe(0);
-    await page.fill('input[type="number"]', "33");
+    await page.fill('input[type="number"]', "44");
     await page.click('button[type="submit"]');
     await page.waitForFunction(() => document.body.textContent?.includes("CONFIG_CONFLICT"));
     const preserved = sorage(["config", "show", "--json"], { home });
-    expect(jsonBody(preserved.stdout).data.ui.defaultPageSize).not.toBe(33);
+    expect(jsonBody(preserved.stdout).data.ui.defaultPageSize).not.toBe(44);
   }, 90000);
 });

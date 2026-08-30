@@ -1,12 +1,12 @@
 {
   "name": "@sorage/daemon",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "@sorage/core": "0.1.0",
-    "@sorage/adapters": "0.1.0"
+    "@sorage/core": "0.2.0",
+    "@sorage/adapters": "0.2.0"
   }
 }

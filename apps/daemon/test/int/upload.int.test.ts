@@ -273,10 +273,13 @@ describe("browser upload (API-003, NFR-005)", () => {
     const outcome = json(created);
     expect(outcome.data.handoffs).toHaveLength(2);
     const group = outcome.data.dispatchGroupId;
-    expect(
-      outcome.data.handoffs.every((entry: { dispatchGroupId?: string }) => entry.dispatchGroupId === undefined || true),
-    ).toBe(true);
     expect(group).toBeTypeOf("string");
+    // Every recipient's copy is independent: distinct Handoff ids and distinct
+    // storage keys under the one dispatch group (HND-009).
+    const ids = outcome.data.handoffs.map((entry: { handoffId: string }) => entry.handoffId);
+    expect(new Set(ids).size).toBe(2);
+    const keys = outcome.data.handoffs.map((entry: { storageKey: string }) => entry.storageKey);
+    expect(new Set(keys).size).toBe(2);
   });
 
   it("aborts mid-stream over artifact.maxBytes with ARTIFACT_TOO_LARGE and leaves nothing behind", async () => {

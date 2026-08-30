@@ -94,7 +94,7 @@ import * as webBindings from "./web";
 import { Command, InvalidArgumentError } from "commander";
 
 export const CLI_NAME = "sorage" as const;
-export const CLI_VERSION = "0.1.0" as const;
+export const CLI_VERSION = "0.2.0" as const;
 
 export interface GlobalOptions {
   as?: string;
@@ -1904,7 +1904,10 @@ export function main(argv: string[] = process.argv.slice(2)): number {
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         process.stderr.write(`the daemon could not start: ${message}\n`);
-        process.exitCode = 78;
+        // PORT_IN_USE and SERVICE_PAUSED carry their documented exit codes; an
+        // unrecognized failure stays in the invalid-configuration category.
+        const code = (error as { code?: unknown } | null)?.code;
+        process.exitCode = typeof code === "string" ? errorSpec(code as Parameters<typeof errorSpec>[0]).exitCode : 78;
       });
     // The daemon owns the process until it stops; the serve promise keeps it alive.
     return -1;
