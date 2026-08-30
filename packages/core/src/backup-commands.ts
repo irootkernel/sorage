@@ -8,8 +8,10 @@ import {
   snapshotManifest,
 } from "./backup-snapshot";
 import { createHash } from "node:crypto";
+import { type Configuration, isValidTimezone, SCHEDULE_AT_PATTERN } from "./config";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import {
+  classifyPushFailure,
   GIT_ARGS,
   type GitClient,
   gitStateConflict,
@@ -505,6 +507,8 @@ export interface BackupRunPorts {
   triggeredBy: "manual" | "scheduled" | "catch-up";
   /** The `gitBackup.push.enabled` flag; false records the push outcome as disabled (BKP-011). */
   pushEnabled: boolean;
+  /** The configured remote and branch, present whenever push is enabled (BKP-025). */
+  pushTarget: { remote: string; branch: string };
   configuredBranch: string;
   lock: {
     /** Acquires backup.lock; a live holder fails with BACKUP_IN_PROGRESS (BKP-006). */
@@ -566,9 +570,12 @@ export function runBackupOnce(ports: BackupRunPorts): Result<BackupRunReport, Ap
   // An unexpected throw (an injected crash, a Git surprise) still records its
   // failure row, because the scheduler treats an unrecorded attempt as a run
   // that never happened.
+  // How far the attempt got, so a late failure - a refused push above all -
+  // still records the commit that exists and the snapshot that was exported.
+  const progress: { snapshotDone: boolean; commitSha: string | null } = { snapshotDone: false, commitSha: null };
   let result: ReturnType<typeof runUnderBackupLock>;
   try {
-    result = runUnderBackupLock(ports);
+    result = runUnderBackupLock(ports, progress);
   } catch (error) {
     result = err(
       appError("INTERNAL_ERROR", `The backup run failed unexpectedly: ${messageOf(error)}.`, {
@@ -597,10 +604,10 @@ export function runBackupOnce(ports: BackupRunPorts): Result<BackupRunReport, Ap
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         outcome: "failure",
-        snapshotOutcome: "failure",
-        commitOutcome: "failure",
-        pushOutcome: "disabled",
-        commitSha: null,
+        snapshotOutcome: progress.snapshotDone ? "success" : "failure",
+        commitOutcome: progress.commitSha !== null ? "committed" : "failure",
+        pushOutcome: "failure",
+        commitSha: progress.commitSha,
         failureCode: result.error.code,
         failureMessage: result.error.message,
       };
@@ -618,7 +625,10 @@ export function runBackupOnce(ports: BackupRunPorts): Result<BackupRunReport, Ap
   });
 }
 
-function runUnderBackupLock(ports: BackupRunPorts): Result<Omit<BackupRunReport, "runId">, AppError> {
+function runUnderBackupLock(
+  ports: BackupRunPorts,
+  progress: { snapshotDone: boolean; commitSha: string | null },
+): Result<Omit<BackupRunReport, "runId">, AppError> {
   // A Vault without a repository gets one on the first run; an existing
   // repository, including an unrelated one, is reported and left untouched.
   const repository = ports.ensureRepository();
@@ -626,6 +636,7 @@ function runUnderBackupLock(ports: BackupRunPorts): Result<Omit<BackupRunReport,
 
   const exported = ports.exportSnapshot();
   if (!exported.ok) return err(exported.error);
+  progress.snapshotDone = true;
 
   // VLT-023: a Missing or Mismatched Artifact blocks backup success outright.
   const verified = ports.verifyCurrentArtifacts();
@@ -676,8 +687,15 @@ function runUnderBackupLock(ports: BackupRunPorts): Result<Omit<BackupRunReport,
   const changeTest = runGit(ports, ["diff", "--cached", "--quiet", "--", ...MANAGED_PATHSPECS]);
   if (!changeTest.ok) return err(changeTest.error);
   if (changeTest.value.exitCode === 0) {
-    // Nothing managed changed since the last commit: no commit is created (BKP-009).
-    return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "disabled", commitSha: null });
+    // Nothing managed changed since the last commit: no commit is created (BKP-009),
+    // but an enabled push still runs so a restored or previously unpushed commit
+    // reaches the remote (section 30).
+    if (!ports.pushEnabled) {
+      return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "disabled", commitSha: null });
+    }
+    const pushed = pushToRemote(ports);
+    if (!pushed.ok) return err(pushed.error);
+    return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "pushed", commitSha: null });
   }
   if (changeTest.value.exitCode !== 1) return gitStateConflict("diff --cached --quiet", changeTest.value);
 
@@ -695,13 +713,25 @@ function runUnderBackupLock(ports: BackupRunPorts): Result<Omit<BackupRunReport,
   if (committed.value.exitCode !== 0) return gitStateConflict("commit", committed.value);
   const sha = runGit(ports, ["rev-parse", "HEAD"]);
   if (!sha.ok) return err(sha.error);
-  return ok({
-    outcome: "success",
-    snapshot: "success",
-    commit: "committed",
-    push: ports.pushEnabled ? "skipped" : "disabled",
-    commitSha: sha.value.exitCode === 0 ? sha.value.stdout.trim() : null,
+  const commitSha = sha.value.exitCode === 0 ? sha.value.stdout.trim() : null;
+  progress.commitSha = commitSha;
+  if (!ports.pushEnabled) {
+    return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "disabled", commitSha });
+  }
+  const pushed = pushToRemote(ports);
+  if (!pushed.ok) return err(pushed.error);
+  return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "pushed", commitSha });
+}
+
+/** One atomic fast-forward push under the batch environment; a refusal classifies as auth or conflict (BKP-014, BKP-025). */
+function pushToRemote(ports: BackupRunPorts): Result<"pushed", AppError> {
+  const pushed = ports.git.run({
+    cwd: ports.vaultPath,
+    args: ["push", "--atomic", ports.pushTarget.remote, ports.pushTarget.branch],
   });
+  if (!pushed.ok) return err(pushed.error);
+  if (pushed.value.exitCode !== 0) return err(classifyPushFailure(pushed.value));
+  return ok("pushed");
 }
 
 /**
@@ -839,4 +869,77 @@ function findLast(rows: BackupRunRow[], predicate: (row: BackupRunRow) => boolea
 
 function compareTimestamps(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * The four User-admin backup configuration commands of TASK-057 (BKP-002,
+ * BKP-011, BKP-025, CLI-019): `enable` turns the schedule on with its local
+ * time and zone, `disable` turns it off, `enable-push` names the remote and
+ * branch, and `disable-push` turns the remote off. Each applies its whole
+ * group of leaf writes in one configuration write, and the HTTP endpoints
+ * call this same use case so the two surfaces cannot drift.
+ */
+export interface BackupConfigPorts {
+  read(): Result<{ config: Configuration; etag: string } | null, AppError>;
+  write(next: Configuration, expect: { etag: string }): Result<{ etag: string }, AppError>;
+}
+
+export type BackupConfigAction = "enable" | "disable" | "enable-push" | "disable-push";
+
+export interface BackupConfigInput {
+  action: BackupConfigAction;
+  asUser: boolean;
+  /** `enable`: the local `HH:MM`. */
+  dailyAt?: string | undefined;
+  /** `enable`: an optional IANA zone replacement. */
+  timezone?: string | undefined;
+  /** `enable-push`: the remote name. */
+  remote?: string | undefined;
+  /** `enable-push`: the branch name. */
+  branch?: string | undefined;
+}
+
+export function configureBackup(
+  ports: BackupConfigPorts,
+  input: BackupConfigInput,
+): Result<{ gitBackup: Configuration["gitBackup"] }, AppError> {
+  if (!input.asUser) {
+    return err(
+      appError("USER_CONTEXT_REQUIRED", "backup configuration commands record a User decision and require --as-user."),
+    );
+  }
+  const read = ports.read();
+  if (!read.ok) return err(read.error);
+  if (read.value === null) return err(appError("NOT_INITIALIZED", "Sorage is not initialized.", {}));
+  const config = read.value.config;
+
+  if (input.action === "enable") {
+    if (input.dailyAt === undefined || !SCHEDULE_AT_PATTERN.test(input.dailyAt)) {
+      return err(appError("CONFIG_INVALID", "backup enable requires --daily-at <HH:MM> with a 24-hour local time."));
+    }
+    if (input.timezone !== undefined && !isValidTimezone(input.timezone)) {
+      return err(appError("CONFIG_INVALID", `The timezone '${input.timezone}' is not a known IANA zone.`));
+    }
+    config.gitBackup.enabled = true;
+    config.gitBackup.schedule.at = input.dailyAt;
+    if (input.timezone !== undefined) config.gitBackup.schedule.timezone = input.timezone;
+  } else if (input.action === "disable") {
+    config.gitBackup.enabled = false;
+  } else if (input.action === "enable-push") {
+    if (input.remote === undefined || input.remote.trim() === "") {
+      return err(appError("CONFIG_INVALID", "backup enable-push requires --remote <name>."));
+    }
+    if (input.branch === undefined || input.branch.trim() === "") {
+      return err(appError("CONFIG_INVALID", "backup enable-push requires --branch <name>."));
+    }
+    config.gitBackup.push.enabled = true;
+    config.gitBackup.push.remote = input.remote;
+    config.gitBackup.push.branch = input.branch;
+  } else {
+    config.gitBackup.push.enabled = false;
+  }
+
+  const written = ports.write(config, { etag: read.value.etag });
+  if (!written.ok) return err(written.error);
+  return ok({ gitBackup: config.gitBackup });
 }

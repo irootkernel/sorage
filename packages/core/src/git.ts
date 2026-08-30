@@ -113,3 +113,38 @@ export function isManagedVaultPath(path: string): boolean {
 export function unmanagedStagedPaths(staged: string[]): string[] {
   return staged.filter((path) => !isManagedVaultPath(path));
 }
+
+/** The push argument array: one atomic fast-forward push to the configured remote (BKP-025). */
+export const GIT_ARGS_PUSH = (remote: string, branch: string): string[] => ["push", "--atomic", remote, branch];
+
+const AUTH_FAILURE_PATTERNS = [
+  "terminal prompts disabled",
+  "could not read username",
+  "authentication failed",
+  "permission denied",
+  "publickey",
+  "batchmode",
+];
+
+/**
+ * Classifies a refused push (BKP-014, BKP-025): with prompts disabled, a
+ * missing credential announces itself as a disabled prompt or an
+ * authentication refusal, and everything else - a non-fast-forward above all -
+ * is the manual Git state the User must resolve.
+ */
+export function classifyPushFailure(outcome: { exitCode: number; stderr: string; stdout: string }): AppError {
+  const text = `${outcome.stderr}
+${outcome.stdout}`.toLowerCase();
+  if (AUTH_FAILURE_PATTERNS.some((pattern) => text.includes(pattern))) {
+    return appError(
+      "GIT_AUTH_REQUIRED",
+      `Pushing to the remote needs a credential that batch mode cannot supply: ${outcome.stderr.trim().split("\n")[0] ?? ""}`.trim(),
+      { exitCode: outcome.exitCode },
+    );
+  }
+  return appError(
+    "GIT_BACKUP_CONFLICT",
+    `The push was refused; resolve the remote state manually, Sorage never force pushes: ${outcome.stderr.trim().split("\n")[0] ?? ""}`.trim(),
+    { exitCode: outcome.exitCode },
+  );
+}

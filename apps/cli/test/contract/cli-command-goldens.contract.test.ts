@@ -221,6 +221,26 @@ const steps: Step[] = [
   },
   { name: "53-backup-run-again", args: ["backup", "run", "--json"] },
   { name: "54-backup-status", args: ["backup", "status", "--json"] },
+  {
+    name: "55-backup-enable-requires-user",
+    args: ["backup", "enable", "--daily-at", "03:00"],
+    expectedStatus: 77,
+  },
+  {
+    name: "56-backup-enable",
+    args: ["backup", "enable", "--daily-at", "04:05", "--timezone", "UTC", "--as-user", "--json"],
+  },
+  {
+    name: "57-backup-enable-push-requires-user",
+    args: ["backup", "enable-push", "--remote", "origin", "--branch", "main"],
+    expectedStatus: 77,
+  },
+  {
+    name: "58-backup-enable-push",
+    args: ["backup", "enable-push", "--remote", "origin", "--branch", "main", "--as-user", "--json"],
+  },
+  { name: "59-backup-disable-push", args: ["backup", "disable-push", "--as-user", "--json"] },
+  { name: "60-backup-disable", args: ["backup", "disable", "--as-user", "--json"] },
 ];
 
 describe("the golden tour of every catalog command", () => {

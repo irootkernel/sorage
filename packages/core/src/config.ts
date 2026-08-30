@@ -290,7 +290,8 @@ function setLeaf(document: Document, path: string[], value: unknown): void {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SCHEDULE_AT_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+/** The `HH:MM` local time shape every daily schedule key must match. */
+export const SCHEDULE_AT_PATTERN = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const TOP_LEVEL_KEYS = [
   "schemaVersion",
   "configRevision",
@@ -650,7 +651,7 @@ function expectNumber(
   return value;
 }
 
-function isValidTimezone(zone: string): boolean {
+export function isValidTimezone(zone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: zone });
     return true;

@@ -61,15 +61,7 @@ const routes: FlatRoute[] = [
 ];
 
 /** Routes that later tasks or milestones own; the catalog row exists, the route does not yet. */
-const DEFERRED = new Set([
-  "GET /api/v1/backup/status", // milestone 0.3
-  "POST /api/v1/backup/run",
-  "POST /api/v1/backup/enable",
-  "POST /api/v1/backup/disable",
-  "POST /api/v1/backup/enable-push",
-  "POST /api/v1/backup/disable-push",
-  "POST /api/v1/backup/verify",
-]);
+const DEFERRED = new Set<string>([]);
 
 describe("the symbolic error to HTTP status matrix (API-011)", () => {
   it("maps every catalogue code to the status the section 15 table documents", () => {

@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "data": {
+    "gitBackup": {
+      "enabled": true,
+      "schedule": {
+        "type": "daily",
+        "at": "04:05",
+        "timezone": "UTC",
+        "catchUpAfterMissedRun": true
+      },
+      "commit": {
+        "messageTemplate": "sorage backup: {timestamp}"
+      },
+      "push": {
+        "enabled": true,
+        "remote": "origin",
+        "branch": "main"
+      },
+      "largeArtifactWarningBytes": 26214400,
+      "snapshot": {
+        "redactWorkspacePaths": true
+      }
+    }
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

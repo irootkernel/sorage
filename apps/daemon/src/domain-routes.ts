@@ -5,13 +5,16 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { createHash, randomUUID } from "node:crypto";
-import type { Result as CoreResult } from "@sorage/core";
+import { ok, type Result as CoreResult } from "@sorage/core";
 import {
   acceptHandoff,
   validateConfigurationFile,
   addProject,
   appError,
   approveDeletion,
+  backupStatus,
+  backupVerify,
+  configureBackup,
   archiveHandoff,
   archiveProject,
   bindProject,
@@ -33,6 +36,7 @@ import {
   requestDeletion,
   resolveWorkspaceActor,
   reviseHandoff,
+  runBackupCommand,
   runDoctor,
   sendHandoffs,
   setReviewNote,
@@ -48,6 +52,7 @@ import {
   vaultVerify,
   moveVault,
 } from "@sorage/core";
+import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import { createNodeHandoffReadPorts } from "@sorage/adapters/src/handoff-command-ports";
 import {
@@ -753,6 +758,106 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       return void respond(response, context, moveVault(opened.value));
     },
   });
+
+  // ---- Backup (section 18.7; restore is deliberately CLI-only) --------------
+  add({
+    method: "GET",
+    pattern: "/api/v1/backup/status",
+    handler: async (_request, response, context) => {
+      const ports = createNodeBackupCommandPorts();
+      const drained = ports.drainAtStart();
+      if (!drained.ok) return void respondError(response, context, drained.error);
+      const opened = ports.statusPorts();
+      if (!opened.ok) return void respondError(response, context, opened.error);
+      return void respond(response, context, backupStatus(opened.value));
+    },
+  });
+
+  add({
+    method: "POST",
+    pattern: "/api/v1/backup/run",
+    idempotent: true,
+    handler: async (_request, response, context) => {
+      const ports = createNodeBackupCommandPorts();
+      const drained = ports.drainAtStart();
+      if (!drained.ok) return void respondError(response, context, drained.error);
+      const opened = ports.runPorts();
+      if (!opened.ok) return void respondError(response, context, opened.error);
+      const result = runBackupCommand(opened.value, {
+        ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+      });
+      return void respond(response, context, result);
+    },
+  });
+
+  add({
+    method: "POST",
+    pattern: "/api/v1/backup/verify",
+    handler: async (_request, response, context) => {
+      const ports = createNodeBackupCommandPorts();
+      const drained = ports.drainAtStart();
+      if (!drained.ok) return void respondError(response, context, drained.error);
+      const opened = ports.verifyPorts();
+      if (!opened.ok) return void respondError(response, context, opened.error);
+      const report = backupVerify(opened.value, { now: new Date() });
+      if (!report.ok) return void respondError(response, context, report.error);
+      return void respond(response, context, ok({ ...report.value, blocking: report.value.findings.length > 0 }));
+    },
+  });
+
+  const backupConfigAction = (action: "enable" | "disable" | "enable-push" | "disable-push") =>
+    add({
+      method: "POST",
+      pattern: `/api/v1/backup/${action}`,
+      handler: async (request, response, context) => {
+        const body = await readJsonBody(request);
+        if (body.asUser !== true) {
+          return void respondError(
+            response,
+            context,
+            appError("USER_CONTEXT_REQUIRED", `backup ${action} is a User-admin operation; pass asUser=true`),
+          );
+        }
+        const store = createNodeConfigCommandPorts().store;
+        const result = configureBackup(
+          {
+            read: () => {
+              const read = store.read();
+              if (!read.ok) return read;
+              if (read.value === null)
+                return { ok: false as const, error: appError("NOT_INITIALIZED", "Sorage is not initialized.") };
+              return { ok: true as const, value: { config: read.value.config, etag: read.value.etag } };
+            },
+            write: (next, expect) => {
+              const written = store.write(next, { etag: expect.etag });
+              if (!written.ok) return written;
+              return { ok: true as const, value: { etag: written.value.etag } };
+            },
+          },
+          {
+            action,
+            asUser: true,
+            ...(action === "enable"
+              ? {
+                  dailyAt: typeof body.dailyAt === "string" ? body.dailyAt : undefined,
+                  ...(typeof body.timezone === "string" ? { timezone: body.timezone } : {}),
+                }
+              : {}),
+            ...(action === "enable-push"
+              ? {
+                  remote: typeof body.remote === "string" ? body.remote : undefined,
+                  branch: typeof body.branch === "string" ? body.branch : undefined,
+                }
+              : {}),
+          },
+        );
+        return void respond(response, context, result);
+      },
+    });
+  backupConfigAction("enable");
+  backupConfigAction("disable");
+  backupConfigAction("enable-push");
+  backupConfigAction("disable-push");
 
   // ---- Diagnostics ----------------------------------------------------------
   add({

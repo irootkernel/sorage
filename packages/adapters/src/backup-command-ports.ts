@@ -100,6 +100,8 @@ interface InstallationView {
   commitMessageTemplate: string;
   /** The `gitBackup.schedule` snapshot status reports (BKP-016). */
   schedule: { enabled: boolean; at: string; timezone: string; catchUpAfterMissedRun: boolean };
+  /** The `gitBackup.push` settings the run engine pushes with (BKP-011, BKP-025). */
+  push: { enabled: boolean; remote: string; branch: string };
 }
 
 /**
@@ -141,6 +143,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       graceHours: config.gc.graceHours,
       backupBranch: config.gitBackup.push.branch,
       commitMessageTemplate: config.gitBackup.commit.messageTemplate,
+      push: {
+        enabled: config.gitBackup.push.enabled,
+        remote: config.gitBackup.push.remote,
+        branch: config.gitBackup.push.branch,
+      },
       schedule: {
         enabled: config.gitBackup.enabled,
         at: config.gitBackup.schedule.at,
@@ -827,7 +834,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         vaultPath,
         messageTemplate: view.value.commitMessageTemplate,
         triggeredBy,
-        pushEnabled: false,
+        pushEnabled: view.value.push.enabled,
+        pushTarget: { remote: view.value.push.remote, branch: view.value.push.branch },
         configuredBranch: view.value.backupBranch,
         lock: { acquire: acquireBackupLock },
         exportSnapshot: () => {

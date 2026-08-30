@@ -40,6 +40,7 @@ function portsOf(
     messageTemplate: "sorage backup: {timestamp}",
     triggeredBy: "manual",
     pushEnabled: false,
+    pushTarget: { remote: "origin", branch: "main" },
     configuredBranch: "main",
     lock: { acquire: () => ok({ release: () => undefined }) },
     exportSnapshot: () =>

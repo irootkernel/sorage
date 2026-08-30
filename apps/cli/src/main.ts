@@ -32,6 +32,8 @@ import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type ActorRef,
+  type Configuration,
+  ok,
   type AddProjectOutcome,
   type AppError,
   acceptHandoff,
@@ -42,6 +44,7 @@ import {
   archiveProject,
   backupRestore,
   backupStatus,
+  configureBackup,
   backupVerify,
   runBackupCommand,
   bindProject,
@@ -1598,6 +1601,64 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     });
 
   backup
+    .command("enable")
+    .description("turn the daily backup schedule on with its local time and zone")
+    .requiredOption("--daily-at <HH:MM>", "the local time of day the schedule runs")
+    .option("--timezone <zone>", "the IANA zone the local time lives in")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = configureBackup(backupConfigPorts(), {
+        action: "enable",
+        asUser: globals.asUser === true,
+        dailyAt: options.dailyAt,
+        timezone: options.timezone,
+      });
+      reportBackupConfig(result, ports, json, reportExitCode);
+    });
+
+  backup
+    .command("disable")
+    .description("turn the daily backup schedule off")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = configureBackup(backupConfigPorts(), { action: "disable", asUser: globals.asUser === true });
+      reportBackupConfig(result, ports, json, reportExitCode);
+    });
+
+  backup
+    .command("enable-push")
+    .description("turn remote push on for one configured remote and branch; the push is a fast-forward only")
+    .requiredOption("--remote <name>", "the Git remote name to push to")
+    .requiredOption("--branch <name>", "the branch to push")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = configureBackup(backupConfigPorts(), {
+        action: "enable-push",
+        asUser: globals.asUser === true,
+        remote: options.remote,
+        branch: options.branch,
+      });
+      reportBackupConfig(result, ports, json, reportExitCode);
+    });
+
+  backup
+    .command("disable-push")
+    .description("turn remote push off; local commits continue")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = configureBackup(backupConfigPorts(), { action: "disable-push", asUser: globals.asUser === true });
+      reportBackupConfig(result, ports, json, reportExitCode);
+    });
+
+  backup
     .command("restore")
     .description(
       "rebuild an empty installation from a Vault backup copy, adopting its installationId; the daemon must be stopped",
@@ -2055,6 +2116,47 @@ function logCommandFailure(error: AppError, id: string): void {
 }
 
 /** Maps an application error to its envelope rendering and published exit code. */
+function backupConfigPorts(): {
+  read(): ReturnType<import("@sorage/core").BackupConfigPorts["read"]>;
+  write(
+    next: Configuration,
+    expect: { etag: string },
+  ): { ok: true; value: { etag: string } } | { ok: false; error: AppError };
+} {
+  const commandPorts = createNodeConfigCommandPorts();
+  const store = commandPorts.store;
+  return {
+    read: () => {
+      const read = store.read();
+      if (!read.ok) return read;
+      if (read.value === null) return ok(null);
+      return ok({ config: read.value.config, etag: read.value.etag });
+    },
+    write: (next, expect) => {
+      const written = store.write(next, { etag: expect.etag });
+      if (!written.ok) return written;
+      return ok({ etag: written.value.etag });
+    },
+  };
+}
+
+function reportBackupConfig(
+  result: { ok: true; value: { gitBackup: unknown } } | { ok: false; error: AppError },
+  ports: OutputPorts,
+  json: boolean,
+  reportExitCode: (code: number) => void,
+): void {
+  if (!result.ok) {
+    reportExitCode(renderAppError(result.error, ports, json));
+    return;
+  }
+  if (json) {
+    ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+  } else {
+    ports.out("Backup configuration updated.\n");
+  }
+}
+
 export function renderAppError(error: AppError, ports: OutputPorts, json: boolean, recoveryOverride?: string): number {
   const spec = errorSpec(error.code);
   const id = requestId();
