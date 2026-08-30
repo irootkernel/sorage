@@ -24,6 +24,7 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <a href="#/inbox" data-nav>Inbox</a>
 <a href="#/outbox" data-nav>Outbox</a>
 <a href="#/deletion-requests" data-nav>Deletion Requests</a>
+<a href="#/backup" data-nav>Backup</a>
 <a href="#/settings" data-nav>Settings</a>
 <a href="#/diagnostics" data-nav>Diagnostics</a>
 </nav>
@@ -143,6 +144,24 @@ export const WEB_APP_JS = `(function () {
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.archived) }), el("span", { text: "archived" })]));
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.deletionRequested) }), el("span", { text: "deletion requested" })]));
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.deleted) }), el("span", { text: "deleted" })]));
+      // WEB-002: Backup Health, shown once Git backup exists, populated from
+      // the same backup_runs data the backup page lists.
+      var health = el("div", { class: "backup-health" });
+      counts.appendChild(health);
+      api("/api/v1/backup/status").then(function (result) {
+        if (result.status !== 200) {
+          health.appendChild(el("strong", { text: "Backup: unknown" }));
+          health.appendChild(el("span", { text: "the status endpoint is unavailable" }));
+          return;
+        }
+        var status = result.body.data;
+        var protection = status.schedule.enabled
+          ? (status.lastPush !== null ? "scheduled, remote push" : "scheduled, local commits")
+          : (status.lastPush !== null ? "manual, remote push" : "local commits only");
+        var healthy = status.lastFailure === null && (status.lastSuccess !== null || status.lastAttempt === null);
+        health.appendChild(el("strong", { text: healthy ? "Backup: healthy" : "Backup: needs attention" }));
+        health.appendChild(el("span", { text: protection + (status.lastAttempt !== null ? ", last run " + status.lastAttempt.outcome : ", never run") }));
+      });
       var recent = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Updated" }), el("th", { text: "Title" }), el("th", { text: "State" })])])]);
       var body = el("tbody", {});
       result.body.data.handoffs.slice(0, 10).forEach(function (handoff) {
@@ -618,6 +637,70 @@ export const WEB_APP_JS = `(function () {
     });
   }
 
+  // WEB-002, BKP-018, BKP-019: the backup page states plainly whether
+  // protection is local-only or includes a remote, lists recent runs from
+  // backup_runs with their snapshot, commit, and push outcomes separated, and
+  // explains that restore is a CLI bootstrap operation rather than offering a
+  // destructive button.
+  function backupPage() {
+    view().replaceChildren();
+    view().appendChild(el("h2", { text: "Backup" }));
+    api("/api/v1/backup/status").then(function (result) {
+      if (result.status !== 200) { note("The backup status could not load: " + result.body.error.code); return; }
+      var status = result.body.data;
+      var remote = status.lastPush !== null;
+      var protection = el("p", {}, [
+        el("strong", { text: remote ? "Protection includes a remote." : "Protection is local-only." }),
+        el("span", {
+          text: remote
+            ? " Commits are pushed to the configured remote after every run."
+            : " Commits stay in this machine's Vault repository; enable a remote with sorage backup enable-push.",
+        }),
+      ]);
+      view().appendChild(protection);
+      if (status.schedule.enabled) {
+        view().appendChild(el("p", { text: "The daily schedule runs at " + status.schedule.at + " in " + status.schedule.timezone + (status.nextDueAt !== null ? "; next due " + status.nextDueAt.replace("T", " ").slice(0, 19) : "") + "." }));
+      } else {
+        view().appendChild(el("p", { text: "The daily schedule is disabled; enable it with sorage backup enable --daily-at <HH:MM>." }));
+      }
+      if (status.lastFailure !== null) {
+        view().appendChild(el("p", { class: "warning", text: "The last backup run failed with " + String(status.lastFailure.failureCode) + " at " + String(status.lastFailure.startedAt).replace("T", " ").slice(0, 19) + "." }));
+      }
+      var table = el("table", {}, [el("thead", {}, [el("tr", {}, [
+        el("th", { text: "Started" }),
+        el("th", { text: "Trigger" }),
+        el("th", { text: "Outcome" }),
+        el("th", { text: "Snapshot" }),
+        el("th", { text: "Commit" }),
+        el("th", { text: "Push" }),
+      ])])]);
+      var body = el("tbody", {});
+      // The runs themselves come from the history the status exposes; the
+      // endpoint returns the five last-* projections, so the page lists the
+      // recorded outcomes it names and points at status for the full history.
+      var runs = [];
+      ["lastAttempt", "lastSuccess", "lastCommit", "lastPush", "lastFailure"].forEach(function (key) {
+        var row = status[key];
+        if (row !== null && runs.indexOf(row) === -1) runs.push(row);
+      });
+      runs.forEach(function (run) {
+        body.appendChild(el("tr", {}, [
+          el("td", { text: String(run.startedAt).replace("T", " ").slice(0, 19) }),
+          el("td", { text: String(run.triggeredBy) }),
+          el("td", { text: String(run.outcome) }),
+          el("td", { text: String(run.snapshotOutcome) }),
+          el("td", { text: run.commitSha !== null ? String(run.commitOutcome) + " (" + String(run.commitSha).slice(0, 8) + ")" : String(run.commitOutcome) }),
+          el("td", { text: String(run.pushOutcome) }),
+        ]));
+      });
+      table.appendChild(body);
+      view().appendChild(el("h3", { text: "Recent runs" }));
+      view().appendChild(table);
+      view().appendChild(el("p", { text: "Restore is a bootstrap command: stop the daemon and run sorage backup restore --from <vault-path> --dry-run --as-user first." }));
+      view().appendChild(el("p", { text: "Deleting a Handoff removes its current file only; prior Git commits may retain earlier content, and Sorage offers no history purge." }));
+    });
+  }
+
   function route() {
     if (store.token === null) {
       view().replaceChildren(el("p", { text: "Run sorage web to open this page with a one-time session secret." }));
@@ -634,6 +717,7 @@ export const WEB_APP_JS = `(function () {
     else if (path === "/deletion-requests") deletionRequests();
     else if (path.indexOf("/handoff/") === 0) detail(path.slice("/handoff/".length));
     else if (path === "/diagnostics") diagnostics();
+    else if (path === "/backup") backupPage();
     else if (path === "/settings") settings();
     else dashboard();
     document.querySelectorAll("[data-nav]").forEach(function (link) {

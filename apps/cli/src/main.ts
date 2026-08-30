@@ -1683,8 +1683,10 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         );
         return;
       }
+      // --confirm is a global option shared with the deletion commands, so
+      // it arrives on the globals rather than a command-local flag.
       const dryRun = options.dryRun === true;
-      const confirm = options.confirm === true;
+      const confirm = globals.confirm === true || options.confirm === true;
       if (dryRun === confirm) {
         ports.err("sorage: pass exactly one of --dry-run or --confirm.\n");
         ports.err("Run 'sorage backup restore --help' for usage.\n");
