@@ -23,7 +23,9 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <a href="#/compose" data-nav>Compose</a>
 <a href="#/inbox" data-nav>Inbox</a>
 <a href="#/outbox" data-nav>Outbox</a>
+<a href="#/deletion-requests" data-nav>Deletion Requests</a>
 <a href="#/settings" data-nav>Settings</a>
+<a href="#/diagnostics" data-nav>Diagnostics</a>
 </nav>
 </header>
 <main id="view"></main>
@@ -130,8 +132,12 @@ export const WEB_APP_JS = `(function () {
         if (handoff.pendingDeletionRequest !== null && handoff.pendingDeletionRequest !== undefined) retention.deletionRequested += 1;
         if (handoff.deletedAt !== null && handoff.deletedAt !== undefined) retention.deleted += 1;
       });
-      Object.keys(states).sort().forEach(function (state) {
-        counts.appendChild(el("div", {}, [el("strong", { text: String(states[state]) }), el("span", { text: state })]));
+      // WEB-002: every review state and retention class shows as a fixed card,
+      // including at a zero count, so the dashboard is a census rather than a
+      // list of whatever happens to be non-empty.
+      var STATE_CARDS = ["awaiting_recipient", "changes_requested", "accepted", "declined", "withdrawn"];
+      STATE_CARDS.forEach(function (state) {
+        counts.appendChild(el("div", {}, [el("strong", { text: String(states[state] || 0) }), el("span", { text: state })]));
       });
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.pinned) }), el("span", { text: "pinned" })]));
       counts.appendChild(el("div", {}, [el("strong", { text: String(retention.archived) }), el("span", { text: "archived" })]));
@@ -156,23 +162,38 @@ export const WEB_APP_JS = `(function () {
     var query = location.hash.split("?")[1] || "";
     var params = new URLSearchParams(query);
     var url = "/api/v1/handoffs?box=" + kind + (store.as ? "&as=" + encodeURIComponent(store.as) : "&asUser=true");
-    ["state", "includeArchived", "includeDeleted"].forEach(function (key) {
+    ["state", "sender", "recipient", "includeArchived", "includeDeleted"].forEach(function (key) {
       if (params.has(key)) url += "&" + key + "=" + params.get(key);
     });
     view().replaceChildren();
     view().appendChild(el("h2", { text: kind === "inbox" ? "Inbox" : "Outbox" }));
+    // WEB-003: the same filter set the CLI offers, URL-addressable so a reload
+    // or a shared link reproduces the same listing.
     var filters = el("div", { class: "filters" });
     var stateInput = el("input", { placeholder: "state filter" });
     stateInput.value = params.get("state") || "";
+    var senderInput = el("input", { placeholder: "sender slug" });
+    senderInput.value = params.get("sender") || "";
+    var recipientInput = el("input", { placeholder: "recipient slug" });
+    recipientInput.value = params.get("recipient") || "";
     var archived = el("input", { type: "checkbox" });
     archived.checked = params.get("includeArchived") === "true";
+    var deleted = el("input", { type: "checkbox" });
+    deleted.checked = params.get("includeDeleted") === "true";
     filters.appendChild(stateInput);
+    filters.appendChild(senderInput);
+    filters.appendChild(recipientInput);
     filters.appendChild(archived);
     filters.appendChild(el("label", { text: " include archived" }));
+    filters.appendChild(deleted);
+    filters.appendChild(el("label", { text: " include deleted" }));
     filters.appendChild(el("button", { text: "Apply", onclick: function () {
       var next = new URLSearchParams();
       if (stateInput.value !== "") next.set("state", stateInput.value);
+      if (senderInput.value !== "") next.set("sender", senderInput.value);
+      if (recipientInput.value !== "") next.set("recipient", recipientInput.value);
       if (archived.checked) next.set("includeArchived", "true");
+      if (deleted.checked) next.set("includeDeleted", "true");
       location.hash = "#/" + kind + (next.toString() !== "" ? "?" + next.toString() : "");
     } }));
     view().appendChild(filters);
@@ -189,6 +210,28 @@ export const WEB_APP_JS = `(function () {
           el("td", { text: String(handoff.revision) }),
         ]));
       });
+    });
+  }
+
+  function deletionRequests() {
+    view().replaceChildren();
+    view().appendChild(el("h2", { text: "Deletion Requests" }));
+    var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Handoff" }), el("th", { text: "State" }), el("th", { text: "Pinned" })])])]);
+    var body = el("tbody", {});
+    table.appendChild(body);
+    view().appendChild(table);
+    view().appendChild(el("p", { text: "Approve or reject a request from the Handoff detail view; approval of a pinned Handoff asks for the distinct confirmation there." }));
+    api("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200").then(function (result) {
+      if (result.status !== 200) { note("The deletion requests could not load: " + result.body.error.code); return; }
+      result.body.data.handoffs
+        .filter(function (handoff) { return handoff.pendingDeletionRequest === true; })
+        .forEach(function (handoff) {
+          body.appendChild(el("tr", {}, [
+            el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
+            el("td", { text: handoff.reviewState }),
+            el("td", { text: handoff.pinned === true ? "pinned" : "" }),
+          ]));
+        });
     });
   }
 
@@ -424,6 +467,7 @@ export const WEB_APP_JS = `(function () {
     var result = el("p", {});
     form.appendChild(el("p", {}, [el("label", { text: "Title " }), title]));
     form.appendChild(el("p", {}, [el("label", { text: "To " }), recipients]));
+    form.appendChild(el("p", { text: "Several recipients create one independent Handoff each; every identifier and the shared dispatch group appear after submission." }));
     form.appendChild(el("p", {}, [el("label", { text: "Document " }), file]));
     form.appendChild(el("button", { type: "submit", text: "Send" }));
     form.appendChild(result);
@@ -587,6 +631,7 @@ export const WEB_APP_JS = `(function () {
     else if (path === "/compose") compose();
     else if (path === "/inbox") listing("inbox");
     else if (path === "/outbox") listing("outbox");
+    else if (path === "/deletion-requests") deletionRequests();
     else if (path.indexOf("/handoff/") === 0) detail(path.slice("/handoff/".length));
     else if (path === "/diagnostics") diagnostics();
     else if (path === "/settings") settings();

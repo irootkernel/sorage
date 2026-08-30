@@ -86,6 +86,27 @@ describe("AJ-13 web administration", () => {
     await page.goto(webUrl);
     await page.waitForSelector(".counts");
 
+    // 1. The dashboard shows every review state and retention class as a fixed
+    //    card, zero counts included, plus recent updates (WEB-002).
+    const cardLabels = await page.$$eval(".counts span", (nodes) => nodes.map((node) => node.textContent ?? ""));
+    for (const expected of [
+      "awaiting_recipient",
+      "changes_requested",
+      "accepted",
+      "declined",
+      "withdrawn",
+      "pinned",
+      "archived",
+      "deletion requested",
+      "deleted",
+    ]) {
+      expect(cardLabels).toContain(expected);
+    }
+    expect(await page.textContent("main")).toContain("Recent updates");
+    // The section 20 navigation reaches Diagnostics and Deletion Requests.
+    expect(await page.textContent("nav")).toContain("Diagnostics");
+    expect(await page.textContent("nav")).toContain("Deletion Requests");
+
     // 2. One document to three recipients: three UUIDs and three independent Handoffs.
     await page.goto(`http://127.0.0.1:${port}/#/compose`);
     await page.fill('input[placeholder="title"]', "The admin brief");
