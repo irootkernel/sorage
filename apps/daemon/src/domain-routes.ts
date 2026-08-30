@@ -621,11 +621,15 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
+      // HND-014 requires both expectations; a missing one is a malformed request,
+      // not a stale one, so it answers CONFIG_INVALID instead of a bogus conflict.
+      const expectations = numericExpectations(body, ["expectedRevision", "expectedRowVersion"]);
+      if (!expectations.ok) return void respondError(response, context, expectations.error);
       const result = acceptHandoff(createNodeTerminalPorts(), {
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
-        expectedRevision: Number(body.expectedRevision ?? NaN),
-        expectedRowVersion: Number(body.expectedRowVersion ?? NaN),
+        expectedRevision: expectations.value.expectedRevision,
+        expectedRowVersion: expectations.value.expectedRowVersion,
       });
       return void respond(response, context, result);
     },
@@ -637,11 +641,13 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
+      const expectations = numericExpectations(body, ["expectedRowVersion"]);
+      if (!expectations.ok) return void respondError(response, context, expectations.error);
       const result = declineHandoff(createNodeTerminalPorts(), {
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
         reason: String(body.reason ?? ""),
-        expectedRowVersion: Number(body.expectedRowVersion ?? NaN),
+        expectedRowVersion: expectations.value.expectedRowVersion,
       });
       return void respond(response, context, result);
     },

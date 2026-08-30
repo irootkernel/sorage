@@ -318,6 +318,42 @@ describe("the handoff lifecycle", () => {
     expect(terminal.status).toBe(200);
   });
 
+  it("rejects missing terminal expectations honestly instead of a bogus conflict", async () => {
+    // A fresh awaiting Handoff whose expectations nobody moved.
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Honest", body: "expectations", asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+
+    // accept without expectedRevision is malformed input, not a stale read.
+    const acceptMissing = await call(`/api/v1/handoffs/${id}/accept`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { expectedRowVersion: 1, as: "web-app" },
+    });
+    expect(acceptMissing.status).toBe(422);
+    expect(json(acceptMissing)).toMatchObject({ error: { code: "CONFIG_INVALID" } });
+
+    const declineMissing = await call(`/api/v1/handoffs/${id}/decline`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { reason: "why", as: "web-app" },
+    });
+    expect(declineMissing.status).toBe(422);
+    expect(json(declineMissing)).toMatchObject({ error: { code: "CONFIG_INVALID" } });
+
+    const nonNumeric = await call(`/api/v1/handoffs/${id}/accept`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { expectedRevision: "2", expectedRowVersion: 1, as: "web-app" },
+    });
+    expect(nonNumeric.status).toBe(422);
+    expect(json(nonNumeric)).toMatchObject({ error: { code: "CONFIG_INVALID" } });
+  });
+
   it("revises through a browser multipart upload and records the uploaded filename", async () => {
     // A fresh User-sent Handoff so the same actor may revise it.
     const created = await call("/api/v1/handoffs/import-path", {
