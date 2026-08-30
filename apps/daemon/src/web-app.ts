@@ -202,13 +202,15 @@ export const WEB_APP_JS = `(function () {
       function row(term, value) { meta.appendChild(el("dt", { text: term })); meta.appendChild(el("dd", { text: value })); }
       row("id", handoff.id);
       row("sender", handoff.senderDisplayName || handoff.senderKind || "");
-      row("recipient", handoff.recipientSlug || handoff.recipientProjectId || "");
+      row("recipient", handoff.recipientProjectSlug || handoff.recipientProjectId || "");
       row("review state", handoff.reviewState);
       row("revision", String(handoff.revision));
       row("row version", String(handoff.rowVersion));
-      row("next actor", handoff.nextActor || nextActorOf(handoff));
+      row("next actor", nextActorText(handoff));
+      row("first fetched", handoff.firstFetchedAt === null || handoff.firstFetchedAt === undefined ? "never fetched (the sender may still withdraw)" : handoff.firstFetchedAt);
       row("created", handoff.createdAt || "");
       view().appendChild(meta);
+      renderTimeline(id);
       if (handoff.deletedAt !== null && handoff.deletedAt !== undefined) {
         var tomb = el("div", { class: "tombstone" });
         tomb.appendChild(el("strong", { text: "Deleted " + handoff.deletedAt }));
@@ -226,7 +228,16 @@ export const WEB_APP_JS = `(function () {
           am.appendChild(el("dd", { text: String(artifact[key] === null || artifact[key] === undefined ? "" : artifact[key]) }));
         });
         card.appendChild(am);
+        var revealStatus = el("span", {});
+        var reveal = el("button", { text: "Reveal in Finder" });
+        reveal.addEventListener("click", function () {
+          api("/api/v1/handoffs/" + id + "/artifact/reveal?asUser=true", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(function (outcome) {
+            revealStatus.textContent = outcome.body.ok ? " " + outcome.body.data.localPath : " " + outcome.body.error.code;
+          });
+        });
         card.appendChild(el("a", { href: "/api/v1/handoffs/" + id + "/artifact/content?asUser=true", text: "Download" }));
+        card.appendChild(reveal);
+        card.appendChild(revealStatus);
         view().appendChild(card);
         if (isPreviewable(artifact.mimeType || "", artifact.originalName || "")) {
           fetch("/api/v1/handoffs/" + id + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
@@ -243,22 +254,64 @@ export const WEB_APP_JS = `(function () {
           view().appendChild(notice);
         }
       }
-      if (handoff.reviewNote !== null && handoff.reviewNote !== undefined) {
-        var noteCard = el("div", { class: "card" });
-        noteCard.appendChild(el("h3", { text: "Review note" }));
-        noteCard.appendChild(el("p", { text: handoff.reviewNote.body || "" }));
-        view().appendChild(noteCard);
-      }
+      renderReviewNote(id);
       view().appendChild(actionsCard(handoff));
-      var timelineCard = el("div", { class: "card" });
+      view().appendChild(reviseCard(id));
+    });
+  }
+
+  function nextActorText(handoff) {
+    var actors = handoff.nextActors;
+    if (actors === null || actors === undefined) return "none";
+    return actors.reviewNextActor || actors.administrativeNextActor || "none";
+  }
+
+  function renderReviewNote(id) {
+    api("/api/v1/handoffs/" + id + "/review-note?asUser=true").then(function (result) {
+      if (result.status !== 200 || result.body.data === null || result.body.data === undefined) return;
+      var noteView = result.body.data;
+      var noteCard = el("div", { class: "card note" });
+      noteCard.appendChild(el("h3", { text: "Review note" }));
+      noteCard.appendChild(el("p", { text: noteView.body || "" }));
+      noteCard.appendChild(el("p", { text: "target revision " + noteView.targetRevision + " — author " + noteView.authorKind }));
+      view().appendChild(noteCard);
+    });
+  }
+
+  function renderTimeline(id) {
+    api("/api/v1/handoffs/" + id + "/events?asUser=true").then(function (result) {
+      var timelineCard = el("div", { class: "card timeline" });
       timelineCard.appendChild(el("h3", { text: "Timeline" }));
       var list = el("ul", {});
-      (handoff.timeline || []).forEach(function (entry) {
-        list.appendChild(el("li", { text: (entry.at || "") + " — " + entry.type + " (" + (entry.actorKind || "") + ")" }));
+      var events = result.status === 200 && result.body.data ? result.body.data : [];
+      events.forEach(function (entry) {
+        list.appendChild(el("li", { text: (entry.createdAt || "") + " — " + entry.eventType + " (" + (entry.actorKind || "") + ")" }));
       });
       timelineCard.appendChild(list);
+      timelineCard.appendChild(el("p", { text: "Metadata events only; the timeline never implies historical Artifact content is retrievable." }));
       view().appendChild(timelineCard);
     });
+  }
+
+  function reviseCard(id) {
+    var card = el("div", { class: "card" });
+    card.appendChild(el("h3", { text: "Revise" }));
+    var status = el("p", {});
+    var file = el("input", { type: "file" });
+    var submit = el("button", { type: "submit", text: "Revise through upload" });
+    submit.addEventListener("click", function () {
+      if (!file.files || file.files.length === 0) { status.textContent = "Choose a replacement file first."; return; }
+      var form = new FormData();
+      form.append("file", file.files[0]);
+      api("/api/v1/handoffs/" + id + "/revise?asUser=true", { method: "POST", body: form }).then(function (outcome) {
+        status.textContent = outcome.body.ok ? "Revised to revision " + outcome.body.data.revision : outcome.body.error.code;
+        if (outcome.body.ok) detail(id);
+      });
+    });
+    card.appendChild(file);
+    card.appendChild(submit);
+    card.appendChild(status);
+    return card;
   }
 
   var projectsRender = 0;
@@ -441,12 +494,6 @@ export const WEB_APP_JS = `(function () {
     card.appendChild(el("p", { text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
     card.appendChild(status);
     return card;
-  }
-
-  function nextActorOf(handoff) {
-    if (handoff.reviewState === "awaiting_recipient") return "recipient";
-    if (handoff.reviewState === "changes_requested") return "sender";
-    return "none (terminal)";
   }
 
   function diagnostics() {

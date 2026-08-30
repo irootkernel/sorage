@@ -113,13 +113,28 @@ describe("AJ-13 web administration", () => {
     await page.waitForFunction(() => document.body.textContent?.includes("changes_requested"));
     const events = await raw("/api/v1/handoffs?asUser=true&includeDeleted=true", {});
     expect(events.status).toBe(401); // the browser session is the only credential
+    // The note card renders from the review-note endpoint with its author kind (WEB-004).
+    await page.waitForSelector(".card.note");
+    expect(await page.textContent(".card.note")).toContain("Please tighten the intro");
+    expect(await page.textContent(".card.note")).toContain("author user");
 
-    // 5-6. Resolve the note, accept, then pin, archive, and unarchive a terminal
-    //      Handoff through the actions.
-    await page.click('button:text("Remove note")');
+    // 5. Revise through upload, resolving the Note, then accept (section 18.5's
+    //    multipart browser shape drives the whole step). A successful revise
+    //    re-renders the detail immediately, so the assertions read the re-rendered
+    //    state: the replacement Artifact's original name and the returned state.
+    await page.setInputFiles('input[type="file"]', {
+      name: "revision.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from("# The admin brief, revised through the browser\n"),
+    });
+    await page.click('button:text("Revise through upload")');
+    await page.waitForFunction(() => document.body.textContent?.includes("revision.md"));
     await page.waitForFunction(() => document.body.textContent?.includes("awaiting_recipient"));
     await page.click('button:text("Accept")');
     await page.waitForFunction(() => document.body.textContent?.includes("accepted"));
+    // The timeline renders metadata events with their actor kinds (WEB-004).
+    await page.waitForSelector(".card.timeline ul li");
+    expect(await page.textContent(".card.timeline")).toContain("user");
     await page.click('button:text("Pin")');
     await page.waitForFunction(() => document.body.textContent?.includes("Unpin"));
     await page.click('button:text("Archive")');

@@ -3,6 +3,7 @@ import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
 import { deriveNextActors, type ReviewState } from "./handoffs";
 import { type ProjectCommandPorts, resolveWorkspaceActor } from "./project-commands";
+import type { ReviewNoteView } from "./review-commands";
 import { workspaceKey as deriveWorkspaceKey } from "./workspace-identity";
 
 /**
@@ -301,6 +302,68 @@ export function getHandoff(
     );
   }
   return ok(found.value);
+}
+
+/** One metadata event of the bounded detail timeline; never Artifact bytes (HND-017). */
+export interface HandoffEventView {
+  id: string;
+  eventType: string;
+  actorKind: "registered_project" | "unregistered_workspace" | "user" | "system";
+  actorId: string | null;
+  rowVersion: number | null;
+  createdAt: string;
+}
+
+/** The bounded number of timeline events the detail surface reads (WEB-004). */
+export const HANDOFF_TIMELINE_LIMIT = 50;
+
+export interface HandoffDetailReadPorts extends HandoffReadPorts {
+  reviews: { findNote(handoffId: string): Result<ReviewNoteView | null, AppError> };
+  events: { listRecent(handoffId: string, limit: number): Result<HandoffEventView[], AppError> };
+}
+
+function gatedHandoffView(
+  ports: HandoffReadPorts,
+  actorInput: ReadActorInput,
+  id: string,
+): Result<HandoffView, AppError> {
+  const found = ports.handoffs.findHandoffView(id);
+  if (!found.ok) return err(found.error);
+  if (found.value === null) {
+    return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${id}'`, { handoffId: id }));
+  }
+  const participant = participantRoleOf(ports, actorInput, found.value);
+  if (participant === null) {
+    return err(
+      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
+    );
+  }
+  return ok(found.value);
+}
+
+/** Reads the current Review Note, participant-gated like get itself (HND-020). */
+export function readReviewNote(
+  ports: HandoffDetailReadPorts,
+  actorInput: ReadActorInput,
+  id: string,
+): Result<ReviewNoteView | null, AppError> {
+  const gated = gatedHandoffView(ports, actorInput, id);
+  if (!gated.ok) return err(gated.error);
+  return ports.reviews.findNote(id);
+}
+
+/**
+ * Reads the bounded recent timeline, participant-gated and newest-first, including
+ * for a tombstone; the timeline never implies historical content is retrievable.
+ */
+export function readHandoffTimeline(
+  ports: HandoffDetailReadPorts,
+  actorInput: ReadActorInput,
+  id: string,
+): Result<HandoffEventView[], AppError> {
+  const gated = gatedHandoffView(ports, actorInput, id);
+  if (!gated.ok) return err(gated.error);
+  return ports.events.listRecent(id, HANDOFF_TIMELINE_LIMIT);
 }
 
 export interface FetchedHandoff {

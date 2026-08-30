@@ -3,7 +3,7 @@ import { closeSync, mkdtempSync, openSync, readSync, rmSync, writeSync } from "n
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import type { HandoffReadPorts, SendPorts } from "@sorage/core";
+import type { HandoffDetailReadPorts, HandoffEventView, HandoffReadPorts, SendPorts } from "@sorage/core";
 import { type AppError, type Result, appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
@@ -241,7 +241,7 @@ export function createNodeReviewPorts(
   return { ...read, reviews: createSqliteReviewStore(db, createSqliteEventLedger(db)) };
 }
 
-export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptions = {}): HandoffReadPorts {
+export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptions = {}): HandoffDetailReadPorts {
   const send = createNodeSendPorts(options);
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
@@ -257,6 +257,39 @@ export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptio
   return {
     projectPorts: send.projectPorts,
     handoffs: createSqliteHandoffReadStore(db, createSqliteEventLedger(db)),
+    // The note read the detail surface needs is the same findNote seam the review
+    // mutations load through, so the two can never disagree on the current Note.
+    reviews: createSqliteReviewStore(db, createSqliteEventLedger(db)),
+    events: {
+      listRecent(handoffId: string, limit: number): Result<HandoffEventView[], AppError> {
+        try {
+          const rows = db
+            .prepare(
+              "SELECT id, event_type, actor_kind, actor_id, row_version, created_at FROM events WHERE handoff_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            )
+            .all(handoffId, limit) as Array<{
+            id: string;
+            event_type: string;
+            actor_kind: HandoffEventView["actorKind"];
+            actor_id: string | null;
+            row_version: number | null;
+            created_at: string;
+          }>;
+          return ok(
+            rows.map((row) => ({
+              id: row.id,
+              eventType: row.event_type,
+              actorKind: row.actor_kind,
+              actorId: row.actor_id,
+              rowVersion: row.row_version,
+              createdAt: row.created_at,
+            })),
+          );
+        } catch (error) {
+          return err(appError("INTERNAL_ERROR", `Reading the Handoff timeline failed: ${String(error)}`));
+        }
+      },
+    },
     config: { vaultPath: effective.vault.path, verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch },
     artifact: send.artifactStore,
     ids: send.ids,

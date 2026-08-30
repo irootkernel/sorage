@@ -944,12 +944,18 @@ POST /api/v1/handoffs/upload
 GET  /api/v1/handoffs/{handoffId}
 GET  /api/v1/handoffs/{handoffId}/artifact
 GET  /api/v1/handoffs/{handoffId}/artifact/content
+GET  /api/v1/handoffs/{handoffId}/review-note
+GET  /api/v1/handoffs/{handoffId}/events
 POST /api/v1/handoffs/{handoffId}/artifact/reveal
 ```
 
 `POST /api/v1/handoffs/upload` streams multipart with a bounded buffer and enforces `artifact.maxBytes` mid-stream (API-003, NFR-005).
 
 `GET /api/v1/handoffs/{handoffId}/artifact/content` returns `Content-Length`, an `ETag` equal to the recorded SHA-256, `Accept-Ranges: bytes` with `Range` support for resumable download, the `Content-Type` decided by section 11.2, and `Content-Disposition: attachment; filename="<originalName>"` for everything that is not previewable text.
+
+`GET /api/v1/handoffs/{handoffId}/review-note` returns the current Review Note with its target Revision and author kind, or `null` when none exists, participant-gated exactly like the detail itself so a non-participant learns nothing (HND-020, WEB-004).
+
+`GET /api/v1/handoffs/{handoffId}/events` returns the bounded recent metadata timeline with each event's type, actor kind, and Row Version, newest first, including for a tombstone; it never carries Artifact bytes and never implies that historical content is retrievable (HND-017, WEB-004).
 
 `GET /api/v1/handoffs` accepts the same filters as `inbox` and `outbox`, including `includeArchived` and `includeDeleted`.
 

@@ -336,6 +336,11 @@ describe("the handoff lifecycle", () => {
     });
     expect(noted.status).toBe(200);
 
+    // The note endpoint returns the current Note with its author kind while one exists.
+    const noteWhilePresent = await call(`/api/v1/handoffs/${id}/review-note?asUser=true`, { bearer: apiToken });
+    expect(noteWhilePresent.status).toBe(200);
+    expect(json(noteWhilePresent).data).toMatchObject({ body: "Tighten", authorKind: "registered_project" });
+
     // A browser session token: section 18.5 documents the multipart shape for the
     // browser, so the route must accept it rather than the CLI token only.
     const secret = createNodeWebSecretStore({
@@ -364,6 +369,17 @@ describe("the handoff lifecycle", () => {
     expect(revised.status).toBe(200);
     expect(json(revised).data.revision).toBe(2);
     expect(json(revised).data.reviewState).toBe("awaiting_recipient");
+
+    // The revision resolved the Note, so the endpoint now reads null, and the
+    // bounded timeline carries the revision events with their actor kinds.
+    const noteAfter = await call(`/api/v1/handoffs/${id}/review-note?asUser=true`, { bearer: apiToken });
+    expect(noteAfter.status).toBe(200);
+    expect(json(noteAfter).data).toBeNull();
+    const timeline = await call(`/api/v1/handoffs/${id}/events?asUser=true`, { bearer: apiToken });
+    expect(timeline.status).toBe(200);
+    const types = json(timeline).data.map((entry: { eventType: string }) => entry.eventType);
+    expect(types).toContain("HANDOFF_REVISED");
+    expect(types).toContain("REVIEW_NOTE_RESOLVED");
 
     // The spool path is opaque, so the browser's filename is what gets recorded.
     const detail = await call(`/api/v1/handoffs/${id}?asUser=true`, { bearer: apiToken });

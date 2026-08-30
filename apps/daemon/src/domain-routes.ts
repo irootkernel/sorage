@@ -22,6 +22,8 @@ import {
   USER_ACTOR,
   getHandoff,
   listInbox,
+  readHandoffTimeline,
+  readReviewNote,
   listOutbox,
   listProjects,
   pinHandoff,
@@ -282,6 +284,33 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   });
   add({
     method: "GET",
+    pattern: "/api/v1/handoffs/{id}/review-note",
+    handler: async (_request, response, context) => {
+      const actor = contextActor(context);
+      if (!actor.ok) return void respond(response, context, actor);
+      // Participant-gated like the detail itself; null means no current Note.
+      const result = readReviewNote(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
+      return void respond(response, context, result);
+    },
+  });
+  add({
+    method: "GET",
+    pattern: "/api/v1/handoffs/{id}/events",
+    handler: async (_request, response, context) => {
+      const actor = contextActor(context);
+      if (!actor.ok) return void respond(response, context, actor);
+      // The bounded metadata timeline, never Artifact bytes; a tombstone keeps its
+      // timeline, because the events of a deleted Handoff remain readable (LIFE-018).
+      const result = readHandoffTimeline(
+        createNodeHandoffReadPorts(),
+        actor.value,
+        (context.params?.id ?? "") as string,
+      );
+      return void respond(response, context, result);
+    },
+  });
+  add({
+    method: "GET",
     pattern: "/api/v1/handoffs/{id}/artifact",
     handler: async (_request, response, context) => {
       const actor = contextActor(context);
@@ -530,7 +559,11 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         if (!upload.ok) return void respondError(response, context, upload.error);
         const file = upload.value.file;
         if (file === null) {
-          return void respondError(response, context, appError("CONFIG_INVALID", "the revise upload carried no file part"));
+          return void respondError(
+            response,
+            context,
+            appError("CONFIG_INVALID", "the revise upload carried no file part"),
+          );
         }
         const fields = upload.value.fields;
         const query = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
@@ -567,9 +600,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const result = reviseHandoff(createNodeRevisionPorts(), {
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
-        ...(typeof body.path === "string"
-          ? { file: body.path, originalName: basename(body.path) }
-          : {}),
+        ...(typeof body.path === "string" ? { file: body.path, originalName: basename(body.path) } : {}),
         ...(body.noChange === true ? { noChange: true } : {}),
         ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
         ...(typeof body.idempotencyKey === "string"
