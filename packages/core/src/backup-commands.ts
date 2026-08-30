@@ -8,7 +8,14 @@ import {
   snapshotManifest,
 } from "./backup-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { GIT_ARGS, type GitClient, gitStateConflict, isRuntimeTrackedPath } from "./git";
+import {
+  GIT_ARGS,
+  type GitClient,
+  gitStateConflict,
+  isRuntimeTrackedPath,
+  MANAGED_PATHSPECS,
+  unmanagedStagedPaths,
+} from "./git";
 import type { VaultMarker } from "./vault";
 import { type VaultVerifyPorts, vaultVerify } from "./vault-commands";
 
@@ -196,6 +203,10 @@ export function backupRestore(
     lock.value.release();
   }
   return outcome;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function restoreUnderLock(
@@ -411,10 +422,13 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
     }
     const staged = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.stagedFiles() });
     if (!staged.ok) return err(staged.error);
-    const stagedPaths = staged.value.stdout.split("\n").filter((line) => line !== "");
+    // Only staged work outside the managed pathspecs is a finding: a crashed
+    // backup run legitimately leaves its own staged managed files behind, and
+    // the next run re-stages and commits them.
+    const stagedPaths = unmanagedStagedPaths(staged.value.stdout.split("\n").filter((line) => line !== ""));
     if (stagedPaths.length > 0) {
       findings.push(
-        `The index holds ${stagedPaths.length} staged file(s) outside a backup run; resolve them manually, because Sorage stages only its managed pathspecs.`,
+        `The index holds ${stagedPaths.length} staged file(s) outside the managed pathspecs; resolve them manually, because Sorage stages only its managed content.`,
       );
     }
     const tracked = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.lsFiles() });
@@ -470,5 +484,221 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
       manifest: manifestChecked,
       trackedFiles: trackedCount,
     },
+  });
+}
+
+/**
+ * The backup run engine of section 27 (TASK-054, BKP-006, BKP-009, BKP-010,
+ * BKP-013, BKP-024): under `backup.lock`, export the deterministic snapshot,
+ * verify every current Artifact checksum, validate the Git state, stage
+ * exactly the managed pathspecs, let `git diff --cached --quiet` decide
+ * whether anything changed, commit with the configured template only when it
+ * did, and record exactly one `backup_runs` row whatever happened. The engine
+ * never pushes, rebases, merges, or resolves a conflict, and push itself is
+ * disabled until TASK-057 wires it.
+ */
+export interface BackupRunPorts {
+  vaultPath: string;
+  /** The `gitBackup.commit.messageTemplate`, with `{timestamp}` as its placeholder (BKP-010). */
+  messageTemplate: string;
+  triggeredBy: "manual" | "scheduled" | "catch-up";
+  /** The `gitBackup.push.enabled` flag; false records the push outcome as disabled (BKP-011). */
+  pushEnabled: boolean;
+  configuredBranch: string;
+  lock: {
+    /** Acquires backup.lock; a live holder fails with BACKUP_IN_PROGRESS (BKP-006). */
+    acquire(): Result<{ release: () => void }, AppError>;
+  };
+  exportSnapshot(): Result<BackupExportReport, AppError>;
+  /** Hashes every current Artifact against its recorded SHA-256 (VLT-023). */
+  verifyCurrentArtifacts(): Result<{ verified: number }, AppError>;
+  ensureRepository(): Result<VaultGitOutcome, AppError>;
+  git: GitClient;
+  /** Merge and rebase indicators read from the repository's state directories. */
+  gitState(): Result<{ mergeInProgress: boolean; rebaseInProgress: boolean }, AppError>;
+  /** Writes exactly one history row for this attempt (BKP-016). */
+  recordRun(row: BackupRunRow): Result<void, AppError>;
+  now(): Date;
+  nextRunId(): string;
+}
+
+export interface BackupRunRow {
+  id: string;
+  triggeredBy: "manual" | "scheduled" | "catch-up";
+  startedAt: string;
+  finishedAt: string;
+  outcome: "success" | "no-change" | "failure";
+  snapshotOutcome: "success" | "skipped" | "failure";
+  commitOutcome: "committed" | "no-change" | "skipped" | "failure";
+  pushOutcome: "pushed" | "skipped" | "failure" | "disabled";
+  commitSha: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+}
+
+export interface BackupRunReport {
+  runId: string;
+  outcome: "success" | "no-change" | "failure";
+  snapshot: "success" | "skipped" | "failure";
+  commit: "committed" | "no-change" | "skipped" | "failure";
+  push: "pushed" | "skipped" | "failure" | "disabled";
+  commitSha: string | null;
+}
+
+function runGit(ports: BackupRunPorts, args: string[]): Result<GitRunOutcomeShape, AppError> {
+  return ports.git.run({ cwd: ports.vaultPath, args });
+}
+
+type GitRunOutcomeShape = { exitCode: number; stdout: string; stderr: string };
+
+/** Renders the configured template with the run's UTC timestamp (BKP-010). */
+export function renderBackupCommitMessage(template: string, now: Date): string {
+  return template.replaceAll("{timestamp}", now.toISOString());
+}
+
+export function runBackupOnce(ports: BackupRunPorts): Result<BackupRunReport, AppError> {
+  const lock = ports.lock.acquire();
+  if (!lock.ok) return err(lock.error);
+  const id = ports.nextRunId();
+  const startedAt = ports.now();
+
+  // An unexpected throw (an injected crash, a Git surprise) still records its
+  // failure row, because the scheduler treats an unrecorded attempt as a run
+  // that never happened.
+  let result: ReturnType<typeof runUnderBackupLock>;
+  try {
+    result = runUnderBackupLock(ports);
+  } catch (error) {
+    result = err(
+      appError("INTERNAL_ERROR", `The backup run failed unexpectedly: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+  const finishedAt = ports.now();
+  const row: BackupRunRow = result.ok
+    ? {
+        id,
+        triggeredBy: ports.triggeredBy,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        outcome: result.value.outcome,
+        snapshotOutcome: result.value.snapshot,
+        commitOutcome: result.value.commit,
+        pushOutcome: result.value.push,
+        commitSha: result.value.commitSha,
+        failureCode: null,
+        failureMessage: null,
+      }
+    : {
+        id,
+        triggeredBy: ports.triggeredBy,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        outcome: "failure",
+        snapshotOutcome: "failure",
+        commitOutcome: "failure",
+        pushOutcome: "disabled",
+        commitSha: null,
+        failureCode: result.error.code,
+        failureMessage: result.error.message,
+      };
+  const recorded = ports.recordRun(row);
+  lock.value.release();
+  if (!recorded.ok) return err(recorded.error);
+  if (!result.ok) return err(result.error);
+  return ok({
+    runId: id,
+    outcome: result.value.outcome,
+    snapshot: result.value.snapshot,
+    commit: result.value.commit,
+    push: result.value.push,
+    commitSha: result.value.commitSha,
+  });
+}
+
+function runUnderBackupLock(ports: BackupRunPorts): Result<Omit<BackupRunReport, "runId">, AppError> {
+  // A Vault without a repository gets one on the first run; an existing
+  // repository, including an unrelated one, is reported and left untouched.
+  const repository = ports.ensureRepository();
+  if (!repository.ok) return err(repository.error);
+
+  const exported = ports.exportSnapshot();
+  if (!exported.ok) return err(exported.error);
+
+  // VLT-023: a Missing or Mismatched Artifact blocks backup success outright.
+  const verified = ports.verifyCurrentArtifacts();
+  if (!verified.ok) return err(verified.error);
+
+  const branch = runGit(ports, ["symbolic-ref", "--short", "HEAD"]);
+  if (!branch.ok) return err(branch.error);
+  const branchName = branch.value.exitCode === 0 ? branch.value.stdout.trim() : "";
+  if (branchName !== ports.configuredBranch) {
+    return err(
+      appError(
+        "GIT_BACKUP_CONFLICT",
+        `The Vault repository is on '${branchName === "" ? "a detached HEAD" : branchName}', not the configured branch '${ports.configuredBranch}'; resolve the repository state manually.`,
+        { branch: branchName, configuredBranch: ports.configuredBranch },
+      ),
+    );
+  }
+  const signals = ports.gitState();
+  if (!signals.ok) return err(signals.error);
+  if (signals.value.mergeInProgress || signals.value.rebaseInProgress) {
+    return err(
+      appError(
+        "GIT_BACKUP_CONFLICT",
+        "The Vault repository has a merge or rebase in progress; Sorage never resolves it.",
+        {},
+      ),
+    );
+  }
+  const staged = runGit(ports, ["diff", "--cached", "--name-only"]);
+  if (!staged.ok) return err(staged.error);
+  const unmanaged = unmanagedStagedPaths(staged.value.stdout.split("\n").filter((line) => line !== ""));
+  if (unmanaged.length > 0) {
+    return err(
+      appError(
+        "GIT_BACKUP_CONFLICT",
+        `The index holds staged work outside the managed pathspecs: ${unmanaged.join(", ")}.`,
+        {
+          unmanaged,
+        },
+      ),
+    );
+  }
+
+  const added = runGit(ports, ["add", "--", ...MANAGED_PATHSPECS]);
+  if (!added.ok) return err(added.error);
+  if (added.value.exitCode !== 0) return gitStateConflict("add", added.value);
+
+  const changeTest = runGit(ports, ["diff", "--cached", "--quiet", "--", ...MANAGED_PATHSPECS]);
+  if (!changeTest.ok) return err(changeTest.error);
+  if (changeTest.value.exitCode === 0) {
+    // Nothing managed changed since the last commit: no commit is created (BKP-009).
+    return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "disabled", commitSha: null });
+  }
+  if (changeTest.value.exitCode !== 1) return gitStateConflict("diff --cached --quiet", changeTest.value);
+
+  const message = renderBackupCommitMessage(ports.messageTemplate, ports.now());
+  const committed = runGit(ports, [
+    "-c",
+    "user.name=Sorage Backup",
+    "-c",
+    "user.email=sorage@localhost",
+    "commit",
+    "-m",
+    message,
+  ]);
+  if (!committed.ok) return err(committed.error);
+  if (committed.value.exitCode !== 0) return gitStateConflict("commit", committed.value);
+  const sha = runGit(ports, ["rev-parse", "HEAD"]);
+  if (!sha.ok) return err(sha.error);
+  return ok({
+    outcome: "success",
+    snapshot: "success",
+    commit: "committed",
+    push: ports.pushEnabled ? "skipped" : "disabled",
+    commitSha: sha.value.exitCode === 0 ? sha.value.stdout.trim() : null,
   });
 }

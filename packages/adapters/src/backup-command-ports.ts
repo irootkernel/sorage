@@ -23,11 +23,15 @@ import {
   type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
+  type BackupRunPorts,
+  type BackupRunRow,
   type BackupVerifyPorts,
   type DrainReport,
   ensureVaultGitRepository,
   err,
   expandConfigurationPath,
+  exportSnapshot,
+  type GitClient,
   ok,
   parseSnapshotManifest,
   parseVaultMarker,
@@ -43,7 +47,9 @@ import {
   USER_ACTOR,
   type VaultGitOutcome,
   type VaultMarker,
+  verifyVaultArtifacts,
 } from "@sorage/core";
+import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
 import { createNodeGitClient } from "./git-client";
@@ -65,12 +71,15 @@ export interface NodeBackupCommandPortsOptions {
   /** The literal `--from <path>` of a restore, expanded for reading. */
   sourcePath?: string | undefined;
   clock?: { now(): Date } | undefined;
+  /** Test seam for the fault-injection Git adapter the backup tests wrap (BKP-013). */
+  gitClient?: GitClient | undefined;
 }
 
 export interface NodeBackupCommandPorts {
   exportPorts(): Result<BackupExportPorts, AppError>;
   restorePorts(): Result<BackupRestorePorts, AppError>;
   verifyPorts(): Result<BackupVerifyPorts, AppError>;
+  runPorts(): Result<BackupRunPorts, AppError>;
   /** The RUN-002 process-start obligation every backup command runs first. */
   drainAtStart(): Result<DrainReport, AppError>;
 }
@@ -83,6 +92,8 @@ interface InstallationView {
   graceHours: number;
   /** The `gitBackup.push.branch` the Vault repository must sit on (section 31). */
   backupBranch: string;
+  /** The `gitBackup.commit.messageTemplate` (BKP-010). */
+  commitMessageTemplate: string;
 }
 
 /**
@@ -98,6 +109,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   const userHome = options.userHome ?? homedir();
   const clock = options.clock ?? { now: () => new Date() };
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const gitClient = options.gitClient ?? createNodeGitClient();
   const store: ConfigStore = createConfigStore({
     home,
     lockPorts: createNodeLockProbePorts(clock),
@@ -122,6 +134,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       redactWorkspacePaths: config.gitBackup.snapshot.redactWorkspacePaths,
       graceHours: config.gc.graceHours,
       backupBranch: config.gitBackup.push.branch,
+      commitMessageTemplate: config.gitBackup.commit.messageTemplate,
     });
   }
 
@@ -223,6 +236,33 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         );
       }
     };
+  }
+
+  /** backup.lock; a live holder refuses the run with BACKUP_IN_PROGRESS (BKP-006). */
+  function acquireBackupLock(): Result<{ release: () => void }, AppError> {
+    const acquired = acquireLock({
+      path: home.lockFile("backup"),
+      lock: "backup",
+      ports: createNodeLockProbePorts(clock),
+    });
+    if (acquired.ok) return ok({ release: acquired.release });
+    return err(
+      appError(
+        "BACKUP_IN_PROGRESS",
+        `A backup run already holds backup.lock (pid ${String(acquired.error.record?.pid)}); this run refused instead of racing it.`,
+        { lockPath: home.lockFile("backup") },
+      ),
+    );
+  }
+
+  /** The recorded current Artifacts the run verifies before it commits (VLT-023). */
+  function recordedArtifactPairs(): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
+    return withDatabase((db) => {
+      const rows = db
+        .prepare("SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1")
+        .all() as unknown as Array<{ storage_key: string; sha256: string }>;
+      return ok(rows.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })));
+    });
   }
 
   function acquireVaultMoveLock(): Result<{ release: () => void }, AppError> {
@@ -761,6 +801,84 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           if (!raw.ok) return ok(0);
           return ok(raw.value.split("\n").filter((line) => line !== "").length);
         },
+      });
+    },
+
+    runPorts(): Result<BackupRunPorts, AppError> {
+      const view = installation();
+      if (!view.ok) return err(view.error);
+      const vaultPath = view.value.vaultPath;
+      const git = gitClient;
+      return ok({
+        vaultPath,
+        messageTemplate: view.value.commitMessageTemplate,
+        triggeredBy: "manual",
+        pushEnabled: false,
+        configuredBranch: view.value.backupBranch,
+        lock: { acquire: acquireBackupLock },
+        exportSnapshot: () => {
+          const ports = createNodeBackupCommandPorts({ env: env as HomeEnvironment, userHome, clock }).exportPorts();
+          if (!ports.ok) return err(ports.error);
+          return exportSnapshot(ports.value);
+        },
+        verifyCurrentArtifacts: () => {
+          const recorded = recordedArtifactPairs();
+          if (!recorded.ok) return err(recorded.error);
+          const store = createNodeArtifactStore({
+            vaultPath,
+            installationId: view.value.installationId,
+          });
+          const integrity = verifyVaultArtifacts({ artifactStore: store }, recorded.value);
+          if (!integrity.ok) return err(integrity.error);
+          if (integrity.value.length > 0) {
+            return err(
+              appError("ARTIFACT_CORRUPTED", integrity.value.join(" "), {
+                affected: integrity.value.length,
+              }),
+            );
+          }
+          return ok({ verified: recorded.value.length });
+        },
+        ensureRepository: () => nodeEnsureVaultGit(vaultPath, view.value.installationId, clock),
+        git,
+        gitState: () =>
+          ok({
+            mergeInProgress: existsSync(join(vaultPath, ".git", "MERGE_HEAD")),
+            rebaseInProgress:
+              existsSync(join(vaultPath, ".git", "rebase-merge")) ||
+              existsSync(join(vaultPath, ".git", "rebase-apply")),
+          }),
+        recordRun: (row: BackupRunRow) =>
+          withDatabase((db) => {
+            try {
+              db.prepare(
+                `INSERT INTO backup_runs (id, triggered_by, started_at, finished_at, outcome, snapshot_outcome,
+                  commit_outcome, push_outcome, commit_sha, failure_code, failure_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ).run(
+                row.id,
+                row.triggeredBy,
+                row.startedAt,
+                row.finishedAt,
+                row.outcome,
+                row.snapshotOutcome,
+                row.commitOutcome,
+                row.pushOutcome,
+                row.commitSha,
+                row.failureCode,
+                row.failureMessage,
+              );
+              return ok(undefined);
+            } catch (error) {
+              return err(
+                appError("INTERNAL_ERROR", `Recording the backup run failed: ${messageOf(error)}.`, {
+                  cause: String(error),
+                }),
+              );
+            }
+          }),
+        now: () => clock.now(),
+        nextRunId: () => randomUUID(),
       });
     },
 

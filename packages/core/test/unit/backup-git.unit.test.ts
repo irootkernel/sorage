@@ -114,8 +114,10 @@ function verifyPortsOf(fixture: VerifyFixture) {
         : null,
     (request) =>
       request.args[0] === "symbolic-ref" ? { exitCode: 0, stdout: fixture.branch ?? "main", stderr: "" } : null,
-    (request) => (request.args[0] === "diff" ? { exitCode: 0, stdout: (fixture.staged ?? []).join("\n"), stderr: "" } : null),
-    (request) => (request.args[0] === "ls-files" ? { exitCode: 0, stdout: (fixture.tracked ?? []).join("\n"), stderr: "" } : null),
+    (request) =>
+      request.args[0] === "diff" ? { exitCode: 0, stdout: (fixture.staged ?? []).join("\n"), stderr: "" } : null,
+    (request) =>
+      request.args[0] === "ls-files" ? { exitCode: 0, stdout: (fixture.tracked ?? []).join("\n"), stderr: "" } : null,
   ]);
   const census: BackupCensus = {
     projects: 1,
@@ -128,7 +130,14 @@ function verifyPortsOf(fixture: VerifyFixture) {
   };
   const manifest =
     fixture.manifest === undefined
-      ? { counts: { projects: census.projects, handoffs: census.handoffs, events: census.events, artifacts: census.artifacts } }
+      ? {
+          counts: {
+            projects: census.projects,
+            handoffs: census.handoffs,
+            events: census.events,
+            artifacts: census.artifacts,
+          },
+        }
       : fixture.manifest;
   return {
     calls,
@@ -149,7 +158,8 @@ function verifyPortsOf(fixture: VerifyFixture) {
       git: client,
       configuredBranch: "main",
       repositoryExists: () => ok(fixture.repository ?? true),
-      repositorySignals: () => ok({ mergeInProgress: fixture.merge ?? false, rebaseInProgress: fixture.rebase ?? false }),
+      repositorySignals: () =>
+        ok({ mergeInProgress: fixture.merge ?? false, rebaseInProgress: fixture.rebase ?? false }),
       census: () => ok(census),
       readManifest: () => ok(manifest),
       countShards: () => ok(fixture.shards ?? census.handoffs),
@@ -159,7 +169,12 @@ function verifyPortsOf(fixture: VerifyFixture) {
 }
 
 function markerOf() {
-  return { type: "sorage-vault" as const, schemaVersion: 1, installationId: "i", createdAt: "2026-01-01T00:00:00.000Z" };
+  return {
+    type: "sorage-vault" as const,
+    schemaVersion: 1,
+    installationId: "i",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 
 describe("backupVerify", () => {
@@ -184,7 +199,10 @@ describe("backupVerify", () => {
     const { ports } = verifyPortsOf({ autocrlf: "true" });
     const report = backupVerify(ports as never, { now: new Date() });
     expect(
-      report.ok && report.value.findings.some((f) => f.includes("core.autocrlf is 'true'") && f.includes("git config core.autocrlf false")),
+      report.ok &&
+        report.value.findings.some(
+          (f) => f.includes("core.autocrlf is 'true'") && f.includes("git config core.autocrlf false"),
+        ),
     ).toBe(true);
   });
 
@@ -204,14 +222,17 @@ describe("backupVerify", () => {
   it("reports staged work outside a backup run", () => {
     const { ports } = verifyPortsOf({ staged: ["notes.txt"] });
     const report = backupVerify(ports as never, { now: new Date() });
-    expect(report.ok && report.value.findings.some((f) => f.includes("staged file(s) outside a backup run"))).toBe(true);
+    expect(
+      report.ok && report.value.findings.some((f) => f.includes("staged file(s) outside the managed pathspecs")),
+    ).toBe(true);
   });
 
   it("reports tracked runtime files by name (BKP-004)", () => {
     const { ports } = verifyPortsOf({ tracked: ["artifacts/h/a/brief.md", "state/sorage.sqlite3"] });
     const report = backupVerify(ports as never, { now: new Date() });
     expect(
-      report.ok && report.value.findings.some((f) => f.includes("state/sorage.sqlite3") && f.includes("never committed")),
+      report.ok &&
+        report.value.findings.some((f) => f.includes("state/sorage.sqlite3") && f.includes("never committed")),
     ).toBe(true);
   });
 

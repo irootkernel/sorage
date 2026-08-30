@@ -167,7 +167,8 @@ describe("backupVerify over a real installation", () => {
     writeFileSync(join(vault, ".gitattributes"), "artifacts/** -text -diff\n");
     const missingLine = verifyOnce(home, userHome);
     expect(
-      missingLine.ok && missingLine.value.findings.some((f) => f.includes(".gitattributes is missing the required line")),
+      missingLine.ok &&
+        missingLine.value.findings.some((f) => f.includes(".gitattributes is missing the required line")),
     ).toBe(true);
   });
 
@@ -185,7 +186,10 @@ describe("backupVerify over a real installation", () => {
     writeFileSync(join(staged.vault, "foreign.txt"), "staged by hand\n");
     git(staged.vault, "add", "foreign.txt");
     const stagedReport = verifyOnce(staged.home, staged.userHome);
-    expect(stagedReport.ok && stagedReport.value.findings.some((f) => f.includes("staged file(s) outside a backup run"))).toBe(true);
+    expect(
+      stagedReport.ok &&
+        stagedReport.value.findings.some((f) => f.includes("staged file(s) outside the managed pathspecs")),
+    ).toBe(true);
   });
 
   it("flags a runtime file that was committed into the Vault (BKP-004)", () => {
@@ -197,7 +201,9 @@ describe("backupVerify over a real installation", () => {
     git(vault, "add", "sorage.log");
     git(vault, "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-m", "leak");
     const report = verifyOnce(home, userHome);
-    expect(report.ok && report.value.findings.some((f) => f.includes("sorage.log") && f.includes("never committed"))).toBe(true);
+    expect(
+      report.ok && report.value.findings.some((f) => f.includes("sorage.log") && f.includes("never committed")),
+    ).toBe(true);
   });
 
   it("keeps an unmaterialized current Artifact a warning that does not fail the run", () => {
@@ -223,7 +229,9 @@ describe("backupVerify over a real installation", () => {
     expect(existsSync(join(clone, ".git"))).toBe(true);
     const artifact = `artifacts/${HANDOFF_ID}/a-1/brief.md`;
     expect(readFileSync(join(clone, artifact), "utf8")).toBe(readFileSync(join(vault, artifact), "utf8"));
-    expect(readFileSync(join(clone, ".sorage-vault.json"), "utf8")).toBe(readFileSync(join(vault, ".sorage-vault.json"), "utf8"));
+    expect(readFileSync(join(clone, ".sorage-vault.json"), "utf8")).toBe(
+      readFileSync(join(vault, ".sorage-vault.json"), "utf8"),
+    );
     expect(readFileSync(join(clone, "snapshots/projects.json"), "utf8")).toBe(
       readFileSync(join(vault, "snapshots/projects.json"), "utf8"),
     );
@@ -234,10 +242,14 @@ describe("backupVerify over a real installation", () => {
     seedOneHandoff(home, vault);
     exportOnce(home, userHome);
     commitManaged(vault);
-    const tracked = git(vault, "ls-files").split("\n").filter((line) => line !== "");
+    const tracked = git(vault, "ls-files")
+      .split("\n")
+      .filter((line) => line !== "");
     expect(tracked).toContain(".sorage-vault.json");
     expect(tracked).toContain(`artifacts/${HANDOFF_ID}/a-1/brief.md`);
-    expect(tracked.some((path) => path.endsWith(".sqlite3") || path.endsWith(".log") || path === "api-token")).toBe(false);
+    expect(tracked.some((path) => path.endsWith(".sqlite3") || path.endsWith(".log") || path === "api-token")).toBe(
+      false,
+    );
   });
 });
 

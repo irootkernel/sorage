@@ -1,4 +1,4 @@
-import { type AppError, appError, err, ok, type Result } from "./errors";
+import { type AppError, appError, err, type Result } from "./errors";
 
 /**
  * The Git client port of section 16 of domain-and-architecture.md and the Git
@@ -87,4 +87,29 @@ export function isRuntimeTrackedPath(path: string): boolean {
   if (name === "api-token" || name === "web-secret") return true;
   if (name.includes("credential")) return true;
   return false;
+}
+
+/** The five managed pathspecs section 26 permits Sorage to stage and commit. */
+export const MANAGED_PATHSPECS = [
+  ".sorage-vault.json",
+  ".gitattributes",
+  ".gitignore",
+  "artifacts",
+  "snapshots",
+] as const;
+
+/** True when one staged or tracked path belongs to the managed pathspecs (section 28). */
+export function isManagedVaultPath(path: string): boolean {
+  return (
+    path === ".sorage-vault.json" ||
+    path === ".gitattributes" ||
+    path === ".gitignore" ||
+    path.startsWith("artifacts/") ||
+    path.startsWith("snapshots/")
+  );
+}
+
+/** The staged paths outside the managed set — the only ones section 28 refuses. */
+export function unmanagedStagedPaths(staged: string[]): string[] {
+  return staged.filter((path) => !isManagedVaultPath(path));
 }

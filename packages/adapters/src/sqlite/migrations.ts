@@ -224,10 +224,41 @@ CREATE TABLE vault_state (
 `,
 };
 
+/**
+ * The backup run history of TASK-054 (BKP-006, BKP-009, BKP-010, BKP-016):
+ * `backup_runs` is the single scheduler authority — there is no separate
+ * scheduler state file — and every attempt that held `backup.lock` writes
+ * exactly one row carrying its snapshot, commit, and push outcomes separately
+ * (section 30), the created commit when there was one, and the symbolic
+ * failure code when there was none.
+ */
+export const BACKUP_RUNS_MIGRATION: Migration = {
+  version: 6,
+  name: "backup-runs-v1",
+  sql: `
+CREATE TABLE backup_runs (
+  id TEXT PRIMARY KEY,
+  triggered_by TEXT NOT NULL CHECK (triggered_by IN ('manual', 'scheduled', 'catch-up')),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'no-change', 'failure')),
+  snapshot_outcome TEXT NOT NULL CHECK (snapshot_outcome IN ('success', 'skipped', 'failure')),
+  commit_outcome TEXT NOT NULL CHECK (commit_outcome IN ('committed', 'no-change', 'skipped', 'failure')),
+  push_outcome TEXT NOT NULL CHECK (push_outcome IN ('pushed', 'skipped', 'failure', 'disabled')),
+  commit_sha TEXT,
+  failure_code TEXT,
+  failure_message TEXT
+);
+
+CREATE INDEX idx_backup_runs_started_at ON backup_runs(started_at);
+`,
+};
+
 export const MIGRATIONS: Migration[] = [
   FIRST_RELEASED_SCHEMA,
   PROJECT_REGISTRY_MIGRATION,
   INTENT_LOG_MIGRATION,
   HANDOFF_DOMAIN_MIGRATION,
   VAULT_MOVE_FENCE_MIGRATION,
+  BACKUP_RUNS_MIGRATION,
 ];
