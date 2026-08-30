@@ -41,7 +41,9 @@ import {
   archiveHandoff,
   archiveProject,
   backupRestore,
+  backupStatus,
   backupVerify,
+  runBackupCommand,
   bindProject,
   type DoctorReport,
   declineHandoff,
@@ -1468,6 +1470,94 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     });
 
   const backup = program.command("backup").description("verify, run, and restore Vault backups");
+
+  backup
+    .command("run")
+    .description("run one backup now: export the snapshot, commit managed changes, and report each outcome")
+    .option("--idempotency-key <uuid>", "replay the identical run under the same key instead of running again")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const backupPorts = createNodeBackupCommandPorts();
+      const drained = backupPorts.drainAtStart();
+      if (!drained.ok) {
+        reportExitCode(renderAppError(drained.error, ports, json));
+        return;
+      }
+      const runPorts = backupPorts.runPorts();
+      if (!runPorts.ok) {
+        reportExitCode(renderAppError(runPorts.error, ports, json));
+        return;
+      }
+      const idempotencyKey =
+        typeof options.idempotencyKey === "string" && options.idempotencyKey.trim() !== ""
+          ? options.idempotencyKey
+          : undefined;
+      const result = runBackupCommand(runPorts.value, { idempotencyKey });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else {
+        const value = result.value;
+        ports.out(
+          `Backup ${value.outcome}: snapshot ${value.snapshot}, commit ${value.commit}, push ${value.push}${value.commitSha !== null ? ` (${value.commitSha.slice(0, 12)})` : ""}\n`,
+        );
+        if (value.replayed) ports.out("replayed from the recorded outcome of this idempotency key\n");
+      }
+    });
+
+  backup
+    .command("status")
+    .description("report the backup history from backup_runs: last attempt, success, commit, push, and failure")
+    .action((_options, command) => {
+      const json = command.optsWithGlobals().json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const backupPorts = createNodeBackupCommandPorts();
+      const drained = backupPorts.drainAtStart();
+      if (!drained.ok) {
+        reportExitCode(renderAppError(drained.error, ports, json));
+        return;
+      }
+      const statusPorts = backupPorts.statusPorts();
+      if (!statusPorts.ok) {
+        reportExitCode(renderAppError(statusPorts.error, ports, json));
+        return;
+      }
+      const report = backupStatus(statusPorts.value);
+      if (!report.ok) {
+        reportExitCode(renderAppError(report.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(report.value, requestId()), null, 2)}\n`);
+      } else {
+        const value = report.value;
+        if (value.lastAttempt === null) {
+          ports.out("No backup has run yet.\n");
+        } else {
+          ports.out(`Last attempt: ${value.lastAttempt.outcome} at ${value.lastAttempt.startedAt}\n`);
+          if (value.lastCommit !== null) {
+            ports.out(
+              `Last commit: ${String(value.lastCommit.commitSha).slice(0, 12)} at ${value.lastCommit.startedAt}\n`,
+            );
+          } else {
+            ports.out("Last commit: none\n");
+          }
+          if (value.lastFailure !== null) {
+            ports.out(`Last failure: ${String(value.lastFailure.failureCode)} at ${value.lastFailure.startedAt}\n`);
+          }
+        }
+        ports.out(
+          value.schedule.enabled
+            ? `Schedule: daily at ${value.schedule.at} in ${value.schedule.timezone}\n`
+            : "Schedule: disabled\n",
+        );
+      }
+    });
 
   backup
     .command("verify")

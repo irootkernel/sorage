@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "runId": "<uuid>",
+    "outcome": "success",
+    "snapshot": "success",
+    "commit": "committed",
+    "push": "disabled",
+    "commitSha": "<sha>",
+    "replayed": false
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

@@ -79,7 +79,8 @@ export interface NodeBackupCommandPorts {
   exportPorts(): Result<BackupExportPorts, AppError>;
   restorePorts(): Result<BackupRestorePorts, AppError>;
   verifyPorts(): Result<BackupVerifyPorts, AppError>;
-  runPorts(): Result<BackupRunPorts, AppError>;
+  runPorts(): Result<import("@sorage/core").BackupRunCommandPorts, AppError>;
+  statusPorts(): Result<import("@sorage/core").BackupStatusPorts, AppError>;
   /** The RUN-002 process-start obligation every backup command runs first. */
   drainAtStart(): Result<DrainReport, AppError>;
 }
@@ -94,6 +95,8 @@ interface InstallationView {
   backupBranch: string;
   /** The `gitBackup.commit.messageTemplate` (BKP-010). */
   commitMessageTemplate: string;
+  /** The `gitBackup.schedule` snapshot status reports (BKP-016). */
+  schedule: { enabled: boolean; at: string; timezone: string; catchUpAfterMissedRun: boolean };
 }
 
 /**
@@ -135,6 +138,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       graceHours: config.gc.graceHours,
       backupBranch: config.gitBackup.push.branch,
       commitMessageTemplate: config.gitBackup.commit.messageTemplate,
+      schedule: {
+        enabled: config.gitBackup.enabled,
+        at: config.gitBackup.schedule.at,
+        timezone: config.gitBackup.schedule.timezone,
+        catchUpAfterMissedRun: config.gitBackup.schedule.catchUpAfterMissedRun,
+      },
     });
   }
 
@@ -804,7 +813,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       });
     },
 
-    runPorts(): Result<BackupRunPorts, AppError> {
+    runPorts(): Result<import("@sorage/core").BackupRunCommandPorts, AppError> {
       const view = installation();
       if (!view.ok) return err(view.error);
       const vaultPath = view.value.vaultPath;
@@ -879,6 +888,78 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           }),
         now: () => clock.now(),
         nextRunId: () => randomUUID(),
+        idempotency: {
+          lookup: (key, scope) =>
+            withDatabase((db) => {
+              try {
+                const row = db
+                  .prepare("SELECT request_hash, response_json FROM idempotency_keys WHERE key = ? AND scope = ?")
+                  .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;
+                return ok(row ? { requestHash: row.request_hash, responseJson: row.response_json } : null);
+              } catch (error) {
+                return err(appError("INTERNAL_ERROR", `Reading the idempotency key failed: ${messageOf(error)}.`));
+              }
+            }),
+          record: (input) =>
+            withDatabase((db) => {
+              try {
+                db.prepare(
+                  "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ).run(
+                  input.key,
+                  input.scope,
+                  input.requestHash,
+                  input.responseJson,
+                  clock.now().toISOString(),
+                  input.expiresAt,
+                );
+                return ok(undefined);
+              } catch (error) {
+                return err(appError("INTERNAL_ERROR", `Recording the idempotency key failed: ${messageOf(error)}.`));
+              }
+            }),
+        },
+      });
+    },
+
+    statusPorts(): Result<import("@sorage/core").BackupStatusPorts, AppError> {
+      const view = installation();
+      if (!view.ok) return err(view.error);
+      const vaultPath = view.value.vaultPath;
+      return ok({
+        vaultPath,
+        history: () =>
+          withDatabase((db) => {
+            try {
+              const rows = db.prepare("SELECT * FROM backup_runs").all() as unknown as Array<Record<string, unknown>>;
+              return ok(rows.map(mapBackupRunRow));
+            } catch (error) {
+              return err(appError("INTERNAL_ERROR", `Reading the backup history failed: ${messageOf(error)}.`));
+            }
+          }),
+        schedule: view.value.schedule,
+        repositoryBytes: () => {
+          const gitDir = join(vaultPath, ".git");
+          if (!existsSync(gitDir)) return ok(null);
+          try {
+            let total = 0;
+            const walk = (directory: string) => {
+              for (const entry of readdirSync(directory, { withFileTypes: true })) {
+                const path = join(directory, entry.name);
+                if (entry.isDirectory()) walk(path);
+                else total += statSync(path).size;
+              }
+            };
+            walk(gitDir);
+            return ok(total);
+          } catch (error) {
+            return err(
+              appError("INTERNAL_ERROR", `Measuring the repository failed: ${messageOf(error)}.`, {
+                cause: String(error),
+              }),
+            );
+          }
+        },
       });
     },
 
@@ -1032,6 +1113,22 @@ function mapSnapshotData(rows: {
       metadata: parseMetadata(row.metadata_json),
       createdAt: str(row.created_at),
     })),
+  };
+}
+
+function mapBackupRunRow(row: Record<string, unknown>): import("@sorage/core").BackupRunRow {
+  return {
+    id: String(row["id"] ?? ""),
+    triggeredBy: (row["triggered_by"] ?? "manual") as import("@sorage/core").BackupRunRow["triggeredBy"],
+    startedAt: String(row["started_at"] ?? ""),
+    finishedAt: row["finished_at"] === null ? null : String(row["finished_at"]),
+    outcome: (row["outcome"] ?? "failure") as import("@sorage/core").BackupRunRow["outcome"],
+    snapshotOutcome: (row["snapshot_outcome"] ?? "failure") as import("@sorage/core").BackupRunRow["snapshotOutcome"],
+    commitOutcome: (row["commit_outcome"] ?? "failure") as import("@sorage/core").BackupRunRow["commitOutcome"],
+    pushOutcome: (row["push_outcome"] ?? "disabled") as import("@sorage/core").BackupRunRow["pushOutcome"],
+    commitSha: row["commit_sha"] === null ? null : String(row["commit_sha"]),
+    failureCode: row["failure_code"] === null ? null : String(row["failure_code"]),
+    failureMessage: row["failure_message"] === null ? null : String(row["failure_message"]),
   };
 }
 

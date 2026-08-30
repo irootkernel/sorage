@@ -7,6 +7,7 @@ import {
   snapshotFiles,
   snapshotManifest,
 } from "./backup-snapshot";
+import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import {
   GIT_ARGS,
@@ -526,7 +527,7 @@ export interface BackupRunRow {
   id: string;
   triggeredBy: "manual" | "scheduled" | "catch-up";
   startedAt: string;
-  finishedAt: string;
+  finishedAt: string | null;
   outcome: "success" | "no-change" | "failure";
   snapshotOutcome: "success" | "skipped" | "failure";
   commitOutcome: "committed" | "no-change" | "skipped" | "failure";
@@ -701,4 +702,137 @@ function runUnderBackupLock(ports: BackupRunPorts): Result<Omit<BackupRunReport,
     push: ports.pushEnabled ? "skipped" : "disabled",
     commitSha: sha.value.exitCode === 0 ? sha.value.stdout.trim() : null,
   });
+}
+
+/**
+ * The manual run command of TASK-055 (BKP-017, section 17.3): `backup run` is
+ * one of the six idempotent operations, so an `--idempotency-key` replays the
+ * recorded outcome of an identical request, refuses a different request under
+ * the same key with `IDEMPOTENCY_CONFLICT`, and records the outcome of a
+ * completed run for 24 hours like every other keyed operation. A failed run
+ * records nothing, because a retry is the wanted behavior after a failure.
+ */
+export interface BackupIdempotencyPort {
+  lookup(key: string, scope: string): Result<{ requestHash: string; responseJson: string } | null, AppError>;
+  record(input: {
+    key: string;
+    scope: string;
+    requestHash: string;
+    responseJson: string;
+    expiresAt: string;
+  }): Result<void, AppError>;
+}
+
+export interface BackupRunCommandPorts extends BackupRunPorts {
+  idempotency: BackupIdempotencyPort;
+}
+
+export type BackupRunCommandOutcome = BackupRunReport & { replayed: boolean };
+
+export function runBackupCommand(
+  ports: BackupRunCommandPorts,
+  options: { idempotencyKey?: string | undefined },
+): Result<BackupRunCommandOutcome, AppError> {
+  // The request identity of a manual run is the command itself over this
+  // Vault: there is no per-run input besides the key, so identical requests
+  // hash identically by construction.
+  const requestHash = hashOf(JSON.stringify({ command: "backup run", vaultPath: ports.vaultPath }));
+  if (options.idempotencyKey !== undefined) {
+    const seen = ports.idempotency.lookup(options.idempotencyKey, "backup-run");
+    if (!seen.ok) return err(seen.error);
+    if (seen.value !== null) {
+      if (seen.value.requestHash !== requestHash) {
+        return err(
+          appError(
+            "IDEMPOTENCY_CONFLICT",
+            "this idempotency key was used with a different request; use a new key or replay the identical request",
+            {
+              idempotencyKey: options.idempotencyKey,
+            },
+          ),
+        );
+      }
+      const replayed = JSON.parse(seen.value.responseJson) as BackupRunReport;
+      return ok({ ...replayed, replayed: true });
+    }
+  }
+  const run = runBackupOnce(ports);
+  if (!run.ok) return err(run.error);
+  if (options.idempotencyKey !== undefined) {
+    const recorded = ports.idempotency.record({
+      key: options.idempotencyKey,
+      scope: "backup-run",
+      requestHash,
+      responseJson: JSON.stringify(run.value),
+      expiresAt: new Date(ports.now().getTime() + 24 * 3_600_000).toISOString(),
+    });
+    if (!recorded.ok) return err(recorded.error);
+  }
+  return ok({ ...run.value, replayed: false });
+}
+
+function hashOf(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * `sorage backup status` (TASK-055, BKP-016, section 31): the run history
+ * projected onto what an operator needs — the last attempt, the last success,
+ * the last commit, the last push, and the last failure with its symbolic
+ * code, next to the schedule snapshot and the repository size on disk. The
+ * computed `nextDueAt` stays null until the scheduler of TASK-056 fills it,
+ * because computing it is the scheduler's DST-aware job.
+ */
+export interface BackupStatusPorts {
+  vaultPath: string;
+  history(): Result<BackupRunRow[], AppError>;
+  schedule: { enabled: boolean; at: string; timezone: string; catchUpAfterMissedRun: boolean };
+  /** Total bytes under the Vault's `.git`, or null when no repository exists. */
+  repositoryBytes(): Result<number | null, AppError>;
+}
+
+export interface BackupStatusReport {
+  lastAttempt: BackupRunRow | null;
+  lastSuccess: BackupRunRow | null;
+  lastCommit: BackupRunRow | null;
+  lastPush: BackupRunRow | null;
+  lastFailure: BackupRunRow | null;
+  nextDueAt: string | null;
+  schedule: { enabled: boolean; at: string; timezone: string; catchUpAfterMissedRun: boolean };
+  repositorySizeBytes: number | null;
+}
+
+export function backupStatus(ports: BackupStatusPorts): Result<BackupStatusReport, AppError> {
+  const history = ports.history();
+  if (!history.ok) return err(history.error);
+  const rows = [...history.value].sort((a, b) => compareTimestamps(a.startedAt, b.startedAt));
+  const lastAttempt = rows.length > 0 ? (rows[rows.length - 1] as BackupRunRow) : null;
+  const lastSuccess = findLast(rows, (row) => row.outcome !== "failure");
+  const lastCommit = findLast(rows, (row) => row.commitSha !== null);
+  const lastPush = findLast(rows, (row) => row.pushOutcome === "pushed");
+  const lastFailure = findLast(rows, (row) => row.outcome === "failure");
+  const bytes = ports.repositoryBytes();
+  if (!bytes.ok) return err(bytes.error);
+  return ok({
+    lastAttempt,
+    lastSuccess,
+    lastCommit,
+    lastPush,
+    lastFailure,
+    nextDueAt: null,
+    schedule: ports.schedule,
+    repositorySizeBytes: bytes.value,
+  });
+}
+
+function findLast(rows: BackupRunRow[], predicate: (row: BackupRunRow) => boolean): BackupRunRow | null {
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index] as BackupRunRow;
+    if (predicate(row)) return row;
+  }
+  return null;
+}
+
+function compareTimestamps(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }

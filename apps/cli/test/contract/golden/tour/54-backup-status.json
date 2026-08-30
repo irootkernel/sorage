@@ -1,0 +1,57 @@
+{
+  "ok": true,
+  "data": {
+    "lastAttempt": {
+      "id": "<uuid>",
+      "triggeredBy": "manual",
+      "startedAt": "<ts>",
+      "finishedAt": "<ts>",
+      "outcome": "no-change",
+      "snapshotOutcome": "success",
+      "commitOutcome": "no-change",
+      "pushOutcome": "disabled",
+      "commitSha": null,
+      "failureCode": null,
+      "failureMessage": null
+    },
+    "lastSuccess": {
+      "id": "<uuid>",
+      "triggeredBy": "manual",
+      "startedAt": "<ts>",
+      "finishedAt": "<ts>",
+      "outcome": "no-change",
+      "snapshotOutcome": "success",
+      "commitOutcome": "no-change",
+      "pushOutcome": "disabled",
+      "commitSha": null,
+      "failureCode": null,
+      "failureMessage": null
+    },
+    "lastCommit": {
+      "id": "<uuid>",
+      "triggeredBy": "manual",
+      "startedAt": "<ts>",
+      "finishedAt": "<ts>",
+      "outcome": "success",
+      "snapshotOutcome": "success",
+      "commitOutcome": "committed",
+      "pushOutcome": "disabled",
+      "commitSha": "<sha>",
+      "failureCode": null,
+      "failureMessage": null
+    },
+    "lastPush": null,
+    "lastFailure": null,
+    "nextDueAt": null,
+    "schedule": {
+      "enabled": false,
+      "at": "03:00",
+      "timezone": "UTC",
+      "catchUpAfterMissedRun": true
+    },
+    "repositorySizeBytes": <bytes>
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

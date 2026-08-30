@@ -14,8 +14,9 @@ import { afterAll, describe, expect, it } from "vitest";
  * segment becomes `artifacts/<uuid>/<key>/`, every UUID becomes `<uuid>`, every
  * ISO-8601 instant becomes `<ts>`, and every 64-hex digest becomes `<digest>`;
  * small integers such as revisions, row versions, and counts stay literal because
- * the tour's sequence makes them deterministic. Refresh the goldens by running the
- * suite once with SORAGE_UPDATE_GOLDENS=1 and reviewing the diff.
+ * the tour's sequence makes them deterministic, every 64-hex digest becomes
+ * `<digest>`, and every 40-hex Git object id becomes `<sha>`. Refresh the goldens
+ * by running the suite once with SORAGE_UPDATE_GOLDENS=1 and reviewing the diff.
  */
 const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
 const goldenDir = fileURLToPath(new URL("./golden/tour/", import.meta.url));
@@ -37,16 +38,22 @@ afterAll(() => {
 const handoffIds = new Map<string, string>();
 
 function normalize(text: string): string {
-  return text
-    .split(home)
-    .join("<home>")
-    .replace(
-      /artifacts\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]+\//g,
-      "artifacts/<uuid>/<key>/",
-    )
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
-    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<ts>")
-    .replace(/\b[0-9a-f]{64}\b/g, "<digest>");
+  return (
+    text
+      .split(home)
+      .join("<home>")
+      .replace(
+        /artifacts\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]+\//g,
+        "artifacts/<uuid>/<key>/",
+      )
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<ts>")
+      .replace(/\b[0-9a-f]{64}\b/g, "<digest>")
+      .replace(/\b[0-9a-f]{40}\b/g, "<sha>")
+      // The Git repository's byte count shifts between runs of identical content
+      // (object mtimes and index bytes), so the golden pins the field, not the size.
+      .replace(/"repositorySizeBytes": \d+/g, '"repositorySizeBytes": <bytes>')
+  );
 }
 
 function runTour(
@@ -204,6 +211,16 @@ const steps: Step[] = [
     args: ["backup", "verify", "--json"],
     expectedStatus: 1,
   },
+  {
+    name: "51-backup-run",
+    args: ["backup", "run", "--idempotency-key", "2f0ac9a0-0000-4000-8000-0000000000bb", "--json"],
+  },
+  {
+    name: "52-backup-run-replay",
+    args: ["backup", "run", "--idempotency-key", "2f0ac9a0-0000-4000-8000-0000000000bb", "--json"],
+  },
+  { name: "53-backup-run-again", args: ["backup", "run", "--json"] },
+  { name: "54-backup-status", args: ["backup", "status", "--json"] },
 ];
 
 describe("the golden tour of every catalog command", () => {

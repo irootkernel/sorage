@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { GitClient, GitRunOutcome, GitRunRequest } from "@sorage/core";
-import { initializeInstallation, ok, runBackupOnce } from "@sorage/core";
+import { backupStatus, initializeInstallation, ok, runBackupCommand, runBackupOnce } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts, nodeEnsureVaultGit } from "../../src/backup-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
@@ -235,3 +235,51 @@ function delegatingClient(
     },
   };
 }
+
+describe("backup run command surface and status over a real installation", () => {
+  it("runs keyed, replays under the same key, and creates exactly one run and one commit", () => {
+    const { home, vault } = initializedHome("sorage-run-cmd-");
+    seedOneHandoff(home, vault);
+    const ports = createNodeBackupCommandPorts({ env: { SORAGE_HOME: home }, userHome: home });
+    const runPorts = ports.runPorts();
+    if (!runPorts.ok) throw new Error(runPorts.error.message);
+    const first = runBackupCommand(runPorts.value, { idempotencyKey: "key-1" });
+    expect(first.ok).toBe(true);
+    if (first.ok) expect(first.value.replayed).toBe(false);
+    const headAfterFirst = git(vault, "rev-parse", "HEAD").trim();
+
+    const replayed = runBackupCommand(runPorts.value, { idempotencyKey: "key-1" });
+    expect(replayed.ok).toBe(true);
+    if (replayed.ok) {
+      expect(replayed.value.replayed).toBe(true);
+      expect(replayed.value.runId).toBe(first.ok ? first.value.runId : "");
+    }
+    expect(git(vault, "rev-list", "--count", "HEAD").trim()).toBe("1");
+    expect(git(vault, "rev-parse", "HEAD").trim()).toBe(headAfterFirst);
+    expect(backupRunRows(home)).toHaveLength(1);
+  });
+
+  it("exposes last attempt, success, commit, and failure through sorage backup status ports", () => {
+    const { home, vault } = initializedHome("sorage-run-status-");
+    seedOneHandoff(home, vault);
+    const ports = createNodeBackupCommandPorts({ env: { SORAGE_HOME: home }, userHome: home });
+    const runPorts = ports.runPorts();
+    if (!runPorts.ok) throw new Error(runPorts.error.message);
+    expect(runBackupCommand(runPorts.value, {}).ok).toBe(true);
+
+    const statusPorts = ports.statusPorts();
+    if (!statusPorts.ok) throw new Error(statusPorts.error.message);
+    const report = backupStatus(statusPorts.value);
+    expect(report.ok).toBe(true);
+    if (report.ok) {
+      expect(report.value.lastAttempt?.outcome).toBe("success");
+      expect(report.value.lastSuccess?.outcome).toBe("success");
+      expect(report.value.lastCommit?.commitSha).toBe(git(vault, "rev-parse", "HEAD").trim());
+      expect(report.value.lastPush).toBeNull();
+      expect(report.value.lastFailure).toBeNull();
+      expect(report.value.schedule.enabled).toBe(false);
+      expect(report.value.nextDueAt).toBeNull();
+      expect(typeof report.value.repositorySizeBytes).toBe("number");
+    }
+  });
+});
