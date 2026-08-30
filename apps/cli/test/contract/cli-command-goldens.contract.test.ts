@@ -199,6 +199,11 @@ const steps: Step[] = [
   { name: "47-vault-status-moved", args: ["vault", "status", "--json"] },
   { name: "48-project-archive", args: ["project", "archive", "alpha", "--as-user", "--json"] },
   { name: "49-project-unarchive", args: ["project", "unarchive", "alpha", "--as-user", "--json"] },
+  {
+    name: "50-backup-verify-no-git",
+    args: ["backup", "verify", "--json"],
+    expectedStatus: 1,
+  },
 ];
 
 describe("the golden tour of every catalog command", () => {

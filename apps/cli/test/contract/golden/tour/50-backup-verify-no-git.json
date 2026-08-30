@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "data": {
+    "findings": [
+      "The Vault has no Git repository; re-run sorage init --initialize-git to initialize one.",
+      "snapshots/manifest.json is missing; a backup run has not exported the current snapshots yet."
+    ],
+    "warnings": [],
+    "checked": {
+      "vault": {
+        "artifacts": 5,
+        "recordedArtifacts": 5,
+        "stagedFiles": 0
+      },
+      "manifest": {
+        "present": false,
+        "projects": 0,
+        "handoffs": 0,
+        "events": 0,
+        "artifacts": 0
+      },
+      "trackedFiles": 0
+    },
+    "blocking": true
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

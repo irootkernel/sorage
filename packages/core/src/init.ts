@@ -1,5 +1,5 @@
-import { defaultConfiguration, expandConfigurationPath, type Configuration } from "./config";
-import { ok, type AppError, type Result } from "./errors";
+import { type Configuration, defaultConfiguration, expandConfigurationPath } from "./config";
+import { type AppError, ok, type Result } from "./errors";
 import type { Clock, IdGenerator } from "./ids";
 import type { ApiTokenStorePort } from "./tokens";
 
@@ -40,6 +40,11 @@ export interface InitFilesystemPort {
   ensureDirectory(path: string): void;
 }
 
+/** From milestone 0.3, `sorage init --initialize-git` also brings up the Vault repository (INIT-007, BKP-022). */
+export interface InitGitPort {
+  ensureRepository(vaultPath: string): Result<{ initialized: boolean; existingReported: boolean }, AppError>;
+}
+
 export interface InitPorts {
   paths: InitPathsPort;
   userHome: string;
@@ -51,6 +56,7 @@ export interface InitPorts {
   filesystem: InitFilesystemPort;
   /** From milestone 0.2, init also creates the API token at `state/api-token` (INIT-003). */
   token?: ApiTokenStorePort | undefined;
+  git?: InitGitPort | undefined;
 }
 
 export interface InitOptions {
@@ -58,6 +64,8 @@ export interface InitOptions {
   vaultPath?: string | undefined;
   /** `--reconfigure`: backfill missing pieces of an existing installation. */
   reconfigure?: boolean | undefined;
+  /** `--initialize-git`: initialize the Vault Git repository (INIT-007, BKP-022). */
+  initializeGit?: boolean | undefined;
 }
 
 export interface InitResult {
@@ -66,6 +74,8 @@ export interface InitResult {
   /** The expanded, normalized Vault directory. */
   vaultPath: string;
   home: string;
+  /** Present only when `--initialize-git` ran (INIT-007). */
+  git?: { initialized: boolean; existingReported: boolean } | undefined;
 }
 
 export function initializeInstallation(ports: InitPorts, options: InitOptions = {}): Result<InitResult, AppError> {
@@ -85,6 +95,17 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
       const vaultPath = expandConfigurationPath(existing.vault.path, ports.userHome, ports.paths.home);
       const vault = ports.vault.initialize(vaultPath, existing.installationId);
       if (!vault.ok) return vault;
+      if (options.initializeGit === true && ports.git !== undefined) {
+        const git = ports.git.ensureRepository(vaultPath);
+        if (!git.ok) return git;
+        return ok({
+          outcome: "already-initialized",
+          installationId: existing.installationId,
+          vaultPath,
+          home: ports.paths.home,
+          git: git.value,
+        });
+      }
     }
     return ok({
       outcome: "already-initialized",
@@ -112,6 +133,11 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
   // race fails with CONFIG_CONFLICT instead of silently replacing the identity.
   const written = ports.config.write(config, { revision: 0 });
   if (!written.ok) return written;
+  if (options.initializeGit === true && ports.git !== undefined) {
+    const git = ports.git.ensureRepository(vaultPath);
+    if (!git.ok) return git;
+    return ok({ outcome: "created", installationId, vaultPath, home: ports.paths.home, git: git.value });
+  }
   return ok({ outcome: "created", installationId, vaultPath, home: ports.paths.home });
 }
 

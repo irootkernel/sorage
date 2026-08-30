@@ -1,16 +1,16 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { appError, err, ok, type AppError, type Result } from "@sorage/core";
 import type { InitDatabasePort, InitPathsPort, InitPorts } from "@sorage/core";
-import { SystemClock, UuidGenerator } from "@sorage/core";
-import { createConfigStore, type ConfigStoreFs } from "./config-store";
+import { type AppError, appError, err, ok, type Result, SystemClock, UuidGenerator } from "@sorage/core";
+import { nodeEnsureVaultGit } from "./backup-command-ports";
+import { type ConfigStoreFs, createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, type LockClock } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
-import { createVaultInitializer } from "./vault";
 import { createNodeApiTokenStore } from "./token-store";
+import { createVaultInitializer } from "./vault";
 
 /**
  * The production wiring of the initialization use case: the home path service, the
@@ -29,15 +29,31 @@ export function createNodeInitPorts(options: NodeInitPortsOptions = {}): InitPor
   const userHome = options.userHome ?? homedir();
   const clock = options.clock ?? new SystemClock();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const configStore = createConfigStore({
+    home,
+    lockPorts: createNodeLockProbePorts(clock),
+    userHome,
+    fs: options.configFs,
+  });
   return {
     paths: pathsFor(home),
     userHome,
     clock,
     ids: new UuidGenerator(),
-    config: createConfigStore({ home, lockPorts: createNodeLockProbePorts(clock), userHome, fs: options.configFs }),
+    config: configStore,
     database: databasePort(join(home.stateDir, "sorage.sqlite3")),
     vault: createVaultInitializer(clock),
     token: createNodeApiTokenStore({ stateDir: home.stateDir }),
+    git: {
+      ensureRepository: (vaultPath) => {
+        const read = configStore.read();
+        if (!read.ok) return read;
+        if (read.value === null) {
+          return err(appError("NOT_INITIALIZED", "Sorage is not initialized; expected configuration file.", {}));
+        }
+        return nodeEnsureVaultGit(vaultPath, read.value.config.installationId, clock);
+      },
+    },
     filesystem: {
       ensureDirectory: (path) => {
         // Node's recursive mkdir ignores existing directories, which is the contract.

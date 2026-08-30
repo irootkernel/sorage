@@ -20,9 +20,12 @@ import { dirname, join } from "node:path";
 import {
   type AppError,
   appError,
+  type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
+  type BackupVerifyPorts,
   type DrainReport,
+  ensureVaultGitRepository,
   err,
   expandConfigurationPath,
   ok,
@@ -38,16 +41,20 @@ import {
   type SnapshotProject,
   type SnapshotReviewNote,
   USER_ACTOR,
+  type VaultGitOutcome,
   type VaultMarker,
 } from "@sorage/core";
 import { type ConfigStore, createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
+import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
 import { createNodeApiTokenStore } from "./token-store";
+import { createVaultInitializer } from "./vault";
+import { createNodeVaultCommandPorts } from "./vault-command-ports";
 
 const COPY_BUFFER_BYTES = 1024 * 1024;
 const ARTIFACT_MODE = 0o444;
@@ -63,6 +70,7 @@ export interface NodeBackupCommandPortsOptions {
 export interface NodeBackupCommandPorts {
   exportPorts(): Result<BackupExportPorts, AppError>;
   restorePorts(): Result<BackupRestorePorts, AppError>;
+  verifyPorts(): Result<BackupVerifyPorts, AppError>;
   /** The RUN-002 process-start obligation every backup command runs first. */
   drainAtStart(): Result<DrainReport, AppError>;
 }
@@ -73,6 +81,8 @@ interface InstallationView {
   etag: string;
   redactWorkspacePaths: boolean;
   graceHours: number;
+  /** The `gitBackup.push.branch` the Vault repository must sit on (section 31). */
+  backupBranch: string;
 }
 
 /**
@@ -111,6 +121,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       etag: read.value.etag,
       redactWorkspacePaths: config.gitBackup.snapshot.redactWorkspacePaths,
       graceHours: config.gc.graceHours,
+      backupBranch: config.gitBackup.push.branch,
     });
   }
 
@@ -338,6 +349,34 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         if (Number(row?.["count"] ?? 0) > 0) return ok(false);
       }
       return ok(true);
+    });
+  }
+
+  /** The database-side census `backup verify` cross-checks the manifest against. */
+  function readCensus(): Result<BackupCensus, AppError> {
+    return withDatabase((db) => {
+      const row = db
+        .prepare(
+          `SELECT
+            (SELECT COUNT(*) FROM projects) AS projects,
+            (SELECT COUNT(*) FROM handoffs) AS handoffs,
+            (SELECT COUNT(*) FROM events) AS events,
+            (SELECT COUNT(*) FROM artifacts) AS artifacts,
+            (SELECT COUNT(*) FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id
+              WHERE h.deleted_at IS NULL AND a.materialized = 0) AS materializing,
+            (SELECT COUNT(*) FROM handoffs h WHERE h.deleted_at IS NOT NULL
+              AND (h.current_artifact_id IS NOT NULL
+                OR EXISTS (SELECT 1 FROM artifacts a WHERE a.handoff_id = h.id))) AS deleted_with_artifact`,
+        )
+        .get() as Record<string, unknown> | undefined;
+      return ok({
+        projects: Number(row?.["projects"] ?? 0),
+        handoffs: Number(row?.["handoffs"] ?? 0),
+        events: Number(row?.["events"] ?? 0),
+        artifacts: Number(row?.["artifacts"] ?? 0),
+        materializing: Number(row?.["materializing"] ?? 0),
+        deletedWithArtifact: Number(row?.["deleted_with_artifact"] ?? 0),
+      });
     });
   }
 
@@ -677,6 +716,54 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       });
     },
 
+    verifyPorts(): Result<BackupVerifyPorts, AppError> {
+      const view = installation();
+      if (!view.ok) return err(view.error);
+      const vaultPath = view.value.vaultPath;
+      // The Git-independent checks are exactly `vault verify`'s, composed from
+      // the same port builder so the two commands can never drift.
+      const vaultPorts = createNodeVaultCommandPorts({ env: env as HomeEnvironment, userHome, clock }).verifyPorts();
+      if (!vaultPorts.ok) return err(vaultPorts.error);
+      return ok({
+        ...vaultPorts.value,
+        git: createNodeGitClient(),
+        configuredBranch: view.value.backupBranch,
+        repositoryExists: () => ok(existsSync(join(vaultPath, ".git"))),
+        repositorySignals: () =>
+          ok({
+            mergeInProgress: existsSync(join(vaultPath, ".git", "MERGE_HEAD")),
+            rebaseInProgress:
+              existsSync(join(vaultPath, ".git", "rebase-merge")) ||
+              existsSync(join(vaultPath, ".git", "rebase-apply")),
+          }),
+        census: () => readCensus(),
+        readManifest: () => {
+          const raw = readSourceFile(vaultPath, "snapshots/manifest.json");
+          if (!raw.ok) return ok(null);
+          return parseSnapshotManifest(raw.value);
+        },
+        countShards: () => {
+          const shardsRoot = join(vaultPath, "snapshots/handoffs");
+          let count = 0;
+          try {
+            for (const shard of readdirSync(shardsRoot)) {
+              const shardPath = join(shardsRoot, shard);
+              if (!statSync(shardPath).isDirectory()) continue;
+              count += readdirSync(shardPath).filter((name) => name.endsWith(".json")).length;
+            }
+          } catch {
+            // An absent shard tree holds no shards; the manifest finding names it.
+          }
+          return ok(count);
+        },
+        countEventLines: () => {
+          const raw = readSourceFile(vaultPath, "snapshots/events.jsonl");
+          if (!raw.ok) return ok(0);
+          return ok(raw.value.split("\n").filter((line) => line !== "").length);
+        },
+      });
+    },
+
     drainAtStart(): Result<DrainReport, AppError> {
       const view = installation();
       if (!view.ok) return err(view.error);
@@ -952,4 +1039,29 @@ function hashFile(path: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The production Git initialization of the Vault (TASK-053, INIT-007,
+ * BKP-001, BKP-022): a repository appears only when none exists, the
+ * repository-local `core.autocrlf` is set to false, and the managed policy
+ * files are re-asserted idempotently through the Vault initializer, which
+ * fills gaps without overwriting existing content. An existing repository —
+ * including an unrelated one — is reported and left untouched.
+ */
+export function nodeEnsureVaultGit(
+  vaultPath: string,
+  installationId: string,
+  clock: { now(): Date },
+): Result<VaultGitOutcome, AppError> {
+  return ensureVaultGitRepository({
+    vaultPath,
+    repositoryExists: () => ok(existsSync(join(vaultPath, ".git"))),
+    reassertPolicyFiles: () => {
+      const reasserted = createVaultInitializer(clock).initialize(vaultPath, installationId);
+      if (!reasserted.ok) return err(reasserted.error);
+      return ok(undefined);
+    },
+    git: createNodeGitClient(),
+  });
 }

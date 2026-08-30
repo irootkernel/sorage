@@ -41,6 +41,7 @@ import {
   archiveHandoff,
   archiveProject,
   backupRestore,
+  backupVerify,
   bindProject,
   type DoctorReport,
   declineHandoff,
@@ -181,6 +182,10 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     .option("--vault <path>", "Vault directory; defaults to ~/.sorage/vault")
     .option("--non-interactive", "never prompt; missing answers use the documented defaults")
     .option("--reconfigure", "explicitly repair or backfill an existing installation")
+    .option(
+      "--initialize-git",
+      "initialize a Git repository in the Vault with core.autocrlf=false; an existing repository is reported, never reinitialized",
+    )
     .action((options, command) => {
       const json = command.optsWithGlobals().json === true;
       if (options.nonInteractive !== true) {
@@ -200,6 +205,7 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       const result = initializeInstallation(createNodeInitPorts(), {
         vaultPath: vaultOption,
         reconfigure: options.reconfigure === true,
+        initializeGit: options.initializeGit === true,
       });
       if (!result.ok) {
         // A malformed configuration routes to the doctor, which names every defect.
@@ -219,11 +225,28 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
         ports.out(`Initialized Sorage at ${result.value.home}\n`);
         ports.out(`Installation: ${result.value.installationId}\n`);
         ports.out(`Vault: ${result.value.vaultPath}\n`);
+        if (result.value.git !== undefined) {
+          ports.out(
+            result.value.git.initialized
+              ? "Initialized the Vault Git repository with core.autocrlf=false.\n"
+              : "An existing Git repository was found at the Vault and was left untouched.\n",
+          );
+        }
       } else {
         ports.out(`Sorage is already initialized at ${result.value.home}\n`);
         ports.out(`Installation: ${result.value.installationId}\n`);
         ports.out(`Vault: ${result.value.vaultPath}\n`);
-        ports.out(`Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`);
+        if (result.value.git !== undefined) {
+          ports.out(
+            result.value.git.existingReported
+              ? "An existing Git repository was found at the Vault and was left untouched.\n"
+              : "Initialized the Vault Git repository with core.autocrlf=false.\n",
+          );
+        } else {
+          ports.out(
+            `Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`,
+          );
+        }
       }
     });
 
@@ -1445,6 +1468,44 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
     });
 
   const backup = program.command("backup").description("verify, run, and restore Vault backups");
+
+  backup
+    .command("verify")
+    .description(
+      "run every vault verify check plus the Git configuration and snapshot consistency checks; never repairs",
+    )
+    .action((_options, command) => {
+      const json = command.optsWithGlobals().json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const backupPorts = createNodeBackupCommandPorts();
+      const drained = backupPorts.drainAtStart();
+      if (!drained.ok) {
+        reportExitCode(renderAppError(drained.error, ports, json));
+        return;
+      }
+      const verifyPorts = backupPorts.verifyPorts();
+      if (!verifyPorts.ok) {
+        reportExitCode(renderAppError(verifyPorts.error, ports, json));
+        return;
+      }
+      const report = backupVerify(verifyPorts.value, { now: new Date() });
+      if (!report.ok) {
+        reportExitCode(renderAppError(report.error, ports, json));
+        return;
+      }
+      const blocking = report.value.findings.length > 0;
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope({ ...report.value, blocking }, requestId()), null, 2)}\n`);
+      } else if (blocking) {
+        for (const finding of report.value.findings) ports.err(`${finding}\n`);
+      } else {
+        ports.out(
+          `The Vault and its backup are consistent: ${report.value.checked.vault.recordedArtifacts} recorded Artifact(s), ${report.value.checked.manifest.handoffs} exported Handoff(s), ${report.value.checked.trackedFiles} tracked file(s).\n`,
+        );
+      }
+      for (const warning of report.value.warnings) ports.err(`warning: ${warning}\n`);
+      reportExitCode(blocking ? 1 : 0);
+    });
 
   backup
     .command("restore")

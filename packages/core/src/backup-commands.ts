@@ -8,7 +8,9 @@ import {
   snapshotManifest,
 } from "./backup-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
+import { GIT_ARGS, type GitClient, gitStateConflict, isRuntimeTrackedPath } from "./git";
 import type { VaultMarker } from "./vault";
+import { type VaultVerifyPorts, vaultVerify } from "./vault-commands";
 
 /**
  * The TASK-052 use cases (BKP-003, BKP-005, BKP-007, BKP-008, BKP-021,
@@ -259,5 +261,214 @@ function restoreUnderLock(
     bindingsRestored: 0,
     events: ["VAULT_ADOPTED", "RESTORE_COMPLETED"],
     apiTokenRegenerated: true,
+  });
+}
+
+/**
+ * Vault Git initialization (TASK-053, INIT-007, BKP-001, BKP-022): Sorage
+ * initializes a repository in the Vault only when none exists, sets
+ * `core.autocrlf=false` repository-locally, and re-asserts the managed policy
+ * files idempotently. An existing repository — including an unrelated one — is
+ * reported, never reinitialized and never reconfigured, because rewriting a
+ * repository the user brought with them is exactly the destructive surprise
+ * the safety rules forbid.
+ */
+export interface VaultGitPorts {
+  vaultPath: string;
+  /** True when a `.git` exists at the Vault path, whatever created it. */
+  repositoryExists(): Result<boolean, AppError>;
+  /** Re-runs the idempotent Vault initializer so the policy files and marker are re-asserted (VLT-024). */
+  reassertPolicyFiles(): Result<void, AppError>;
+  git: GitClient;
+}
+
+export interface VaultGitOutcome {
+  /** True when this call created the repository. */
+  initialized: boolean;
+  /** True when an existing repository was found and left untouched. */
+  existingReported: boolean;
+}
+
+export function ensureVaultGitRepository(ports: VaultGitPorts): Result<VaultGitOutcome, AppError> {
+  const existing = ports.repositoryExists();
+  if (!existing.ok) return err(existing.error);
+  if (existing.value) {
+    // An existing repository is adoption-shaped, not initialization-shaped:
+    // Sorage verifies it but never rewrites its history or configuration.
+    return ok({ initialized: false, existingReported: true });
+  }
+  const init = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.init() });
+  if (!init.ok) return err(init.error);
+  if (init.value.exitCode !== 0) return gitStateConflict("init", init.value);
+  const autocrlf = ports.git.run({
+    cwd: ports.vaultPath,
+    args: GIT_ARGS.configSet("core.autocrlf", "false"),
+  });
+  if (!autocrlf.ok) return err(autocrlf.error);
+  if (autocrlf.value.exitCode !== 0) return gitStateConflict("config core.autocrlf=false", autocrlf.value);
+  const reasserted = ports.reassertPolicyFiles();
+  if (!reasserted.ok) return err(reasserted.error);
+  return ok({ initialized: true, existingReported: false });
+}
+
+/** The database-side census the backup verification cross-checks the manifest against. */
+export interface BackupCensus {
+  projects: number;
+  handoffs: number;
+  events: number;
+  artifacts: number;
+  /** Live Handoffs whose current Artifact has `materialized = 0`. */
+  materializing: number;
+  /** Tombstoned Handoffs that still hold an active Artifact row. */
+  deletedWithArtifact: number;
+}
+
+export interface BackupVerifyPorts extends VaultVerifyPorts {
+  git: GitClient;
+  /** The configured `gitBackup.push.branch`; the repository must sit on it (section 31). */
+  configuredBranch: string;
+  /** True when a `.git` exists at the Vault path. */
+  repositoryExists(): Result<boolean, AppError>;
+  /** Merge and rebase indicators read from the repository's state directories. */
+  repositorySignals(): Result<{ mergeInProgress: boolean; rebaseInProgress: boolean }, AppError>;
+  census(): Result<BackupCensus, AppError>;
+  /** Reads `snapshots/manifest.json`; null when the file is absent. */
+  readManifest(): Result<SnapshotManifest | null, AppError>;
+  /** Counts the exported Handoff shard files under `snapshots/handoffs/`. */
+  countShards(): Result<number, AppError>;
+  /** Counts the ledger lines in `snapshots/events.jsonl`. */
+  countEventLines(): Result<number, AppError>;
+}
+
+export interface BackupVerifyReport {
+  findings: string[];
+  /** Non-fatal conditions the run reports without failing, today only the unmaterialized Artifact (section 31). */
+  warnings: string[];
+  checked: {
+    vault: { artifacts: number; recordedArtifacts: number; stagedFiles: number };
+    manifest: { present: boolean; projects: number; handoffs: number; events: number; artifacts: number };
+    trackedFiles: number;
+  };
+}
+
+/**
+ * `sorage backup verify` (TASK-053, BKP-022, section 31): every `vault verify`
+ * check plus the Git-backed ones — the three `.gitattributes` lines,
+ * `core.autocrlf=false`, the managed branch, no merge or rebase in progress,
+ * no unrelated staged work, no runtime file ever tracked, and a manifest whose
+ * counts agree with both the database census and the exported tree. The
+ * command never rewrites history and never repairs; it reports, and an
+ * unmaterialized current Artifact is a warning rather than a failure.
+ */
+export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): Result<BackupVerifyReport, AppError> {
+  const vault = vaultVerify(ports, options);
+  if (!vault.ok) return err(vault.error);
+  const findings = [...vault.value.findings];
+  const warnings: string[] = [];
+
+  const census = ports.census();
+  if (!census.ok) return err(census.error);
+  if (census.value.materializing > 0) {
+    warnings.push(
+      `${census.value.materializing} Handoff(s) have a current Artifact with materialized = 0; they are skipped by this verification until a drain materializes them.`,
+    );
+  }
+  if (census.value.deletedWithArtifact > 0) {
+    findings.push(
+      `${census.value.deletedWithArtifact} deleted Handoff(s) still hold an active Artifact row; deletion approval removes the current Artifact row.`,
+    );
+  }
+
+  const existing = ports.repositoryExists();
+  if (!existing.ok) return err(existing.error);
+  let trackedCount = 0;
+  if (!existing.value) {
+    findings.push("The Vault has no Git repository; re-run sorage init --initialize-git to initialize one.");
+  } else {
+    const autocrlf = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.configGet("core.autocrlf") });
+    if (!autocrlf.ok) return err(autocrlf.error);
+    const value = autocrlf.value.exitCode === 0 ? autocrlf.value.stdout.trim() : "";
+    if (value !== "false") {
+      findings.push(
+        `core.autocrlf is '${value === "" ? "unset" : value}' in the Vault repository; run git config core.autocrlf false inside the Vault, because a clone with autocrlf true would rewrite managed bytes and break their checksums.`,
+      );
+    }
+    const branch = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.currentBranch() });
+    if (!branch.ok) return err(branch.error);
+    const branchName = branch.value.exitCode === 0 ? branch.value.stdout.trim() : "";
+    if (branchName !== ports.configuredBranch) {
+      findings.push(
+        `The Vault repository is on '${branchName === "" ? "a detached HEAD" : branchName}', not the configured branch '${ports.configuredBranch}'; Sorage commits only on the configured branch.`,
+      );
+    }
+    const signals = ports.repositorySignals();
+    if (!signals.ok) return err(signals.error);
+    if (signals.value.mergeInProgress) {
+      findings.push("A merge is in progress in the Vault repository; resolve it manually, Sorage never merges.");
+    }
+    if (signals.value.rebaseInProgress) {
+      findings.push("A rebase is in progress in the Vault repository; resolve it manually, Sorage never rebases.");
+    }
+    const staged = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.stagedFiles() });
+    if (!staged.ok) return err(staged.error);
+    const stagedPaths = staged.value.stdout.split("\n").filter((line) => line !== "");
+    if (stagedPaths.length > 0) {
+      findings.push(
+        `The index holds ${stagedPaths.length} staged file(s) outside a backup run; resolve them manually, because Sorage stages only its managed pathspecs.`,
+      );
+    }
+    const tracked = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.lsFiles() });
+    if (!tracked.ok) return err(tracked.error);
+    const trackedPaths = tracked.value.stdout.split("\n").filter((line) => line !== "");
+    trackedCount = trackedPaths.length;
+    const runtimeTracked = trackedPaths.filter(isRuntimeTrackedPath);
+    if (runtimeTracked.length > 0) {
+      findings.push(
+        `Runtime file(s) are tracked in the Vault repository: ${runtimeTracked.join(", ")}; the database, logs, tokens, and credentials are never committed (BKP-004).`,
+      );
+    }
+  }
+
+  const manifest = ports.readManifest();
+  if (!manifest.ok) return err(manifest.error);
+  let manifestChecked = { present: false, projects: 0, handoffs: 0, events: 0, artifacts: 0 };
+  if (manifest.value === null) {
+    findings.push("snapshots/manifest.json is missing; a backup run has not exported the current snapshots yet.");
+  } else {
+    manifestChecked = { present: true, ...manifest.value.counts };
+    const shards = ports.countShards();
+    if (!shards.ok) return err(shards.error);
+    const eventLines = ports.countEventLines();
+    if (!eventLines.ok) return err(eventLines.error);
+    if (manifest.value.counts.projects !== census.value.projects) {
+      findings.push(
+        `The manifest counts ${manifest.value.counts.projects} project(s) against the database's ${census.value.projects}.`,
+      );
+    }
+    if (manifest.value.counts.handoffs !== census.value.handoffs || shards.value !== census.value.handoffs) {
+      findings.push(
+        `The manifest counts ${manifest.value.counts.handoffs} handoff(s), the shard tree holds ${shards.value}, and the database holds ${census.value.handoffs}.`,
+      );
+    }
+    if (manifest.value.counts.events !== census.value.events || eventLines.value !== census.value.events) {
+      findings.push(
+        `The manifest counts ${manifest.value.counts.events} ledger event(s), the ledger export holds ${eventLines.value}, and the database holds ${census.value.events}.`,
+      );
+    }
+    if (manifest.value.counts.artifacts !== census.value.artifacts) {
+      findings.push(
+        `The manifest counts ${manifest.value.counts.artifacts} artifact(s) against the database's ${census.value.artifacts}.`,
+      );
+    }
+  }
+
+  return ok({
+    findings,
+    warnings,
+    checked: {
+      vault: vault.value.checked,
+      manifest: manifestChecked,
+      trackedFiles: trackedCount,
+    },
   });
 }
