@@ -148,10 +148,11 @@ export function previousScheduledInstant(spec: BackupScheduleSpec, now: Date): n
     const probe = wallOf(spec.timezone, now.getTime() + dayOffset * DAY_MS);
     const wall: WallTime = { ...probe, hour, minute };
     const instants = localWallInstants(spec.timezone, wall);
-    const candidates = instants.length > 0 ? instants : [firstValidInstantAfter(spec.timezone, wall)];
-    for (const candidate of candidates) {
-      if (candidate <= now.getTime() && (latest === null || candidate > latest)) latest = candidate;
-    }
+    // The day's scheduled instant is its FIRST occurrence (BKP-026), the same
+    // one nextScheduledInstant runs, so a run that covered the first occurrence
+    // is never read as missing a second one.
+    const candidate = instants.length > 0 ? (instants[0] as number) : firstValidInstantAfter(spec.timezone, wall);
+    if (candidate <= now.getTime() && (latest === null || candidate > latest)) latest = candidate;
   }
   return latest;
 }

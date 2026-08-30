@@ -289,6 +289,8 @@ function restoreUnderLock(
  */
 export interface VaultGitPorts {
   vaultPath: string;
+  /** The `gitBackup.push.branch` a freshly initialized repository must carry. */
+  configuredBranch: string;
   /** True when a `.git` exists at the Vault path, whatever created it. */
   repositoryExists(): Result<boolean, AppError>;
   /** Re-runs the idempotent Vault initializer so the policy files and marker are re-asserted (VLT-024). */
@@ -311,7 +313,7 @@ export function ensureVaultGitRepository(ports: VaultGitPorts): Result<VaultGitO
     // Sorage verifies it but never rewrites its history or configuration.
     return ok({ initialized: false, existingReported: true });
   }
-  const init = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.init() });
+  const init = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.init(ports.configuredBranch) });
   if (!init.ok) return err(init.error);
   if (init.value.exitCode !== 0) return gitStateConflict("init", init.value);
   const autocrlf = ports.git.run({

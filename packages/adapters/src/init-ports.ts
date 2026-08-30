@@ -51,7 +51,12 @@ export function createNodeInitPorts(options: NodeInitPortsOptions = {}): InitPor
         if (read.value === null) {
           return err(appError("NOT_INITIALIZED", "Sorage is not initialized; expected configuration file.", {}));
         }
-        return nodeEnsureVaultGit(vaultPath, read.value.config.installationId, clock);
+        return nodeEnsureVaultGit(
+          vaultPath,
+          read.value.config.installationId,
+          clock,
+          read.value.config.gitBackup.push.branch,
+        );
       },
     },
     filesystem: {

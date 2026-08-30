@@ -80,7 +80,7 @@ function seedOneHandoff(home: string, vault: string): void {
 }
 
 function enablePush(home: string, vault: string, remotePath: string): void {
-  nodeEnsureVaultGit(vault, "installation", new FakeClock());
+  nodeEnsureVaultGit(vault, "installation", new FakeClock(), "main");
   git(vault, "remote", "add", "origin", remotePath);
   const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
   const config = readFileSync(join(home, "config.yaml"), "utf8");

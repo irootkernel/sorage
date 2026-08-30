@@ -110,11 +110,11 @@ describe("nodeEnsureVaultGit", () => {
   it("initializes the repository with core.autocrlf=false and reports an existing one untouched", () => {
     const { home, vault } = initializedHome("sorage-git-init-");
     expect(existsSync(join(vault, ".git"))).toBe(false);
-    const first = nodeEnsureVaultGit(vault, "installation", new FakeClock());
+    const first = nodeEnsureVaultGit(vault, "installation", new FakeClock(), "main");
     expect(first.ok && first.value.initialized).toBe(true);
     expect(git(vault, "config", "--local", "--get", "core.autocrlf").trim()).toBe("false");
 
-    const second = nodeEnsureVaultGit(vault, "installation", new FakeClock());
+    const second = nodeEnsureVaultGit(vault, "installation", new FakeClock(), "main");
     expect(second.ok && second.value).toEqual({ initialized: false, existingReported: true });
     expect(home).toBeTruthy();
   });
@@ -127,9 +127,24 @@ describe("nodeEnsureVaultGit", () => {
     git(vault, "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-m", "unrelated history");
     const before = git(vault, "rev-parse", "HEAD").trim();
 
-    const outcome = nodeEnsureVaultGit(vault, "installation", new FakeClock());
+    const outcome = nodeEnsureVaultGit(vault, "installation", new FakeClock(), "main");
     expect(outcome.ok && outcome.value).toEqual({ initialized: false, existingReported: true });
     expect(git(vault, "rev-parse", "HEAD").trim()).toBe(before);
+  });
+
+  it("pins the configured branch on a fresh repository whatever the user's init.defaultBranch is", () => {
+    const { home, vault } = initializedHome("sorage-git-branchpin-");
+    // A user whose global default branch is not "main" would otherwise wedge
+    // the run engine's branch gate on the very Vault this epic initialized.
+    git(vault, "config", "--global", "init.defaultBranch", "trunk");
+    try {
+      const outcome = nodeEnsureVaultGit(vault, "installation", new FakeClock(), "main");
+      expect(outcome.ok && outcome.value.initialized).toBe(true);
+      expect(git(vault, "symbolic-ref", "--short", "HEAD").trim()).toBe("main");
+    } finally {
+      execFileSync("git", ["config", "--global", "--unset", "init.defaultBranch"]);
+      void home;
+    }
   });
 
   it("initializes through sorage init --initialize-git", () => {

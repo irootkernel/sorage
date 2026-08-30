@@ -33,6 +33,7 @@ describe("ensureVaultGitRepository", () => {
     const { calls, client } = recordingGit([]);
     const result = ensureVaultGitRepository({
       vaultPath: "/vault",
+      configuredBranch: "main",
       repositoryExists: () => ok(true),
       reassertPolicyFiles: () => ok(undefined),
       git: client,
@@ -46,6 +47,7 @@ describe("ensureVaultGitRepository", () => {
     const reassertions: string[] = [];
     const result = ensureVaultGitRepository({
       vaultPath: "/vault",
+      configuredBranch: "main",
       repositoryExists: () => ok(false),
       reassertPolicyFiles: () => {
         reassertions.push("/vault");
@@ -54,7 +56,10 @@ describe("ensureVaultGitRepository", () => {
       git: client,
     });
     expect(result.ok && result.value).toEqual({ initialized: true, existingReported: false });
-    expect(calls.map((call) => call.args)).toEqual([GIT_ARGS.init(), GIT_ARGS.configSet("core.autocrlf", "false")]);
+    expect(calls.map((call) => call.args)).toEqual([
+      GIT_ARGS.init("main"),
+      GIT_ARGS.configSet("core.autocrlf", "false"),
+    ]);
     expect(reassertions).toEqual(["/vault"]);
   });
 
@@ -64,6 +69,7 @@ describe("ensureVaultGitRepository", () => {
     ]);
     const result = ensureVaultGitRepository({
       vaultPath: "/vault",
+      configuredBranch: "main",
       repositoryExists: () => ok(false),
       reassertPolicyFiles: () => ok(undefined),
       git: client,

@@ -861,7 +861,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           }
           return ok({ verified: recorded.value.length });
         },
-        ensureRepository: () => nodeEnsureVaultGit(vaultPath, view.value.installationId, clock),
+        ensureRepository: () =>
+          nodeEnsureVaultGit(vaultPath, view.value.installationId, clock, view.value.backupBranch),
         git,
         gitState: () =>
           ok({
@@ -1232,7 +1233,10 @@ function streamCopy(source: string, destination: string): string {
   const input = openSync(source, "r");
   let output: number | undefined;
   try {
-    output = openSync(destination, "wx");
+    // "w", not "wx" (whole-epic validation F001): a crashed restore attempt
+    // may have placed this very file before its rebuild, and the retry must
+    // converge past it; the in-pass hash keeps the overwrite honest.
+    output = openSync(destination, "w");
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
     for (;;) {
@@ -1294,9 +1298,11 @@ export function nodeEnsureVaultGit(
   vaultPath: string,
   installationId: string,
   clock: { now(): Date },
+  backupBranch: string,
 ): Result<VaultGitOutcome, AppError> {
   return ensureVaultGitRepository({
     vaultPath,
+    configuredBranch: backupBranch,
     repositoryExists: () => ok(existsSync(join(vaultPath, ".git"))),
     reassertPolicyFiles: () => {
       const reasserted = createVaultInitializer(clock).initialize(vaultPath, installationId);

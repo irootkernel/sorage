@@ -40,7 +40,7 @@ export const GIT_BATCH_ENV = {
 
 /** Argument arrays for the operations the backup surface uses; never interpolated shell strings. */
 export const GIT_ARGS = {
-  init: () => ["init"],
+  init: (branch: string) => ["init", "-b", branch],
   configSet: (key: string, value: string) => ["config", "--local", key, value],
   configGet: (key: string) => ["config", "--local", "--get", key],
   lsFiles: () => ["ls-files"],

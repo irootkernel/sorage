@@ -102,6 +102,18 @@ describe("backupTickDecision", () => {
     expect(days.triggeredBy).toBe("catch-up");
   });
 
+  it("counts only the first occurrence of a repeated fall-back time as the day's due instant", () => {
+    const spec = specOf({ at: "01:30", timezone: NEW_YORK });
+    // 01:30 occurs twice on 2026-11-01 in New York: 05:30 UTC (EDT) then 06:30 UTC (EST).
+    // A run that covered the first occurrence at 05:35 UTC must read as covered
+    // even though the second occurrence is now also in the past.
+    const decision = backupTickDecision(spec, new Date("2026-11-01T07:00:00.000Z"), "2026-11-01T05:35:00.000Z");
+    expect(decision.action).toBe("none");
+    // Before the first occurrence, the previous due instant is yesterday's first occurrence.
+    const before = previousScheduledInstant(spec, new Date("2026-11-01T05:00:00.000Z"));
+    expect(new Date(before as number).toISOString()).toBe("2026-10-31T05:30:00.000Z");
+  });
+
   it("never catches up when the policy is disabled", () => {
     const spec = specOf({ catchUpAfterMissedRun: false });
     const decision = backupTickDecision(spec, new Date("2026-08-30T09:00:00.000Z"), null);

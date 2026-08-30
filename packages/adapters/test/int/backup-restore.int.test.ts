@@ -278,6 +278,21 @@ describe("backupRestore across two installations", () => {
     expect(token.length).toBeGreaterThanOrEqual(43);
   });
 
+  it("converges past a crashed attempt's leftover artifact file", () => {
+    const source = initializedHome("sorage-restore-converge-src-");
+    seedSource(source.home, source.vault);
+    const copy = vaultCopy(source.vault);
+    const target = initializedHome("sorage-restore-converge-dst-");
+    // The first attempt crashed after copying one artifact but before the
+    // rebuild; its file is still in place and the retry must overwrite it.
+    mkdirSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1`), { recursive: true });
+    writeFileSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1/brief.md`), "leftover bytes\n");
+
+    const result = restoreInto(target.home, copy, { dryRun: false });
+    expect(result.ok).toBe(true);
+    expect(readFileSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1/brief.md`), "utf8")).toBe("# The brief\n");
+  });
+
   it("refuses a populated target with RESTORE_TARGET_NOT_EMPTY", () => {
     const source = initializedHome("sorage-restore-second-src-");
     seedSource(source.home, source.vault);
