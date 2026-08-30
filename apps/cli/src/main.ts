@@ -1,11 +1,13 @@
-import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { connect } from "node:net";
-import { request as httpRequest } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
+import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
+import * as daemonCommandPorts from "@sorage/adapters/src/daemon-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
@@ -19,14 +21,14 @@ import {
 } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { inspectSourceFile } from "@sorage/adapters/src/import-source";
+import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
-import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
-import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
+import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type ActorRef,
@@ -38,6 +40,7 @@ import {
   approveDeletion,
   archiveHandoff,
   archiveProject,
+  backupRestore,
   bindProject,
   type DoctorReport,
   declineHandoff,
@@ -56,6 +59,7 @@ import {
   moveVault,
   pinHandoff,
   protocolVersion,
+  refreshInboxMarker,
   rejectDeletion,
   removeReviewNote,
   renameProject,
@@ -63,11 +67,11 @@ import {
   resolveCommandActor,
   resolveWorkspaceActor,
   reviseHandoff,
+  rotateApiToken,
   runDoctor,
   sendHandoffs,
   setConfigurationValue,
   setReviewNote,
-  rotateApiToken,
   showConfiguration,
   showProject,
   successEnvelope,
@@ -79,19 +83,17 @@ import {
   validateConfigurationFile,
   vaultStatus,
   vaultVerify,
-  refreshInboxMarker,
   waitForNewInboxItems,
   withdrawHandoff,
   withdrawReviewNote,
   workspaceKey,
 } from "@sorage/core";
-import { buildCompletionScript } from "./completion";
-import { createWebRuntimePorts, runWebCommand } from "./web";
-import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import * as daemonModule from "@sorage/daemon";
-import * as daemonCommandPorts from "@sorage/adapters/src/daemon-command-ports";
-import * as webBindings from "./web";
 import { Command, InvalidArgumentError } from "commander";
+import { buildCompletionScript } from "./completion";
+import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
+import * as webBindings from "./web";
+import { createWebRuntimePorts, runWebCommand } from "./web";
 
 export const CLI_NAME = "sorage" as const;
 export const CLI_VERSION = "0.2.0" as const;
@@ -1438,6 +1440,81 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       } else {
         ports.out(
           `Moved the Vault from ${result.value.fromPath} to ${result.value.toPath} (${result.value.artifactsMoved} artifacts); the previous Vault was kept in place.\n`,
+        );
+      }
+    });
+
+  const backup = program.command("backup").description("verify, run, and restore Vault backups");
+
+  backup
+    .command("restore")
+    .description(
+      "rebuild an empty installation from a Vault backup copy, adopting its installationId; the daemon must be stopped",
+    )
+    .requiredOption("--from <vault-path>", "the Vault copy to restore from")
+    .option("--dry-run", "validate the backup and report the plan without writing")
+    .option("--confirm", "required for the writing restore")
+    .action((options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (globals.asUser !== true) {
+        reportExitCode(
+          renderAppError(
+            appError(
+              "USER_CONTEXT_REQUIRED",
+              "sorage backup restore adopts another installation's identity and requires --as-user.",
+            ),
+            ports,
+            json,
+          ),
+        );
+        return;
+      }
+      const dryRun = options.dryRun === true;
+      const confirm = options.confirm === true;
+      if (dryRun === confirm) {
+        ports.err("sorage: pass exactly one of --dry-run or --confirm.\n");
+        ports.err("Run 'sorage backup restore --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
+      // A relative --from resolves against the cwd once, matching the vault
+      // move's --to anchoring so the recorded path is stable across commands.
+      const sourcePath = isAbsolute(options.from) ? options.from : resolve(options.from);
+      const backupPorts = createNodeBackupCommandPorts({ sourcePath });
+      const drained = backupPorts.drainAtStart();
+      if (!drained.ok) {
+        reportExitCode(renderAppError(drained.error, ports, json));
+        return;
+      }
+      const restorePorts = backupPorts.restorePorts();
+      if (!restorePorts.ok) {
+        reportExitCode(renderAppError(restorePorts.error, ports, json));
+        return;
+      }
+      const result = backupRestore(restorePorts.value, { dryRun });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+      } else if (result.value.dryRun) {
+        const value = result.value;
+        ports.out(`Dry run against ${value.sourcePath}:\n`);
+        ports.out(
+          `would create ${value.wouldCreate.projects} project(s), ${value.wouldCreate.handoffs} handoff(s), ${value.wouldCreate.reviewNotes} review note(s), ${value.wouldCreate.artifacts} artifact(s), and ${value.wouldCreate.events} ledger event(s)\n`,
+        );
+        ports.out(`would adopt installationId ${value.adoptedInstallationId}\n`);
+        ports.out("nothing was written; run with --confirm to restore\n");
+      } else {
+        const value = result.value;
+        ports.out(
+          `Restored ${value.restored.handoffs} handoff(s) and ${value.restored.artifacts} artifact(s) from ${value.sourcePath}; adopted installationId ${value.adoptedInstallationId} and regenerated the API token.\n`,
+        );
+        ports.out(
+          "Project directory bindings are machine-local and were not restored; re-bind them with sorage project bind.\n",
         );
       }
     });

@@ -33,7 +33,7 @@ export function workspaceActor(workspaceKey: string): ActorRef {
   return { kind: "unregistered_workspace", id: workspaceKey };
 }
 
-/** The 0.1 slice of the normative event catalog of section 10 of security-reliability.md. */
+/** The normative event catalog of section 10 of security-reliability.md this build may append. */
 export const EVENT_TYPES = [
   "HANDOFF_CREATED",
   "ARTIFACT_FETCHED_FIRST_TIME",
@@ -65,6 +65,8 @@ export const EVENT_TYPES = [
   "PROJECT_RENAMED",
   "CONFIG_CHANGED",
   "VAULT_MOVED",
+  "VAULT_ADOPTED",
+  "RESTORE_COMPLETED",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

@@ -1,5 +1,6 @@
 export const ADAPTERS_PACKAGE_NAME = "@sorage/adapters" as const;
 export * from "./artifact-store";
+export * from "./backup-command-ports";
 export * from "./config-command-ports";
 export * from "./config-store";
 export * from "./doctor";

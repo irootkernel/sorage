@@ -1,6 +1,8 @@
 export const CORE_PACKAGE_NAME = "@sorage/core" as const;
 export * from "./artifact-integrity";
 export * from "./artifacts";
+export * from "./backup-commands";
+export * from "./backup-snapshot";
 export * from "./config";
 export * from "./config-commands";
 export * from "./cursor";

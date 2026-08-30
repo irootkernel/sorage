@@ -72,4 +72,37 @@ describe("cli golden snapshots", () => {
     const golden = readFileSync(`${goldenDir}vault-move-requires-user-context.txt`, "utf8");
     expect(run.stderr).toBe(golden);
   });
+
+  it("pins backup restore without --as-user refusing with USER_CONTEXT_REQUIRED", () => {
+    const run = runCli(
+      ["backup", "restore", "--from", "/tmp/sorage-golden-restore-source", "--dry-run"],
+      "/tmp/sorage-golden-home2",
+    );
+    expect(run.status).toBe(77);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}backup-restore-requires-user-context.txt`, "utf8");
+    expect(run.stderr).toBe(golden);
+  });
+
+  it("pins backup restore against a directory that is not a Vault", () => {
+    const run = runCli(
+      ["backup", "restore", "--from", "/tmp/sorage-golden-not-a-vault", "--dry-run", "--as-user"],
+      "/tmp/sorage-golden-home2",
+    );
+    expect(run.status).toBe(73);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}backup-restore-invalid-vault.txt`, "utf8");
+    expect(run.stderr).toBe(golden);
+  });
+
+  it("exits 2 when backup restore passes neither or both of --dry-run and --confirm", () => {
+    const run = runCli(
+      ["backup", "restore", "--from", "/tmp/sorage-golden-restore-source", "--as-user"],
+      "/tmp/sorage-golden-home2",
+    );
+    expect(run.status).toBe(2);
+    expect(run.stdout).toBe("");
+    const golden = readFileSync(`${goldenDir}backup-restore-needs-exactly-one-mode.txt`, "utf8");
+    expect(run.stderr).toBe(golden);
+  });
 });

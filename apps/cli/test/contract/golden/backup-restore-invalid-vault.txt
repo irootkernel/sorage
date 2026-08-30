@@ -1,0 +1,2 @@
+VAULT_INTEGRITY_ERROR: The backup copy does not contain .sorage-vault.json: ENOENT: no such file or directory, open '/tmp/sorage-golden-not-a-vault/.sorage-vault.json'.
+Recovery: sorage vault verify

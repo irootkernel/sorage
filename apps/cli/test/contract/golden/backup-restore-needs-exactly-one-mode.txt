@@ -1,0 +1,2 @@
+sorage: pass exactly one of --dry-run or --confirm.
+Run 'sorage backup restore --help' for usage.
