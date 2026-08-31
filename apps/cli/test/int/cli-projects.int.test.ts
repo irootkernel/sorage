@@ -404,6 +404,23 @@ describe("doctor binding checks", () => {
     expect(ambiguous?.message).toContain("second");
     expect(ambiguous?.recovery?.suggestedCommand).toContain("unbind");
   });
+
+  it("keeps an unreachable distinct-spelling pair out of bindings.ambiguous", () => {
+    initializedHome();
+    const present = tempDir();
+    expect(runCli(["project", "add", "--name", "Present", "--dir", present], capture().ports)).toBe(0);
+    const stale = tempDir();
+    expect(runCli(["project", "add", "--name", "Stale", "--dir", stale], capture().ports)).toBe(0);
+    // A stale binding is a routine state and bindings.exist owns the missing
+    // directory; distinct spellings can never reach the resolver's same-depth
+    // tie, so the ambiguous probe must not name the two unrelated Projects.
+    rmSync(stale, { recursive: true, force: true });
+    const exist = doctorChecks()["bindings.exist"];
+    expect(exist?.severity).toBe("warning");
+    expect(exist?.message).toContain("'stale'");
+    const ambiguous = doctorChecks()["bindings.ambiguous"];
+    expect(ambiguous?.severity).toBe("ok");
+  });
 });
 
 describe("sorage project add (ADR-0020)", () => {

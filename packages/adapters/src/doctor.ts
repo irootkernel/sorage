@@ -461,14 +461,18 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             const firstIdentity = identityFor(first.directory);
             const secondIdentity = identityFor(second.directory);
             if (firstIdentity === null || secondIdentity === null) {
-              // An unanswerable comparison is reported as a data-quality note
-              // without asserting a resolution outcome: a missing directory
-              // already warns through bindings.exist, and only a same-depth
-              // tie the resolver reaches could turn unanswerable into
-              // ambiguity.
-              aliases.push(
-                `'${first.directory}' and '${second.directory}' cannot be physically compared while a directory is unreachable`,
-              );
+              // An unanswerable probe matters only to a pair the resolver's
+              // same-depth tie can actually reach, and the registry's unique
+              // (installation, directory) constraint leaves identical stored
+              // spellings as the sole such pair, reachable only through
+              // restored or directly edited data. A missing directory of a
+              // distinct spelling already warns through bindings.exist, and
+              // warning here too would name unrelated Projects as ambiguous.
+              if (first.directory === second.directory) {
+                aliases.push(
+                  `'${first.directory}' cannot be physically compared while its directory is unreachable`,
+                );
+              }
               continue;
             }
             if (firstIdentity === secondIdentity && first.project_id !== second.project_id) {
