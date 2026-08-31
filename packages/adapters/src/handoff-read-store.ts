@@ -174,6 +174,14 @@ export function createSqliteHandoffReadStore(db: SorageSqlite, ledger: SqliteEve
           clauses.push("recipient_project_id = (SELECT id FROM projects WHERE slug = ? COLLATE NOCASE)");
           params.push(filters.recipientSlug);
         }
+        if (filters.updatedSince !== undefined) {
+          clauses.push("updated_at >= ?");
+          params.push(filters.updatedSince);
+        }
+        if (filters.updatedUntil !== undefined) {
+          clauses.push("updated_at <= ?");
+          params.push(filters.updatedUntil);
+        }
         if (!filters.includeArchived) clauses.push("archived_at IS NULL");
         if (!filters.includeDeleted) clauses.push("deleted_at IS NULL");
         if (afterSortKey !== null) {

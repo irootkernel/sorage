@@ -583,3 +583,28 @@ A directory binding must name a working tree. `project add` and `project bind` r
 - The workspace-root derivation stays total: the parent of a stored common directory is always a real working tree.
 - Binding a bare repository fails with a clear configuration error instead of an undefined workspace identity at send time.
 - A user who keeps documents in a bare repository's sibling checkout binds that checkout, which is the directory the working tree actually lives in.
+
+## ADR-0021: Handoff lists filter by inclusive `updatedAt` bounds carried in the cursor contract
+
+- **Status:** Accepted
+- **Date:** 2026-08-31
+
+### Context
+
+WEB-003 requires Handoff lists to support sender, recipient, state, retention, and date filters. The EPIC-007 cold validation recorded the residual that the date filter had no contract to ride on: section 19's cursor filter set named only state, sender, recipient, and the two retention toggles, so offering a date filter would have been a material change to the versioned pagination contract, and the settlement was deferred to an EPIC-009 task before the 0.3 release could claim WEB-003 fully met.
+
+### Decision
+
+The shared cursor filter set of section 19 gains two inclusive bounds, `updatedSince` and `updatedUntil`, each an ISO-8601 UTC instant matched against `updatedAt`. The bounds are part of the cursor's filter hash, so a cursor minted under one bound set fails with `CURSOR_INVALID` under another, exactly like every other filter. The CLI exposes them as `--updated-since` and `--updated-until` on `inbox` and `outbox`, the HTTP listing accepts them as query parameters, and the Web list view offers them as URL-addressable inputs that survive a reload. A bound that is not a well-formed UTC instant, or a `since` later than its `until`, fails validation with `CONFIG_INVALID` before any listing runs.
+
+### Alternatives considered
+
+- Filter on `createdAt` instead of `updatedAt` | the listing's sort and cursor keyset are `updatedAt`, so a createdAt bound could exclude rows the cursor still pages through and split one logical page across both sides of the bound.
+- Exclusive bounds | an exclusive upper bound silently drops the row a user watching "today" most likely means, and inclusivity matches how the state and retention filters treat their boundary values.
+- A local-date shorthand like `2026-08-31` resolved against the daemon's zone | the daemon's zone is not the user's zone, and WEB-003 never promised wall-clock semantics, so the contract keeps one unambiguous instant shape.
+
+### Consequences
+
+- WEB-003's date filter rides the same cursor, CLI, HTTP, and Web surfaces as every other filter, with no second pagination path to maintain.
+- The section 19 amendment is a reviewed, re-keying contract change: the cursor filter hash gains the two bound keys even when they are absent, so cursors minted before the change stop validating and fail `CURSOR_INVALID` after the upgrade. Cursors are short-lived pagination tokens that the contract already frees from surviving a Sorage upgrade, so the re-key rides that established boundary.
+- Clients wanting a wall-clock range convert to UTC instants themselves, which keeps the server free of timezone configuration.

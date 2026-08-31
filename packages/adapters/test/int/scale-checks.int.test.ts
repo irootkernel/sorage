@@ -45,7 +45,7 @@ describe("the 10,000-Handoff scale checks", () => {
     db = temp.db;
     migrate(db, MIGRATIONS);
     insertHandoffSeed(db, 10_000);
-  });
+  }, 60_000);
 
   it("uses an index for every query on the inbox, outbox, and detail paths", () => {
     const projectId = (db.prepare("SELECT id FROM projects WHERE slug = ?").get("recipient-00") as { id: string }).id;

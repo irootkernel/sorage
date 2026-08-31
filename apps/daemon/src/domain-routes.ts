@@ -1,35 +1,48 @@
-import { createReadStream } from "node:fs";
-import { statSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { createNodeHomePaths } from "@sorage/adapters/src/home";
-import { createHash, randomUUID } from "node:crypto";
-import { ok, type Result as CoreResult } from "@sorage/core";
+import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
+import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
+import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import {
+  createNodeHandoffReadPorts,
+  createNodeRetentionPorts,
+  createNodeReviewPorts,
+  createNodeRevisionPorts,
+  createNodeSendPorts,
+  createNodeTerminalPorts,
+} from "@sorage/adapters/src/handoff-command-ports";
+import { createNodeHomePaths } from "@sorage/adapters/src/home";
+import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
+import {
+  type ActorRef,
+  type AppError,
   acceptHandoff,
-  validateConfigurationFile,
   addProject,
   appError,
   approveDeletion,
-  backupStatus,
-  backupVerify,
-  configureBackup,
   archiveHandoff,
   archiveProject,
+  backupStatus,
+  backupVerify,
   bindProject,
+  type Result as CoreResult,
+  configureBackup,
   declineHandoff,
-  type ActorRef,
-  type AppError,
-  projectActor,
-  USER_ACTOR,
   getHandoff,
   listInbox,
-  readHandoffTimeline,
-  readReviewNote,
   listOutbox,
   listProjects,
+  moveVault,
+  ok,
   pinHandoff,
+  projectActor,
+  type ReadActorInput,
+  readHandoffTimeline,
+  readReviewNote,
   rejectDeletion,
   removeReviewNote,
   renameProject,
@@ -41,35 +54,22 @@ import {
   sendHandoffs,
   setReviewNote,
   showProject,
-  type ReadActorInput,
+  successEnvelope,
+  USER_ACTOR,
   unarchiveHandoff,
   unarchiveProject,
   unbindProject,
   unpinHandoff,
-  withdrawHandoff,
-  withdrawReviewNote,
+  validateConfigurationFile,
   vaultStatus,
   vaultVerify,
-  moveVault,
+  withdrawHandoff,
+  withdrawReviewNote,
 } from "@sorage/core";
-import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
-import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
-import { createNodeHandoffReadPorts } from "@sorage/adapters/src/handoff-command-ports";
-import {
-  createNodeRetentionPorts,
-  createNodeReviewPorts,
-  createNodeRevisionPorts,
-  createNodeSendPorts,
-  createNodeTerminalPorts,
-} from "@sorage/adapters/src/handoff-command-ports";
-import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
-import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
-import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
-import { successEnvelope } from "@sorage/core";
 import type { DaemonConfigService } from "./index";
 import type { RouteEntryInternal } from "./route-kit";
-import { consumeMultipartUpload } from "./upload";
 import type { DaemonRequestContext } from "./server";
+import { consumeMultipartUpload } from "./upload";
 
 /**
  * The `/api/v1` domain surface of TASK-046 (API-002, API-004, API-005, API-007 to
@@ -266,6 +266,12 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           ...(url.searchParams.has("state") ? { state: url.searchParams.get("state") ?? undefined } : {}),
           ...(url.searchParams.has("sender") ? { sender: url.searchParams.get("sender") ?? undefined } : {}),
           ...(url.searchParams.has("recipient") ? { recipient: url.searchParams.get("recipient") ?? undefined } : {}),
+          ...(url.searchParams.has("updatedSince")
+            ? { updatedSince: url.searchParams.get("updatedSince") ?? undefined }
+            : {}),
+          ...(url.searchParams.has("updatedUntil")
+            ? { updatedUntil: url.searchParams.get("updatedUntil") ?? undefined }
+            : {}),
           includeArchived: url.searchParams.get("includeArchived") === "true",
           includeDeleted: url.searchParams.get("includeDeleted") === "true",
         },

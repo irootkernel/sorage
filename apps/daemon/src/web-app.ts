@@ -181,7 +181,7 @@ export const WEB_APP_JS = `(function () {
     var query = location.hash.split("?")[1] || "";
     var params = new URLSearchParams(query);
     var url = "/api/v1/handoffs?box=" + kind + (store.as ? "&as=" + encodeURIComponent(store.as) : "&asUser=true");
-    ["state", "sender", "recipient", "includeArchived", "includeDeleted"].forEach(function (key) {
+    ["state", "sender", "recipient", "updatedSince", "updatedUntil", "includeArchived", "includeDeleted"].forEach(function (key) {
       if (params.has(key)) url += "&" + key + "=" + params.get(key);
     });
     view().replaceChildren();
@@ -195,6 +195,10 @@ export const WEB_APP_JS = `(function () {
     senderInput.value = params.get("sender") || "";
     var recipientInput = el("input", { placeholder: "recipient slug" });
     recipientInput.value = params.get("recipient") || "";
+    var sinceInput = el("input", { placeholder: "updated since (2026-08-01T00:00:00Z)" });
+    sinceInput.value = params.get("updatedSince") || "";
+    var untilInput = el("input", { placeholder: "updated until (ISO-8601 UTC)" });
+    untilInput.value = params.get("updatedUntil") || "";
     var archived = el("input", { type: "checkbox" });
     archived.checked = params.get("includeArchived") === "true";
     var deleted = el("input", { type: "checkbox" });
@@ -202,6 +206,8 @@ export const WEB_APP_JS = `(function () {
     filters.appendChild(stateInput);
     filters.appendChild(senderInput);
     filters.appendChild(recipientInput);
+    filters.appendChild(sinceInput);
+    filters.appendChild(untilInput);
     filters.appendChild(archived);
     filters.appendChild(el("label", { text: " include archived" }));
     filters.appendChild(deleted);
@@ -211,6 +217,10 @@ export const WEB_APP_JS = `(function () {
       if (stateInput.value !== "") next.set("state", stateInput.value);
       if (senderInput.value !== "") next.set("sender", senderInput.value);
       if (recipientInput.value !== "") next.set("recipient", recipientInput.value);
+      var sinceBound = sinceInput.value.trim();
+      var untilBound = untilInput.value.trim();
+      if (sinceBound !== "") next.set("updatedSince", sinceBound);
+      if (untilBound !== "") next.set("updatedUntil", untilBound);
       if (archived.checked) next.set("includeArchived", "true");
       if (deleted.checked) next.set("includeDeleted", "true");
       location.hash = "#/" + kind + (next.toString() !== "" ? "?" + next.toString() : "");

@@ -1019,7 +1019,7 @@ Sort order:
 updatedAt DESC, id DESC
 ```
 
-A cursor encodes the last `(updatedAt, id)` pair together with a hash of the filter set that produced it: state, sender, recipient, `includeArchived`, `includeDeleted`, and page size.
+A cursor encodes the last `(updatedAt, id)` pair together with a hash of the filter set that produced it: state, sender, recipient, the inclusive `updatedSince` and `updatedUntil` bounds of WEB-003 (TASK-067), `includeArchived`, `includeDeleted`, and page size.
 
 Reusing a cursor with a different filter set changes the hash and fails with `CURSOR_INVALID` rather than silently paging through an inconsistent result.
 

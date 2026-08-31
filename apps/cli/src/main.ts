@@ -55,6 +55,7 @@ import {
   declineHandoff,
   type Envelope,
   editConfiguration,
+  err,
   errorEnvelope,
   errorSpec,
   fetchHandoff,
@@ -69,7 +70,6 @@ import {
   listProjects,
   moveVault,
   ok,
-  err,
   pinHandoff,
   protocolVersion,
   refreshInboxMarker,
@@ -847,6 +847,8 @@ export function buildProgram(
     .option("--state <state>", "filter by review state")
     .option("--sender <slug>", "filter by sender Project slug")
     .option("--recipient <slug>", "filter by recipient Project slug")
+    .option("--updated-since <instant>", "inclusive lower bound on updatedAt, as an ISO-8601 UTC instant")
+    .option("--updated-until <instant>", "inclusive upper bound on updatedAt, as an ISO-8601 UTC instant")
     .option("--include-archived", "include archived Handoffs")
     .option("--include-deleted", "include tombstones")
     .option("--wait", "poll until a new inbox item appears for the resolved actor, then list it")
@@ -909,6 +911,8 @@ export function buildProgram(
     .option("--state <state>", "filter by review state")
     .option("--sender <slug>", "filter by sender Project slug")
     .option("--recipient <slug>", "filter by recipient Project slug")
+    .option("--updated-since <instant>", "inclusive lower bound on updatedAt, as an ISO-8601 UTC instant")
+    .option("--updated-until <instant>", "inclusive upper bound on updatedAt, as an ISO-8601 UTC instant")
     .option("--include-archived", "include archived Handoffs")
     .option("--include-deleted", "include tombstones")
     .action((options, command) => {
@@ -2139,6 +2143,8 @@ function listQueryOf(options: Record<string, unknown>, globals: Record<string, u
       state: typeof options.state === "string" ? options.state : undefined,
       senderSlug: typeof options.sender === "string" ? options.sender : undefined,
       recipientSlug: typeof options.recipient === "string" ? options.recipient : undefined,
+      updatedSince: typeof options.updatedSince === "string" ? options.updatedSince : undefined,
+      updatedUntil: typeof options.updatedUntil === "string" ? options.updatedUntil : undefined,
       includeArchived: options.includeArchived === true,
       includeDeleted: options.includeDeleted === true,
     },

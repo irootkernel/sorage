@@ -60,6 +60,10 @@ export interface HandoffListFilters {
   state?: string | undefined;
   senderSlug?: string | undefined;
   recipientSlug?: string | undefined;
+  /** Inclusive lower bound on updatedAt, as an ISO-8601 UTC instant (WEB-003). */
+  updatedSince?: string | undefined;
+  /** Inclusive upper bound on updatedAt, as an ISO-8601 UTC instant (WEB-003). */
+  updatedUntil?: string | undefined;
   includeArchived: boolean;
   includeDeleted: boolean;
 }
@@ -119,6 +123,8 @@ function filterIdentity(filters: HandoffListFilters, scope: ListingScope): strin
             ? scope.workspaceKey
             : null,
     state: filters.state ?? null,
+    updatedSince: filters.updatedSince ?? null,
+    updatedUntil: filters.updatedUntil ?? null,
     senderSlug: filters.senderSlug ?? null,
     recipientSlug: filters.recipientSlug ?? null,
     includeArchived: filters.includeArchived,
@@ -126,7 +132,86 @@ function filterIdentity(filters: HandoffListFilters, scope: ListingScope): strin
   });
 }
 
+/** An ISO-8601 UTC instant with an optional fractional part, the bound shape (WEB-003). */
+const UPDATED_BOUND_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+
+/** `2026-08-01T00:00:00Z` and `2026-08-01T00:00:00.000Z` name one instant. */
+function normalizeWholeSeconds(value: string): string {
+  return /\.\d+Z$/.test(value) ? value : value.replace(/Z$/, ".000Z");
+}
+
+/**
+ * Parses one bound into its canonical millisecond form. Stored `updatedAt`
+ * values always carry three fractional digits, and a whole-second bound
+ * compares lexicographically above `.5Z`, so every bound is normalized to the
+ * stored shape before it reaches SQL or the reversed-bounds comparison;
+ * impossible calendar values are rejected here rather than silently filtering
+ * everything.
+ */
+function parseBound(field: string, value: string): Result<string, AppError> {
+  if (!UPDATED_BOUND_PATTERN.test(value)) {
+    return err(
+      appError("CONFIG_INVALID", `the ${field} bound must be an ISO-8601 UTC instant like 2026-08-01T00:00:00Z`, {
+        field,
+        value,
+      }),
+    );
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return err(appError("CONFIG_INVALID", `the ${field} bound is not a real UTC instant: ${value}`, { field, value }));
+  }
+  const canonical = new Date(parsed).toISOString();
+  // Exactly representable means the canonical millisecond form names the same
+  // instant the input spelled: equal after an all-zero fractional tail is
+  // dropped. A sub-millisecond remainder is refused rather than silently
+  // reshaped into a neighboring millisecond the user never named.
+  const trimmed = (text: string): string => text.replace(/(\.\d{3})0+Z$/, "$1Z").replace(/\.000Z$/, "Z");
+  // ISO 8601 permits one or two fractional digits: pad a short fraction to the
+  // canonical three before comparing, so `.0Z` and `.00Z` name their whole
+  // millisecond instead of reading as a mismatch.
+  const padded = (text: string): string =>
+    text.replace(/\.(\d{1,2})Z$/, (_match, digits: string) => `.${digits.padEnd(3, "0")}Z`);
+  if (trimmed(padded(canonical)) !== trimmed(padded(normalizeWholeSeconds(value)))) {
+    return err(
+      appError("CONFIG_INVALID", `the ${field} bound is finer than one millisecond: ${value}`, { field, value }),
+    );
+  }
+  return ok(canonical);
+}
+
+function validateBounds(filters: HandoffListFilters): Result<null, AppError> {
+  let since: string | null = null;
+  let until: string | null = null;
+  for (const [field, value] of [
+    ["updatedSince", filters.updatedSince],
+    ["updatedUntil", filters.updatedUntil],
+  ] as const) {
+    if (value === undefined) continue;
+    const parsed = parseBound(field, value);
+    if (!parsed.ok) return parsed;
+    if (field === "updatedSince") {
+      since = parsed.value;
+      filters.updatedSince = parsed.value;
+    } else {
+      until = parsed.value;
+      filters.updatedUntil = parsed.value;
+    }
+  }
+  if (until !== null && since !== null && Date.parse(since) > Date.parse(until)) {
+    return err(
+      appError("CONFIG_INVALID", "the updatedSince bound is later than the updatedUntil bound", {
+        updatedSince: since,
+        updatedUntil: until,
+      }),
+    );
+  }
+  return ok(null);
+}
+
 function runListing(ports: HandoffReadPorts, scope: ListingScope, query: ListQuery): Result<ListedHandoffs, AppError> {
+  const bounds = validateBounds(query.filters);
+  if (!bounds.ok) return bounds;
   const identity = filterIdentity(query.filters, scope);
   let afterSortKey: string | null = null;
   let limit = query.limit;
@@ -220,6 +305,8 @@ export function waitForNewInboxItems(
   query: ListQuery,
   options: InboxWaitOptions,
 ): Result<WaitedInbox, AppError> {
+  const bounds = validateBounds(query.filters);
+  if (!bounds.ok) return bounds;
   const scope = inboxScopeOf(ports, actorInput);
   if (!scope.ok) return err(scope.error);
   // The wait began now: no Handoff created after this instant can sort below an
