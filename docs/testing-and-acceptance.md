@@ -406,6 +406,8 @@ Measurement method: the corpus is built by the `testkit` seed generator with the
 
 An `EXPLAIN QUERY PLAN` result that shows a full table scan on a standard listing is a P2 defect regardless of the measured time; a missed millisecond target on recorded hardware is a P2 defect and does not by itself block a gate, because NFR-004 is a SHOULD while correctness is not.
 
+TASK-062 records the baseline the numbers were measured on and keeps the proof executable: `packages/adapters/test/int/scale-checks.int.test.ts` loads the 10,000-Handoff seed, pins every inbox, outbox, and detail query to an index through `EXPLAIN QUERY PLAN` (`SEARCH ... USING INDEX idx_handoffs_inbox` and its siblings, with no `SCAN` anywhere), and asserts the budgets with one discarded warm-up and the median of twenty runs. The baseline for the committed numbers: MacBook Pro, Apple M5 Pro, 64 GB memory, macOS 26.5.2, APFS `/var/folders` temporary storage, Bun 1.3.14 toolchain with the suite executed through `make test-int`; the observed medians were 0.02 ms for the inbox first page, 0.52 ms for the workspace outbox first page, and 0.02 ms for a detail read, three orders of magnitude inside the budgets, and the exhaustive pagination proof over the whole seed lives in `packages/adapters/test/int/handoff-read.int.test.ts`.
+
 ## 8. Security checks
 
 Section 15 of [security-reliability.md](security-reliability.md) is the normative list of security checks, and every numbered row there is a release-gate condition of the milestone that introduces its subject.
