@@ -223,6 +223,19 @@ describe("resolveWorkspaceActor", () => {
     expect(result.error.code).toBe("AMBIGUOUS_PROJECT");
   });
 
+  it("selects the code-point-first binding for a multi-bound Project under --as", () => {
+    const multi = ports([binding("p1", "/work/b"), binding("p1", "/work/a")], projects, {});
+    const first = resolveWorkspaceActor(multi, { path: "/unrelated", userHome: "/h", as: "alpha" });
+    expect(first.ok && first.value.kind === "registered_project" && first.value.binding.directory).toBe("/work/a");
+    // An astral-plane name sorts after every BMP name by code point, where a
+    // UTF-16 comparator would compare surrogate halves against BMP characters.
+    const astral = ports([binding("p1", "/work/\u{1F980}"), binding("p1", "/work/\uFFFD")], projects, {});
+    const chosen = resolveWorkspaceActor(astral, { path: "/unrelated", userHome: "/h", as: "alpha" });
+    expect(chosen.ok && chosen.value.kind === "registered_project" && chosen.value.binding.directory).toBe(
+      "/work/\uFFFD",
+    );
+  });
+
   it("reports an unregistered workspace when no binding matches", () => {
     const result = resolveWorkspaceActor(ports([binding("p1", "/work")], projects, {}), {
       path: "/elsewhere",

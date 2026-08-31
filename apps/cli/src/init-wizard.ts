@@ -274,7 +274,13 @@ export function runInitWizard(ports: WizardPorts, defaults: WizardDefaults): Wiz
 
   ports.out("\nSummary:\n");
   ports.out(
-    `  Vault: ${choices.vaultPath}${choices.createVault ? "" : " (existing directory, not created by init)"}\n`,
+    `  Vault: ${choices.vaultPath}${
+      choices.createVault
+        ? ""
+        : existsSync(choices.vaultPath)
+          ? " (existing directory, not created by init)"
+          : " (does not exist and will not be created)"
+    }\n`,
   );
   ports.out(`  Server port: ${choices.serverPort}\n`);
   ports.out(`  LaunchAgent: ${choices.installService ? "install xyz.rootkernel.sorage" : "not installed"}\n`);

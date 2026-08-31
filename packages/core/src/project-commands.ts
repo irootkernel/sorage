@@ -391,7 +391,12 @@ export function resolveWorkspaceActor(
         }),
       );
     }
-    return ok({ kind: "registered_project", project: found.value, binding: bindings.value[0] as ProjectBinding });
+    // A multi-bound Project under --as selects the code-point-first binding
+    // directory deterministically; --as names the Project, and the documented
+    // escape for a specific workspace is running from that directory or the
+    // resolution ladder.
+    const ordered = [...bindings.value].sort((a, b) => compareByCodePoint(a.directory, b.directory));
+    return ok({ kind: "registered_project", project: found.value, binding: ordered[0] as ProjectBinding });
   }
   const real = ports.bindings.realPath(input.path, input.userHome);
   if (!real.ok) return real;
@@ -495,6 +500,19 @@ export function resolveCommandActor(ports: ProjectCommandPorts, input: CommandAc
     return ok(projectActor(resolved.value.project.id));
   }
   return ok(workspaceActor(workspaceKey(ports.installationId, resolved.value.directory)));
+}
+
+/** Orders strings by Unicode code point, not UTF-16 code unit (so astral-plane names sort after all BMP names). */
+function compareByCodePoint(a: string, b: string): number {
+  const left = Array.from(a);
+  const right = Array.from(b);
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftCode = (left[index] ?? "").codePointAt(0) ?? 0;
+    const rightCode = (right[index] ?? "").codePointAt(0) ?? 0;
+    if (leftCode !== rightCode) return leftCode - rightCode;
+  }
+  return left.length - right.length;
 }
 
 function ambiguity(bindings: ProjectBinding[], registered: Map<string, Project>): AppError {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { type CommandInput, runCli } from "../../src/main";
+import { runInitWizard } from "../../src/init-wizard";
 
 const homes: string[] = [];
 afterEach(() => {
@@ -258,6 +259,44 @@ describe("the interactive init wizard", () => {
     const list = capture();
     expect(runCli(["project", "list", "--json"], list.ports)).toBe(0);
     expect(list.out.join("")).toContain("소라게");
+  });
+
+  it("states the machine's actual state in the summary for a declined Vault directory", () => {
+    const home = tempHome("sorage-wizard-summary-");
+    const io = capture();
+    const script = answers([
+      join(home, "nowhere-vault"), // 1. custom path, does not exist
+      "n", // 2. decline creation
+      "", // 3. port
+      "n", // 4. service
+      "n", // 5. daemon
+      "n", // 6. git
+      "n", // 7. backup
+      "n", // 10. project
+      "y", // confirm: the summary prints before this answer is consumed
+    ]);
+    const asked: string[] = [];
+    const input = {
+      ask: (question: string) => {
+        asked.push(question);
+        return script.input.ask(question);
+      },
+    };
+    const wizard = runInitWizard(
+      { out: (t: string) => io.out.push(t), err: (t: string) => io.err.push(t), ask: input.ask },
+      {
+        defaultVaultPath: join(home, "vault"),
+        defaultPort: 46321,
+        defaultBackupAt: "03:00",
+        defaultBackupTimezone: "UTC",
+        systemTimezone: null,
+      },
+    );
+    expect(wizard.status).toBe("confirmed");
+    // The confirmation summary is printed before the final answer, and the
+    // declined directory is described by its actual state.
+    expect(io.out.join("")).toContain("does not exist and will not be created");
+    expect(io.out.join("")).not.toContain("existing directory, not created by init");
   });
 
   it("creates the vault nowhere when creation is declined for a missing directory", () => {
