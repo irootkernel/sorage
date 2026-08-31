@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-008`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-059`
