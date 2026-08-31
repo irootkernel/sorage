@@ -1,21 +1,21 @@
-import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { request as httpRequest } from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { initializeInstallation } from "@sorage/core";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import {
   createNodeApiTokenStore,
   createNodeTokenEntropy,
   createNodeWebSecretStore,
 } from "@sorage/adapters/src/token-store";
+import { initializeInstallation } from "@sorage/core";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSessionService } from "../../src/auth";
 import { createDomainRoutes } from "../../src/domain-routes";
+import type { RouteEntryInternal } from "../../src/route-kit";
 import { createDaemonConfigService } from "../../src/runtime";
 import { createDaemonServer } from "../../src/server";
-import type { RouteEntryInternal } from "../../src/route-kit";
 
 /**
  * The TASK-046 domain surface over a real socket and a real installation: every
@@ -462,6 +462,62 @@ describe("the Idempotency-Key replay (API-012)", () => {
     });
     expect(conflict.status).toBe(409);
     expect(json(conflict)).toMatchObject({ error: { code: "IDEMPOTENCY_CONFLICT" } });
+  });
+});
+
+describe("matrix rows 10 and 11: hostile content types never render inline (WEB-006)", () => {
+  it("serves an SVG and an .html Artifact as attachments, never inline", async () => {
+    writeFileSync(
+      join(senderDir, "badge.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>\n',
+    );
+    writeFileSync(join(senderDir, "page.html"), "<!doctype html><html><script>alert(2)</script></html>\n");
+    for (const [name, file] of [
+      ["SVG", "badge.svg"],
+      ["HTML", "page.html"],
+    ] as const) {
+      const created = await call("/api/v1/handoffs/import-path", {
+        method: "POST",
+        bearer: apiToken,
+        body: { to: ["web-app"], title: `${name} upload`, path: join(senderDir, file), asUser: true },
+      });
+      expect(created.status).toBe(201);
+      const id = json(created).data.handoffs[0].handoffId as string;
+      const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(served.status).toBe(200);
+      // Neither hostile type is ever served with a content type a browser renders.
+      expect(served.headers["content-type"]).toBe("application/octet-stream");
+      expect(String(served.headers["content-disposition"])).toContain(`attachment; filename="${file}"`);
+    }
+  });
+
+  it("serves Markdown as text, never as a browser-parsed document type", async () => {
+    // The safe-preview contract has two halves: the server never labels a
+    // document Artifact text/html, and the client script escapes before it
+    // re-enables the tiny Markdown subset, so a <script> tag rides as text.
+    writeFileSync(
+      join(senderDir, "hostile.md"),
+      '# Title\n\n<script>alert(3)</script> and <img src="https://evil.example/x.png">\n',
+    );
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Hostile markdown", path: join(senderDir, "hostile.md"), asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+    const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(served.status).toBe(200);
+    expect(String(served.headers["content-type"])).toContain("text/");
+    expect(String(served.headers["content-type"])).not.toContain("html");
+    expect(served.body).toContain("<script>alert(3)</script>");
+    // The client script escapes before building DOM nodes and never uses
+    // innerHTML; the CSP of row 9 blocks the external image load.
+    const script = await call("/assets/app.js", { bearer: null });
+    expect(script.status).toBe(200);
+    expect(script.body).not.toContain("innerHTML");
+    expect(script.body).toContain("renderMarkdownSafe");
+    expect(script.body).toContain('replace(/</g, "&lt;")');
   });
 });
 

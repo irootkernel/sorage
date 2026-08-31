@@ -186,3 +186,37 @@ describe("the error middleware (API-006)", () => {
     expect(response.status).toBe(200);
   });
 });
+
+describe("the cross-origin posture (SEC row 8: no CORS allowance, no ambient credential)", () => {
+  // A browser page from another origin must not be able to read anything: the
+  // server grants no CORS allowance, so a fetch from it fails the preflight and
+  // carries no ambient credential, because nothing ever sets a cookie.
+  const responses: Array<{ name: string; run: () => Promise<TestResponse> }> = [
+    {
+      name: "preflight with a foreign Origin",
+      run: () =>
+        request("/api/v1/handoffs", {
+          method: "OPTIONS",
+          origin: "https://evil.example",
+          extra: { "access-control-request-method": "GET" },
+        }),
+    },
+    { name: "GET with a foreign Origin", run: () => request("/api/v1/health", { origin: "https://evil.example" }) },
+    {
+      name: "rejected host with a foreign Origin",
+      run: () => request("/api/v1/health", { host: `evil.example:${port}`, origin: "https://evil.example" }),
+    },
+  ];
+
+  for (const { name, run } of responses) {
+    it(`grants no CORS allowance on the ${name} response`, async () => {
+      const response = await run();
+      expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(response.headers["access-control-allow-credentials"]).toBeUndefined();
+      expect(response.headers["access-control-allow-headers"]).toBeUndefined();
+      expect(response.headers["access-control-allow-methods"]).toBeUndefined();
+      // There is no ambient credential to attach: no response ever sets a cookie.
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    });
+  }
+});

@@ -410,6 +410,24 @@ Section 15 of [security-reliability.md](security-reliability.md) is the normativ
 
 The Host allowlist, session exchange, response headers and cookie absence run inside AJ-12; SVG and HTML handling and the mid-stream size abort run inside AJ-13; `--as-user` gating and the non-participant read run inside AJ-07, AJ-10, and AJ-04, so a regression fails a journey rather than only a checklist.
 
+TASK-060 additionally binds every row of the section 15 matrix to a permanent automated home inside `make test`, so removing a control fails its row's test rather than only a journey:
+
+| Rows | Permanent automated home |
+|---|---|
+| 1 | `apps/daemon/test/unit/server.unit.test.ts` (non-loopback bind refused) |
+| 2, 3, 8, 9 | `apps/daemon/test/int/server.int.test.ts` (Host allowlist, cross-origin posture, security headers) |
+| 4, 6, 7 | `apps/daemon/test/int/auth.int.test.ts` with `apps/daemon/test/contract/auth.contract.test.ts` |
+| 5 | `apps/daemon/test/int/auth.int.test.ts` for the `TOKEN_INVALID` rejection and rotation; the CLI read-retry clause is a recorded EPIC-009 gap with its own task slot until it ships |
+| 10, 11 | `apps/daemon/test/int/domain-routes.int.test.ts` (hostile content types never render inline) |
+| 12 | `apps/daemon/test/int/upload.int.test.ts` |
+| 13, 14 | `packages/adapters/test/int/import-safety.int.test.ts` |
+| 15, 20 | `apps/cli/test/int/cli-security-matrix.int.test.ts` |
+| 16 | `apps/cli/test/int/cli-user-admin-matrix.int.test.ts` |
+| 17, 19, 23 | `apps/cli/test/int/cli-retention.int.test.ts` |
+| 18 | `apps/cli/test/int/cli-read.int.test.ts` |
+| 21 | `packages/adapters/test/int/token-store.int.test.ts` |
+| 22 | `test/e2e/backup-web.e2e.test.ts` with the AJ-14 journey |
+
 ## 9. Release gates
 
 Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the 0.3 gate (GEN-013).
