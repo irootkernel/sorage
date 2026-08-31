@@ -469,9 +469,7 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
               // distinct spelling already warns through bindings.exist, and
               // warning here too would name unrelated Projects as ambiguous.
               if (first.directory === second.directory) {
-                aliases.push(
-                  `'${first.directory}' cannot be physically compared while its directory is unreachable`,
-                );
+                aliases.push(`'${first.directory}' cannot be physically compared while its directory is unreachable`);
               }
               continue;
             }
