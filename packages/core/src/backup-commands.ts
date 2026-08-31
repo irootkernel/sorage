@@ -499,8 +499,8 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
  * exactly the managed pathspecs, let `git diff --cached --quiet` decide
  * whether anything changed, commit with the configured template only when it
  * did, and record exactly one `backup_runs` row whatever happened. The engine
- * never pushes, rebases, merges, or resolves a conflict, and push itself is
- * disabled until TASK-057 wires it.
+ * never rebases, merges, or resolves a conflict, and it pushes only when
+ * `gitBackup.push.enabled` is set (BKP-011, BKP-013).
  */
 export interface BackupRunPorts {
   vaultPath: string;

@@ -136,14 +136,19 @@ describe("nodeEnsureVaultGit", () => {
     const { home, vault } = initializedHome("sorage-git-branchpin-");
     // A user whose global default branch is not "main" would otherwise wedge
     // the run engine's branch gate on the very Vault this epic initialized.
-    git(vault, "config", "--global", "init.defaultBranch", "trunk");
+    // The simulated user's global config lives inside the temporary home, so
+    // neither the fixture nor the production Git client under test touches
+    // the developer's real ~/.gitconfig.
+    const realHome = process.env.HOME;
+    process.env.HOME = home;
     try {
+      git(vault, "config", "--global", "init.defaultBranch", "trunk");
       const outcome = nodeEnsureVaultGit(vault, "installation", new FakeClock(), "main");
       expect(outcome.ok && outcome.value.initialized).toBe(true);
       expect(git(vault, "symbolic-ref", "--short", "HEAD").trim()).toBe("main");
     } finally {
-      execFileSync("git", ["config", "--global", "--unset", "init.defaultBranch"]);
-      void home;
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
     }
   });
 
