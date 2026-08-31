@@ -37,11 +37,13 @@ export const DOCTOR_CATALOG_0_1 = [
   "bindings.exist",
   "bindings.nested",
   "bindings.ambiguous",
-  "platform.tcc",
+  "daemon.reachable",
   "daemon.port",
+  "token.permissions",
   "service.installed",
   "backup.schedule",
   "git.state",
+  "platform.tcc",
 ] as const;
 
 export type DoctorCheckId = (typeof DOCTOR_CATALOG_0_1)[number];
@@ -61,7 +63,9 @@ export const DOCTOR_CATALOG_SEVERITY: Record<DoctorCheckId, DoctorSeverity> = {
   "bindings.exist": "warning",
   "bindings.nested": "warning",
   "bindings.ambiguous": "warning",
+  "daemon.reachable": "warning",
   "platform.tcc": "warning",
+  "token.permissions": "blocking",
   "daemon.port": "warning",
   "service.installed": "warning",
   "backup.schedule": "warning",

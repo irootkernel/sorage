@@ -105,7 +105,7 @@
       }
     },
     {
-      "id": "platform.tcc",
+      "id": "daemon.reachable",
       "severity": "blocking",
       "message": "Sorage is not initialized",
       "recovery": {
@@ -114,6 +114,14 @@
     },
     {
       "id": "daemon.port",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "token.permissions",
       "severity": "blocking",
       "message": "Sorage is not initialized",
       "recovery": {
@@ -138,6 +146,14 @@
     },
     {
       "id": "git.state",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
+      "id": "platform.tcc",
       "severity": "blocking",
       "message": "Sorage is not initialized",
       "recovery": {

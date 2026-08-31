@@ -52,12 +52,16 @@
     "worst": "warning"
   },
   {
-    "id": "platform.tcc",
+    "id": "daemon.reachable",
     "worst": "warning"
   },
   {
     "id": "daemon.port",
     "worst": "warning"
+  },
+  {
+    "id": "token.permissions",
+    "worst": "blocking"
   },
   {
     "id": "service.installed",
@@ -69,6 +73,10 @@
   },
   {
     "id": "git.state",
+    "worst": "warning"
+  },
+  {
+    "id": "platform.tcc",
     "worst": "warning"
   }
 ]

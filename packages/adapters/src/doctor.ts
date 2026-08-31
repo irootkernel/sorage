@@ -47,6 +47,8 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "bindings.nested": "Pass --as <project-slug> wherever the deepest match is not the intended Project",
   "bindings.ambiguous": "sorage project unbind the aliased path, or always pass --as <project-slug> from it",
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
+  "daemon.reachable": "sorage daemon start, or delete a stale ~/.sorage/run/daemon.json",
+  "token.permissions": "sorage token rotate --as-user",
   "daemon.port": "Change server.port in the configuration, then restart the daemon",
   "service.installed": "launchctl bootstrap gui/$UID ~/Library/LaunchAgents/xyz.rootkernel.sorage.plist",
   "backup.schedule": "sorage backup run, then read sorage backup status",
@@ -491,6 +493,56 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         return ok("The Vault is readable without a privacy prompt.");
       }
 
+      case "daemon.reachable": {
+        const recordPath = join(home.runDir, "daemon.json");
+        const daemon = readDaemonRecord(recordPath);
+        if (daemon === null) {
+          if (existsSync(recordPath)) {
+            return warning("run/daemon.json exists but cannot be parsed; delete it and start the daemon again.");
+          }
+          return ok("No daemon is recorded; start one with sorage daemon start when the API is needed.");
+        }
+        if (!isPidAlive(daemon.pid)) {
+          return warning(`run/daemon.json names pid ${String(daemon.pid)}, which is not running; the record is stale.`);
+        }
+        const config = configuration();
+        if (config === null) {
+          return warning("The daemon record cannot be checked without a valid configuration.");
+        }
+        // The CLI process blocks synchronously (CLI-020), so the health check
+        // runs as the command's own subprocess exactly like the web probe; the
+        // expected installationId is the configuration's, not the record's.
+        const scriptArgs =
+          process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
+            ? [process.argv[1], "__health-probe", daemon.host, String(daemon.port), config.installationId]
+            : ["__health-probe", daemon.host, String(daemon.port), config.installationId];
+        const probe = spawnSync(process.execPath, scriptArgs, { timeout: 5000, encoding: "utf8" });
+        if (probe.status === 0) {
+          return ok("The daemon answers /api/v1/health with the expected installationId.");
+        }
+        return warning("The daemon's pid is alive but /api/v1/health does not confirm this installation.");
+      }
+
+      case "token.permissions": {
+        const tokenPath = join(home.stateDir, "api-token");
+        if (!existsSync(tokenPath)) {
+          return warning("The API token file does not exist yet; it is created at init or by a rotation.");
+        }
+        try {
+          const stats = statSync(tokenPath);
+          const mode = stats.mode & 0o777;
+          if (mode !== 0o600) {
+            return blocking(`The API token file mode is ${mode.toString(8)}, not 0600.`);
+          }
+          if (stats.size < 32) {
+            return blocking("The API token file holds fewer than 32 bytes.");
+          }
+          return ok("The API token file is owner-only and holds at least 32 bytes.");
+        } catch {
+          return blocking("The API token file could not be inspected.");
+        }
+      }
+
       case "daemon.port": {
         const config = configuration();
         if (config === null) return warning("The daemon port cannot be checked without a valid configuration.");
@@ -662,7 +714,20 @@ function backupRunRows(home: { stateDir: string }): BackupRunRow[] {
 function readDaemonRecord(path: string): { pid: number; host: string; port: number } | null {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown; host?: unknown; port?: unknown };
-    if (typeof parsed.pid !== "number" || typeof parsed.host !== "string" || typeof parsed.port !== "number") {
+    // The staleness evaluator treats out-of-domain pids as malformed, because
+    // kill(-1, 0) and kill(0, 0) probe the caller's set rather than one daemon;
+    // the same domain rules keep the doctor from framing a corrupt record as a
+    // live-but-unhealthy daemon.
+    if (
+      typeof parsed.pid !== "number" ||
+      !Number.isInteger(parsed.pid) ||
+      parsed.pid <= 0 ||
+      typeof parsed.host !== "string" ||
+      typeof parsed.port !== "number" ||
+      !Number.isInteger(parsed.port) ||
+      parsed.port <= 0 ||
+      parsed.port > 65535
+    ) {
       return null;
     }
     return parsed as { pid: number; host: string; port: number };

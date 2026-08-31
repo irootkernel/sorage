@@ -91,7 +91,7 @@ describe("AJ-01: fresh non-interactive initialization and doctor", () => {
     expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(18);
+    expect(report.data.checks).toHaveLength(20);
     for (const check of report.data.checks) {
       // The LaunchAgent is the one optional piece: an installation without it is
       // healthy and reports service.installed as a warning, never blocking.
@@ -140,7 +140,7 @@ describe("AJ-02: pre-initialization guidance", () => {
     expect(code).toBe(1);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(18);
+    expect(report.data.checks).toHaveLength(20);
     const expectedIds = [
       "home.permissions",
       "config.schema",
@@ -155,11 +155,13 @@ describe("AJ-02: pre-initialization guidance", () => {
       "bindings.exist",
       "bindings.nested",
       "bindings.ambiguous",
-      "platform.tcc",
+      "daemon.reachable",
       "daemon.port",
+      "token.permissions",
       "service.installed",
       "backup.schedule",
       "git.state",
+      "platform.tcc",
     ];
     expect(report.data.checks.map((check) => check.id)).toEqual(expectedIds);
     for (const check of report.data.checks) {

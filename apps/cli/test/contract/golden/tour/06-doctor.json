@@ -68,14 +68,19 @@
         "message": "No two bindings of the same kind alias one directory."
       },
       {
-        "id": "platform.tcc",
+        "id": "daemon.reachable",
         "severity": "ok",
-        "message": "The Vault is readable without a privacy prompt."
+        "message": "No daemon is recorded; start one with sorage daemon start when the API is needed."
       },
       {
         "id": "daemon.port",
         "severity": "ok",
         "message": "Nothing is listening on 127.0.0.1:46321 yet."
+      },
+      {
+        "id": "token.permissions",
+        "severity": "ok",
+        "message": "The API token file is owner-only and holds at least 32 bytes."
       },
       {
         "id": "service.installed",
@@ -94,6 +99,11 @@
         "id": "git.state",
         "severity": "ok",
         "message": "The Vault has no Git repository yet."
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
       }
     ]
   },

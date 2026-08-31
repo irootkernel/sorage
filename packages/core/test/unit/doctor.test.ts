@@ -10,19 +10,31 @@ import {
 } from "../../src/doctor";
 
 describe("the doctor catalog", () => {
-  it("holds exactly eighteen unique check identifiers after 0.3 adds service.installed", () => {
-    expect(DOCTOR_CATALOG_0_1).toHaveLength(18);
-    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(18);
-  });
-
-  it("contains the 0.3 service, backup, and Git checks and none of the later unscheduled ones", () => {
-    expect(DOCTOR_CATALOG_0_1).toContain("backup.schedule");
-    expect(DOCTOR_CATALOG_0_1).toContain("git.state");
-    expect(DOCTOR_CATALOG_0_1).toContain("service.installed");
-    const laterIds = ["daemon.reachable", "token.permissions"];
-    for (const id of laterIds) {
-      expect(DOCTOR_CATALOG_0_1).not.toContain(id);
-    }
+  it("holds exactly the twenty documented ids in the section 35 order", () => {
+    expect(DOCTOR_CATALOG_0_1).toHaveLength(20);
+    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(20);
+    expect(DOCTOR_CATALOG_0_1).toEqual([
+      "home.permissions",
+      "config.schema",
+      "config.lock",
+      "vault.marker",
+      "vault.gitattributes",
+      "vault.writable",
+      "db.integrity",
+      "db.pendingIntents",
+      "db.migrations",
+      "artifacts.checksums",
+      "bindings.exist",
+      "bindings.nested",
+      "bindings.ambiguous",
+      "daemon.reachable",
+      "daemon.port",
+      "token.permissions",
+      "service.installed",
+      "backup.schedule",
+      "git.state",
+      "platform.tcc",
+    ]);
   });
 
   it("declares the section-35 worst severity for every id", () => {
@@ -48,7 +60,7 @@ describe("the doctor catalog", () => {
 describe("the pre-initialization report", () => {
   it("marks every check blocking with the init recovery", () => {
     const report = notInitializedReport("/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(18);
+    expect(report.checks).toHaveLength(20);
     for (const check of report.checks) {
       expect(check.severity).toBe("blocking");
       if (check.id !== "config.schema") {
@@ -98,7 +110,7 @@ describe("runDoctor", () => {
       },
     };
     const report = runDoctor(ports, "/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(18);
+    expect(report.checks).toHaveLength(20);
     expect(report.checks.every((check) => check.severity === "blocking")).toBe(true);
   });
 });
