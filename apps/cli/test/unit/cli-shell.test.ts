@@ -37,7 +37,7 @@ describe("cli shell", () => {
   it("prints human version text on stdout without --json", () => {
     const cap = capture();
     expect(runCli(["version"], cap.ports)).toBe(0);
-    expect(cap.out).toContain("sorage 0.2.0");
+    expect(cap.out).toContain("sorage 0.3.0");
   });
 
   it("exits 0 for help", () => {

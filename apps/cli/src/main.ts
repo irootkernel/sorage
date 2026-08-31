@@ -112,7 +112,7 @@ import * as webBindings from "./web";
 import { createWebRuntimePorts, runWebCommand } from "./web";
 
 export const CLI_NAME = "sorage" as const;
-export const CLI_VERSION = "0.2.0" as const;
+export const CLI_VERSION = "0.3.0" as const;
 
 export interface GlobalOptions {
   as?: string;

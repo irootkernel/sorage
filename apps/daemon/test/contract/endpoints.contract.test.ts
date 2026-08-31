@@ -13,7 +13,7 @@ import { createDaemonServer } from "../../src/server";
  */
 const REQUEST_ID = "2f0ac9a0-0000-4000-8000-0000000000dd";
 const INSTALLATION_ID = "1a2b3c4d-0000-4000-8000-000000000042";
-const VERSION = "0.2.0-contract";
+const VERSION = "0.3.0-contract";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
