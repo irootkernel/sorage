@@ -87,7 +87,11 @@ if (firstDigest !== secondDigest) {
 const stagedBinary = join(dist, ".sorage.staged");
 copyFileSync(first, stagedBinary);
 sh("codesign", ["--force", "--sign", "-", stagedBinary]);
-const receipt = spawnSync("codesign", ["-dv", first], { encoding: "utf8" });
+// The receipt must describe the copy the pipeline just signed: `first` is
+// still the unsigned first compile here, and the arm64 linker already
+// ad-hoc signs it, so verifying `first` would pass even if the explicit
+// signature of the staged copy were invalid.
+const receipt = spawnSync("codesign", ["-dv", stagedBinary], { encoding: "utf8" });
 if (receipt.status !== 0) {
   console.error(`the ad-hoc signature could not be verified: ${(receipt.stderr ?? "").trim()}`);
   process.exit(1);
