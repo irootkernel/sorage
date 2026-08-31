@@ -426,6 +426,7 @@ A binding of kind `git_repository` stores the git common directory, resolved wit
 
 - **Status:** Accepted
 - **Date:** 2026-08-22
+- **Amended:** 2026-09-01 — the pinned Bun version moved from `1.3.14` to `1.4.0` after the 0.3 MVP gate passed; the pin mechanics, storage, test runner, and distribution decisions below are unchanged, and the full verification gate including the reproducible-build check of `make package` was re-run green under the new pin.
 
 ### Context
 
@@ -439,7 +440,7 @@ Sibling repositories pin their toolchain hard — podway's `Makefile:3-6` raises
 
 ### Decision
 
-The toolchain is Bun `1.3.14`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from 0.2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
+The toolchain is Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from 0.2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
 
 `make build` compiles with `bun build --compile` into `dist/sorage` and `make package` produces the ad-hoc signed binary and the Homebrew formula inputs; `make test` is the single verification gate and `make test-prepare` asserts the pinned Bun version; verification runs locally on macOS with no hosted CI service (the GitHub Actions workflow added in TASK-002 was removed by the owner's direction on 2026-08-24).
 

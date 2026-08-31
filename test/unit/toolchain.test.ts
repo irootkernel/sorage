@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const PINNED_BUN = "1.3.14";
+const PINNED_BUN = "1.4.0";
 
 describe("toolchain pin", () => {
   it("records the pinned Bun version in .bun-version and package.json engines", () => {

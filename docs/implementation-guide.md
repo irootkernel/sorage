@@ -19,7 +19,7 @@ TypeScript types do not replace runtime validation.
 
 The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 
-- Bun `1.3.14`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017).
+- Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017).
 - `bun:sqlite` as the only SQLite driver; it is synchronous, which is what makes the synchronous `UnitOfWork` natural.
 - Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone 0.2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.

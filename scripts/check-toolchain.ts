@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 
-const PINNED_VERSION = "1.3.14";
+const PINNED_VERSION = "1.4.0";
 const PIN_FILES = [".bun-version", "package.json (engines.bun)"] as const;
 
 function fail(message: string): never {
