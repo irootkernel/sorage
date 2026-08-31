@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import { homedir } from "node:os";
@@ -25,6 +25,11 @@ import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-po
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
+import {
+  createNodeLaunchAgentPorts,
+  launchAgentsDirectory,
+  launchAgentUid,
+} from "@sorage/adapters/src/launchagent-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
@@ -32,8 +37,6 @@ import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type ActorRef,
-  type Configuration,
-  ok,
   type AddProjectOutcome,
   type AppError,
   acceptHandoff,
@@ -44,10 +47,10 @@ import {
   archiveProject,
   backupRestore,
   backupStatus,
-  configureBackup,
   backupVerify,
-  runBackupCommand,
   bindProject,
+  type Configuration,
+  configureBackup,
   type DoctorReport,
   declineHandoff,
   type Envelope,
@@ -57,12 +60,16 @@ import {
   fetchHandoff,
   getHandoff,
   hasBlockingCheck,
+  type InitResult,
   initializeInstallation,
+  installLaunchAgent,
   type ListedProject,
   listInbox,
   listOutbox,
   listProjects,
   moveVault,
+  ok,
+  err,
   pinHandoff,
   protocolVersion,
   refreshInboxMarker,
@@ -74,6 +81,7 @@ import {
   resolveWorkspaceActor,
   reviseHandoff,
   rotateApiToken,
+  runBackupCommand,
   runDoctor,
   sendHandoffs,
   setConfigurationValue,
@@ -85,6 +93,7 @@ import {
   unarchiveHandoff,
   unarchiveProject,
   unbindProject,
+  uninstallInstallation,
   unpinHandoff,
   validateConfigurationFile,
   vaultStatus,
@@ -98,6 +107,7 @@ import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError } from "commander";
 import { buildCompletionScript } from "./completion";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
+import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
 import * as webBindings from "./web";
 import { createWebRuntimePorts, runWebCommand } from "./web";
 
@@ -151,7 +161,14 @@ function collectRepeatable(value: string, previous: string[]): string[] {
 /** Runs one CLI action and remembers its exit code for `runCli` to return. */
 type ReportExitCode = (code: number) => void;
 
-export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: ReportExitCode = () => {}): Command {
+/** The command surface's input side: prompts for the interactive wizard, injectable for tests. */
+export type CommandInput = PromptPorts;
+
+export function buildProgram(
+  ports: OutputPorts = defaultPorts,
+  reportExitCode: ReportExitCode = () => {},
+  input: CommandInput = createStdinPrompt(),
+): Command {
   const program = new Command();
   program
     .name(CLI_NAME)
@@ -191,67 +208,154 @@ export function buildProgram(ports: OutputPorts = defaultPorts, reportExitCode: 
       "--initialize-git",
       "initialize a Git repository in the Vault with core.autocrlf=false; an existing repository is reported, never reinitialized",
     )
+    .option("--port <n>", "set server.port in the creating write", parseInteger)
+    .option("--install-service", "install the xyz.rootkernel.sorage LaunchAgent (INIT-009)")
+    .option("--start-daemon", "start the daemon after a successful init")
+    .option("--enable-daily-backup", "enable the daily backup schedule (INIT-008)")
+    .option("--backup-at <HH:MM>", "the daily backup local time; requires --enable-daily-backup")
+    .option("--timezone <tz>", "the daily backup IANA zone; requires --enable-daily-backup")
     .action((options, command) => {
       const json = command.optsWithGlobals().json === true;
-      if (options.nonInteractive !== true) {
-        ports.err(`${CLI_NAME}: the interactive wizard arrives in milestone 0.3; pass --non-interactive\n`);
-        ports.err(`Run '${CLI_NAME} --help' for usage.\n`);
+      const backupAtGiven = options.backupAt !== undefined || options.timezone !== undefined;
+      if (backupAtGiven && options.enableDailyBackup !== true) {
+        ports.err(`${CLI_NAME}: --backup-at and --timezone apply only together with --enable-daily-backup\n`);
         reportExitCode(2);
         return;
       }
+      let choices: InitChoices | null = null;
       // A relative --vault resolves against the cwd once, so the recorded path and
       // every later probe agree no matter where subsequent commands run from.
+      const home = createNodeHomePaths();
       const vaultOption =
         typeof options.vault === "string" && options.vault.trim() !== "" && !isAbsolute(options.vault)
           ? resolve(options.vault)
           : typeof options.vault === "string"
             ? options.vault
             : undefined;
-      const result = initializeInstallation(createNodeInitPorts(), {
-        vaultPath: vaultOption,
-        reconfigure: options.reconfigure === true,
-        initializeGit: options.initializeGit === true,
-      });
-      if (!result.ok) {
-        // A malformed configuration routes to the doctor, which names every defect.
-        reportExitCode(
-          renderAppError(
-            result.error,
-            ports,
-            json,
-            result.error.code === "CONFIG_INVALID" ? "sorage doctor" : undefined,
-          ),
+      if (options.nonInteractive !== true) {
+        // The wizard takes its answers interactively: only --vault may pre-seed a
+        // default. Any other option is a usage error rather than a silent no-op.
+        const wizardForbidden = [
+          ["--reconfigure", options.reconfigure === true],
+          ["--initialize-git", options.initializeGit === true],
+          ["--port", options.port !== undefined],
+          ["--install-service", options.installService === true],
+          ["--start-daemon", options.startDaemon === true],
+          ["--enable-daily-backup", options.enableDailyBackup === true],
+          ["--backup-at", options.backupAt !== undefined],
+          ["--timezone", options.timezone !== undefined],
+        ] as const;
+        const conflicting = wizardForbidden.find(([, given]) => given);
+        if (conflicting !== undefined) {
+          ports.err(`${CLI_NAME}: ${conflicting[0]} needs --non-interactive; the wizard asks its own questions\n`);
+          reportExitCode(2);
+          return;
+        }
+        const wizard = runInitWizard(
+          { ...ports, ask: (question) => input.ask(question) },
+          {
+            defaultVaultPath: vaultOption ?? join(home.home, "vault"),
+            defaultPort: 46321,
+            defaultBackupAt: "03:00",
+            defaultBackupTimezone: "UTC",
+            systemTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? null,
+          },
         );
+        if (wizard.status === "unanswered") {
+          ports.err(`${CLI_NAME}: no answer available for the ${wizard.question}; pass --non-interactive\n`);
+          ports.err(`Run '${CLI_NAME} --help' for usage.\n`);
+          reportExitCode(2);
+          return;
+        }
+        if (wizard.status === "declined") {
+          ports.out("Nothing was changed.\n");
+          return;
+        }
+        choices = wizard.choices;
+      } else {
+        choices = {
+          vaultPath: vaultOption ?? join(home.home, "vault"),
+          createVault: true,
+          serverPort: typeof options.port === "number" ? options.port : 46321,
+          installService: options.installService === true,
+          startDaemon: options.startDaemon === true,
+          initializeGit: options.initializeGit === true,
+          enableDailyBackup: options.enableDailyBackup === true,
+          backupAt: typeof options.backupAt === "string" ? options.backupAt : "03:00",
+          backupTimezone: typeof options.timezone === "string" ? options.timezone : "UTC",
+          enablePush: false,
+          pushRemote: "origin",
+          pushBranch: "main",
+          registerProject: false,
+          projectName: "",
+          projectDir: "",
+        };
+      }
+      applyInitChoices(ports, json, reportExitCode, choices, vaultOption, options.reconfigure === true);
+    });
+
+  program
+    .command("uninstall")
+    .description("remove the Sorage installation while keeping the Vault")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      const home = createNodeHomePaths();
+      const commandPorts = createNodeConfigCommandPorts();
+      const daemonPorts = daemonCommandPorts.createNodeDaemonPorts();
+      const result = uninstallInstallation(
+        {
+          home: home.home,
+          stateDir: home.stateDir,
+          logsDir: home.logsDir,
+          runDir: home.runDir,
+          configFile: commandPorts.configFile,
+          configBackupFile: `${commandPorts.configFile}.bak`,
+          userHome: homedir(),
+          readConfiguration: () => {
+            const read = commandPorts.store.read();
+            if (!read.ok) return read;
+            if (read.value === null) return ok(null);
+            return ok({ config: read.value.config });
+          },
+          daemonRunning: () => {
+            const record = daemonPorts.readDaemonRecord();
+            return record !== null && daemonPorts.isPidAlive(record.pid);
+          },
+          stopDaemon: () => {
+            const code = daemonStop(createDaemonRuntimePorts(), ports);
+            // A non-zero stop leaves the daemon running, and the use case refuses
+            // to remove live state from under it rather than reporting success.
+            return code === 0
+              ? ok({ stopped: true })
+              : err(appError("DAEMON_UNAVAILABLE", "sorage daemon stop did not end the daemon."));
+          },
+          launchAgent: createNodeLaunchAgentPorts(),
+          agentsDirectory: launchAgentsDirectory(),
+          uid: launchAgentUid(),
+          removeDirectory: (path) => rmSync(path, { recursive: true, force: true }),
+          removeFile: (path) => rmSync(path, { force: true }),
+          exists: (path) => existsSync(path),
+        },
+        { asUser: globals.asUser === true, confirm: globals.confirm === true },
+      );
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
-      } else if (result.value.outcome === "created") {
-        ports.out(`Initialized Sorage at ${result.value.home}\n`);
-        ports.out(`Installation: ${result.value.installationId}\n`);
-        ports.out(`Vault: ${result.value.vaultPath}\n`);
-        if (result.value.git !== undefined) {
-          ports.out(
-            result.value.git.initialized
-              ? "Initialized the Vault Git repository with core.autocrlf=false.\n"
-              : "An existing Git repository was found at the Vault and was left untouched.\n",
-          );
-        }
       } else {
-        ports.out(`Sorage is already initialized at ${result.value.home}\n`);
-        ports.out(`Installation: ${result.value.installationId}\n`);
-        ports.out(`Vault: ${result.value.vaultPath}\n`);
-        if (result.value.git !== undefined) {
-          ports.out(
-            result.value.git.existingReported
-              ? "An existing Git repository was found at the Vault and was left untouched.\n"
-              : "Initialized the Vault Git repository with core.autocrlf=false.\n",
-          );
-        } else {
-          ports.out(
-            `Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`,
-          );
+        for (const removed of result.value.removed) {
+          ports.out(`Removed ${removed}\n`);
         }
+        if (result.value.daemonStopped) {
+          ports.out("Stopped the running daemon.\n");
+        }
+        if (result.value.launchAgent.wasLoaded) {
+          ports.out("Removed the xyz.rootkernel.sorage LaunchAgent.\n");
+        }
+        ports.out(`Vault retained at ${result.value.retainedVaultPath}\n`);
       }
     });
 
@@ -1895,11 +1999,19 @@ function requireInitialized(ports: OutputPorts, json: boolean, reportExitCode: (
 }
 
 /** Runs one CLI invocation and returns its process exit code without exiting. */
-export function runCli(argv: string[], ports: OutputPorts = defaultPorts): number {
+export function runCli(
+  argv: string[],
+  ports: OutputPorts = defaultPorts,
+  input: CommandInput = createStdinPrompt(),
+): number {
   let actionExitCode: number | null = null;
-  const program = buildProgram(ports, (code) => {
-    actionExitCode = code;
-  });
+  const program = buildProgram(
+    ports,
+    (code) => {
+      actionExitCode = code;
+    },
+    input,
+  );
   program.configureOutput({
     writeOut: (str) => ports.out(str),
     // The catch block below is the single renderer for usage errors; suppressing
@@ -2118,6 +2230,174 @@ function logCommandFailure(error: AppError, id: string): void {
 }
 
 /** Maps an application error to its envelope rendering and published exit code. */
+/**
+ * Applies one confirmed set of init choices (INIT-004, section 3.1 and 3.2): the base
+ * installation first, then the optional pieces in configuration order — backup
+ * schedule, remote push, first Project, LaunchAgent, and daemon start — so a failure
+ * in any step reports exactly where the sequence stopped. `vaultOption` is the
+ * literal `--vault` value; when the choices keep the documented default the use case
+ * receives `undefined` so `config.yaml` records the `~/.sorage/vault` default.
+ */
+function applyInitChoices(
+  ports: OutputPorts,
+  json: boolean,
+  reportExitCode: ReportExitCode,
+  choices: InitChoices,
+  vaultOption: string | undefined,
+  reconfigure = false,
+): void {
+  const homePaths = createNodeHomePaths();
+  const sentinel = join(homePaths.home, "vault");
+  const wizardDefault = vaultOption ?? sentinel;
+  const vaultForUseCase = choices.vaultPath === wizardDefault ? vaultOption : choices.vaultPath;
+
+  if (!choices.createVault && !existsSync(choices.vaultPath)) {
+    ports.err(`${CLI_NAME}: the Vault directory ${choices.vaultPath} does not exist and its creation was declined\n`);
+    ports.err(`Run '${CLI_NAME} --help' for usage.\n`);
+    reportExitCode(2);
+    return;
+  }
+
+  const result = initializeInstallation(createNodeInitPorts(), {
+    vaultPath: vaultForUseCase,
+    reconfigure,
+    initializeGit: choices.initializeGit,
+    serverPort: choices.serverPort,
+  });
+  if (!result.ok) {
+    // A malformed configuration routes to the doctor, which names every defect.
+    reportExitCode(
+      renderAppError(result.error, ports, json, result.error.code === "CONFIG_INVALID" ? "sorage doctor" : undefined),
+    );
+    return;
+  }
+
+  if (result.value.outcome !== "created") {
+    // An existing installation is reported and never reconfigured by the wizard or
+    // the flags: the optional steps are init-time choices, not repairs.
+    if (json) {
+      ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+    } else {
+      ports.out(`Sorage is already initialized at ${result.value.home}\n`);
+      ports.out(`Installation: ${result.value.installationId}\n`);
+      ports.out(`Vault: ${result.value.vaultPath}\n`);
+      if (result.value.git !== undefined) {
+        ports.out(
+          result.value.git.existingReported
+            ? "An existing Git repository was found at the Vault and was left untouched.\n"
+            : "Initialized the Vault Git repository with core.autocrlf=false.\n",
+        );
+      } else {
+        ports.out(`Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`);
+      }
+    }
+    return;
+  }
+
+  // Every optional step runs before any rendering, so the JSON envelope reports
+  // side effects that actually happened rather than the ones that were requested.
+  const report: Record<string, unknown> = { ...result.value };
+  const lines: string[] = [
+    `Initialized Sorage at ${result.value.home}\n`,
+    `Installation: ${result.value.installationId}\n`,
+    `Vault: ${result.value.vaultPath}\n`,
+  ];
+  if (result.value.git !== undefined) {
+    lines.push(
+      result.value.git.initialized
+        ? "Initialized the Vault Git repository with core.autocrlf=false.\n"
+        : "An existing Git repository was found at the Vault and was left untouched.\n",
+    );
+  }
+
+  if (choices.enableDailyBackup) {
+    const enabled = configureBackup(backupConfigPorts(), {
+      action: "enable",
+      // The wizard or the flag pair carries the same intent the backup command's
+      // --as-user gate protects, confirmed interactively or explicitly at init time.
+      asUser: true,
+      dailyAt: choices.backupAt,
+      timezone: choices.backupTimezone,
+    });
+    if (!enabled.ok) {
+      reportExitCode(renderAppError(enabled.error, ports, json));
+      return;
+    }
+    report.backup = { enabled: true, at: choices.backupAt, timezone: choices.backupTimezone };
+    lines.push(`Enabled daily backup at ${choices.backupAt} ${choices.backupTimezone}.\n`);
+  }
+  if (choices.enablePush) {
+    const push = configureBackup(backupConfigPorts(), {
+      action: "enable-push",
+      asUser: true,
+      remote: choices.pushRemote,
+      branch: choices.pushBranch,
+    });
+    if (!push.ok) {
+      reportExitCode(renderAppError(push.error, ports, json));
+      return;
+    }
+    report.push = { remote: choices.pushRemote, branch: choices.pushBranch };
+    lines.push(`Enabled remote push to ${choices.pushRemote} ${choices.pushBranch}.\n`);
+  }
+  if (choices.registerProject) {
+    const project = addProject(createNodeProjectPorts(), {
+      name: choices.projectName,
+      dir: choices.projectDir,
+      userHome: homedir(),
+      actor: USER_ACTOR,
+    });
+    if (!project.ok) {
+      reportExitCode(renderAppError(project.error, ports, json));
+      return;
+    }
+    report.project = {
+      slug: project.value.project.slug,
+      displayName: project.value.project.displayName,
+      binding: project.value.binding.directory,
+    };
+    lines.push(`Added Project ${project.value.project.slug} (${project.value.project.displayName})\n`);
+    lines.push(`Bound ${project.value.binding.bindingKind} ${project.value.binding.directory}\n`);
+  }
+  if (choices.installService) {
+    const installed = installLaunchAgent(createNodeLaunchAgentPorts(), {
+      program: {
+        binaryPath: process.execPath,
+        scriptArgs:
+          process.argv[1] !== undefined && process.argv[1].endsWith("main.ts") ? [process.argv[1] as string] : [],
+      },
+      sorageHome: homePaths.home,
+      agentsDirectory: launchAgentsDirectory(),
+      uid: launchAgentUid(),
+    });
+    if (!installed.ok) {
+      reportExitCode(renderAppError(installed.error, ports, json));
+      return;
+    }
+    report.service = { label: "xyz.rootkernel.sorage", plistPath: installed.value.plistPath };
+    lines.push(
+      installed.value.bootstrapped
+        ? `Installed the xyz.rootkernel.sorage LaunchAgent at ${installed.value.plistPath}; the daemon starts now and at every login.\n`
+        : `Wrote the xyz.rootkernel.sorage LaunchAgent plist at ${installed.value.plistPath}; the agent was already loaded.\n`,
+    );
+  }
+  if (choices.startDaemon && !choices.installService) {
+    const code = daemonStart(createDaemonRuntimePorts(), ports);
+    if (code !== 0) {
+      reportExitCode(code);
+      return;
+    }
+    report.daemon = { started: true };
+    lines.push("Started the daemon.\n");
+  }
+
+  if (json) {
+    ports.out(`${JSON.stringify(successEnvelope(report, requestId()), null, 2)}\n`);
+  } else {
+    ports.out(lines.join(""));
+  }
+}
+
 function backupConfigPorts(): {
   read(): ReturnType<import("@sorage/core").BackupConfigPorts["read"]>;
   write(

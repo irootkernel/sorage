@@ -66,6 +66,8 @@ export interface InitOptions {
   reconfigure?: boolean | undefined;
   /** `--initialize-git`: initialize the Vault Git repository (INIT-007, BKP-022). */
   initializeGit?: boolean | undefined;
+  /** `--port <n>`: sets `server.port` in the creating write (section 3.1). */
+  serverPort?: number | undefined;
 }
 
 export interface InitResult {
@@ -119,6 +121,9 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
   const config = defaultConfiguration(installationId);
   if (options.vaultPath !== undefined && options.vaultPath.trim() !== "") {
     config.vault.path = options.vaultPath;
+  }
+  if (options.serverPort !== undefined) {
+    config.server.port = options.serverPort;
   }
 
   ensureHomeTree(ports);

@@ -28,6 +28,7 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
     "src/doctor",
     "src/home",
     "src/init-ports",
+    "src/launchagent-ports",
     "src/logging",
     "src/handoff-command-ports",
     "src/project-command-ports",

@@ -78,6 +78,14 @@
         "message": "Nothing is listening on 127.0.0.1:46321 yet."
       },
       {
+        "id": "service.installed",
+        "severity": "warning",
+        "message": "The xyz.rootkernel.sorage LaunchAgent is not installed.",
+        "recovery": {
+          "suggestedCommand": "launchctl bootstrap gui/$UID ~/Library/LaunchAgents/xyz.rootkernel.sorage.plist"
+        }
+      },
+      {
         "id": "backup.schedule",
         "severity": "ok",
         "message": "The backup schedule is disabled."

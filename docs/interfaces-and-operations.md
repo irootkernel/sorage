@@ -171,6 +171,8 @@ The wizard asks ten questions in order (INIT-004):
 
 The wizard prints a full summary and asks for one final confirmation before it mutates anything.
 
+The wizard reads its answers one line at a time from standard input, so it works on a terminal and under a pipe. A declined confirmation prints `Nothing was changed.` and exits 0; input that ends before the wizard finishes exits 2 with the `--non-interactive` hint and mutates nothing. Options other than `--vault` (which pre-seeds the first question's default) are usage errors in wizard mode, because the wizard asks its own questions.
+
 ### 3.3 Idempotency
 
 When a valid installation already exists:
@@ -1356,6 +1358,8 @@ launchctl bootout gui/$UID/xyz.rootkernel.sorage
 
 The legacy `load` and `unload` verbs are not used, and every value written into the plist is XML-escaped, including paths containing `&`, `<`, `>`, or quotation marks.
 
+The plist carries the canonical `Label`, the `ProgramArguments` running `<sorage-binary> daemon serve`, the `SORAGE_HOME` the agent was installed under as an environment variable, and `RunAtLoad`, so the `bootstrap` itself starts the daemon and every later login starts it again.
+
 The default Vault lives under `~/.sorage/vault` rather than `~/Documents` specifically so that a launchd-started daemon does not trigger a macOS privacy prompt that no one is present to answer.
 
 The binary the LaunchAgent points at is produced by `make build`, which compiles to `dist/sorage`, and the distributable is produced by `make package`, which signs that binary and emits the Homebrew formula inputs (NFR-013, NFR-016).
@@ -1376,7 +1380,7 @@ All Sorage processes write structured JSON logs to `~/.sorage/logs/sorage.log` (
 sorage uninstall --as-user --confirm
 ```
 
-`uninstall` removes the LaunchAgent, `~/.sorage/state`, `~/.sorage/run`, `~/.sorage/logs`, and `config.yaml`; it never deletes the Vault, and it prints the Vault path so the User knows exactly what remains (INIT-016).
+`uninstall` stops a running daemon and boots out the LaunchAgent before removing anything, then removes the LaunchAgent plist, `~/.sorage/state`, `~/.sorage/run`, `~/.sorage/logs`, `config.yaml`, and the retained `config.yaml.bak`; it never deletes the Vault, and it prints the Vault path so the User knows exactly what remains (INIT-016). `config.yaml` is removed last, so an interrupted uninstall leaves an installation with empty directories rather than an uninitialized home that still holds live state.
 
 ## 35. Doctor check catalog
 

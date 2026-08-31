@@ -6,18 +6,19 @@ import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
 import {
   type BackupRunRow,
   type Configuration,
+  isManagedVaultPath,
   nextDueAt,
   parseConfigurationFile,
   parseVaultMarker,
   validateVaultMarkerForInstallation,
-  verifyVaultArtifacts,
-  isManagedVaultPath,
   vaultGitattributesContent,
   vaultGitignoreContent,
+  verifyVaultArtifacts,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
+import { launchAgentPlistPath, launchAgentsDirectory, launchAgentUid, plistPointsAtBinary } from "./launchagent-ports";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
 import { openSorageDatabase } from "./sqlite/connection";
 import { MIGRATIONS } from "./sqlite/migrations";
@@ -47,6 +48,7 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "bindings.ambiguous": "sorage project unbind the aliased path, or always pass --as <project-slug> from it",
   "platform.tcc": "Grant Full Disk Access to the invoking terminal, or keep the Vault under ~/.sorage",
   "daemon.port": "Change server.port in the configuration, then restart the daemon",
+  "service.installed": "launchctl bootstrap gui/$UID ~/Library/LaunchAgents/xyz.rootkernel.sorage.plist",
   "backup.schedule": "sorage backup run, then read sorage backup status",
   "git.state": "Resolve the repository state manually; Sorage never rebases or merges",
 };
@@ -471,6 +473,30 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         return warning(
           `Another process is listening on ${config.server.host}:${config.server.port}, so the daemon cannot bind it.`,
         );
+      }
+
+      case "service.installed": {
+        const agentsDirectory = launchAgentsDirectory(userHome);
+        const plistPath = launchAgentPlistPath(agentsDirectory);
+        const plist = existsSync(plistPath) ? readFileSync(plistPath, "utf8") : null;
+        if (plist === null) {
+          return warning("The xyz.rootkernel.sorage LaunchAgent is not installed.");
+        }
+        const candidates = [process.execPath];
+        if (process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")) {
+          candidates.push(process.argv[1]);
+        }
+        if (!candidates.some((candidate) => plistPointsAtBinary(plist, candidate))) {
+          return warning("The installed LaunchAgent plist points at a different sorage binary.");
+        }
+        const print = spawnSync("launchctl", ["print", `gui/${launchAgentUid()}/xyz.rootkernel.sorage`], {
+          timeout: 5000,
+          encoding: "utf8",
+        });
+        if (print.status !== 0) {
+          return warning("The LaunchAgent plist exists but the agent is not bootstrapped in gui/$UID.");
+        }
+        return ok("The xyz.rootkernel.sorage LaunchAgent is bootstrapped and points at this binary.");
       }
 
       case "backup.schedule": {

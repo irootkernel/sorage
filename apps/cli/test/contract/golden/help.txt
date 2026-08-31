@@ -22,6 +22,8 @@ Commands:
   version                         print the CLI, product, and protocol versions
   init [options]                  create the Sorage installation: home tree,
                                   configuration, database, and Vault
+  uninstall                       remove the Sorage installation while keeping
+                                  the Vault
   config                          inspect and change the installation
                                   configuration
   doctor                          run the milestone-scoped installation checks

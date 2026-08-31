@@ -60,6 +60,10 @@
     "worst": "warning"
   },
   {
+    "id": "service.installed",
+    "worst": "warning"
+  },
+  {
     "id": "backup.schedule",
     "worst": "warning"
   },

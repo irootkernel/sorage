@@ -121,6 +121,14 @@
       }
     },
     {
+      "id": "service.installed",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
       "id": "backup.schedule",
       "severity": "blocking",
       "message": "Sorage is not initialized",

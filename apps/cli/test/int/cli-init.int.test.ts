@@ -82,10 +82,10 @@ describe("sorage init", () => {
     expect(readFileSync(join(home, "config.yaml"), "utf8")).toBe(before);
   });
 
-  it("refuses to run without --non-interactive because the wizard arrives in 0.3", () => {
+  it("exits 2 with the --non-interactive hint when stdin offers no wizard answer", () => {
     tempHome("sorage-cli-init-interactive-");
     const io = capture();
-    const code = runCli(["init"], io.ports);
+    const code = runCli(["init"], io.ports, { ask: () => null });
     expect(code).toBe(2);
     expect(io.err.join("")).toContain("--non-interactive");
   });

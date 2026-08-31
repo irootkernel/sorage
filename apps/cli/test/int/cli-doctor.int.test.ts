@@ -91,8 +91,15 @@ describe("AJ-01: fresh non-interactive initialization and doctor", () => {
     expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(17);
+    expect(report.data.checks).toHaveLength(18);
     for (const check of report.data.checks) {
+      // The LaunchAgent is the one optional piece: an installation without it is
+      // healthy and reports service.installed as a warning, never blocking.
+      if (check.id === "service.installed") {
+        expect(check.severity).toBe("warning");
+        expect(check.recovery?.suggestedCommand).toContain("launchctl bootstrap gui/$UID");
+        continue;
+      }
       expect(check.severity).toBe("ok");
       expect(check.recovery).toBeUndefined();
     }
@@ -133,7 +140,7 @@ describe("AJ-02: pre-initialization guidance", () => {
     expect(code).toBe(1);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(17);
+    expect(report.data.checks).toHaveLength(18);
     const expectedIds = [
       "home.permissions",
       "config.schema",
@@ -150,6 +157,7 @@ describe("AJ-02: pre-initialization guidance", () => {
       "bindings.ambiguous",
       "platform.tcc",
       "daemon.port",
+      "service.installed",
       "backup.schedule",
       "git.state",
     ];
