@@ -17,19 +17,19 @@ Milestone values come from the specification and name the release gate at whose 
 | Requirement group | Milestone | Implementing tasks | Acceptance evidence (AJ ids / test layer) |
 |---|---|---|---|
 | GEN-001 to GEN-014 | 0.1, 0.2 | `TASK-001` to `TASK-002`, `TASK-005`, `TASK-008`, `TASK-039` to `TASK-042`, `TASK-051`, `TASK-064` to `TASK-065` | AJ-01, AJ-02, AJ-16; the dependency-boundary check in `make test-prepare` and the clean-home run in `make test-int` |
-| INIT-001 to INIT-017 | 0.1, 0.3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot |
-| CFG-001 to CFG-020 | 0.1 | `TASK-010` to `TASK-013`, `TASK-015`, `TASK-026`, `TASK-045`, `TASK-061`, `TASK-063` | AJ-01, AJ-13; `make test-unit` for schema defaults and the comment round-trip, `make test-int` for atomic writes and ETag conflict, `make test-contract` for the schema against the example |
-| RUN-001 to RUN-014 | 0.1, 0.2, 0.3 | `TASK-006` to `TASK-007`, `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-042` to `TASK-045`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version |
-| PRJ-001 to PRJ-022 | 0.1 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050` | AJ-03, AJ-05; `make test-int` for worktree folding, binding precedence, alias ambiguity, and the workspace-root downgrade guard |
+| INIT-001 to INIT-017 | 0.1, 0.3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot |
+| CFG-001 to CFG-020 | 0.1 | `TASK-010` to `TASK-013`, `TASK-015`, `TASK-026`, `TASK-045`, `TASK-061`, `TASK-063`, `TASK-072` | AJ-01, AJ-13; `make test-unit` for schema defaults and the comment round-trip, `make test-int` for atomic writes and ETag conflict, `make test-contract` for the schema against the example |
+| RUN-001 to RUN-014 | 0.1, 0.2, 0.3 | `TASK-006` to `TASK-007`, `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-042` to `TASK-045`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-068` to `TASK-069` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version |
+| PRJ-001 to PRJ-022 | 0.1 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050`, `TASK-066` | AJ-03, AJ-05; `make test-int` for worktree folding, binding precedence, alias ambiguity, and the workspace-root downgrade guard |
 | VLT-001 to VLT-024 | 0.1, 0.2 | `TASK-003`, `TASK-012`, `TASK-021` to `TASK-026`, `TASK-029` to `TASK-030`, `TASK-032`, `TASK-034` to `TASK-035`, `TASK-044`, `TASK-046`, `TASK-052`, `TASK-055`, `TASK-063` | AJ-08 to AJ-10; `make test-int` for the intent log and the seven crash points, plus `sorage doctor` and `sorage vault verify` for exhaustive checksums |
 | HND-001 to HND-026 | 0.1 | `TASK-027` to `TASK-030`, `TASK-032` to `TASK-033`, `TASK-035`, `TASK-038` to `TASK-039` | AJ-04, AJ-06, AJ-07, AJ-08; `make test-unit` for the transition table and `make test-contract` for the public representation |
 | REV-001 to REV-017 | 0.1 | `TASK-027`, `TASK-031` to `TASK-032`, `TASK-049` | AJ-04, AJ-07, AJ-13; `make test-unit` for the Note rules and `make test-int` for atomic resolution |
 | LIFE-001 to LIFE-018 | 0.1 | `TASK-028`, `TASK-033` to `TASK-034`, `TASK-049` | AJ-04, AJ-07, AJ-10; `make test-int` for terminal immutability, tombstone rejection, retention, and the two-phase deletion |
-| CLI-001 to CLI-021 | 0.1, 0.3 | `TASK-004` to `TASK-005`, `TASK-013`, `TASK-017` to `TASK-018`, `TASK-026`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-064` to `TASK-065` | AJ-01 to AJ-10; `make test-contract` for golden envelopes, exit-code categories, and cursors |
-| API-001 to API-012 | 0.2 | `TASK-042`, `TASK-045` to `TASK-048`, `TASK-060` | AJ-11, AJ-12, AJ-13; `make test-contract` for the symbolic-error to HTTP-status matrix and the DTOs |
-| WEB-001 to WEB-018 | 0.2, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060` | AJ-12, AJ-13; `make test-e2e` under Playwright with the axe-core check as engineering practice |
+| CLI-001 to CLI-021 | 0.1, 0.3 | `TASK-004` to `TASK-005`, `TASK-013`, `TASK-017` to `TASK-018`, `TASK-026`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-064` to `TASK-065`, `TASK-067` | AJ-01 to AJ-10; `make test-contract` for golden envelopes, exit-code categories, and cursors |
+| API-001 to API-012 | 0.2 | `TASK-042`, `TASK-045` to `TASK-048`, `TASK-060`, `TASK-067`, `TASK-070` | AJ-11, AJ-12, AJ-13; `make test-contract` for the symbolic-error to HTTP-status matrix and the DTOs |
+| WEB-001 to WEB-018 | 0.2, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060`, `TASK-067` | AJ-12, AJ-13; `make test-e2e` under Playwright with the axe-core check as engineering practice |
 | BKP-001 to BKP-026 | 0.3 | `TASK-052` to `TASK-058`, `TASK-061`, `TASK-065` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify` |
-| SEC-001 to SEC-021 | 0.1, 0.2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int` |
+| SEC-001 to SEC-021 | 0.1, 0.2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063`, `TASK-068`, `TASK-070` to `TASK-071` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int` |
 | NFR-001 to NFR-017 | 0.1, 0.3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
@@ -63,7 +63,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `INIT-001` | 0.1 | `TASK-009` |
 | `INIT-002` | 0.1 | `TASK-009` |
 | `INIT-003` | 0.1 | `TASK-012`, `TASK-043` |
-| `INIT-004` | 0.3 | `TASK-059` |
+| `INIT-004` | 0.3 | `TASK-059`, `TASK-069` |
 | `INIT-005` | 0.1 | `TASK-012` |
 | `INIT-006` | 0.1 | `TASK-012` |
 | `INIT-007` | 0.3 | `TASK-053`, `TASK-059` |
@@ -75,8 +75,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `INIT-013` | 0.1 | `TASK-012` |
 | `INIT-014` | 0.1 | `TASK-014` |
 | `INIT-015` | 0.1 | `TASK-009` |
-| `INIT-016` | 0.3 | `TASK-059` |
-| `INIT-017` | 0.1 | `TASK-014`, `TASK-020`, `TASK-025` |
+| `INIT-016` | 0.3 | `TASK-059`, `TASK-069` |
+| `INIT-017` | 0.1 | `TASK-014`, `TASK-020`, `TASK-025`, `TASK-068` |
 | `CFG-001` | 0.1 | `TASK-010`, `TASK-063` |
 | `CFG-002` | 0.1 | `TASK-010`, `TASK-063` |
 | `CFG-003` | 0.1 | `TASK-010`, `TASK-012` |
@@ -87,11 +87,11 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `CFG-008` | 0.1 | `TASK-010` |
 | `CFG-009` | 0.1 | `TASK-010` |
 | `CFG-010` | 0.1 | `TASK-011` |
-| `CFG-011` | 0.1 | `TASK-011` |
+| `CFG-011` | 0.1 | `TASK-011`, `TASK-072` |
 | `CFG-012` | 0.1 | `TASK-011` |
 | `CFG-013` | 0.1 | `TASK-013`, `TASK-026` |
 | `CFG-014` | 0.1 | `TASK-026` |
-| `CFG-015` | 0.1 | `TASK-011`, `TASK-061` |
+| `CFG-015` | 0.1 | `TASK-011`, `TASK-061`, `TASK-072` |
 | `CFG-016` | 0.1 | `TASK-013`, `TASK-045` |
 | `CFG-017` | 0.1 | `TASK-015` |
 | `CFG-018` | 0.1 | `TASK-010` |
@@ -103,20 +103,20 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `RUN-004` | 0.1 | `TASK-036` |
 | `RUN-005` | 0.2 | `TASK-042` |
 | `RUN-006` | 0.2 | `TASK-044` |
-| `RUN-007` | 0.3 | `TASK-059` |
+| `RUN-007` | 0.3 | `TASK-059`, `TASK-069` |
 | `RUN-008` | 0.2 | `TASK-044`, `TASK-045` |
 | `RUN-009` | 0.1 | `TASK-007` |
 | `RUN-010` | 0.1 | `TASK-007` |
 | `RUN-011` | 0.3 | `TASK-059` |
 | `RUN-012` | 0.2 | `TASK-043` |
-| `RUN-013` | 0.2 | `TASK-044` |
+| `RUN-013` | 0.2 | `TASK-044`, `TASK-068` |
 | `RUN-014` | 0.1 | `TASK-026`, `TASK-052` |
 | `PRJ-001` | 0.1 | `TASK-015` |
 | `PRJ-002` | 0.1 | `TASK-015` |
 | `PRJ-003` | 0.1 | `TASK-016` |
 | `PRJ-004` | 0.1 | `TASK-016`, `TASK-020` |
 | `PRJ-005` | 0.1 | `TASK-015` |
-| `PRJ-006` | 0.1 | `TASK-015`, `TASK-018` |
+| `PRJ-006` | 0.1 | `TASK-015`, `TASK-018`, `TASK-066` |
 | `PRJ-007` | 0.1 | `TASK-018` |
 | `PRJ-008` | 0.1 | `TASK-018` |
 | `PRJ-009` | 0.1 | `TASK-017` |
@@ -128,7 +128,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `PRJ-015` | 0.1 | `TASK-019` |
 | `PRJ-016` | 0.1 | `TASK-015`, `TASK-017`, `TASK-050` |
 | `PRJ-017` | 0.1 | `TASK-018` |
-| `PRJ-018` | 0.1 | `TASK-018` |
+| `PRJ-018` | 0.1 | `TASK-018`, `TASK-066` |
 | `PRJ-019` | 0.1 | `TASK-019`, `TASK-029` |
 | `PRJ-020` | 0.1 | `TASK-019` |
 | `PRJ-021` | 0.1 | `TASK-017` |
@@ -226,7 +226,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `CLI-006` | 0.3 | `TASK-055`, `TASK-065` |
 | `CLI-007` | 0.1 | `TASK-029` |
 | `CLI-008` | 0.1 | `TASK-029` |
-| `CLI-009` | 0.1 | `TASK-030` |
+| `CLI-009` | 0.1 | `TASK-030`, `TASK-067` |
 | `CLI-010` | 0.1 | `TASK-030` |
 | `CLI-011` | 0.1 | `TASK-031` |
 | `CLI-012` | 0.1 | `TASK-032` |
@@ -243,17 +243,17 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `API-002` | 0.2 | `TASK-046` |
 | `API-003` | 0.2 | `TASK-047` |
 | `API-004` | 0.2 | `TASK-046` |
-| `API-005` | 0.2 | `TASK-045`, `TASK-046` |
+| `API-005` | 0.2 | `TASK-045`, `TASK-046`, `TASK-070` |
 | `API-006` | 0.2 | `TASK-042` |
 | `API-007` | 0.2 | `TASK-046`, `TASK-048` |
-| `API-008` | 0.2 | `TASK-046` |
+| `API-008` | 0.2 | `TASK-046`, `TASK-067` |
 | `API-009` | 0.2 | `TASK-046`, `TASK-060` |
 | `API-010` | 0.2 | `TASK-048`, `TASK-060` |
 | `API-011` | 0.2 | `TASK-046` |
 | `API-012` | 0.2 | `TASK-046` |
 | `WEB-001` | 0.2 | `TASK-048` |
 | `WEB-002` | 0.2 | `TASK-048`, `TASK-058` |
-| `WEB-003` | 0.2 | `TASK-048` |
+| `WEB-003` | 0.2 | `TASK-048`, `TASK-067` |
 | `WEB-004` | 0.2 | `TASK-048` |
 | `WEB-005` | 0.2 | `TASK-048` |
 | `WEB-006` | 0.2 | `TASK-048`, `TASK-060` |
@@ -296,10 +296,10 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `BKP-025` | 0.3 | `TASK-057` |
 | `BKP-026` | 0.3 | `TASK-056` |
 | `SEC-001` | 0.2 | `TASK-042` |
-| `SEC-002` | 0.2 | `TASK-043` |
+| `SEC-002` | 0.2 | `TASK-043`, `TASK-068` |
 | `SEC-003` | 0.2 | `TASK-043` |
-| `SEC-004` | 0.1 | `TASK-013`, `TASK-018`, `TASK-057`, `TASK-060` |
-| `SEC-005` | 0.1 | `TASK-013`, `TASK-018`, `TASK-057`, `TASK-060` |
+| `SEC-004` | 0.1 | `TASK-013`, `TASK-018`, `TASK-057`, `TASK-060`, `TASK-071` |
+| `SEC-005` | 0.1 | `TASK-013`, `TASK-018`, `TASK-057`, `TASK-060`, `TASK-071` |
 | `SEC-006` | 0.1 | `TASK-023`, `TASK-060` |
 | `SEC-007` | 0.1 | `TASK-023`, `TASK-060` |
 | `SEC-008` | 0.1 | `TASK-006`, `TASK-028`, `TASK-061` |
@@ -311,10 +311,10 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-014` | 0.1 | `TASK-025`, `TASK-052` |
 | `SEC-015` | 0.2 | `TASK-044`, `TASK-061` |
 | `SEC-016` | 0.1 | `TASK-006`, `TASK-011`, `TASK-061`, `TASK-063` |
-| `SEC-017` | 0.2 | `TASK-042`, `TASK-060` |
+| `SEC-017` | 0.2 | `TASK-042`, `TASK-060`, `TASK-071` |
 | `SEC-018` | 0.2 | `TASK-042`, `TASK-060` |
 | `SEC-019` | 0.2 | `TASK-043`, `TASK-060` |
-| `SEC-020` | 0.2 | `TASK-043`, `TASK-060` |
+| `SEC-020` | 0.2 | `TASK-043`, `TASK-060`, `TASK-070` |
 | `SEC-021` | 0.1 | `TASK-028`, `TASK-040`, `TASK-060` |
 | `NFR-001` | 0.1 | `TASK-001` |
 | `NFR-002` | 0.1 | `TASK-002` |
