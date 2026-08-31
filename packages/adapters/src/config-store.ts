@@ -172,6 +172,9 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
         if (previousExists) {
           fs.copyFile(configFile, backupTemporary);
           fs.chmod(backupTemporary, 0o600);
+          // The backup's bytes hit the platter before the rename makes it the
+          // retained copy, so a power loss cannot leave an empty or torn .bak.
+          fs.fsync(backupTemporary);
           fs.rename(backupTemporary, backupFile);
         }
         fs.rename(temporary, configFile);

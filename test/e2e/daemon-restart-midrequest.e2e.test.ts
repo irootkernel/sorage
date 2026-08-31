@@ -147,7 +147,13 @@ describe("a daemon killed mid-request", () => {
     const key = "restart-midrequest-key-1";
     const record = JSON.parse(readFileSync(`${home}/run/daemon.json`, "utf8")) as { pid: number };
     const interrupted = await slowUpload(port, token, key, () => {
-      process.kill(record.pid, "SIGKILL");
+      try {
+        process.kill(record.pid, "SIGKILL");
+      } catch {
+        // The daemon already died on its own; the transport failure this case
+        // asserts is then already on its way, and the kill must not throw
+        // uncaught inside the timer callback.
+      }
     });
     expect(interrupted.settled).toBe("transport-failure");
 

@@ -158,6 +158,9 @@ describe("two concurrent writers on one Handoff", () => {
     const { winners, conflicts } = outcomes([a.code, b.code]);
     expect(winners).toBe(1);
     expect(conflicts).toBe(1);
+    // The loser names the compare-and-set conflict, not just any exit 75.
+    const raceLoser = a.code === 75 ? a : b;
+    expect(raceLoser.stderr).toContain("ROW_VERSION_CONFLICT");
     // The winner's content is the only current Artifact. The loser staged its own
     // copy before the authoritative compare-and-set rolled its transaction back,
     // so its file is exactly the matrix row's orphan of the no-row class: visible
