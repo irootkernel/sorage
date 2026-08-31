@@ -1,8 +1,10 @@
 // scripts/sot-check enforces the Source of Truth documentation rules of this
 // repository: no hard-wrapped prose, a resolvable target for every relative link,
 // unique Epic and Task identifiers, no forward or self dependency, no citation of a
-// requirement identifier absent from required-specification.md, and no requirement
-// whose every citing Task belongs to a later milestone than the requirement itself.
+// requirement identifier absent from required-specification.md, no requirement
+// whose every citing Task belongs to a later milestone than the requirement itself,
+// no requirement that is not Deferred with no citing Task, and a reverse index in
+// traceability.md that matches the roadmap's Requirements column.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -216,6 +218,76 @@ function checkIdentifiers(): void {
   }
 }
 
+function checkTraceability(): void {
+  const { tasks } = parseRoadmap();
+  const requirements = parseRequirements();
+  const traceabilityPath = join(root, "docs", "traceability.md");
+
+  // The reverse index is generated from the roadmap's Requirements column, so it
+  // is compared against a freshly derived index rather than trusted.
+  const expected = new Map<string, string[]>();
+  for (const task of tasks.values()) {
+    for (const requirement of task.requirements) {
+      const list = expected.get(requirement) ?? [];
+      list.push(task.id);
+      expected.set(requirement, list);
+    }
+  }
+
+  // A requirement that is not Deferred must have at least one citing Task.
+  for (const [requirement, milestone] of requirements) {
+    if (milestone !== "Deferred" && !expected.has(requirement)) {
+      fail(traceabilityPath, `requirement ${requirement} (milestone ${milestone}) has no citing Task`);
+    }
+  }
+
+  const rows = new Map<string, { milestone: string; tasks: string[]; line: number }>();
+  const lines = readFileSync(traceabilityPath, "utf8").split("\n");
+  let inReverseIndex = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    if (line.startsWith("## ")) inReverseIndex = line.startsWith("## 3.");
+    if (!inReverseIndex) continue;
+    const match = line.match(/^\| `([A-Z]{3,6}-\d{3})` \| (0\.[123]|Deferred) \| (.+) \|$/);
+    if (match === null) continue;
+    const id = match[1] as string;
+    if (rows.has(id)) fail(`${traceabilityPath}:${index + 1}`, `duplicate reverse-index row ${id}`);
+    const citing = match[3] ?? "";
+    rows.set(id, {
+      milestone: match[2] as string,
+      tasks: citing === "None" ? [] : (citing.match(/TASK-\d{3}/g) ?? []),
+      line: index + 1,
+    });
+  }
+
+  for (const [id, milestone] of requirements) {
+    const row = rows.get(id);
+    const expectedTasks = (expected.get(id) ?? []).sort();
+    if (row === undefined) {
+      fail(traceabilityPath, `the reverse index is missing its row for ${id}`);
+      continue;
+    }
+    if (row.milestone !== milestone) {
+      fail(
+        `${traceabilityPath}:${row.line}`,
+        `reverse-index milestone ${row.milestone} for ${id} disagrees with the specification's ${milestone}`,
+      );
+    }
+    const actual = [...row.tasks].sort();
+    if (actual.join(",") !== expectedTasks.join(",")) {
+      fail(
+        `${traceabilityPath}:${row.line}`,
+        `reverse-index citing tasks for ${id} disagree with the roadmap's Requirements column`,
+      );
+    }
+  }
+  for (const id of rows.keys()) {
+    if (!requirements.has(id)) {
+      fail(traceabilityPath, `reverse-index row ${id} names a requirement absent from the specification`);
+    }
+  }
+}
+
 const docsRoot = join(root, "docs");
 walkFiles(docsRoot, (path) => {
   checkHardWrap(path);
@@ -229,6 +301,7 @@ for (const topLevel of ["README.md", "AGENTS.md"]) {
   }
 }
 checkIdentifiers();
+checkTraceability();
 
 if (violations.length > 0) {
   console.error("sot-check failed:");
