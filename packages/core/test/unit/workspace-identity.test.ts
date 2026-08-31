@@ -63,6 +63,7 @@ function ports(git: Record<string, string>): ProjectCommandPorts {
       throw new Error("unused");
     },
     realPath: (path) => ok(path),
+    physicalIdentity: () => null,
     gitCommonDirectory: (path) => git[path] ?? null,
   };
   return {

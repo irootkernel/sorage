@@ -58,7 +58,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
   const git = options.git ?? nativeGit;
   const isBare = options.gitIsBare ?? nativeIsBare;
-  const fs = options.fs ?? { realpath: (path) => realpathSync(path) };
+  const fs = options.fs ?? { realpath: (path: string) => realpathSync(path) };
   // The canonical installation identity is the generated key in the effective
   // configuration; the repository never trusts a caller-supplied identity.
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
@@ -85,6 +85,14 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
           return err(appError("CONFIG_INVALID", `the directory '${absolute}' does not exist`, { directory: absolute }));
         }
         return ok(fs.realpath(absolute));
+      },
+      physicalIdentity(path) {
+        try {
+          const stats = statSync(path);
+          return `${stats.dev}:${stats.ino}`;
+        } catch {
+          return null;
+        }
       },
       absentRealPath(path, currentUserHome) {
         const expanded =

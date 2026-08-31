@@ -107,6 +107,9 @@ const passthroughFs: ProjectBindingFsPort = {
   resolveDirectory(path) {
     return ok({ directory: `/real${path.startsWith("/") ? path : `/${path}`}`, bindingKind: "directory" });
   },
+  physicalIdentity() {
+    return null;
+  },
   realPath(path) {
     return ok(path.startsWith("/real") ? path : `/real${path.startsWith("/") ? path : `/${path}`}`);
   },
@@ -418,6 +421,9 @@ describe("bindProject and unbindProject", () => {
             directory: path,
           }),
         );
+      },
+      physicalIdentity() {
+        return null;
       },
       realPath(path) {
         return ok(path);

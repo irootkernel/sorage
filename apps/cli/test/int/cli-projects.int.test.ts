@@ -374,18 +374,34 @@ describe("doctor binding checks", () => {
     initializedHome();
     const real = tempDir();
     expect(runCli(["project", "add", "--name", "Web App", "--dir", real], capture().ports)).toBe(0);
-    // A stored uncollapsed alias spelling, exactly what an APFS firmlink leaves behind:
-    // two distinct stored directories whose realpath is one physical directory.
+    // The alias must belong to a second Project: one physical directory under
+    // two Projects is the ambiguity the resolver raises, while a same-Project
+    // duplicate spelling resolves and must not warn.
+    const second = tempDir();
+    expect(runCli(["project", "add", "--name", "Second", "--dir", second], capture().ports)).toBe(0);
+    // A stored uncollapsed alias spelling, exactly what an APFS firmlink leaves
+    // behind: two distinct stored directories at the same depth that stat to
+    // one inode. The spelling derives from the STORED directory (realpath of
+    // the bound dir), whose /private prefix strips back to the /var spelling.
     const home = process.env.SORAGE_HOME as string;
     const alias = join(home, "state", "sorage.sqlite3");
     const db = new DatabaseSync(alias);
+    const stored = (
+      db
+        .prepare(
+          "SELECT directory FROM project_bindings WHERE project_id = (SELECT id FROM projects WHERE slug = 'web-app')",
+        )
+        .get() as { directory: string }
+    ).directory;
     db.prepare(
-      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('alias-1', (SELECT id FROM projects LIMIT 1), (SELECT installation_id FROM project_bindings LIMIT 1), ?, 'directory', 't', 't')",
-    ).run(real.startsWith("/private/") ? `/${real.slice("/private/".length)}` : join(real, "x", ".."));
+      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('alias-1', (SELECT id FROM projects WHERE slug = 'second'), (SELECT installation_id FROM project_bindings LIMIT 1), ?, 'directory', 't', 't')",
+    ).run(stored.startsWith("/private/") ? `/${stored.slice("/private/".length)}` : join(stored, "x", ".."));
     db.close();
     const ambiguous = doctorChecks()["bindings.ambiguous"];
     expect(ambiguous?.severity).toBe("warning");
     expect(ambiguous?.message).toContain("alias one directory");
+    expect(ambiguous?.message).toContain("web-app");
+    expect(ambiguous?.message).toContain("second");
     expect(ambiguous?.recovery?.suggestedCommand).toContain("unbind");
   });
 });

@@ -169,6 +169,9 @@ function makeWorld(): World {
           clock,
           ids: { next: nextId },
           bindings: {
+            physicalIdentity() {
+              return null;
+            },
             realPath: (path) => ({ ok: true, value: path }),
             absentRealPath: (path) => ({ ok: true, value: path }),
             gitCommonDirectory: () => null,

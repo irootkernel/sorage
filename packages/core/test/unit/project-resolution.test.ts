@@ -45,7 +45,13 @@ function fakeRegistry(projects: Project[], bindings: ProjectBinding[]): ProjectR
   };
 }
 
-function ports(bindings: ProjectBinding[], projects: Project[], git: Record<string, string>): ProjectCommandPorts {
+function ports(
+  bindings: ProjectBinding[],
+  projects: Project[],
+  git: Record<string, string>,
+  identity: Record<string, string> = {},
+): ProjectCommandPorts {
+  const identityUses = new Map<string, number>();
   const fs: ProjectBindingFsPort = {
     resolveDirectory: () => {
       throw new Error("not used by resolution");
@@ -53,8 +59,16 @@ function ports(bindings: ProjectBinding[], projects: Project[], git: Record<stri
     absentRealPath: () => {
       throw new Error("not used by resolution");
     },
+    physicalIdentity(directory) {
+      // Keyed with an optional "/index" suffix so several bindings sharing one
+      // stored spelling can still answer with distinct dev:ino values.
+      const ordinal = identityUses.get(directory) ?? 0;
+      identityUses.set(directory, ordinal + 1);
+      const value = identity[`${directory}#${ordinal}`] ?? identity[directory] ?? null;
+      return value === undefined || value === null ? (identity[directory] ?? null) : value;
+    },
     realPath(path) {
-      return ok(git[path] !== undefined ? path : path);
+      return ok(path);
     },
     gitCommonDirectory(path) {
       return git[path] ?? null;
@@ -156,6 +170,57 @@ describe("resolveWorkspaceActor", () => {
       as: "ALPHA",
     });
     expect(override.ok && override.value.kind === "registered_project" && override.value.project.slug).toBe("alpha");
+  });
+
+  it("resolves a same-depth tie whose bindings are physically one directory under one Project", () => {
+    // TASK-066: the physical probe answers, and both bindings collapse onto one
+    // Project, so the tie is a spelling overlap rather than an ownership fight.
+    // A same-depth tie needs both directories to match the query path, which
+    // only a shared stored spelling models in memory; give that spelling an
+    // identity so the probe can answer for it.
+    const shared = ports(
+      [binding("p1", "/shared/a"), binding("p1", "/shared/a")],
+      projects,
+      {},
+      { "/shared/a": "17:7" },
+    );
+    const result = resolveWorkspaceActor(shared, { path: "/shared/a/file", userHome: "/h" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.kind).toBe("registered_project");
+  });
+
+  it("keeps the tie ambiguous when the probe answers two Projects for one physical directory", () => {
+    const aliased = ports(
+      [binding("p1", "/shared/a"), binding("p2", "/shared/a")],
+      projects,
+      {},
+      { "/shared/a": "17:4242" },
+    );
+    const result = resolveWorkspaceActor(aliased, { path: "/shared/a/file", userHome: "/h" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("AMBIGUOUS_PROJECT");
+    expect(result.error.message).toContain("alpha");
+    expect(result.error.message).toContain("beta");
+    expect(result.error.details).toMatchObject({ projects: ["alpha", "beta"] });
+  });
+
+  it("keeps the tie ambiguous when the probe reports distinct physical directories", () => {
+    // The same stored spelling answering twice with distinct dev:ino values is
+    // impossible through the command surface; the resolver must still fail
+    // safe rather than silently pick a winner when it happens through restored
+    // or directly edited data.
+    const distinct = ports(
+      [binding("p1", "/shared/a"), binding("p2", "/shared/a")],
+      projects,
+      {},
+      { "/shared/a#0": "17:1", "/shared/a#1": "17:2" },
+    );
+    const result = resolveWorkspaceActor(distinct, { path: "/shared/a/file", userHome: "/h" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("AMBIGUOUS_PROJECT");
   });
 
   it("reports an unregistered workspace when no binding matches", () => {

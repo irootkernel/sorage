@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
@@ -420,20 +420,56 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
         const aliases: string[] = [];
+        // One identity probe per distinct directory, before the pair loop: the
+        // comment and the resolver's mechanism stay honest, and no directory is
+        // stat once per pair it participates in.
+        const identityOf = new Map<string, string | null>();
+        const identityFor = (directory: string): string | null => {
+          if (!identityOf.has(directory)) {
+            try {
+              const stats = statSync(directory);
+              identityOf.set(directory, `${stats.dev}:${stats.ino}`);
+            } catch {
+              identityOf.set(directory, null);
+            }
+          }
+          return identityOf.get(directory) ?? null;
+        };
         for (let i = 0; i < bindings.length; i++) {
           for (let j = i + 1; j < bindings.length; j++) {
             const first = bindings[i] as (typeof bindings)[number];
             const second = bindings[j] as (typeof bindings)[number];
-            if (first.binding_kind !== second.binding_kind || first.directory === second.directory) continue;
-            let firstReal: string | null = null;
-            let secondReal: string | null = null;
-            try {
-              firstReal = realpathSync(first.directory);
-              secondReal = realpathSync(second.directory);
-            } catch {
+            // Identical spellings under two different Projects are the resolver's
+            // owner-conflict ambiguity too, so they must warn; under one Project
+            // they are a duplicate the registry forbids and resolution collapses.
+            // Genuine same-inode aliases warn at any depth: section 35 scopes
+            // this check to aliased bindings as a data-quality condition ahead
+            // of time, and a firmlink alias genuinely differs in path depth.
+            if (
+              first.binding_kind !== second.binding_kind ||
+              (first.directory === second.directory && first.project_id === second.project_id)
+            ) {
               continue;
             }
-            if (firstReal === secondReal) {
+            // The same dev:ino comparison the resolver's step 6 uses, so the
+            // warning actually predicts the condition that raises
+            // AMBIGUOUS_PROJECT: realpath cannot collapse a bind mount or an
+            // APFS firmlink, but their inode identity is still one directory.
+            // One stat per directory, mirroring the resolver's single probe.
+            const firstIdentity = identityFor(first.directory);
+            const secondIdentity = identityFor(second.directory);
+            if (firstIdentity === null || secondIdentity === null) {
+              // An unanswerable comparison is reported as a data-quality note
+              // without asserting a resolution outcome: a missing directory
+              // already warns through bindings.exist, and only a same-depth
+              // tie the resolver reaches could turn unanswerable into
+              // ambiguity.
+              aliases.push(
+                `'${first.directory}' and '${second.directory}' cannot be physically compared while a directory is unreachable`,
+              );
+              continue;
+            }
+            if (firstIdentity === secondIdentity && first.project_id !== second.project_id) {
               aliases.push(
                 `'${first.directory}' (${projectSlugOf(projects, first)}) and '${second.directory}' (${projectSlugOf(projects, second)}) alias one directory`,
               );

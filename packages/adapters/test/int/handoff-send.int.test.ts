@@ -60,6 +60,9 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
     clock,
     ids: { next: nextId },
     bindings: {
+      physicalIdentity() {
+        return null;
+      },
       realPath(path) {
         return { ok: true, value: path.startsWith("/") ? path : join(USER_HOME, path) };
       },

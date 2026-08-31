@@ -23,6 +23,13 @@ export interface ProjectBindingFsPort {
   /** The normalized real path of any candidate path: ~ expansion, absolutization, symlink resolution. */
   realPath(path: string, userHome: string): Result<string, AppError>;
   /**
+   * The physical identity of a stored binding directory as `dev:ino`, or null
+   * when the platform cannot stat it (TASK-066): two same-depth matches that
+   * are physically one directory resolve to it, while a genuine alias raises
+   * AMBIGUOUS_PROJECT the way section 22.2 step 6 documents.
+   */
+  physicalIdentity(path: string): string | null;
+  /**
    * The normalized path of a directory that may no longer exist: ~ expansion, absolutization,
    * and the real path of its longest existing ancestor, so `project unbind` can still match the
    * recorded binding directory after the directory itself has vanished (PRJ-010).
@@ -423,7 +430,36 @@ export function resolveWorkspaceActor(
       const project = registered.get(binding.projectId);
       if (project !== undefined) return ok({ kind: "registered_project", project, binding });
     } else {
-      return err(ambiguity(best, registered));
+      // Step 6 (TASK-066): a same-depth tie is genuinely ambiguous only when the
+      // two stored directories are physically the same directory through an
+      // alias `realpath` does not collapse - a bind mount or an APFS firmlink.
+      // Two distinct directories can never both prefix-match one canonical
+      // query path, so comparing their identity (dev, ino) keeps the documented
+      // error honest instead of dead.
+      // Only a same-identity collapse onto one Project resolves; anything else -
+      // one physical directory under two Projects (the alias the step names), a
+      // probe the platform cannot answer, or genuinely distinct directories -
+      // stays the documented ambiguity rather than picking silently.
+      const physical = new Map<string, string>();
+      for (const binding of best) {
+        const identity = ports.bindings.physicalIdentity(binding.directory);
+        if (identity === null) return err(ambiguity(best, registered));
+        const owner = physical.get(identity);
+        if (owner !== undefined && owner !== binding.projectId) {
+          // One physical directory under two Projects: the alias the step names.
+          return err(ambiguity(best, registered));
+        }
+        physical.set(identity, binding.projectId);
+      }
+      if (physical.size !== 1) {
+        return err(ambiguity(best, registered));
+      }
+      const binding = best[0] as ProjectBinding;
+      const project = registered.get(binding.projectId);
+      // A stale winner (a binding whose Project left the registry through
+      // restored data) falls through like the single-best path does, rather
+      // than masquerading as an ambiguity.
+      if (project !== undefined) return ok({ kind: "registered_project", project, binding });
     }
   }
 
