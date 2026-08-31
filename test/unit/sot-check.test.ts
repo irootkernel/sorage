@@ -48,6 +48,21 @@ function docFixture(mutate: (root: string) => void): string {
       "",
     ].join("\n"),
   );
+  writeFileSync(
+    join(root, "docs", "traceability.md"),
+    [
+      "# Requirement Traceability",
+      "",
+      "## 3. Reverse index",
+      "",
+      "| Requirement | Milestone | Citing tasks |",
+      "|---|---|---|",
+      "| `GEN-001` | 0.1 | `TASK-001`, `TASK-002` |",
+      "| `GEN-002` | 0.1 | `TASK-001` |",
+      "| `INIT-001` | 0.1 | `TASK-001` |",
+      "",
+    ].join("\n"),
+  );
   mutate(root);
   return root;
 }
@@ -155,6 +170,60 @@ describe("sot-check", () => {
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("cited only by later-milestone Tasks");
+  });
+
+  it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "traceability.md");
+        writeFileSync(
+          path,
+          readTheFile(path).replace("| `GEN-001` | 0.1 | `TASK-001`, `TASK-002` |", "| `GEN-001` | 0.1 | `TASK-001` |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("reverse-index citing tasks for GEN-001 disagree");
+  });
+
+  it("fails when the reverse index is missing its row for a requirement", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "traceability.md");
+        writeFileSync(path, readTheFile(path).replace("| `INIT-001` | 0.1 | `TASK-001` |\n", ""));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("missing its row for INIT-001");
+  });
+
+  it("fails when a non-Deferred requirement has no citing Task", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const roadmap = join(root, "docs", "roadmap.md");
+        writeFileSync(
+          roadmap,
+          readTheFile(roadmap).replace("GEN-001, GEN-002 to GEN-002, INIT-001", "GEN-001, GEN-002 to GEN-002"),
+        );
+        const traceability = join(root, "docs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace("| `INIT-001` | 0.1 | `TASK-001` |", "| `INIT-001` | 0.1 | None |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement INIT-001 (milestone 0.1) has no citing Task");
+  });
+
+  it("fails when the traceability reverse index is absent", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        rmSync(join(root, "docs", "traceability.md"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("the traceability reverse index is absent");
   });
 });
 

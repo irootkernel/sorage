@@ -242,6 +242,10 @@ function checkTraceability(): void {
   }
 
   const rows = new Map<string, { milestone: string; tasks: string[]; line: number }>();
+  if (!existsSync(traceabilityPath)) {
+    fail(traceabilityPath, "the traceability reverse index is absent");
+    return;
+  }
   const lines = readFileSync(traceabilityPath, "utf8").split("\n");
   let inReverseIndex = false;
   for (let index = 0; index < lines.length; index++) {
