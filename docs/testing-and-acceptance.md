@@ -93,6 +93,8 @@ Section 4 is the required matrix; every row is a test, and each one restarts the
 | Concurrent Note and revise | Recipient `review set` and sender `revise` on the same Handoff with the same Row Version | Exactly one succeeds; the loser fails with `ROW_VERSION_CONFLICT` and the Handoff state is internally consistent, with no Note attached to a Revision that no longer exists |
 | Concurrent revise and revise | Two senders revising the same Handoff with the same expected Row Version | Exactly one succeeds; the compare-and-set loser's transaction rolls back, its staged file becomes an orphan of the no-row class visible to `sorage vault verify`, and the `staging/` sweep removes it |
 
+TASK-061 binds every non-crash-point row to a permanent automated home inside `make test`: the seven `CP` rows live in `packages/adapters/test/int/failure-injection.int.test.ts` from `TASK-035`; the disk-full rows run against a real 2 MB HFS ram disk filled to a two-block window in `packages/adapters/test/int/disk-full.int.test.ts`; the read-only-Vault row is `apps/cli/test/int/cli-readonly-vault.int.test.ts`; the daemon-restart row is `test/e2e/daemon-restart-midrequest.e2e.test.ts`, which kills a real daemon mid-upload and retries with the same `Idempotency-Key`; and both concurrent-writer rows race two real CLI processes in `apps/cli/test/int/cli-concurrent-writers.int.test.ts`.
+
 ## 5. Acceptance journeys
 
 Journeys are numbered per milestone: AJ-01 to AJ-10 for 0.1, AJ-11 to AJ-13 for 0.2, and AJ-14 to AJ-16 for 0.3.

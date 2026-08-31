@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
+  fsyncSync,
   mkdirSync,
   openSync,
-  closeSync,
-  fsyncSync,
   readFileSync,
   renameSync,
   unlinkSync,
@@ -13,18 +13,18 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import {
+  type AppError,
   appError,
   applyConfigurationToDocument,
+  type Configuration,
   emptyConfigurationDocument,
   err,
   loadConfiguration,
   ok,
   parseConfigurationFile,
+  type Result,
   serializeConfiguration,
   validateConfiguration,
-  type AppError,
-  type Configuration,
-  type Result,
 } from "@sorage/core";
 import type { HomePaths } from "./home";
 import { acquireLock, type LockProbePorts } from "./lockfile";
@@ -159,25 +159,33 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
    */
   function swapIn(text: string, previousExists: boolean): Result<void, AppError> {
     const temporary = `${configFile}.tmp-${process.pid}`;
+    const backupTemporary = `${backupFile}.tmp-${process.pid}`;
     try {
       fs.mkdir(dirname(configFile));
       fs.writeFile(temporary, text, 0o600);
       fs.fsync(temporary);
       try {
-        // The single .bak holds the previous valid file, replaced only after validation.
+        // The single .bak holds the previous valid file, replaced only after
+        // validation and only atomically: a partial copy (a full disk can strike
+        // mid-copyFile) must never replace the previous good .bak, so the copy
+        // lands on a temporary sibling that renames over the .bak in one step.
         if (previousExists) {
-          fs.copyFile(configFile, backupFile);
-          fs.chmod(backupFile, 0o600);
+          fs.copyFile(configFile, backupTemporary);
+          fs.chmod(backupTemporary, 0o600);
+          fs.rename(backupTemporary, backupFile);
         }
         fs.rename(temporary, configFile);
         fs.fsync(dirname(configFile));
         fs.chmod(configFile, 0o600);
       } catch (error) {
-        // A failed swap must not leave a temporary file behind for a later rename.
-        try {
-          fs.unlink(temporary);
-        } catch {
-          // The rename may already have consumed it.
+        // A failed swap must not leave a temporary file behind for a later rename,
+        // and the previous .bak must survive the failure untouched.
+        for (const scratch of [temporary, backupTemporary]) {
+          try {
+            fs.unlink(scratch);
+          } catch {
+            // A rename may already have consumed it.
+          }
         }
         throw error;
       }

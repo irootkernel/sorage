@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { type Configuration, defaultConfiguration, errorSpec } from "@sorage/core";
 import { describe, expect, it } from "vitest";
-import { defaultConfiguration, errorSpec, type Configuration } from "@sorage/core";
-import { createConfigStore, realConfigStoreFs, type ConfigStoreFs } from "../../src/config-store";
+import { type ConfigStoreFs, createConfigStore, realConfigStoreFs } from "../../src/config-store";
 import { createHomePaths, createNodeHomePaths } from "../../src/home";
 import { createNodeLockProbePorts } from "../../src/lockfile";
 import {
@@ -11,8 +11,8 @@ import {
   FakeClock,
   faultInjectingFs,
   makeTempHome,
-  withTempHome,
   type CrashPointRegistry as Registry,
+  withTempHome,
 } from "../../src/testkit";
 
 const UUID = "1f0ac9a0-0000-4000-8000-00000000000a";
@@ -287,7 +287,10 @@ describe("the atomic configuration store", () => {
       const activeAfterFirst = readFileSync(paths.configFile, "utf8");
       const bakAfterFirst = readFileSync(`${paths.configFile}.bak`, "utf8");
 
-      registry.arm("CP-write-rename", "fs", "rename", "before");
+      // The .bak swaps first through its own atomic rename, so firing after the
+      // first rename lands exactly between the two: the backup is already whole
+      // while the active file has not moved yet.
+      registry.arm("CP-write-rename", "fs", "rename", "after");
       const crashed = store.write(
         { ...defaultConfiguration(UUID), server: { ...defaultConfiguration(UUID).server, port: 46332 } },
         { revision: 2 },
