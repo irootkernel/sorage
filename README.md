@@ -1,7 +1,7 @@
 # Sorage Source of Truth
 
 - Source of Truth version: `0.4.0`
-- Product status: In development toward the 0.3 MVP release
+- Product status: 0.3 MVP complete, tagged `v0.3.0` locally with publication pending
 - Korean product name: 소라게
 - Repository: `irootkernel/sorage`
 - MVP platform: macOS
