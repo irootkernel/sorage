@@ -1,4 +1,6 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { makeTempDir, runCleanups, sorage } from "./helpers";
 
@@ -24,6 +26,20 @@ function freePort(): Promise<number> {
 afterAll(() => runCleanups());
 
 describe("configuration routing through the daemon (CFG-016)", () => {
+  it("lands a routed change after a completed rotation", async () => {
+    const port = await freePort();
+    expect(sorage(["init", "--non-interactive", "--port", String(port)], { home }).status).toBe(0);
+    expect(sorage(["token", "rotate", "--as-user", "--json"], { home }).status).toBe(0);
+    expect(sorage(["daemon", "start", "--json"], { home }).status).toBe(0);
+    // Both the CLI and the daemon re-read the token file per call, so a
+    // completed rotation agrees on both sides and the change lands; the
+    // mid-flight retry and its never-retried write are proven deterministically
+    // against a scripted server in apps/cli/test/int/cli-token-retry.int.test.ts.
+    const set = sorage(["config", "set", "server.port", String(port), "--as-user", "--json"], { home });
+    expect(set.status).toBe(0);
+    expect(sorage(["daemon", "stop", "--json"], { home }).status).toBe(0);
+  });
+
   it("routes config set through the daemon while it runs and back to the file after it stops", async () => {
     const port = await freePort();
     expect(sorage(["init", "--vault", `${home}/vault`, "--non-interactive", "--json"], { home }).status).toBe(0);

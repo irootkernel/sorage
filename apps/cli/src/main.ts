@@ -2576,55 +2576,87 @@ interface ConfigPutOutcome {
   body: unknown;
 }
 
-function configPutOnce(host: string, port: number, key: string, value: string): Promise<ConfigPutOutcome | null> {
+/**
+ * The routed configuration change (CFG-016): a GET for the ETag, then the PUT.
+ * After a rotation the read half retries exactly once with a re-read token; the
+ * PUT never retries, so a rotation can never cause a write to run twice (SEC-020).
+ */
+export function configPutOnce(
+  host: string,
+  port: number,
+  key: string,
+  value: string,
+): Promise<ConfigPutOutcome | null> {
+  const stateDir = join(createNodeHomePaths().stateDir);
   const { readApiToken } = webModule();
-  const token = readApiToken(join(createNodeHomePaths().stateDir));
+  const token = readApiToken(stateDir);
   if (token === null) {
     return Promise.resolve({
       ok: false,
       body: { ok: false, error: { code: "TOKEN_INVALID", message: "the Installation API token is missing" } },
     });
   }
-  const headers = { host: `127.0.0.1:${port}`, authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const headersFor = (bearer: string) => ({
+    host: `127.0.0.1:${port}`,
+    authorization: `Bearer ${bearer}`,
+    "content-type": "application/json",
+  });
   return new Promise((resolve) => {
-    const getOutgoing = httpRequest({ host, port, path: "/api/v1/config", method: "GET", headers }, (getResponse) => {
-      const chunks: Buffer[] = [];
-      getResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
-      getResponse.on("end", () => {
-        const etag = String(getResponse.headers.etag ?? "");
-        const putOutgoing = httpRequest(
-          {
-            host,
-            port,
-            path: "/api/v1/config",
-            method: "PUT",
-            headers: { ...headers, "if-match": etag },
-          },
-          (putResponse) => {
-            const putChunks: Buffer[] = [];
-            putResponse.on("data", (chunk: Buffer) => putChunks.push(chunk));
-            putResponse.on("end", () => {
-              try {
-                resolve({
-                  ok: putResponse.statusCode === 200,
-                  body: JSON.parse(Buffer.concat(putChunks).toString("utf8")),
-                });
-              } catch {
-                resolve(null);
+    // Section 17.1: after a rotation the CLI retries once, and only for the
+    // read half of the routed change; the PUT never retries, so a rotation can
+    // never cause a write to run twice.
+    const issue = (bearer: string, retried: boolean): void => {
+      const getOutgoing = httpRequest(
+        { host, port, path: "/api/v1/config", method: "GET", headers: headersFor(bearer) },
+        (getResponse) => {
+          const chunks: Buffer[] = [];
+          getResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
+          getResponse.on("end", () => {
+            if (getResponse.statusCode === 401 && !retried) {
+              const { readApiToken } = webModule();
+              const fresh = readApiToken(stateDir);
+              if (fresh !== null && fresh !== bearer) {
+                issue(fresh, true);
+                return;
               }
-            });
-          },
-        );
-        putOutgoing.on("error", () => resolve(null));
-        putOutgoing.end(JSON.stringify({ key, value }));
+            }
+            const etag = String(getResponse.headers.etag ?? "");
+            const putOutgoing = httpRequest(
+              {
+                host,
+                port,
+                path: "/api/v1/config",
+                method: "PUT",
+                headers: { ...headersFor(bearer), "if-match": etag },
+              },
+              (putResponse) => {
+                const putChunks: Buffer[] = [];
+                putResponse.on("data", (chunk: Buffer) => putChunks.push(chunk));
+                putResponse.on("end", () => {
+                  try {
+                    resolve({
+                      ok: putResponse.statusCode === 200,
+                      body: JSON.parse(Buffer.concat(putChunks).toString("utf8")),
+                    });
+                  } catch {
+                    resolve(null);
+                  }
+                });
+              },
+            );
+            putOutgoing.on("error", () => resolve(null));
+            putOutgoing.end(JSON.stringify({ key, value }));
+          });
+        },
+      );
+      getOutgoing.setTimeout(5000, () => {
+        getOutgoing.destroy();
+        resolve(null);
       });
-    });
-    getOutgoing.setTimeout(5000, () => {
-      getOutgoing.destroy();
-      resolve(null);
-    });
-    getOutgoing.on("error", () => resolve(null));
-    getOutgoing.end();
+      getOutgoing.on("error", () => resolve(null));
+      getOutgoing.end();
+    };
+    issue(token, false);
   });
 }
 

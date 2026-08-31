@@ -421,7 +421,7 @@ TASK-060 additionally binds every row of the section 15 matrix to a permanent au
 | 1 | `apps/daemon/test/unit/server.unit.test.ts` (non-loopback bind refused) |
 | 2, 3, 8, 9 | `apps/daemon/test/int/server.int.test.ts` (Host allowlist, cross-origin posture, security headers) |
 | 4, 6, 7 | `apps/daemon/test/int/auth.int.test.ts` with `apps/daemon/test/contract/auth.contract.test.ts` |
-| 5 | `apps/daemon/test/int/auth.int.test.ts` for the `TOKEN_INVALID` rejection and rotation; the CLI read-retry clause is a recorded EPIC-009 gap with its own task slot until it ships |
+| 5 | `apps/daemon/test/int/auth.int.test.ts` for the `TOKEN_INVALID` rejection and rotation, with `apps/cli/test/int/cli-token-retry.int.test.ts` deterministically proving the CLI's routed read retries exactly once after a rotation while the write never retries, and `test/e2e/daemon-config.e2e.test.ts` proving the surface against the compiled binary (TASK-070) |
 | 10, 11 | `apps/daemon/test/int/domain-routes.int.test.ts` (hostile content types never render inline) |
 | 12 | `apps/daemon/test/int/upload.int.test.ts` |
 | 13, 14 | `packages/adapters/test/int/import-safety.int.test.ts` |
