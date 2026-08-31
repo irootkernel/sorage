@@ -84,8 +84,12 @@ describe("matrix row 15: shell metacharacters are data, never a command", () => 
     const handoffId = envelope.data.handoffs[0]?.handoffId;
     expect(handoffId).toBeDefined();
     const get = capture();
-    expect(runCli(["get", handoffId, "--json"], get.ports)).toBe(0);
+    expect(runCli(["get", handoffId as string, "--json"], get.ports)).toBe(0);
     expect(get.outText()).toContain("Review; rm -rf");
+    // The filename rode through as data too: the recorded original name is the
+    // hostile basename verbatim, never renamed or sanitized into something safe.
+    const detail = JSON.parse(get.outText()) as { data: { currentArtifact: { originalName: string } } };
+    expect(detail.data.currentArtifact.originalName).toBe("notes; $(id) `whoami` && echo.md");
   });
 
   it("renders the configured commit message template literally into the backup commit", () => {

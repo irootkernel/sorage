@@ -13,7 +13,10 @@ interface TestResponse {
  * Sends a request with an explicit `Host` header; the Fetch spec forbids callers from
  * setting `Host`, so the allowlist is exercised through the raw `node:http` client.
  */
-function request(path: string, init?: { method?: string; host?: string }): Promise<TestResponse> {
+function request(
+  path: string,
+  init?: { method?: string; host?: string; origin?: string; extra?: Record<string, string> },
+): Promise<TestResponse> {
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest(
       {
@@ -21,7 +24,11 @@ function request(path: string, init?: { method?: string; host?: string }): Promi
         port,
         path,
         method: init?.method ?? "GET",
-        headers: { host: init?.host ?? `127.0.0.1:${port}` },
+        headers: {
+          host: init?.host ?? `127.0.0.1:${port}`,
+          ...(init?.origin !== undefined ? { origin: init.origin } : {}),
+          ...(init?.extra ?? {}),
+        },
       },
       (response) => {
         const chunks: Buffer[] = [];
