@@ -174,6 +174,8 @@ The application asserts `changes === 1`; any other value means another writer mo
 - Test the upgrade from the previous fixture; capture that fixture when the migration is written, not when the upgrade test is written.
 - Do not store the API token in the database while the token file is the authority.
 
+The finalized upgrade policy of TASK-063 covers all three versioned surfaces. The database replays the immutable migration history over the captured first-schema fixture with real v1 data and loses nothing; a failing step rolls back to the previous valid schema and start-up surfaces the thrown failure rather than serving a half-migrated database, proved in `packages/adapters/test/int/upgrade-fixture.int.test.ts`. The configuration carries `schemaVersion: 1` as its only released schema: a configuration written by an older schemaVersion would be migrated in place through the atomic store's rewrite, which retains the single `.bak` of the previous valid file, and because no schema older than 1 ever shipped the mechanism is exactly the validated rewrite path that the configuration store suite already proves byte for byte. The Vault marker never migrates: a marker whose `schemaVersion` is newer than the build fails with `VAULT_SCHEMA_UNSUPPORTED` at exit 78 and a downgrade is refused rather than attempted, because a Vault written by a newer build may contain meanings this build would silently corrupt.
+
 ## 9. Files
 
 - Stream copies and hash while copying.
