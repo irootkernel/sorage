@@ -15,22 +15,25 @@ export interface PromptPorts {
 }
 
 /** The synchronous stdin reader: blocks for the next line, returns null at end of input. */
-export function createStdinPrompt(): PromptPorts {
-  let buffer = "";
+export function createStdinPrompt(write: (text: string) => void = (text) => process.stdout.write(text)): PromptPorts {
+  let pending = Buffer.alloc(0);
   let stdinClosed = false;
   return {
     ask(question: string): string | null {
-      process.stdout.write(question);
+      write(question);
       while (true) {
-        const newline = buffer.indexOf("\n");
+        // Scan the raw bytes for the newline so a partial trailing multibyte
+        // sequence never passes through a decode/re-encode round-trip: only
+        // the complete line is ever decoded.
+        const newline = pending.indexOf(0x0a);
         if (newline !== -1) {
-          const line = buffer.slice(0, newline).replace(/\r$/, "");
-          buffer = buffer.slice(newline + 1);
+          const line = pending.subarray(0, newline).toString("utf8").replace(/\r$/, "");
+          pending = pending.subarray(newline + 1);
           return line;
         }
         if (stdinClosed) {
-          const rest = buffer;
-          buffer = "";
+          const rest = pending.toString("utf8");
+          pending = Buffer.alloc(0);
           return rest === "" ? null : rest.replace(/\r$/, "");
         }
         const chunk = Buffer.alloc(4096);
@@ -44,7 +47,7 @@ export function createStdinPrompt(): PromptPorts {
           stdinClosed = true;
           continue;
         }
-        buffer += chunk.toString("utf8", 0, bytesRead);
+        pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)]);
       }
     },
   };
@@ -52,6 +55,8 @@ export function createStdinPrompt(): PromptPorts {
 
 export interface WizardPorts extends PromptPorts {
   out: (text: string) => void;
+  /** Question prompts render on stderr, so stdout stays the envelope channel. */
+  err: (text: string) => void;
 }
 
 export interface InitChoices {
@@ -95,8 +100,30 @@ function parseBoolean(answer: string, fallback: boolean): boolean | null {
   return null;
 }
 
+/**
+ * Asks one yes/no question, re-asking on an invalid answer (up to three tries)
+ * instead of declining or silently coercing; null still means end of input.
+ */
+function askBoolean(
+  ask: (question: string) => string | null,
+  question: string,
+  fallback: boolean,
+  notice: (text: string) => void,
+): boolean | null {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const answer = ask(question);
+    if (answer === null) return null;
+    const parsed = parseBoolean(answer, fallback);
+    if (parsed !== null) return parsed;
+    notice("Please answer y or n.\n");
+  }
+  return null;
+}
+
 export function runInitWizard(ports: WizardPorts, defaults: WizardDefaults): WizardOutcome {
   const ask = (question: string): string | null => ports.ask(question);
+  const notice = (text: string) => ports.err(text);
+  const yesNo = (question: string, fallback: boolean): boolean | null => askBoolean(ask, question, fallback, notice);
 
   ports.out("Sorage init wizard - ten questions, one summary, one confirmation.\n");
   ports.out("Press Enter to accept each [default]. Nothing changes until the final confirmation.\n\n");
@@ -110,13 +137,8 @@ export function runInitWizard(ports: WizardPorts, defaults: WizardDefaults): Wiz
   // 2. Whether to create it (asked only when the directory does not exist)
   let createVault = true;
   if (!existsSync(vaultPath)) {
-    const createAnswer = ask(`2. ${vaultPath} does not exist. Create it? [Y/n]: `);
-    if (createAnswer === null) return { status: "unanswered", question: "create the Vault directory" };
-    const create = parseBoolean(createAnswer, true);
-    if (create === null) {
-      ports.out("Please answer y or n.\n");
-      return { status: "declined" };
-    }
+    const create = yesNo(`2. ${vaultPath} does not exist. Create it? [Y/n]: `, true);
+    if (create === null) return { status: "unanswered", question: "create the Vault directory" };
     createVault = create;
   } else {
     ports.out(`2. ${vaultPath} already exists and will be adopted if it holds a valid marker.\n`);
@@ -139,46 +161,27 @@ export function runInitWizard(ports: WizardPorts, defaults: WizardDefaults): Wiz
   }
 
   // 4. LaunchAgent
-  const serviceAnswer = ask("4. Install the xyz.rootkernel.sorage LaunchAgent (daemon at login)? [y/N]: ");
-  if (serviceAnswer === null) return { status: "unanswered", question: "LaunchAgent installation" };
-  const installService = parseBoolean(serviceAnswer, false);
-  if (installService === null) {
-    ports.out("Please answer y or n.\n");
-    return { status: "declined" };
-  }
+  const installService = yesNo("4. Install the xyz.rootkernel.sorage LaunchAgent (daemon at login)? [y/N]: ", false);
+  if (installService === null) return { status: "unanswered", question: "LaunchAgent installation" };
 
   // 5. Start the daemon now (the LaunchAgent already starts it when installed)
   let startDaemon = false;
   if (!installService) {
-    const daemonAnswer = ask("5. Start the daemon now? [y/N]: ");
-    if (daemonAnswer === null) return { status: "unanswered", question: "start the daemon" };
-    const start = parseBoolean(daemonAnswer, false);
-    if (start === null) {
-      ports.out("Please answer y or n.\n");
-      return { status: "declined" };
-    }
+    const start = yesNo("5. Start the daemon now? [y/N]: ", false);
+    if (start === null) return { status: "unanswered", question: "start the daemon" };
     startDaemon = start;
   } else {
     ports.out("5. The LaunchAgent starts the daemon immediately and at every login.\n");
   }
 
   // 6. Vault Git repository
-  const gitAnswer = ask("6. Initialize the Vault as a Git repository? [y/N]: ");
-  if (gitAnswer === null) return { status: "unanswered", question: "Vault Git initialization" };
-  let initializeGit = parseBoolean(gitAnswer, false);
-  if (initializeGit === null) {
-    ports.out("Please answer y or n.\n");
-    return { status: "declined" };
-  }
+  const gitChoice = yesNo("6. Initialize the Vault as a Git repository? [y/N]: ", false);
+  if (gitChoice === null) return { status: "unanswered", question: "Vault Git initialization" };
+  let initializeGit = gitChoice;
 
   // 7. Daily backup
-  const backupAnswer = ask("7. Enable daily Git backup? [y/N]: ");
-  if (backupAnswer === null) return { status: "unanswered", question: "daily backup" };
-  const enableDailyBackup = parseBoolean(backupAnswer, false);
-  if (enableDailyBackup === null) {
-    ports.out("Please answer y or n.\n");
-    return { status: "declined" };
-  }
+  const enableDailyBackup = yesNo("7. Enable daily Git backup? [y/N]: ", false);
+  if (enableDailyBackup === null) return { status: "unanswered", question: "daily backup" };
   if (enableDailyBackup && !initializeGit) {
     ports.out("   Daily backup requires a Git repository, so the Vault will be initialized as one.\n");
     initializeGit = true;
@@ -220,9 +223,9 @@ export function runInitWizard(ports: WizardPorts, defaults: WizardDefaults): Wiz
   let pushRemote = "origin";
   let pushBranch = "main";
   if (enableDailyBackup) {
-    const pushAnswer = ask("9. Enable remote push of backups? [y/N]: ");
-    if (pushAnswer === null) return { status: "unanswered", question: "remote push" };
-    enablePush = parseBoolean(pushAnswer, false) ?? false;
+    const pushChoice = yesNo("9. Enable remote push of backups? [y/N]: ", false);
+    if (pushChoice === null) return { status: "unanswered", question: "remote push" };
+    enablePush = pushChoice;
     if (enablePush) {
       const remoteAnswer = ask("   Remote name [origin]: ");
       if (remoteAnswer === null) return { status: "unanswered", question: "push remote" };
@@ -239,9 +242,9 @@ export function runInitWizard(ports: WizardPorts, defaults: WizardDefaults): Wiz
   let registerProject = false;
   let projectName = "";
   let projectDir = "";
-  const projectAnswer = ask("10. Register a first Project? [y/N]: ");
-  if (projectAnswer === null) return { status: "unanswered", question: "first Project" };
-  registerProject = parseBoolean(projectAnswer, false) ?? false;
+  const projectChoice = yesNo("10. Register a first Project? [y/N]: ", false);
+  if (projectChoice === null) return { status: "unanswered", question: "first Project" };
+  registerProject = projectChoice;
   if (registerProject) {
     const nameAnswer = ask("    Project display name: ");
     if (nameAnswer === null || nameAnswer.trim() === "") return { status: "unanswered", question: "Project name" };

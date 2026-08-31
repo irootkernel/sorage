@@ -167,7 +167,7 @@ export type CommandInput = PromptPorts;
 export function buildProgram(
   ports: OutputPorts = defaultPorts,
   reportExitCode: ReportExitCode = () => {},
-  input: CommandInput = createStdinPrompt(),
+  input: CommandInput = createStdinPrompt((text) => process.stderr.write(text)),
 ): Command {
   const program = new Command();
   program
@@ -236,6 +236,7 @@ export function buildProgram(
         // The wizard takes its answers interactively: only --vault may pre-seed a
         // default. Any other option is a usage error rather than a silent no-op.
         const wizardForbidden = [
+          ["--json", json],
           ["--reconfigure", options.reconfigure === true],
           ["--initialize-git", options.initializeGit === true],
           ["--port", options.port !== undefined],
@@ -252,7 +253,7 @@ export function buildProgram(
           return;
         }
         const wizard = runInitWizard(
-          { ...ports, ask: (question) => input.ask(question) },
+          { out: ports.out, err: ports.err, ask: (question) => input.ask(question) },
           {
             defaultVaultPath: vaultOption ?? join(home.home, "vault"),
             defaultPort: 46321,
@@ -2006,7 +2007,7 @@ function requireInitialized(ports: OutputPorts, json: boolean, reportExitCode: (
 export function runCli(
   argv: string[],
   ports: OutputPorts = defaultPorts,
-  input: CommandInput = createStdinPrompt(),
+  input: CommandInput = createStdinPrompt((text) => process.stderr.write(text)),
 ): number {
   let actionExitCode: number | null = null;
   const program = buildProgram(
@@ -2381,6 +2382,7 @@ function applyInitChoices(
       return;
     }
     report.service = { label: "xyz.rootkernel.sorage", plistPath: installed.value.plistPath };
+    if (choices.startDaemon) lines.push("--start-daemon is subsumed: the LaunchAgent starts the daemon now.\n");
     lines.push(
       installed.value.bootstrapped
         ? `Installed the xyz.rootkernel.sorage LaunchAgent at ${installed.value.plistPath}; the daemon starts now and at every login.\n`

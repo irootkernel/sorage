@@ -1,7 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { type CommandInput, runCli } from "../../src/main";
 
 const homes: string[] = [];
@@ -173,6 +175,89 @@ describe("the interactive init wizard", () => {
     const code = runCli(["init", "--install-service"], io.ports, { ask: () => null });
     expect(code).toBe(2);
     expect(io.err.join("")).toContain("--install-service needs --non-interactive");
+  });
+
+  it("keeps --json out of wizard mode and the wizard off stdout", () => {
+    tempHome("sorage-wizard-json-");
+    const io = capture();
+    const code = runCli(["init", "--json"], io.ports, { ask: () => null });
+    expect(code).toBe(2);
+    expect(io.err.join("")).toContain("--json needs --non-interactive");
+  });
+
+  it("re-asks an invalid yes/no answer instead of declining or coercing", () => {
+    tempHome("sorage-wizard-invalid-");
+    const io = capture();
+    const script = answers([
+      "", // 1. vault default
+      "y", // 2. create
+      "", // 3. port
+      "x", // 4. invalid service answer
+      "x", //    still invalid
+      "n", //    accepted on the third try
+      "n", // 5. daemon
+      "n", // 6. git
+      "n", // 7. backup
+      "n", // 10. project
+      "y", // confirm
+    ]);
+    const code = runCli(["init"], io.ports, script.input);
+    expect(code).toBe(0);
+    expect(io.out.join("")).toContain("Initialized Sorage");
+    expect(script.asked.filter((question) => question.includes("4. Install")).length).toBe(3);
+  });
+
+  it("round-trips a multibyte Project name across the wizard", () => {
+    const home = tempHome("sorage-wizard-multibyte-");
+    const projectDir = join(home, "프로젝트");
+    mkdirSync(projectDir, { recursive: true });
+    const io = capture();
+    const script = answers([
+      "", // 1. vault default
+      "y", // 2. create
+      "", // 3. port
+      "n", // 4. service
+      "n", // 5. daemon
+      "n", // 6. git
+      "n", // 7. backup
+      "y", // 10. register
+      "소라게 프로젝트", // name
+      projectDir, // dir
+      "y", // confirm
+    ]);
+    const code = runCli(["init"], io.ports, script.input);
+    expect(code).toBe(0);
+    expect(io.out.join("")).toContain("소라게 프로젝트");
+    const list = capture();
+    expect(runCli(["project", "list", "--json"], list.ports)).toBe(0);
+    expect(list.out.join("")).toContain("소라게 프로젝트");
+  });
+
+  it("round-trips a multibyte name split across a readSync chunk boundary", () => {
+    const home = tempHome("sorage-wizard-boundary-");
+    const projectDir = join(home, "디렉터리");
+    mkdirSync(projectDir, { recursive: true });
+    // Drive the real stdin reader in a child process, with the filler chosen
+    // so the first byte of the multibyte name lands exactly on the 4096-byte
+    // readSync boundary: the first chunk ends after two of its three bytes.
+    const name = "소라게";
+    const head = ["", "y", "", "n", "n", "n", "n", "y", ""].join("\n");
+    // The sheet is head + filler + name + rest; filler makes the name's first
+    // byte sit exactly at offset 4096, the readSync chunk boundary.
+    const filler = "x".repeat(4096 - Buffer.byteLength(head));
+    const sheet = `${head}${filler}${name}\n${projectDir}\ny\n`;
+    expect(Buffer.from(sheet, "utf8").indexOf(Buffer.from(name, "utf8"))).toBe(4096);
+    const result = spawnSync("bun", [fileURLToPath(new URL("../../src/main.ts", import.meta.url)), "init"], {
+      cwd: projectDir,
+      encoding: "utf8",
+      input: sheet,
+      env: { ...process.env, SORAGE_HOME: home },
+    });
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("소라게");
+    const list = capture();
+    expect(runCli(["project", "list", "--json"], list.ports)).toBe(0);
+    expect(list.out.join("")).toContain("소라게");
   });
 
   it("creates the vault nowhere when creation is declined for a missing directory", () => {

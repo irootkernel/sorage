@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { installLaunchAgent, renderLaunchAgentPlist, uninstallLaunchAgent } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNodeDoctorPorts } from "../../src/doctor";
+import { escapePlistValue } from "@sorage/core";
 import {
   createNodeLaunchAgentPorts,
   launchAgentPlistPath,
   launchAgentsDirectory,
   launchAgentUid,
+  plistPointsAtBinary,
 } from "../../src/launchagent-ports";
 
 /**
@@ -143,6 +145,21 @@ describe("the LaunchAgent node ports", () => {
       `bootout gui/${launchAgentUid()}/xyz.rootkernel.sorage`,
       `bootstrap gui/${launchAgentUid()} ${launchAgentPlistPath(agentsDirectory)}`,
     ]);
+  });
+
+  it("decodes double-escaped plist entities in the correct order", () => {
+    // A binary path containing a literal entity-looking segment: the plist
+    // stores it as &amp;lt;, and the doctor's decode order must read that back
+    // as the literal &lt; the candidate comparison expects.
+    const literal = "/opt/literal-&lt;-segment/sorage";
+    const plist = `<plist><dict><string>xyz.rootkernel.sorage</string><string>${escapePlistValue(literal)}</string></dict></plist>`;
+    expect(plistPointsAtBinary(plist, literal)).toBe(true);
+    expect(
+      plistPointsAtBinary(
+        "<plist><dict><string>xyz.rootkernel.sorage</string><string>/opt/other/sorage</string></dict></plist>",
+        literal,
+      ),
+    ).toBe(false);
   });
 
   it("leaves an already-loaded agent untouched when the plist it would write is identical", () => {

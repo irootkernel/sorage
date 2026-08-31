@@ -108,13 +108,15 @@ export function createNodeLaunchAgentPorts(options: NodeLaunchAgentPortsOptions 
 /** True when the plist names the given binary as the program launchd runs. */
 export function plistPointsAtBinary(plistText: string, binaryPath: string): boolean {
   const strings = [...plistText.matchAll(/<string>([^<]*)<\/string>/g)].map((match) => match[1] ?? "");
+  // XML unescape order: named entities other than &amp; first, &amp; last, so
+  // a double-escaped value like &amp;lt; decodes to the literal &lt;.
   const unescaped = strings.map((value) =>
     value
-      .replaceAll("&amp;", "&")
       .replaceAll("&lt;", "<")
       .replaceAll("&gt;", ">")
       .replaceAll("&quot;", '"')
-      .replaceAll("&apos;", "'"),
+      .replaceAll("&apos;", "'")
+      .replaceAll("&amp;", "&"),
   );
   const labelIndex = unescaped.indexOf(LAUNCH_AGENT_LABEL);
   if (labelIndex === -1) return false;
