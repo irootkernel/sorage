@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { err, ok, type AppError, type Result } from "./errors";
 
 /**
- * The token model of milestone 0.2 (SEC-002, SEC-019, SEC-020): the Installation API
+ * The token model of milestone M2 (SEC-002, SEC-019, SEC-020): the Installation API
  * token lives outside `config.yaml` at `~/.sorage/state/api-token` as at least 32
  * random bytes encoded base64url with owner-only permissions, is compared in constant
  * time, and is never logged, echoed, or embedded in an error body.

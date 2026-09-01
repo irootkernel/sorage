@@ -1,21 +1,28 @@
 /**
- * The TASK-064 packaging pipeline (GEN-002, CLI-015, NFR-012, NFR-013, NFR-017):
- * `make package` compiles the locked-dependency tree through the pinned Bun
- * toolchain into `dist/sorage`, ad-hoc code-signs it, verifies the signature,
- * and emits the Homebrew formula inputs beside it. Two builds of the same
- * commit must produce the same binary, so the compile runs twice into separate
- * outputs and the digests are compared before anything is signed; a mismatch
- * fails the package rather than shipping an irreproducible artifact.
+ * The release-candidate packaging pipeline (GEN-002, CLI-015, NFR-012,
+ * NFR-013, NFR-017): compile twice, reject irreproducible unsigned output,
+ * ad-hoc sign the source-install binary, and emit a versioned GitHub Release
+ * candidate with checksum and manifest for darwin-arm64.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SORAGE_VERSION } from "../packages/core/src/version";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
+const target = "darwin-arm64";
+const releaseBase = `sorage-v${SORAGE_VERSION}-${target}`;
+const sourceBinary = join(dist, "sorage");
+const releaseBinary = join(dist, releaseBase);
+const checksumPath = `${releaseBinary}.sha256`;
+const manifestPath = `${releaseBinary}.manifest.json`;
+const stagedBinary = join(dist, ".sorage.staged");
+const stagedReleaseBinary = join(dist, `.${releaseBase}.staged`);
+const stagedChecksum = join(dist, `.${releaseBase}.sha256.staged`);
+const stagedManifest = join(dist, `.${releaseBase}.manifest.json.staged`);
 
 function sh(command: string, args: string[]): string {
   const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
@@ -47,90 +54,95 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function withdraw(): void {
+  for (const file of [
+    sourceBinary,
+    releaseBinary,
+    checksumPath,
+    manifestPath,
+    stagedBinary,
+    stagedReleaseBinary,
+    stagedChecksum,
+    stagedManifest,
+  ]) {
+    rmSync(file, { force: true });
+  }
+}
+
 mkdirSync(dist, { recursive: true });
-// A rejected or in-flight run must never leave a binary and a manifest that
-// describe different builds, so both artifacts start and end atomically.
+withdraw();
 rmSync(join(dist, "package.json"), { force: true });
 
-// Reproducibility first (NFR-012): two independent compiles of the same tree,
-// compared byte for byte through their digests before anything is signed.
-// The compiled binary embeds its own basename into the virtual filesystem, so
-// the reproducibility probe compiles into scratch directories that preserve the
-// exact name; anything else would differ for reasons no user ever sees.
-const first = join(dist, "sorage");
+// Compile into paths with the same basename so Bun's embedded virtual path
+// cannot create a false reproducibility mismatch.
 const scratch = join(dist, ".repro");
 mkdirSync(scratch, { recursive: true });
 const second = join(scratch, "sorage");
-compile(first);
+compile(sourceBinary);
 compile(second);
-const firstDigest = sha256(first);
+const firstDigest = sha256(sourceBinary);
 const secondDigest = sha256(second);
 rmSync(scratch, { recursive: true, force: true });
 if (firstDigest !== secondDigest) {
-  rmSync(first, { force: true });
+  withdraw();
   console.error(`two builds of the same commit differ: ${firstDigest} vs ${secondDigest}`);
   process.exit(1);
 }
 
-// Ad-hoc code signing happens on a staged copy so the published pair is
-// assembled by renames: Gatekeeper never quarantines a locally signed binary
-// the tap installs, and `codesign -dv` leaves a durable, inspectable receipt.
-const stagedBinary = join(dist, ".sorage.staged");
-copyFileSync(first, stagedBinary);
+// Sign a staged copy, validate that exact copy, and only then publish it under
+// both the source-install and release-candidate names.
+copyFileSync(sourceBinary, stagedBinary);
 sh("codesign", ["--force", "--sign", "-", stagedBinary]);
-// The receipt must describe the copy the pipeline just signed: `first` is
-// still the unsigned first compile here, and the arm64 linker already
-// ad-hoc signs it, so verifying `first` would pass even if the explicit
-// signature of the staged copy were invalid.
-const receipt = spawnSync("codesign", ["-dv", stagedBinary], { encoding: "utf8" });
+const receipt = spawnSync("codesign", ["--verify", "--strict", stagedBinary], { encoding: "utf8" });
 if (receipt.status !== 0) {
+  withdraw();
   console.error(`the ad-hoc signature could not be verified: ${(receipt.stderr ?? "").trim()}`);
   process.exit(1);
 }
 
-const version = SORAGE_VERSION;
-const revision = sh("git", ["rev-parse", "HEAD"]);
-
-// The manifest digest describes the signed binary that actually ships: ad-hoc
-// signing rewrites the Mach-O, so hashing before it would describe a build
-// that never existed.
 const signedDigest = sha256(stagedBinary);
 if (signedDigest === firstDigest) {
+  withdraw();
   console.error("signing did not change the binary; the recorded digest would be ambiguous");
   process.exit(1);
 }
 
-// The Homebrew formula input: the digest, the revision, and the version the
-// tap formula is generated from, kept beside the binary it describes.
-const inputs = {
-  version,
-  revision,
-  binary: "dist/sorage",
-  sha256: signedDigest,
-  reproducibleUnsignedDigest: firstDigest,
-  signature: "ad-hoc",
-};
-const manifestPath = join(dist, "package.json");
-const stagedManifest = join(dist, ".package.json.staged");
-writeFileSync(stagedManifest, `${JSON.stringify(inputs, null, 2)}\n`);
-if (sha256(stagedBinary) !== signedDigest) {
-  for (const scratch of [stagedManifest, stagedBinary, first]) rmSync(scratch, { force: true });
-  console.error("the binary changed after signing; refusing to publish a mismatched manifest");
-  process.exit(1);
-}
-// Publish the signed binary and its manifest together, then re-hash the
-// published bytes: a concurrent writer that slipped between the guard and the
-// renames is caught here and both artifacts are withdrawn.
-const { renameSync } = require("node:fs") as typeof import("node:fs");
-renameSync(stagedBinary, first);
-renameSync(stagedManifest, manifestPath);
-if (sha256(first) !== signedDigest) {
-  rmSync(first, { force: true });
-  rmSync(manifestPath, { force: true });
-  console.error("dist/sorage changed during publication; both artifacts were withdrawn");
+const revision = sh("git", ["rev-parse", "HEAD"]);
+copyFileSync(stagedBinary, stagedReleaseBinary);
+writeFileSync(stagedChecksum, `${signedDigest}  ${releaseBase}\n`);
+writeFileSync(
+  stagedManifest,
+  `${JSON.stringify(
+    {
+      version: SORAGE_VERSION,
+      revision,
+      target,
+      binary: releaseBase,
+      sha256: signedDigest,
+      reproducibleUnsignedDigest: firstDigest,
+      signature: "ad-hoc",
+    },
+    null,
+    2,
+  )}\n`,
+);
+
+if (sha256(stagedBinary) !== signedDigest || sha256(stagedReleaseBinary) !== signedDigest) {
+  withdraw();
+  console.error("release bytes changed while metadata was assembled");
   process.exit(1);
 }
 
-console.log(`packaged dist/sorage ${version} at ${revision}`);
+renameSync(stagedBinary, sourceBinary);
+renameSync(stagedReleaseBinary, releaseBinary);
+renameSync(stagedChecksum, checksumPath);
+renameSync(stagedManifest, manifestPath);
+if (sha256(sourceBinary) !== signedDigest || sha256(releaseBinary) !== signedDigest) {
+  withdraw();
+  console.error("published release bytes do not match the manifest; all candidate files were withdrawn");
+  process.exit(1);
+}
+
+console.log(`packaged ${releaseBase} ${SORAGE_VERSION} at ${revision}`);
 console.log(`sha256 ${signedDigest} (signed binary)`);
 console.log(`reproducible unsigned digest ${firstDigest}`);

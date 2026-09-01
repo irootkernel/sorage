@@ -21,12 +21,12 @@ The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 
 - Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017). The shipped product version has one runtime source in `packages/core/src/version.ts`; the same preparation gate rejects a workspace manifest or internal dependency declaration that drifts from it, and CLI, daemon, and packaging code consume that source directly (NFR-003, NFR-012).
 - `bun:sqlite` as the only SQLite driver; it is synchronous, which is what makes the synchronous `UnitOfWork` natural.
-- Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone 0.2.
+- Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone M2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.
 - The `yaml` package used through its Document API rather than `parse`/`stringify`, because only the document tree preserves existing comments and key order across a write (CFG-018).
 - The Web control plane ships as a no-build static SPA served by the daemon under `apps/daemon/src/web-app.ts`: one HTML document, one external script, and one external stylesheet, all CSP-safe by construction. A Vite and Preact build remains a candidate if the SPA outgrows this shape; the required behavior (WEB-001 to WEB-018) is framework-independent.
-- `bun build --compile` for release binaries, followed by ad-hoc codesigning, distributed through a Homebrew tap so Gatekeeper never quarantines a downloaded binary. `make package` (TASK-064) runs the whole pipeline from the repository root: it compiles twice into scratch outputs that keep the exact `sorage` basename - the compiled binary embeds its own name, so the reproducibility probe must compare like with like - fails on any digest mismatch, ad-hoc signs `dist/sorage` with `codesign --force --sign -` and verifies the receipt, and writes `dist/package.json` carrying the version, the revision, the binary digest, and the signature mode as the Homebrew formula inputs. AJ-16 drives the packaged binary through a clean isolated account in `test/e2e/aj16-packaging.e2e.test.ts`, runs whenever the packaging manifest is present, and skips with that reason under a bare `make build`, which deliberately removes a stale manifest so an unsigned build never masquerades as a packaged one; the manifest itself is staged and renamed only after the shipped bytes are re-hashed against the digest it records.
-- `make test` as the single verification gate, over the targets `test-prepare`, `test-unit`, `test-int`, `test-contract`, and `test-e2e`; `make build` compiles `dist/sorage` and `make package` produces the signed binary and the Homebrew formula inputs (NFR-016).
+- `bun build --compile` for release binaries, followed by ad-hoc codesigning and architecture-specific GitHub Release assets. `make package` compiles twice into scratch outputs that keep the exact `sorage` basename - the compiled binary embeds its own name, so the reproducibility probe must compare like with like - and fails on any digest mismatch. It signs `dist/sorage`, verifies that exact staged copy, and publishes the same signed bytes as `dist/sorage-v0.1.0-darwin-arm64` with a two-space checksum file and a manifest carrying the version, HEAD revision, target, asset basename, signed digest, reproducible unsigned digest, and signature mode. AJ-16 runs whenever that versioned manifest exists and drives the versioned candidate through a clean isolated account; a bare `make build` removes all three candidate files so unsigned output cannot retain stale release metadata.
+- `make test` as the single verification gate, over the targets `test-prepare`, `test-unit`, `test-int`, `test-contract`, and `test-e2e`; `make build` compiles `dist/sorage` and `make package` produces the signed source-install binary and GitHub Release candidates (NFR-016).
 - Verification is local: the same `make` targets a developer runs are the whole gate, because this repository uses no hosted continuous-integration service.
 
 Bun does not use libuv, so `F_FULLFSYNC` durability MUST be verified empirically in the foundation milestone rather than assumed.
@@ -277,7 +277,7 @@ Every HTTP request carries a UUID request id, and the same field appears on the 
 }
 ```
 
-The catalog is owned normatively by `../specs/interfaces-and-operations.md`, and it is milestone-scoped: the 0.1 snapshot carries only the 0.1 check identifiers, and a later identifier appears when its milestone is reached.
+The catalog is owned normatively by `../specs/interfaces-and-operations.md`, and it is milestone-scoped: the M1 snapshot carries only the M1 check identifiers, and a later identifier appears when its milestone is reached.
 
 Changing an existing identifier or its severity semantics is a contract change, because both are as stable as any other public JSON field.
 
@@ -297,7 +297,7 @@ Those same targets run on the developer's macOS machine, so a check that cannot 
 
 - Sorage is a standalone repository and builds, tests, and packages from its own root; no ecosystem tool is a source dependency of any package (GEN-009, NFR-013).
 - The development workflow binds to Aquarium, Podway, Mulgae, Gaori, and Sanho in exactly one place, `AGENTS.md` at the repository root; nothing under `packages/` or `apps/` references them.
-- Discovery ships as `skills/use-sorage/SKILL.md` in this repository from milestone 0.1, and Sorage adds no handler to Aquarium and requires no change to it (GEN-011).
+- Discovery ships as `skills/use-sorage/SKILL.md` in this repository from milestone M1, and Sorage adds no handler to Aquarium and requires no change to it (GEN-011).
 - The skill MUST instruct an agent to run `sorage inbox --json` at session start and before starting a task, to act on `changes_requested` items in its outbox before beginning new work, and to never edit managed Vault files directly (GEN-014); it also tells Projects to ignore `.sorage/` in git when the optional inbox marker is enabled (HND-026).
 - The named interoperability seam is the Podway `ExternalReference` artifact slot: another tool records a Handoff UUID there and resolves it through the public `sorage` CLI or the local API, never by importing a Sorage package.
 - Sorage adopts the ecosystem Markdown rules voluntarily: no hard-wrapped prose, and every relative link resolves (NFR-015).
@@ -312,7 +312,7 @@ The runtime dependency set is fixed by ADR-0016 rather than chosen per Task:
 | `commander` | One declaration produces help text, parsing, and shell completion, which keeps CLI-001 and CLI-015 in agreement |
 | `yaml` | Its Document API is the only practical way to preserve comments and key order across a configuration write (CFG-018) |
 | `vitest` | The ecosystem-standard runner, executed through Bun for unit, integration, and contract suites |
-| `playwright` | Web end-to-end coverage from milestone 0.2, including the browser session exchange |
+| `playwright` | Web end-to-end coverage from milestone M2, including the browser session exchange |
 | `axe-core` | Accessibility checks inside `make test-e2e`, as engineering practice rather than a release gate (WEB-018) |
 | `preact` with `vite` | A small SPA runtime and a build that emits static assets the daemon can serve without a Node runtime |
 

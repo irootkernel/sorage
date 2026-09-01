@@ -24,7 +24,7 @@ import { openSorageDatabase } from "./sqlite/connection";
 import { MIGRATIONS } from "./sqlite/migrations";
 
 /**
- * The production doctor probes over the live installation: every check the 0.1
+ * The production doctor probes over the live installation: every check the M1
  * snapshot can perform, with the recovery guidance of section 35 attached to every
  * non-ok outcome. Checks whose domain tables arrive with later epics report honest
  * vacuous passes instead of pretending to verify data that cannot exist yet.

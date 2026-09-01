@@ -12,12 +12,12 @@ import { afterAll, describe, expect, it } from "vitest";
  * a freshly created macOS account would see it, runs init, a full Handoff loop,
  * doctor, and completion with no separately installed runtime, and the
  * uninstall leaves the Vault behind. The literal fresh macOS user account and
- * a real Homebrew tap install remain the recorded evidence boundary: the tap
- * repository is outside this repository's reach, so the journey drives the
- * exact binary `make package` produces through the same isolation a clean
- * account provides.
+ * a literal fresh macOS user account and hosted GitHub Release download remain
+ * the recorded evidence boundary. This journey drives the exact versioned
+ * release candidate that `make package` produces.
  */
-const BINARY = fileURLToPath(new URL("../../dist/sorage", import.meta.url));
+const BINARY_NAME = "sorage-v0.1.0-darwin-arm64";
+const BINARY = fileURLToPath(new URL(`../../dist/${BINARY_NAME}`, import.meta.url));
 
 const scratch: string[] = [];
 afterAll(() => {
@@ -65,7 +65,8 @@ describe("AJ-16 packaging on a clean account", () => {
   // `make test` builds without packaging, and the journey's subject is the
   // packaged artifact, so it runs whenever the packaging pipeline has produced
   // its manifest and reports a precise skip otherwise.
-  const manifestPath = join(dirname(BINARY), "package.json");
+  const manifestPath = `${BINARY}.manifest.json`;
+  const checksumPath = `${BINARY}.sha256`;
   const packaged = existsSync(manifestPath);
   it.skipIf(!packaged)("installs nothing but the binary and completes the journey", () => {
     expect(existsSync(BINARY)).toBe(true);
@@ -79,14 +80,31 @@ describe("AJ-16 packaging on a clean account", () => {
     const codesign = spawnSync("codesign", ["--verify", "--strict", BINARY], { encoding: "utf8" });
     expect(codesign.status, `codesign --verify failed: ${codesign.stderr}`).toBe(0);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      version: string;
       sha256: string;
       revision: string;
+      target: string;
+      binary: string;
+      signature: string;
     };
-    expect(createHash("sha256").update(readFileSync(BINARY)).digest("hex")).toBe(manifest.sha256);
+    const digest = createHash("sha256").update(readFileSync(BINARY)).digest("hex");
+    expect(digest).toBe(manifest.sha256);
+    expect(manifest).toMatchObject({
+      version: "0.1.0",
+      target: "darwin-arm64",
+      binary: BINARY_NAME,
+      signature: "ad-hoc",
+    });
+    expect(readFileSync(checksumPath, "utf8")).toBe(`${digest}  ${BINARY_NAME}\n`);
+    const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dirname(BINARY), encoding: "utf8" });
+    expect(revision.status).toBe(0);
+    expect(manifest.revision).toBe(revision.stdout.trim());
+    const sourceBinary = join(dirname(BINARY), "sorage");
+    expect(createHash("sha256").update(readFileSync(sourceBinary)).digest("hex")).toBe(digest);
 
     const version = installed(["version", "--json"], account);
     expect(version.status).toBe(0);
-    expect(version.stdout).toBe('{"name":"sorage","version":"v0.3.0"}\n');
+    expect(version.stdout).toBe('{"name":"sorage","version":"v0.1.0"}\n');
     expect(version.stderr).toBe("");
 
     const init = installed(["init", "--non-interactive"], account);

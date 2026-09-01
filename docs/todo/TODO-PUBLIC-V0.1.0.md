@@ -22,7 +22,9 @@ Turn the completed internal MVP work into Sorage's first public release. Before 
 - Preserve committed Epic and Task identifiers and completed delivery history.
 - Keep Source of Truth version `0.4.0` distinct from public product SemVer.
 - Publish only an Apple Silicon macOS binary in the first release.
-- Attach the binary, SHA-256 checksum, and manifest to the GitHub Release.
+- Attach `sorage-v0.1.0-darwin-arm64`, `sorage-v0.1.0-darwin-arm64.sha256`, and `sorage-v0.1.0-darwin-arm64.manifest.json` to the GitHub Release.
+- Preserve the historical snapshots only as local annotated `M1`, `M2`, and `M3` tags peeling to `d9856ef77f4ac87419380e21948e2a4cf441c843`, `5ff60a776393b062ddf812015c9577e7ad95b7ae`, and `d8b13e95d5b0d06d44e62b68dd6ede3b3ecc1df0`; do not publish them.
+- Keep Source of Truth `0.4.0`, `/api/v1`, configuration schema `1`, database schema `1`, and Vault schema `1` unchanged.
 - Verify the downloaded published asset in an isolated temporary `SORAGE_HOME` before closing the Epic.
 - Obtain separate authorization for commit, push, tag replacement, official tag creation, and GitHub Release publication.
 
@@ -35,4 +37,4 @@ Turn the completed internal MVP work into Sorage's first public release. Before 
 
 ## Acceptance
 
-The release is accepted when the documentation inspector and repository verification gate pass, every public version surface reports `0.1.0`, and the release assets identify `darwin-arm64` and match their checksums. The MIT license must name RootKernel. The binary downloaded from the hosted `v0.1.0` release must also complete the documented isolated installation journey.
+The release is accepted when the documentation inspector and repository verification gate pass, every public version surface reports `0.1.0`, and the release assets identify `darwin-arm64` and match their checksums. The manifest must name the asset by basename, bind it to the reviewed release revision, and record its signed and reproducible unsigned digests. The MIT license must name RootKernel. The binary downloaded from the hosted `v0.1.0` release must also complete the documented isolated installation journey.

@@ -8,22 +8,22 @@
 # Comments and key order are preserved by `sorage config set` and
 # `sorage config edit` (CFG-018), so annotations like these survive edits.
 #
-# Milestones: 0.1 CLI core · 0.2 daemon, HTTP API, Web UI · 0.3 Git backup,
+# Milestones: M1 CLI core · M2 daemon, HTTP API, Web UI · M3 Git backup,
 # scheduling, packaging. A key belonging to a later milestone is inert until
 # that milestone ships.
 
-# Milestone 0.1 — identity and schema
+# Milestone M1 — identity and schema
 schemaVersion: 1
 configRevision: 1
 installationId: "9d57384c-030e-4ff7-90ca-c615d8043db2"
 
-# Milestone 0.1 — Vault. Never relocate a non-empty Vault by editing `path`;
+# Milestone M1 — Vault. Never relocate a non-empty Vault by editing `path`;
 # use `sorage vault move --to <path> --as-user` (CFG-013, CFG-014).
 vault:
   path: "~/.sorage/vault"
   importMode: "copy"
 
-# Milestone 0.2 — loopback daemon. `host` accepts only "127.0.0.1" and "::1";
+# Milestone M2 — loopback daemon. `host` accepts only "127.0.0.1" and "::1";
 # a `host` or `port` change requires `sorage daemon restart` (RUN-008).
 server:
   host: "127.0.0.1"
@@ -31,7 +31,7 @@ server:
   autoStart: false
   openBrowserOnStart: false
 
-# Milestone 0.1 — sender and discovery policy. `inboxMarker` writes the derived
+# Milestone M1 — sender and discovery policy. `inboxMarker` writes the derived
 # marker `.sorage/INBOX.md` into each recipient binding directory; recipients
 # should git-ignore `.sorage/` (HND-026).
 handoff:
@@ -39,14 +39,14 @@ handoff:
   requireRegisteredRecipient: true
   inboxMarker: false
 
-# Milestone 0.1 — Artifact policy. `maxBytes` is enforced mid-stream during
+# Milestone M1 — Artifact policy. `maxBytes` is enforced mid-stream during
 # import, never after buffering (NFR-005).
 artifact:
   maxBytes: 104857600
   externalSourcePolicy: "workspace_or_explicit"
   verifyChecksumOnFetch: false
 
-# Milestone 0.3 — Git backup, disabled in a 0.1 installation. Set `timezone` to
+# Milestone M3 — Git backup, disabled in a M1 installation. Set `timezone` to
 # a local IANA zone such as "Asia/Seoul" once a daily schedule is enabled; push
 # is toggled with `sorage backup enable-push` / `disable-push` (BKP-025).
 # `snapshot.redactWorkspacePaths` keeps local paths out of the exported
@@ -68,14 +68,14 @@ gitBackup:
   snapshot:
     redactWorkspacePaths: true
 
-# Milestone 0.1 — presentation. `timezone: null` renders timestamps in the
+# Milestone M1 — presentation. `timezone: null` renders timestamps in the
 # system zone; storage is always UTC (NFR-007).
 ui:
   defaultPageSize: 50
   showArchivedByDefault: false
   timezone: null
 
-# Milestone 0.1 — structured JSON logs at ~/.sorage/logs/sorage.log. Tokens and
+# Milestone M1 — structured JSON logs at ~/.sorage/logs/sorage.log. Tokens and
 # credentials are never logged at any level (SEC-010, RUN-009).
 logging:
   level: "warn"
@@ -84,7 +84,7 @@ logging:
     maxBytes: 10485760
     maxFiles: 5
 
-# Milestone 0.1 — garbage collection. Sweeping runs only after the pending
+# Milestone M1 — garbage collection. Sweeping runs only after the pending
 # intent drain and never touches a path referenced by an intent (VLT-013).
 gc:
   graceHours: 24

@@ -23,9 +23,9 @@ function docFixture(mutate: (root: string) => void): string {
       "",
       "| ID | Milestone | Requirement |",
       "|---|---|---|",
-      "| GEN-001 | 0.1 | Scope holds. |",
-      "| GEN-002 | 0.1 | Another rule holds. |",
-      "| INIT-001 | 0.1 | Home directory is fixed. |",
+      "| GEN-001 | M1 | Scope holds. |",
+      "| GEN-002 | M1 | Another rule holds. |",
+      "| INIT-001 | M1 | Home directory is fixed. |",
       "",
     ].join("\n"),
   );
@@ -36,14 +36,14 @@ function docFixture(mutate: (root: string) => void): string {
       "",
       "| Epic ID | Title | Milestone | Status | Task range |",
       "|---|---|---|---|---|",
-      "| `EPIC-001` | Foundation | 0.1 | Planned | `TASK-001` to `TASK-002` |",
+      "| `EPIC-001` | Foundation | M1 | Planned | `TASK-001` to `TASK-002` |",
       "",
       "## EPIC-001: Foundation",
       "",
       "| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |",
       "|---|---|---|---|---|---|---|---|",
-      "| `TASK-001` | Planned | 0.1 | First deliverable is one long unbroken line of prose. | Gate one. | None | GEN-001, GEN-002 to GEN-002, INIT-001 | Not required |",
-      "| `TASK-002` | Planned | 0.1 | Second deliverable is also one long unbroken line of prose. | Gate two. | `TASK-001` | GEN-001 | Not required |",
+      "| `TASK-001` | Planned | M1 | First deliverable is one long unbroken line of prose. | Gate one. | None | GEN-001, GEN-002 to GEN-002, INIT-001 | Not required |",
+      "| `TASK-002` | Planned | M1 | Second deliverable is also one long unbroken line of prose. | Gate two. | `TASK-001` | GEN-001 | Not required |",
       "",
       "See [required-specification.md](../specs/required-specification.md) for the requirements.",
       "",
@@ -58,9 +58,9 @@ function docFixture(mutate: (root: string) => void): string {
       "",
       "| Requirement | Milestone | Citing tasks |",
       "|---|---|---|",
-      "| `GEN-001` | 0.1 | `TASK-001`, `TASK-002` |",
-      "| `GEN-002` | 0.1 | `TASK-001` |",
-      "| `INIT-001` | 0.1 | `TASK-001` |",
+      "| `GEN-001` | M1 | `TASK-001`, `TASK-002` |",
+      "| `GEN-002` | M1 | `TASK-001` |",
+      "| `INIT-001` | M1 | `TASK-001` |",
       "",
     ].join("\n"),
   );
@@ -107,7 +107,7 @@ describe("sot-check", () => {
         const text = readTheFile(path);
         writeFileSync(
           path,
-          text.replace("| `TASK-002` | Planned | 0.1 | Second", "| `TASK-001` | Planned | 0.1 | Second"),
+          text.replace("| `TASK-002` | Planned | M1 | Second", "| `TASK-001` | Planned | M1 | Second"),
         );
       }),
     );
@@ -154,17 +154,17 @@ describe("sot-check", () => {
     expect(result.stderr).toContain("cites unknown requirement INIT-999");
   });
 
-  it("fails on a 0.1 requirement cited only by later-milestone Tasks and expands range citations", () => {
+  it("fails on a M1 requirement cited only by later-milestone Tasks and expands range citations", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "roadmap", "README.md");
         const text = readTheFile(path);
-        // Remove the TASK-001 citation cell content for GEN-002 so only a 0.3 task cites it.
+        // Remove the TASK-001 citation cell content for GEN-002 so only a M3 task cites it.
         writeFileSync(
           path,
           text
             .replace("GEN-001, GEN-002 to GEN-002, INIT-001", "GEN-001, INIT-001")
-            .replace("| `TASK-002` | Planned | 0.1 |", "| `TASK-002` | Planned | 0.3 |")
+            .replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M3 |")
             .replace("| Gate two. | `TASK-001` | GEN-001 |", "| Gate two. | `TASK-001` | GEN-002 |"),
         );
       }),
@@ -173,13 +173,27 @@ describe("sot-check", () => {
     expect(result.stderr).toContain("cited only by later-milestone Tasks");
   });
 
+  it("fails when a Task uses a numeric release version as its milestone", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(
+          path,
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | 0.1 |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, or M3');
+  });
+
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "specs", "traceability.md");
         writeFileSync(
           path,
-          readTheFile(path).replace("| `GEN-001` | 0.1 | `TASK-001`, `TASK-002` |", "| `GEN-001` | 0.1 | `TASK-001` |"),
+          readTheFile(path).replace("| `GEN-001` | M1 | `TASK-001`, `TASK-002` |", "| `GEN-001` | M1 | `TASK-001` |"),
         );
       }),
     );
@@ -191,7 +205,7 @@ describe("sot-check", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "specs", "traceability.md");
-        writeFileSync(path, readTheFile(path).replace("| `INIT-001` | 0.1 | `TASK-001` |\n", ""));
+        writeFileSync(path, readTheFile(path).replace("| `INIT-001` | M1 | `TASK-001` |\n", ""));
       }),
     );
     expect(result.status).toBe(1);
@@ -209,12 +223,12 @@ describe("sot-check", () => {
         const traceability = join(root, "docs", "specs", "traceability.md");
         writeFileSync(
           traceability,
-          readTheFile(traceability).replace("| `INIT-001` | 0.1 | `TASK-001` |", "| `INIT-001` | 0.1 | None |"),
+          readTheFile(traceability).replace("| `INIT-001` | M1 | `TASK-001` |", "| `INIT-001` | M1 | None |"),
         );
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requirement INIT-001 (milestone 0.1) has no citing Task");
+    expect(result.stderr).toContain("requirement INIT-001 (milestone M1) has no citing Task");
   });
 
   it("fails when the traceability reverse index is absent", () => {
@@ -229,6 +243,7 @@ describe("sot-check", () => {
 });
 
 import { readFileSync } from "node:fs";
+
 function readTheFile(path: string): string {
   return readFileSync(path, "utf8");
 }

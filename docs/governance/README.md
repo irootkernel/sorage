@@ -112,7 +112,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
 - Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
-- Declare the milestone the Task belongs to, one of `0.1`, `0.2`, or `0.3`.
+- Declare the milestone the Task belongs to, one of `M1`, `M2`, or `M3`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
 - Confirm the `Design Gate impact` cell, which is `Not required` for every Task in v0.4.0 because no Design Gate registry is enrolled for this repository, and record that reason rather than leaving the cell empty.

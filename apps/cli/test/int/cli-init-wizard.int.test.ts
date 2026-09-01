@@ -320,7 +320,7 @@ describe("the interactive init wizard", () => {
   });
 });
 
-describe("the non-interactive 0.3 init flags", () => {
+describe("the non-interactive M3 init flags", () => {
   it("enables the daily schedule with --enable-daily-backup and its pair flags", () => {
     const home = tempHome("sorage-init-flags-backup-");
     const io = capture();

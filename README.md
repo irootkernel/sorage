@@ -4,7 +4,7 @@ Sorage (소라게) is a local broker for document handoffs between AI coding ses
 
 Copying a file into another repository, pasting it into chat, or passing around a temporary path can lose track of who owns the document, where its review stands, and which Revision was accepted. Sorage keeps that context. If one send names several recipients, Sorage creates a separate Handoff for each one, so their reviews and retention decisions stay independent.
 
-> **Release status:** Sorage is preparing its first public release. Until `v0.1.0` is published, install it from source as described below. The initial supported target is Apple Silicon macOS.
+> **Release status:** Sorage is preparing its first public release on GitHub Releases. Until `v0.1.0` is published and its hosted assets are verified, install it from source as described below. The initial supported target is Apple Silicon macOS.
 
 ## Features
 

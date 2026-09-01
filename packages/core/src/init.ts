@@ -40,7 +40,7 @@ export interface InitFilesystemPort {
   ensureDirectory(path: string): void;
 }
 
-/** From milestone 0.3, `sorage init --initialize-git` also brings up the Vault repository (INIT-007, BKP-022). */
+/** From milestone M3, `sorage init --initialize-git` also brings up the Vault repository (INIT-007, BKP-022). */
 export interface InitGitPort {
   ensureRepository(vaultPath: string): Result<{ initialized: boolean; existingReported: boolean }, AppError>;
 }
@@ -54,7 +54,7 @@ export interface InitPorts {
   database: InitDatabasePort;
   vault: InitVaultPort;
   filesystem: InitFilesystemPort;
-  /** From milestone 0.2, init also creates the API token at `state/api-token` (INIT-003). */
+  /** From milestone M2, init also creates the API token at `state/api-token` (INIT-003). */
   token?: ApiTokenStorePort | undefined;
   git?: InitGitPort | undefined;
 }

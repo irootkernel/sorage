@@ -165,7 +165,7 @@
         "ok": true,
         "data": {
           "installationId": "1a2b3c4d-0000-4000-8000-000000000043",
-          "version": "0.3.0-contract"
+          "version": "0.1.0-contract"
         },
         "meta": {
           "requestId": "2f0ac9a0-0000-4000-8000-0000000000ee"

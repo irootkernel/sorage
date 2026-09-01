@@ -4,7 +4,7 @@ This document owns the concrete surfaces of Sorage: filesystem layout, CLI synta
 
 It sits below [required-specification.md](required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), and [../architecture/README.md](../architecture/README.md); where this document appears to disagree with any of them, they win.
 
-Every surface is tagged with the milestone at which it must exist: `0.1` CLI core, `0.2` daemon with local HTTP API and Web UI, `0.3` Git backup, scheduling, and packaging.
+Every surface is tagged with the milestone at which it must exist: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, `M3` Git backup, scheduling, and packaging.
 
 ## 1. Canonical product and runtime identity
 
@@ -37,7 +37,7 @@ Home layout:
 ├── vault/                        # default Vault, configurable
 ├── state/
 │   ├── sorage.sqlite3            # plus -wal and -shm
-│   ├── api-token                 # 0.2, mode 0600, at least 32 random bytes, base64url
+│   ├── api-token                 # M2, mode 0600, at least 32 random bytes, base64url
 │   └── backups/                  # database snapshots taken with VACUUM INTO
 ├── logs/
 │   └── sorage.log                # plus rotated files
@@ -91,23 +91,23 @@ Every configuration leaf except `installationId` declares a normative fixed defa
 | `vault.importMode` | const `copy` | `copy` | The MVP imports by copy only (VLT-004) |
 | `server.host` | enum `127.0.0.1`, `::1` | `127.0.0.1` | Loopback literals only; the name `localhost` is not accepted as a bind address (SEC-001) |
 | `server.port` | integer 1024–65535 | `46321` | A change requires a controlled daemon restart (RUN-008) |
-| `server.autoStart` | boolean | `false` | Milestone 0.2; no daemon exists in 0.1 |
-| `server.openBrowserOnStart` | boolean | `false` | Milestone 0.2 |
+| `server.autoStart` | boolean | `false` | Milestone M2; no daemon exists in M1 |
+| `server.openBrowserOnStart` | boolean | `false` | Milestone M2 |
 | `handoff.allowUnregisteredSenders` | boolean | `true` | Unregistered Workspaces may send; they may never receive |
 | `handoff.requireRegisteredRecipient` | const `true` | `true` | Fixed by PRJ-012 |
 | `handoff.inboxMarker` | boolean | `false` | When true, every creation or state change rewrites `.sorage/INBOX.md` under each recipient binding directory (HND-026) |
 | `artifact.maxBytes` | integer ≥ 1 | `104857600` | Enforced mid-stream during import, never after buffering (NFR-005) |
 | `artifact.externalSourcePolicy` | enum `workspace_only`, `workspace_or_explicit` | `workspace_or_explicit` | Governs `SOURCE_OUTSIDE_WORKSPACE` and `--allow-external-source` |
 | `artifact.verifyChecksumOnFetch` | boolean | `false` | Rationale below |
-| `gitBackup.enabled` | boolean | `false` | Milestone 0.3; off in a 0.1 installation |
-| `gitBackup.schedule.type` | const `daily` | `daily` | Milestone 0.3 |
+| `gitBackup.enabled` | boolean | `false` | Milestone M3; off in a M1 installation |
+| `gitBackup.schedule.type` | const `daily` | `daily` | Milestone M3 |
 | `gitBackup.schedule.at` | string `HH:MM` | `03:00` | Local time in `gitBackup.schedule.timezone` |
 | `gitBackup.schedule.timezone` | IANA zone string | `UTC` | The DST rules of BKP-026 apply to this zone |
 | `gitBackup.schedule.catchUpAfterMissedRun` | boolean | `true` | At most one catch-up run after a start (BKP-015) |
 | `gitBackup.commit.messageTemplate` | string | `sorage backup: {timestamp}` | BKP-010 |
 | `gitBackup.push.enabled` | boolean | `false` | Toggled by `backup enable-push` and `disable-push` (BKP-025) |
-| `gitBackup.push.remote` | string | `origin` | Milestone 0.3 |
-| `gitBackup.push.branch` | string | `main` | Milestone 0.3 |
+| `gitBackup.push.remote` | string | `origin` | Milestone M3 |
+| `gitBackup.push.branch` | string | `main` | Milestone M3 |
 | `gitBackup.largeArtifactWarningBytes` | integer ≥ 1 | `26214400` | Import warns above this size while backup is enabled |
 | `gitBackup.snapshot.redactWorkspacePaths` | boolean | `true` | Redact `senderPathSnapshot`, binding paths, and path fields inside event `metadataJson` in the export |
 | `ui.defaultPageSize` | integer 10–200 | `50` | Cursor page size |
@@ -125,9 +125,9 @@ Turning it on trades fetch latency for immediate detection, and an installation 
 
 ## 3. Initialization
 
-`sorage init` creates the home directories, `config.yaml`, the installation identity, the operational database, and the Vault marker; from milestone 0.2 it also creates the API token at `~/.sorage/state/api-token` (INIT-003).
+`sorage init` creates the home directories, `config.yaml`, the installation identity, the operational database, and the Vault marker; from milestone M2 it also creates the API token at `~/.sorage/state/api-token` (INIT-003).
 
-### 3.1 Non-interactive, milestone 0.1
+### 3.1 Non-interactive, milestone M1
 
 ```bash
 sorage init \
@@ -137,20 +137,20 @@ sorage init \
 
 | Flag | Milestone | Effect |
 |---|---|---|
-| `--vault <path>` | 0.1 | Sets `vault.path`; the default is `~/.sorage/vault` |
-| `--non-interactive` | 0.1 | Never prompts; missing answers use documented defaults (INIT-005) |
-| `--reconfigure` | 0.1 | Explicit repair or reconfiguration of an existing installation (INIT-006) |
-| `--port <n>` | 0.2 | Sets `server.port` |
-| `--start-daemon` | 0.2 | Starts the daemon after a successful init |
-| `--initialize-git` | 0.3 | Initializes the Vault as a Git repository and writes `.gitattributes` (INIT-007, BKP-022) |
-| `--enable-daily-backup` | 0.3 | Enables the daily schedule (INIT-008) |
-| `--backup-at <HH:MM>` | 0.3 | Sets `gitBackup.schedule.at` |
-| `--timezone <tz>` | 0.3 | Sets `gitBackup.schedule.timezone` |
-| `--install-service` | 0.3 | Installs the `xyz.rootkernel.sorage` LaunchAgent (INIT-009) |
+| `--vault <path>` | M1 | Sets `vault.path`; the default is `~/.sorage/vault` |
+| `--non-interactive` | M1 | Never prompts; missing answers use documented defaults (INIT-005) |
+| `--reconfigure` | M1 | Explicit repair or reconfiguration of an existing installation (INIT-006) |
+| `--port <n>` | M2 | Sets `server.port` |
+| `--start-daemon` | M2 | Starts the daemon after a successful init |
+| `--initialize-git` | M3 | Initializes the Vault as a Git repository and writes `.gitattributes` (INIT-007, BKP-022) |
+| `--enable-daily-backup` | M3 | Enables the daily schedule (INIT-008) |
+| `--backup-at <HH:MM>` | M3 | Sets `gitBackup.schedule.at` |
+| `--timezone <tz>` | M3 | Sets `gitBackup.schedule.timezone` |
+| `--install-service` | M3 | Installs the `xyz.rootkernel.sorage` LaunchAgent (INIT-009) |
 
-Passing a 0.2 or 0.3 flag to a build that does not implement it is a usage error, not a silent no-op.
+Passing a M2 or M3 flag to a build that does not implement it is a usage error, not a silent no-op.
 
-### 3.2 Interactive wizard, milestone 0.3
+### 3.2 Interactive wizard, milestone M3
 
 ```bash
 sorage init
@@ -260,7 +260,7 @@ Rules:
 
 ### 5.1 Authority and concurrency
 
-CFG-019 applies from milestone 0.1, with its daemon clause phrased conditionally: once the daemon exists, a running daemon is the only writer of `config.yaml` and the CLI routes writes through `PUT /api/v1/config` with `If-Match`.
+CFG-019 applies from milestone M1, with its daemon clause phrased conditionally: once the daemon exists, a running daemon is the only writer of `config.yaml` and the CLI routes writes through `PUT /api/v1/config` with `If-Match`.
 
 When no daemon is running the CLI writes the file itself while holding `~/.sorage/run/config.lock`, following the ten-step atomic write of `../architecture/README.md` section 21.
 
@@ -324,7 +324,7 @@ Managed layout:
 └── staging/
 ```
 
-Vault initialization writes both `.gitattributes` and `.gitignore` in milestone 0.1, before any Git machinery exists, because the bytes they protect are written from the first import onward (VLT-024).
+Vault initialization writes both `.gitattributes` and `.gitignore` in milestone M1, before any Git machinery exists, because the bytes they protect are written from the first import onward (VLT-024).
 
 `.gitattributes` is written verbatim:
 
@@ -336,9 +336,9 @@ snapshots/** text eol=lf
 
 `.gitignore` contains the single line `staging/`.
 
-Git initialization in milestone 0.3 re-asserts both files idempotently rather than assuming them, so a Vault created by an earlier build is backfilled the first time `sorage init --reconfigure` or Git initialization runs; until then `doctor` reports `vault.gitattributes` and `sorage backup verify` fails the check (BKP-022, which now owns only `core.autocrlf=false` and the verification).
+Git initialization in milestone M3 re-asserts both files idempotently rather than assuming them, so a Vault created by an earlier build is backfilled the first time `sorage init --reconfigure` or Git initialization runs; until then `doctor` reports `vault.gitattributes` and `sorage backup verify` fails the check (BKP-022, which now owns only `core.autocrlf=false` and the verification).
 
-Without `.gitattributes` a clone with `core.autocrlf=true` rewrites text Artifact bytes and breaks their recorded SHA-256, which is why the file is milestone 0.1 and not 0.3.
+Without `.gitattributes` a clone with `core.autocrlf=true` rewrites text Artifact bytes and breaks their recorded SHA-256, which is why the file is milestone M1 and not M3.
 
 `storageKey` is the sole authority for an Artifact's location, and the `<artifact-id>` segment gives every Revision its own slot so a replacement never overwrites bytes in place (VLT-020).
 
@@ -356,7 +356,7 @@ A non-empty directory without a valid marker is never silently adopted (VLT-003)
 
 ### 6.2 `sorage vault verify`
 
-`vault verify` is the Git-independent integrity sweep and runs in milestone 0.1, before any backup machinery exists:
+`vault verify` is the Git-independent integrity sweep and runs in milestone M1, before any backup machinery exists:
 
 - The marker exists, parses, and its `installationId` matches the Installation.
 - The marker `schemaVersion` is supported.
@@ -367,7 +367,7 @@ A non-empty directory without a valid marker is never silently adopted (VLT-003)
 
 `vault verify` reports findings and exits non-zero on a blocking finding; it never repairs, rewrites, or deletes.
 
-`sorage backup verify` is the superset that adds the Git checks of section 31 and exists only from milestone 0.3.
+`sorage backup verify` is the superset that adds the Git checks of section 31 and exists only from milestone M3.
 
 ## 7. Vault relocation
 
@@ -570,59 +570,59 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage init [flags]` | 0.1 | Section 3 |
-| `sorage version [--json]` | 0.1 | Prints exactly `sorage v0.3.0` plus one newline, or the compact JSON object `{"name":"sorage","version":"v0.3.0"}` plus one newline; available before initialization |
-| `sorage help [command]` | 0.1 | Also `--help` on every command |
-| `sorage completion <shell>` | 0.1 | CLI-015 |
-| `sorage doctor [--json]` | 0.1 | Section 35 |
-| `sorage uninstall --as-user --confirm` | 0.3 | Removes the LaunchAgent, `~/.sorage/state`, `run`, `logs`, and `config.yaml`; never deletes the Vault; prints the Vault path (INIT-016) |
+| `sorage init [flags]` | M1 | Section 3 |
+| `sorage version [--json]` | M1 | Prints exactly `sorage v0.1.0` plus one newline, or the compact JSON object `{"name":"sorage","version":"v0.1.0"}` plus one newline; available before initialization |
+| `sorage help [command]` | M1 | Also `--help` on every command |
+| `sorage completion <shell>` | M1 | CLI-015 |
+| `sorage doctor [--json]` | M1 | Section 35 |
+| `sorage uninstall --as-user --confirm` | M3 | Removes the LaunchAgent, `~/.sorage/state`, `run`, `logs`, and `config.yaml`; never deletes the Vault; prints the Vault path (INIT-016) |
 
 ### 13.2 Daemon and session
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage daemon start` | 0.2 | Fails with `PORT_IN_USE` when the port is bound (RUN-013) |
-| `sorage daemon stop` | 0.2 | Graceful drain before storage shutdown (SEC-015) |
-| `sorage daemon restart` | 0.2 | Required after a `server.host` or `server.port` change (RUN-008) |
-| `sorage daemon status` | 0.2 | Reads `run/daemon.json` and verifies `installationId` through `/api/v1/health` |
-| `sorage web` | 0.2 | Starts the daemon when it is not running and opens the browser with a one-time secret (RUN-012, SEC-019) |
-| `sorage token rotate --as-user` | 0.2 | Replaces the API token and invalidates every live browser session (SEC-020) |
+| `sorage daemon start` | M2 | Fails with `PORT_IN_USE` when the port is bound (RUN-013) |
+| `sorage daemon stop` | M2 | Graceful drain before storage shutdown (SEC-015) |
+| `sorage daemon restart` | M2 | Required after a `server.host` or `server.port` change (RUN-008) |
+| `sorage daemon status` | M2 | Reads `run/daemon.json` and verifies `installationId` through `/api/v1/health` |
+| `sorage web` | M2 | Starts the daemon when it is not running and opens the browser with a one-time secret (RUN-012, SEC-019) |
+| `sorage token rotate --as-user` | M2 | Replaces the API token and invalidates every live browser session (SEC-020) |
 
 ### 13.3 Configuration and Vault
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage config show [--json]` | 0.1 | Any actor |
-| `sorage config validate` | 0.1 | Any actor |
-| `sorage config set <key> <value> --as-user [--expected-revision <n>]` | 0.1 | Section 5 |
-| `sorage config edit --as-user` | 0.1 | Captures the revision and ETag when the editor opens |
-| `sorage vault status` | 0.1 | Path, marker, counts, sizes |
-| `sorage vault verify` | 0.1 | Section 6.2 |
-| `sorage vault move --to <path> --as-user` | 0.1 | Section 7 |
+| `sorage config show [--json]` | M1 | Any actor |
+| `sorage config validate` | M1 | Any actor |
+| `sorage config set <key> <value> --as-user [--expected-revision <n>]` | M1 | Section 5 |
+| `sorage config edit --as-user` | M1 | Captures the revision and ETag when the editor opens |
+| `sorage vault status` | M1 | Path, marker, counts, sizes |
+| `sorage vault verify` | M1 | Section 6.2 |
+| `sorage vault move --to <path> --as-user` | M1 | Section 7 |
 
 ### 13.4 Project
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage project add --name <name> [--slug <slug>] --dir <path>` | 0.1 | Registers a Project and its first binding (PRJ-003) |
-| `sorage project list [--json]` | 0.1 | Flags unbound Projects |
-| `sorage project show <project>` | 0.1 | Bindings, counts, lifecycle |
-| `sorage project rename <project> --name <name>` | 0.1 | Slug is not renamed |
-| `sorage project bind <project> --dir <path>` | 0.1 | Adds a binding (PRJ-016) |
-| `sorage project unbind <project> --dir <path> [--confirm]` | 0.1 | `--confirm` required when it would leave open Handoffs unbound (PRJ-022) |
-| `sorage project archive <project> --as-user` | 0.1 | Blocks new incoming Handoffs (PRJ-009) |
-| `sorage project unarchive <project> --as-user` | 0.1 | Returns the Project to `active` |
-| `sorage project resolve [--path <path>]` | 0.1 | Prints what the actor resolver would decide |
+| `sorage project add --name <name> [--slug <slug>] --dir <path>` | M1 | Registers a Project and its first binding (PRJ-003) |
+| `sorage project list [--json]` | M1 | Flags unbound Projects |
+| `sorage project show <project>` | M1 | Bindings, counts, lifecycle |
+| `sorage project rename <project> --name <name>` | M1 | Slug is not renamed |
+| `sorage project bind <project> --dir <path>` | M1 | Adds a binding (PRJ-016) |
+| `sorage project unbind <project> --dir <path> [--confirm]` | M1 | `--confirm` required when it would leave open Handoffs unbound (PRJ-022) |
+| `sorage project archive <project> --as-user` | M1 | Blocks new incoming Handoffs (PRJ-009) |
+| `sorage project unarchive <project> --as-user` | M1 | Returns the Project to `active` |
+| `sorage project resolve [--path <path>]` | M1 | Prints what the actor resolver would decide |
 
 ### 13.5 Handoff creation and discovery
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage send --to <project> [--to <project> ...] --title <t> (--file <path> \| --body <text>) [--supersedes <id>] [--allow-external-source] [--allow-unregistered] [--idempotency-key <uuid>]` | 0.1 | One Handoff per recipient, one Dispatch Group, all-or-nothing (HND-006, HND-008) |
-| `sorage inbox [--wait] [--timeout <s>] [--interval <s>]` | 0.1 | Section 13.9 |
-| `sorage outbox [--current-workspace]` | 0.1 | Sender view for the resolved Project or Workspace |
-| `sorage get <handoff-id>` | 0.1 | Metadata only; never sets `firstFetchedAt` and never emits an event |
-| `sorage fetch <handoff-id>` | 0.1 | Section 11.3 |
+| `sorage send --to <project> [--to <project> ...] --title <t> (--file <path> \| --body <text>) [--supersedes <id>] [--allow-external-source] [--allow-unregistered] [--idempotency-key <uuid>]` | M1 | One Handoff per recipient, one Dispatch Group, all-or-nothing (HND-006, HND-008) |
+| `sorage inbox [--wait] [--timeout <s>] [--interval <s>]` | M1 | Section 13.9 |
+| `sorage outbox [--current-workspace]` | M1 | Sender view for the resolved Project or Workspace |
+| `sorage get <handoff-id>` | M1 | Metadata only; never sets `firstFetchedAt` and never emits an event |
+| `sorage fetch <handoff-id>` | M1 | Section 11.3 |
 
 The derived inbox marker (HND-026): when `handoff.inboxMarker` is `true`, every Handoff creation and every state change — including the recipient's first `fetch` and the User-admin retention decisions — rewrites `.sorage/INBOX.md` under each binding directory of the recipient Project. The marker is a rendered view of that recipient's current inbox, one line per non-archived, non-deleted Handoff as `- <handoff-id> <review-state> "<title>" revision <n>` under a header that states the file is derived, must never be edited, and is never read back as authority; corrupting or deleting it changes no command result, and the next state change recreates it. A marker that cannot be written — a read-only binding directory, for example — prints a warning on standard error and never fails the command, because the marker is advisory. Projects that enable the marker should ignore `.sorage/` in Git, which the shipped `use-sorage` skill instructs.
 
@@ -630,14 +630,14 @@ The derived inbox marker (HND-026): when `handoff.inboxMarker` is `true`, every 
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage review set <id> (--text <text> \| --file <path>) [--target-revision <n>]` | 0.1 | Stale target Revision returns `REVISION_CONFLICT` (REV-005, REV-006) |
-| `sorage review withdraw <id>` | 0.1 | Recipient withdraws the current Note whichever actor authored it; Revision unchanged (REV-016); the User uses `review remove --as-user` |
-| `sorage review remove <id> --as-user --confirm` | 0.1 | Audited administrative removal (REV-015) |
-| `sorage revise <id> --file <path> [--idempotency-key <uuid>]` | 0.1 | Identical content returns `NO_CONTENT_CHANGE` (HND-015) |
-| `sorage revise <id> --no-change --reason <text>` | 0.1 | Valid only in `changes_requested`, else `NO_REVIEW_NOTE`; at most one consecutive, else `NO_CHANGE_LIMIT` (REV-017) |
-| `sorage accept <id> --expected-revision <n> --expected-row-version <n>` | 0.1 | Both expected values are mandatory; an Artifact still at `materialized = 0` fails with `ARTIFACT_MATERIALIZING` (LIFE-002, CLI-013) |
-| `sorage decline <id> --reason <text> --expected-row-version <n>` | 0.1 | Terminal `declined` with a mandatory reason (HND-022) |
-| `sorage withdraw <id>` | 0.1 | Only from `awaiting_recipient` while both `firstFetchedAt` and `reviewEngagedAt` are null (HND-021) |
+| `sorage review set <id> (--text <text> \| --file <path>) [--target-revision <n>]` | M1 | Stale target Revision returns `REVISION_CONFLICT` (REV-005, REV-006) |
+| `sorage review withdraw <id>` | M1 | Recipient withdraws the current Note whichever actor authored it; Revision unchanged (REV-016); the User uses `review remove --as-user` |
+| `sorage review remove <id> --as-user --confirm` | M1 | Audited administrative removal (REV-015) |
+| `sorage revise <id> --file <path> [--idempotency-key <uuid>]` | M1 | Identical content returns `NO_CONTENT_CHANGE` (HND-015) |
+| `sorage revise <id> --no-change --reason <text>` | M1 | Valid only in `changes_requested`, else `NO_REVIEW_NOTE`; at most one consecutive, else `NO_CHANGE_LIMIT` (REV-017) |
+| `sorage accept <id> --expected-revision <n> --expected-row-version <n>` | M1 | Both expected values are mandatory; an Artifact still at `materialized = 0` fails with `ARTIFACT_MATERIALIZING` (LIFE-002, CLI-013) |
+| `sorage decline <id> --reason <text> --expected-row-version <n>` | M1 | Terminal `declined` with a mandatory reason (HND-022) |
+| `sorage withdraw <id>` | M1 | Only from `awaiting_recipient` while both `firstFetchedAt` and `reviewEngagedAt` are null (HND-021) |
 
 `withdraw` is available only while the recipient has neither read nor engaged: `firstFetchedAt` records the first fetch and `reviewEngagedAt` records the first `review set` and is never cleared, so withdrawing a Handoff whose Note was later withdrawn is still refused.
 
@@ -649,26 +649,26 @@ It refuses with `HANDOFF_ALREADY_FETCHED` when either timestamp is set, with `RE
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage pin <id> --as-user` | 0.1 | Independent of review state (LIFE-007) |
-| `sorage unpin <id> --as-user` | 0.1 | |
-| `sorage archive <id> --as-user` | 0.1 | Terminal states only, else `HANDOFF_ARCHIVE_INVALID` (LIFE-008) |
-| `sorage unarchive <id> --as-user` | 0.1 | Reverses archiving; a Handoff that is not archived fails with `HANDOFF_NOT_ARCHIVED` (LIFE-009) |
-| `sorage delete request <id> [--reason <text>]` | 0.1 | Any participant, in any non-deleted state; a second pending request fails with `DELETION_ALREADY_REQUESTED` |
-| `sorage delete approve <id> --as-user --confirm [--confirm-pinned <id>] [--idempotency-key <uuid>]` | 0.1 | Requires a terminal review state, else `HANDOFF_NOT_TERMINAL`; a pinned Handoff needs the distinct `--confirm-pinned <id>` argument, else `PINNED_DELETE_CONFIRMATION`; a missing or mismatched current Artifact fails with `ARTIFACT_CORRUPTED` without claiming deletion (LIFE-012, VLT-023) |
-| `sorage delete reject <id> --as-user [--reason <text>]` | 0.1 | Records the decision (LIFE-016) |
+| `sorage pin <id> --as-user` | M1 | Independent of review state (LIFE-007) |
+| `sorage unpin <id> --as-user` | M1 | |
+| `sorage archive <id> --as-user` | M1 | Terminal states only, else `HANDOFF_ARCHIVE_INVALID` (LIFE-008) |
+| `sorage unarchive <id> --as-user` | M1 | Reverses archiving; a Handoff that is not archived fails with `HANDOFF_NOT_ARCHIVED` (LIFE-009) |
+| `sorage delete request <id> [--reason <text>]` | M1 | Any participant, in any non-deleted state; a second pending request fails with `DELETION_ALREADY_REQUESTED` |
+| `sorage delete approve <id> --as-user --confirm [--confirm-pinned <id>] [--idempotency-key <uuid>]` | M1 | Requires a terminal review state, else `HANDOFF_NOT_TERMINAL`; a pinned Handoff needs the distinct `--confirm-pinned <id>` argument, else `PINNED_DELETE_CONFIRMATION`; a missing or mismatched current Artifact fails with `ARTIFACT_CORRUPTED` without claiming deletion (LIFE-012, VLT-023) |
+| `sorage delete reject <id> --as-user [--reason <text>]` | M1 | Records the decision (LIFE-016) |
 
 ### 13.8 Backup
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage backup status` | 0.3 | Last attempt, success, commit, push, failure, repository size (BKP-016) |
-| `sorage backup run [--idempotency-key <uuid>]` | 0.3 | Manual run under `backup.lock` |
-| `sorage backup verify` | 0.3 | Section 31 |
-| `sorage backup enable --daily-at <HH:MM> [--timezone <tz>] --as-user` | 0.3 | Writes `gitBackup.schedule` |
-| `sorage backup disable --as-user` | 0.3 | |
-| `sorage backup enable-push --remote <name> --branch <name> --as-user` | 0.3 | BKP-025 |
-| `sorage backup disable-push --as-user` | 0.3 | |
-| `sorage backup restore --from <vault-path> --dry-run --as-user` or `sorage backup restore --from <vault-path> --as-user --confirm` | 0.3 | Section 32 |
+| `sorage backup status` | M3 | Last attempt, success, commit, push, failure, repository size (BKP-016) |
+| `sorage backup run [--idempotency-key <uuid>]` | M3 | Manual run under `backup.lock` |
+| `sorage backup verify` | M3 | Section 31 |
+| `sorage backup enable --daily-at <HH:MM> [--timezone <tz>] --as-user` | M3 | Writes `gitBackup.schedule` |
+| `sorage backup disable --as-user` | M3 | |
+| `sorage backup enable-push --remote <name> --branch <name> --as-user` | M3 | BKP-025 |
+| `sorage backup disable-push --as-user` | M3 | |
+| `sorage backup restore --from <vault-path> --dry-run --as-user` or `sorage backup restore --from <vault-path> --as-user --confirm` | M3 | Section 32 |
 
 A Deletion Request may be filed from any non-deleted state, but approval requires a terminal review state, so every tombstone is terminal.
 
@@ -678,26 +678,26 @@ A tombstone rejects `fetch`, `revise`, `review set`, `review withdraw`, `review 
 
 | Option | Milestone | Meaning |
 |---|---|---|
-| `--json` | 0.1 | Machine output on stdout only |
-| `--as <project-slug>` | 0.1 | Override working-directory resolution (CLI-020) |
-| `--as-user` | 0.1 | Enter User-admin context (CLI-019) |
-| `--confirm` | 0.1 | Explicit confirmation for a destructive operation |
-| `--confirm-pinned <id>` | 0.1 | Distinct second confirmation for deleting a pinned Handoff |
-| `--expected-row-version <n>` | 0.1 | Optimistic concurrency; see below |
-| `--expected-revision <n>` | 0.1 | The exact Revision on `accept`; the configuration revision on `config set` |
-| `--target-revision <n>` | 0.1 | The Revision a Review Note is written against |
-| `--idempotency-key <uuid>` | 0.1 | Replay protection on `send`, `revise`, `delete approve`, and `backup run` (CLI-021, section 17.3) |
-| `--limit <n>` | 0.1 | Page size; defaults to `ui.defaultPageSize` |
-| `--cursor <token>` | 0.1 | Opaque cursor; section 19 |
-| `--state <state>` | 0.1 | One of the five review states |
-| `--sender <slug or workspace-key>` | 0.1 | Filter by sender identity |
-| `--recipient <project>` | 0.1 | Filter by recipient Project |
-| `--include-archived` | 0.1 | Include archived Handoffs |
-| `--include-deleted` | 0.1 | Include tombstones |
-| `--allow-external-source` | 0.1 | Accept a source outside the sender workspace |
-| `--allow-unregistered` | 0.1 | Accept a deliberate unregistered send (PRJ-019) |
-| `--supersedes <handoff-id>` | 0.1 | Link a new Handoff to the one it replaces; see below |
-| `--wait [--timeout <s>] [--interval <s>]` | 0.1 | `inbox` only; see below |
+| `--json` | M1 | Machine output on stdout only |
+| `--as <project-slug>` | M1 | Override working-directory resolution (CLI-020) |
+| `--as-user` | M1 | Enter User-admin context (CLI-019) |
+| `--confirm` | M1 | Explicit confirmation for a destructive operation |
+| `--confirm-pinned <id>` | M1 | Distinct second confirmation for deleting a pinned Handoff |
+| `--expected-row-version <n>` | M1 | Optimistic concurrency; see below |
+| `--expected-revision <n>` | M1 | The exact Revision on `accept`; the configuration revision on `config set` |
+| `--target-revision <n>` | M1 | The Revision a Review Note is written against |
+| `--idempotency-key <uuid>` | M1 | Replay protection on `send`, `revise`, `delete approve`, and `backup run` (CLI-021, section 17.3) |
+| `--limit <n>` | M1 | Page size; defaults to `ui.defaultPageSize` |
+| `--cursor <token>` | M1 | Opaque cursor; section 19 |
+| `--state <state>` | M1 | One of the five review states |
+| `--sender <slug or workspace-key>` | M1 | Filter by sender identity |
+| `--recipient <project>` | M1 | Filter by recipient Project |
+| `--include-archived` | M1 | Include archived Handoffs |
+| `--include-deleted` | M1 | Include tombstones |
+| `--allow-external-source` | M1 | Accept a source outside the sender workspace |
+| `--allow-unregistered` | M1 | Accept a deliberate unregistered send (PRJ-019) |
+| `--supersedes <handoff-id>` | M1 | Link a new Handoff to the one it replaces; see below |
+| `--wait [--timeout <s>] [--interval <s>]` | M1 | `inbox` only; see below |
 
 `--expected-row-version` is mandatory only on `accept` and `decline`; it is accepted on every other mutating command and is enforced whenever it is supplied (HND-014). Commands that create a Handoff, or that mutate configuration or Projects, accept the flag for uniformity but carry no expectation, because there is no previously read Handoff row to compare against.
 
@@ -707,7 +707,7 @@ A `--supersedes` target MUST exist and MUST be in a terminal state, otherwise th
 
 The target need not share the recipient, a tombstone may be superseded because the link is metadata rather than content, and every Handoff of one fan-out may reference the same target.
 
-`inbox --wait` in milestone 0.1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020). The wait returns only the items that appeared after it began, so a Handoff the waiter already saw does not wake it even when it changes state, and the timeout result is the empty list rather than the items the waiter started from; because a wait lists only new items, `--wait` cannot combine with `--cursor`, and an `--interval` below one second is a usage error rather than an unthrottled poll.
+`inbox --wait` in milestone M1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020). The wait returns only the items that appeared after it began, so a Handoff the waiter already saw does not wake it even when it changes state, and the timeout result is the empty list rather than the items the waiter started from; because a wait lists only new items, `--wait` cannot combine with `--cursor`, and an `--interval` below one second is a usage error rather than an unthrottled poll.
 
 ## 14. CLI envelopes
 
@@ -744,7 +744,7 @@ Error:
 
 `meta.requestId` is the only universal meta field; `meta.timedOut` is added by `inbox --wait` and appears nowhere else.
 
-`sorage version --json` is the deliberate exception to this envelope: it returns the compact standalone object `{"name":"sorage","version":"v0.3.0"}` so ecosystem version probes can consume the same field names and `v`-prefixed value as sibling tools. This presentation prefix applies only to the two CLI version outputs; the shared runtime source, package manifest, daemon record, and HTTP health and version DTOs retain the bare semantic version `0.3.0`.
+`sorage version --json` is the deliberate exception to this envelope: it returns the compact standalone object `{"name":"sorage","version":"v0.1.0"}` so ecosystem version probes can consume the same field names and `v`-prefixed value as sibling tools. This presentation prefix applies only to the two CLI version outputs; the shared runtime source, package manifest, daemon record, and HTTP health and version DTOs retain the bare semantic version `0.1.0`.
 
 The envelope is versioned and contract-tested through `make test-contract` (NFR-003, NFR-011).
 
@@ -828,7 +828,7 @@ The symbolic code is the primary machine contract; the exit code is the coarse c
 
 ## 17. Transport, authentication, and daemon discovery
 
-Everything in this section is milestone 0.2, because it exists only once the daemon does.
+Everything in this section is milestone M2, because it exists only once the daemon does.
 
 ### 17.1 Authentication
 
@@ -883,7 +883,7 @@ Path-based imports are accepted only from the authenticated local CLI context, n
 
 ## 18. HTTP endpoint catalog
 
-Every endpoint is milestone 0.2 unless it is marked 0.3, and every path is prefixed by the version segment `/api/v1` (API-001).
+Every endpoint is milestone M2 unless it is marked M3, and every path is prefixed by the version segment `/api/v1` (API-001).
 
 ### 18.1 Runtime and session
 
@@ -998,7 +998,7 @@ POST /api/v1/handoffs/{handoffId}/deletion-reject
 
 `POST /api/v1/handoffs/{handoffId}/unarchive` replaces the `/restore` path of the previous Source of Truth revision, so `restore` now names disaster recovery only.
 
-### 18.7 Backup, milestone 0.3
+### 18.7 Backup, milestone M3
 
 ```text
 GET  /api/v1/backup/status
@@ -1030,11 +1030,11 @@ Cursors are opaque to clients and are not required to survive a Sorage upgrade.
 
 ## 20. Web information architecture
 
-Milestone 0.2 delivers a read-only dashboard plus the User-admin actions and upload creation; the Backup screen arrives with milestone 0.3.
+Milestone M2 delivers a read-only dashboard plus the User-admin actions and upload creation; the Backup screen arrives with milestone M3.
 
 ```text
-Dashboard                          0.2
-Handoffs                           0.2
+Dashboard                          M2
+Handoffs                           M2
   Inbox
   Outbox
   Changes Requested
@@ -1044,17 +1044,17 @@ Handoffs                           0.2
   Archived
   Deleted
   Deletion Requests
-Projects                           0.2
+Projects                           M2
   Bindings
-Unregistered Workspaces            0.2
-Backup                             0.3
-Settings                           0.2
+Unregistered Workspaces            M2
+Backup                             M3
+Settings                           M2
   General
   Vault
   Server
   Git Backup
   YAML (read-only)
-Diagnostics                        0.2
+Diagnostics                        M2
 ```
 
 Every list screen offers the same filters as the CLI, and the Deleted view is the Web equivalent of `--include-deleted` (WEB-003).
@@ -1075,7 +1075,7 @@ Summary cards (WEB-002):
 - Deleted
 - Deletion Requested
 - Recently Updated
-- Backup Health, milestone 0.3, shown only once Git backup exists
+- Backup Health, milestone M3, shown only once Git backup exists
 
 Handoff table:
 
@@ -1089,7 +1089,7 @@ Handoff table:
 | Next Actor | Recipient, sender, User, or none |
 | Updated | Last mutation time, rendered in `ui.timezone` or the system zone |
 | Pinned | Retention marker |
-| Backup | Whether the Handoff was included in the last successful backup, 0.3 |
+| Backup | Whether the Handoff was included in the last successful backup, M3 |
 
 ## 22. Handoff detail
 
@@ -1113,7 +1113,7 @@ The timeline must never imply that historical Artifact content is retrievable.
 
 ## 23. Web creation
 
-The upload form is milestone 0.2 and includes (WEB-007):
+The upload form is milestone M2 and includes (WEB-007):
 
 - Sender: a registered Project or User upload
 - One or more recipient Projects
@@ -1135,7 +1135,7 @@ Settings shows the canonical configuration path and provides (WEB-012, WEB-013, 
 - ETag conflict detection with a clear "the file changed outside this page" message
 - A diff of the pending change before save
 - Restart-required indicators matching the table in section 5.2
-- Git backup settings and status, 0.3
+- Git backup settings and status, M3
 
 The Web UI provides no YAML editor; the YAML view is read-only precisely so that comment preservation and schema validity stay guaranteed by the typed path (WEB-014).
 
@@ -1323,7 +1323,7 @@ A restore whose Vault marker `schemaVersion` is newer than the running build sto
 
 ## 33. Deletion and Git history
 
-Required warning, whose text is carried by LIFE-015 from milestone 0.1 and repeated in the backup messaging of BKP-019:
+Required warning, whose text is carried by LIFE-015 from milestone M1 and repeated in the backup messaging of BKP-019:
 
 > Sorage deletion removes the current managed Artifact, but prior Git commits may retain earlier content. The MVP does not rewrite Git history.
 
@@ -1335,7 +1335,7 @@ The reverse property is just as important and is easy to miss: Sorage retains on
 
 ## 34. Daemon and service operations
 
-### 34.1 Lifecycle, milestone 0.2
+### 34.1 Lifecycle, milestone M2
 
 | Command | Behavior |
 |---|---|
@@ -1350,7 +1350,7 @@ A start that finds a `daemon.lock` whose pid is dead breaks the stale lock; a st
 
 Graceful shutdown refuses new mutations before storage shutdown so no transaction is cut in half (SEC-015).
 
-### 34.2 LaunchAgent, milestone 0.3
+### 34.2 LaunchAgent, milestone M3
 
 The per-user LaunchAgent is labeled `xyz.rootkernel.sorage` (RUN-007, RUN-011).
 
@@ -1365,7 +1365,7 @@ The plist carries the canonical `Label`, the `ProgramArguments` running `<sorage
 
 The default Vault lives under `~/.sorage/vault` rather than `~/Documents` specifically so that a launchd-started daemon does not trigger a macOS privacy prompt that no one is present to answer.
 
-The binary the LaunchAgent points at is produced by `make build`, which compiles to `dist/sorage`, and the distributable is produced by `make package`, which signs that binary and emits the Homebrew formula inputs (NFR-013, NFR-016).
+The binary the LaunchAgent points at is produced by `make build`, which compiles to `dist/sorage`. `make package` signs that source-install binary and emits the same signed bytes as `dist/sorage-v0.1.0-darwin-arm64` together with its `.sha256` checksum and `.manifest.json` metadata (NFR-013, NFR-016, ADR-0023).
 
 ### 34.3 Logging
 
@@ -1377,7 +1377,7 @@ All Sorage processes write structured JSON logs to `~/.sorage/logs/sorage.log` (
 - Bearer tokens, one-time secrets, and Git credentials are never logged, at any level (SEC-010).
 - Every log line carries the `requestId` that the CLI and API envelopes return, which is the intended way to find the record behind an `INTERNAL_ERROR`.
 
-### 34.4 Uninstall, milestone 0.3
+### 34.4 Uninstall, milestone M3
 
 ```bash
 sorage uninstall --as-user --confirm
@@ -1395,34 +1395,34 @@ The command exits 0 when no check is `blocking`, and it is usable before and aft
 
 | Check id | Milestone | Severity | Verifies | Recovery |
 |---|---|---|---|---|
-| `home.permissions` | 0.1 | blocking | The home directory resolved from `SORAGE_HOME` exists and `config.yaml` is owner-only | Recreate the home tree with `sorage init --reconfigure`, or restore owner-only permissions |
-| `config.schema` | 0.1 | blocking | `config.yaml` parses and validates against the schema with declared defaults applied | `sorage config validate`, then repair the reported keys |
-| `config.lock` | 0.1 | warning | No `config.lock` is held by a dead pid or older than its 30-second staleness window | Remove `~/.sorage/run/config.lock` once no `sorage` process is running |
-| `vault.marker` | 0.1 | blocking | The marker exists, parses, matches `installationId`, and has a supported `schemaVersion` | `sorage vault verify`; adopt a foreign Vault only through `sorage backup restore --from <vault-path> --as-user --confirm` |
-| `vault.gitattributes` | 0.1 | warning | `.gitattributes` and `.gitignore` match section 6 verbatim (VLT-024), and from 0.3 the Vault repository also has `core.autocrlf=false` (BKP-022) | `sorage init --reconfigure` backfills both files; set the git configuration in the Vault repository |
-| `vault.writable` | 0.1 | blocking | The Vault root, `artifacts/`, and `staging/` are writable by this operating-system user | Fix the directory permissions, or remount the volume read-write |
-| `db.integrity` | 0.1 | blocking | `PRAGMA integrity_check` reports no corruption and the database is in WAL mode with foreign keys enabled | Restore from `~/.sorage/state/backups/`, or `sorage backup restore` into a fresh installation |
-| `db.pendingIntents` | 0.1 | warning | Reports only the intents the start-up drain could not resolve, which are integrity-failed; an intent the drain cleared is never reported | Inspect the `ARTIFACT_INTEGRITY_FAILED` events for the affected Handoffs and restore them from backup |
-| `db.migrations` | 0.1 | blocking | `schema_migrations` is at the version this build expects and `migration.lock` is not held by a dead pid | Install the matching `sorage` build; remove a stale `~/.sorage/run/migration.lock` |
-| `artifacts.checksums` | 0.1 | blocking | Every live Handoff's current Artifact exists at its `storageKey` and matches its recorded SHA-256 | `sorage vault verify`, then restore the affected Handoff from backup |
-| `bindings.exist` | 0.1 | warning | Every active Project has at least one binding and every binding directory still exists | `sorage project bind <project> --dir <path> for an unbound Project, or sorage project unbind <project> --dir <the recorded directory this warning names> for a binding whose directory vanished` |
-| `bindings.nested` | 0.1 | warning | Nested bindings are reported together with the Project each one resolves to | Pass `--as <project-slug>` wherever the deepest match is not the intended Project |
-| `bindings.ambiguous` | 0.1 | warning | No two bindings of the same kind alias the same directory through a bind mount or an APFS firmlink, which `realpath` does not collapse, which is the only way a resolution can raise `AMBIGUOUS_PROJECT`; `--as <project-slug>` is the documented escape | `sorage project unbind` the aliased path, or always pass `--as <project-slug>` from it |
-| `daemon.reachable` | 0.2 | warning | `run/daemon.json` is fresh and `/api/v1/health` returns the expected `installationId` | `sorage daemon start`, or delete a stale `run/daemon.json` |
-| `daemon.port` | 0.2 | warning | The configured port is not already bound by another process | Change `server.port` and restart the daemon, or stop the other process |
-| `token.permissions` | 0.2 | blocking | `~/.sorage/state/api-token` exists with mode `0600` and holds at least 32 random bytes | `sorage token rotate --as-user` |
-| `service.installed` | 0.3 | warning | The LaunchAgent is bootstrapped in `gui/$UID` and points at the installed binary | `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/xyz.rootkernel.sorage.plist` |
-| `backup.schedule` | 0.3 | warning | Backup is enabled, `nextDueAt` is computable in the configured zone, the last run did not fail, and the last success is not older than the configured cadence | `sorage backup run`, then read `sorage backup status` |
-| `git.state` | 0.3 | warning | The Vault repository is on the configured branch, has no in-progress merge or rebase, holds no unrelated staged work, and its remote configuration matches the push setting | Resolve the repository state manually; Sorage never rebases or merges |
-| `platform.tcc` | 0.1 | warning | The Vault and every Project binding directory are readable without a macOS privacy prompt | Grant Full Disk Access to the invoking terminal, or keep the Vault under `~/.sorage` |
+| `home.permissions` | M1 | blocking | The home directory resolved from `SORAGE_HOME` exists and `config.yaml` is owner-only | Recreate the home tree with `sorage init --reconfigure`, or restore owner-only permissions |
+| `config.schema` | M1 | blocking | `config.yaml` parses and validates against the schema with declared defaults applied | `sorage config validate`, then repair the reported keys |
+| `config.lock` | M1 | warning | No `config.lock` is held by a dead pid or older than its 30-second staleness window | Remove `~/.sorage/run/config.lock` once no `sorage` process is running |
+| `vault.marker` | M1 | blocking | The marker exists, parses, matches `installationId`, and has a supported `schemaVersion` | `sorage vault verify`; adopt a foreign Vault only through `sorage backup restore --from <vault-path> --as-user --confirm` |
+| `vault.gitattributes` | M1 | warning | `.gitattributes` and `.gitignore` match section 6 verbatim (VLT-024), and from M3 the Vault repository also has `core.autocrlf=false` (BKP-022) | `sorage init --reconfigure` backfills both files; set the git configuration in the Vault repository |
+| `vault.writable` | M1 | blocking | The Vault root, `artifacts/`, and `staging/` are writable by this operating-system user | Fix the directory permissions, or remount the volume read-write |
+| `db.integrity` | M1 | blocking | `PRAGMA integrity_check` reports no corruption and the database is in WAL mode with foreign keys enabled | Restore from `~/.sorage/state/backups/`, or `sorage backup restore` into a fresh installation |
+| `db.pendingIntents` | M1 | warning | Reports only the intents the start-up drain could not resolve, which are integrity-failed; an intent the drain cleared is never reported | Inspect the `ARTIFACT_INTEGRITY_FAILED` events for the affected Handoffs and restore them from backup |
+| `db.migrations` | M1 | blocking | `schema_migrations` is at the version this build expects and `migration.lock` is not held by a dead pid | Install the matching `sorage` build; remove a stale `~/.sorage/run/migration.lock` |
+| `artifacts.checksums` | M1 | blocking | Every live Handoff's current Artifact exists at its `storageKey` and matches its recorded SHA-256 | `sorage vault verify`, then restore the affected Handoff from backup |
+| `bindings.exist` | M1 | warning | Every active Project has at least one binding and every binding directory still exists | `sorage project bind <project> --dir <path> for an unbound Project, or sorage project unbind <project> --dir <the recorded directory this warning names> for a binding whose directory vanished` |
+| `bindings.nested` | M1 | warning | Nested bindings are reported together with the Project each one resolves to | Pass `--as <project-slug>` wherever the deepest match is not the intended Project |
+| `bindings.ambiguous` | M1 | warning | No two bindings of the same kind alias the same directory through a bind mount or an APFS firmlink, which `realpath` does not collapse, which is the only way a resolution can raise `AMBIGUOUS_PROJECT`; `--as <project-slug>` is the documented escape | `sorage project unbind` the aliased path, or always pass `--as <project-slug>` from it |
+| `daemon.reachable` | M2 | warning | `run/daemon.json` is fresh and `/api/v1/health` returns the expected `installationId` | `sorage daemon start`, or delete a stale `run/daemon.json` |
+| `daemon.port` | M2 | warning | The configured port is not already bound by another process | Change `server.port` and restart the daemon, or stop the other process |
+| `token.permissions` | M2 | blocking | `~/.sorage/state/api-token` exists with mode `0600` and holds at least 32 random bytes | `sorage token rotate --as-user` |
+| `service.installed` | M3 | warning | The LaunchAgent is bootstrapped in `gui/$UID` and points at the installed binary | `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/xyz.rootkernel.sorage.plist` |
+| `backup.schedule` | M3 | warning | Backup is enabled, `nextDueAt` is computable in the configured zone, the last run did not fail, and the last success is not older than the configured cadence | `sorage backup run`, then read `sorage backup status` |
+| `git.state` | M3 | warning | The Vault repository is on the configured branch, has no in-progress merge or rebase, holds no unrelated staged work, and its remote configuration matches the push setting | Resolve the repository state manually; Sorage never rebases or merges |
+| `platform.tcc` | M1 | warning | The Vault and every Project binding directory are readable without a macOS privacy prompt | Grant Full Disk Access to the invoking terminal, or keep the Vault under `~/.sorage` |
 
 The catalog holds exactly these twenty ids, `severity` is the worst severity the check can report, and a passing check reports `ok`.
 
-The catalog is milestone-scoped: a 0.1 build emits the 0.1 ids only, and each later id appears when its milestone is reached, so a check is never reported as `ok` by a build that cannot perform it.
+The catalog is milestone-scoped: a M1 build emits the M1 ids only, and each later id appears when its milestone is reached, so a check is never reported as `ok` by a build that cannot perform it.
 
 Before initialization every installation-dependent check reports `blocking` with the message "Sorage is not initialized" and `sorage init` as its recovery, and only `config.schema` names the expected configuration file, so a fresh machine gets one path to read and not twenty.
 
-Checksums are verified exhaustively here and by `sorage vault verify`; there is no per-process start-up sweep, because paying for one on every CLI invocation would make the common command slow. Once the daemon exists it also runs a periodic background sweep bounded to 64 MiB of Artifact bytes per garbage-collection tick (0.2), which has no configuration key.
+Checksums are verified exhaustively here and by `sorage vault verify`; there is no per-process start-up sweep, because paying for one on every CLI invocation would make the common command slow. Once the daemon exists it also runs a periodic background sweep bounded to 64 MiB of Artifact bytes per garbage-collection tick (M2), which has no configuration key.
 
 JSON shape:
 

@@ -78,6 +78,12 @@ interface TaskRow {
   line: number;
 }
 
+const MILESTONE_ORDER = new Map([
+  ["M1", 1],
+  ["M2", 2],
+  ["M3", 3],
+]);
+
 /** Expands range notation like `CFG-001 to CFG-009` into the full inclusive id set. */
 function expandRanges(cell: string): string[] {
   const ids = new Set<string>();
@@ -152,7 +158,7 @@ function parseRoadmap(): {
 function parseRequirements(): Map<string, string> {
   const specPath = join(root, "docs", "specs", "required-specification.md");
   const requirements = new Map<string, string>();
-  for (const match of readFileSync(specPath, "utf8").matchAll(/^\| ([A-Z]{3,6}-\d{3}) \| (0\.[123]|Deferred) \|/gm)) {
+  for (const match of readFileSync(specPath, "utf8").matchAll(/^\| ([A-Z]{3,6}-\d{3}) \| (M[123]|Deferred) \|/gm)) {
     requirements.set(match[1] as string, match[2] as string);
   }
   return requirements;
@@ -163,6 +169,12 @@ function checkIdentifiers(): void {
   const requirements = parseRequirements();
 
   for (const task of tasks.values()) {
+    if (!MILESTONE_ORDER.has(task.milestone)) {
+      fail(
+        `docs/roadmap/README.md:${task.line}`,
+        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected M1, M2, or M3`,
+      );
+    }
     for (const dependency of task.dependencies) {
       if (dependency === task.id) {
         fail(`docs/roadmap/README.md:${task.line}`, `Task ${task.id} depends on itself`);
@@ -199,15 +211,8 @@ function checkIdentifiers(): void {
   for (const [requirement, citers] of citingTasks) {
     const milestone = requirements.get(requirement);
     if (milestone === undefined || milestone === "Deferred") continue;
-    const later = (a: string, b: string): boolean => {
-      const parse = (value: string): [number, number] => {
-        const [major, minor] = value.split(".").map((part) => Number.parseInt(part ?? "0", 10));
-        return [major ?? 0, minor ?? 0];
-      };
-      const [aMajor, aMinor] = parse(a);
-      const [bMajor, bMinor] = parse(b);
-      return aMajor > bMajor || (aMajor === bMajor && aMinor > bMinor);
-    };
+    const later = (a: string, b: string): boolean =>
+      (MILESTONE_ORDER.get(a) ?? Number.POSITIVE_INFINITY) > (MILESTONE_ORDER.get(b) ?? Number.POSITIVE_INFINITY);
     if (citers.every((task) => later(task.milestone, milestone))) {
       const firstCiter = citers[0];
       fail(
@@ -252,7 +257,7 @@ function checkTraceability(): void {
     const line = lines[index] ?? "";
     if (line.startsWith("## ")) inReverseIndex = line.startsWith("## 3.");
     if (!inReverseIndex) continue;
-    const match = line.match(/^\| `([A-Z]{3,6}-\d{3})` \| (0\.[123]|Deferred) \| (.+) \|$/);
+    const match = line.match(/^\| `([A-Z]{3,6}-\d{3})` \| (M[123]|Deferred) \| (.+) \|$/);
     if (match === null) continue;
     const id = match[1] as string;
     if (rows.has(id)) fail(`${traceabilityPath}:${index + 1}`, `duplicate reverse-index row ${id}`);

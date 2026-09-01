@@ -6,10 +6,10 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 
 | Layer | Tool | Milestone |
 |---|---|---|
-| Unit, integration, contract | Vitest executed through Bun | 0.1 |
-| Command-line end to end | The compiled `sorage` binary driven from Vitest | 0.1 |
-| Web end to end | Playwright | 0.2 |
-| Accessibility | axe-core inside the Playwright run, SHOULD, engineering practice rather than a gate condition (WEB-018) | 0.2 |
+| Unit, integration, contract | Vitest executed through Bun | M1 |
+| Command-line end to end | The compiled `sorage` binary driven from Vitest | M1 |
+| Web end to end | Playwright | M2 |
+| Accessibility | axe-core inside the Playwright run, SHOULD, engineering practice rather than a gate condition (WEB-018) | M2 |
 
 `make` provides at least these targets, and `make test` is the single verification gate (NFR-016):
 
@@ -19,10 +19,10 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |
-| `test-e2e` | Whole journeys: the compiled CLI from 0.1, and Playwright plus axe-core from 0.2 |
+| `test-e2e` | Whole journeys: the compiled CLI from M1, and Playwright plus axe-core from M2 |
 | `test` | All of the above in order |
 | `build` | `bun build --compile` producing `dist/sorage` |
-| `package` | The signed binary plus the Homebrew formula inputs |
+| `package` | The signed source-install binary plus the versioned `darwin-arm64` release candidate, checksum, and manifest |
 
 Verification runs locally on the developer's macOS machine through `make test`; `test-prepare` asserts Bun `1.4.0` as pinned in `.bun-version` at the repository root and mirrored in the `package.json` `engines` field, so no environment can silently drift from the pin; a mismatch fails in `test-prepare` before any test executes. This repository uses no hosted continuous-integration service.
 
@@ -70,7 +70,7 @@ CLI JSON envelopes and the `doctor` catalog as golden snapshots, HTTP DTOs, erro
 
 ### 3.4 End to end
 
-Complete journeys through the compiled binary from 0.1, and through a real browser against a real daemon from 0.2, including the Host allowlist, the fragment-secret session exchange, and the absence of any cookie.
+Complete journeys through the compiled binary from M1, and through a real browser against a real daemon from M2, including the Host allowlist, the fragment-secret session exchange, and the absence of any cookie.
 
 ### 3.5 Failure injection
 
@@ -89,7 +89,7 @@ Section 4 is the required matrix; every row is a test, and each one restarts the
 | `CP-7` | Kill in the middle of a drain, then kill again during the retry | The drain is repeatable; `attempts` increases, ordering stays `createdAt`, and no intent is executed destructively twice |
 | Disk full | `disk-full` mode during staging and during the rename | The operation fails with a recoverable error, no partial Artifact is ever marked materialized, and no committed Handoff is left without a repair path |
 | Read-only Vault | `read-only` mode for the whole Vault | Mutations fail with recovery guidance, reads and `doctor` still work, and `vault.writable` reports blocking |
-| Daemon restart mid-request, 0.2 | Stop the daemon while a multipart upload is in flight | The client sees a transport failure, the drain leaves no half-created Handoff, and a retry with the same `Idempotency-Key` produces exactly one Handoff |
+| Daemon restart mid-request, M2 | Stop the daemon while a multipart upload is in flight | The client sees a transport failure, the drain leaves no half-created Handoff, and a retry with the same `Idempotency-Key` produces exactly one Handoff |
 | Concurrent Note and revise | Recipient `review set` and sender `revise` on the same Handoff with the same Row Version | Exactly one succeeds; the loser fails with `ROW_VERSION_CONFLICT` and the Handoff state is internally consistent, with no Note attached to a Revision that no longer exists |
 | Concurrent revise and revise | Two senders revising the same Handoff with the same expected Row Version | Exactly one succeeds; the compare-and-set loser's transaction rolls back, its staged file becomes an orphan of the no-row class visible to `sorage vault verify`, and the `staging/` sweep removes it |
 
@@ -97,18 +97,18 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for 0.1, AJ-11 to AJ-13 for 0.2, and AJ-14 to AJ-16 for 0.3.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, and AJ-14 to AJ-16 for M3.
 
-`Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every 0.1 journey is executed through the CLI surface completed in `EPIC-006`.
+`Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
 
 ### AJ-01: Fresh non-interactive initialization and doctor
 
-- **Owner:** `EPIC-002` · **Milestone:** 0.1
+- **Owner:** `EPIC-002` · **Milestone:** M1
 - **Requirements:** INIT-001, INIT-003, INIT-005, INIT-006, INIT-014, INIT-015, INIT-017, CFG-020, VLT-002, VLT-024, GEN-010
 
 1. Start with an empty temporary `SORAGE_HOME` and no ecosystem tool installed.
 2. Run `sorage init` fully non-interactively with explicit flags.
-3. Verify `config.yaml`, the operational database, the Vault marker, and the directory layout, and confirm that Vault initialization wrote `.gitattributes` with `artifacts/** -text -diff`, `snapshots/** text eol=lf`, and `.sorage-vault.json text eol=lf`, and `.gitignore` with `staging/`, at milestone 0.1 (VLT-024).
+3. Verify `config.yaml`, the operational database, the Vault marker, and the directory layout, and confirm that Vault initialization wrote `.gitattributes` with `artifacts/** -text -diff`, `snapshots/** text eol=lf`, and `.sorage-vault.json text eol=lf`, and `.gitignore` with `staging/`, at milestone M1 (VLT-024).
 4. Verify `sorage config show --json` returns exactly the schema defaults.
 5. Run `sorage init` again and confirm it is idempotent and destroys nothing.
 6. Run `sorage doctor --json`.
@@ -117,7 +117,7 @@ Expected: every check is `ok`, the exit code is 0, and no check reports `blockin
 
 ### AJ-02: Pre-initialization guidance
 
-- **Owner:** `EPIC-002` · **Milestone:** 0.1
+- **Owner:** `EPIC-002` · **Milestone:** M1
 - **Requirements:** INIT-011, INIT-012, INIT-014, INIT-017, CLI-002, CLI-004, CLI-016
 
 1. Start with no installation.
@@ -125,11 +125,11 @@ Expected: every check is `ok`, the exit code is 0, and no check reports `blockin
 3. Run each of `init`, `help`, `version`, `completion`, and `doctor`.
 4. Inspect every entry of the pre-initialization `sorage doctor --json` catalog.
 
-Expected: the first two fail with `NOT_INITIALIZED`, the expected config path, and `sorage init` as the suggested next command, with JSON only on standard output; the five bootstrap commands run; the pre-initialization catalog holds the 0.1 check ids only, every installation-dependent check reports `blocking` with a message stating that Sorage is not initialized and `sorage init` as its recovery, only `config.schema` names the configuration file, and the exit code is therefore non-zero.
+Expected: the first two fail with `NOT_INITIALIZED`, the expected config path, and `sorage init` as the suggested next command, with JSON only on standard output; the five bootstrap commands run; the pre-initialization catalog holds the M1 check ids only, every installation-dependent check reports `blocking` with a message stating that Sorage is not initialized and `sorage init` as its recovery, only `config.schema` names the configuration file, and the exit code is therefore non-zero.
 
 ### AJ-03: Project registration, worktree resolution, nesting, and archiving
 
-- **Owner:** `EPIC-003` · **Milestone:** 0.1
+- **Owner:** `EPIC-003` · **Milestone:** M1
 - **Requirements:** PRJ-003 to PRJ-009, PRJ-016 to PRJ-018, PRJ-021, PRJ-022
 
 1. Register Projects A and B with `sorage project add`.
@@ -147,7 +147,7 @@ Expected: every worktree of A resolves to A; binding a worktree path of an alrea
 
 ### AJ-04: Registered Handoff loop
 
-- **Owner:** `EPIC-006` · **Milestone:** 0.1
+- **Owner:** `EPIC-006` · **Milestone:** M1
 - **Requirements:** HND-001 to HND-006, HND-010, HND-012, HND-014, HND-024, HND-025, REV-005 to REV-009, REV-013, LIFE-001 to LIFE-005, LIFE-017, CLI-010, CLI-013
 
 1. From A: `sorage send --to b --title <t> --file <path> --json`.
@@ -165,7 +165,7 @@ Expected: the Row Version the client holds is 1, then 2, then 3 at each successi
 
 ### AJ-05: Unregistered sender, downgrade guard, and later registration
 
-- **Owner:** `EPIC-003` · **Milestone:** 0.1
+- **Owner:** `EPIC-003` · **Milestone:** M1
 - **Requirements:** PRJ-013 to PRJ-015, PRJ-019, PRJ-020, HND-011, CLI-017
 
 1. From a directory that is neither a binding nor inside one, send to B and confirm a stable `workspaceKey` identity.
@@ -181,7 +181,7 @@ Expected: steps 4 and 5 fail with `SENDER_IDENTITY_DOWNGRADE`, because the worki
 
 ### AJ-06: Fan-out independence
 
-- **Owner:** `EPIC-005` · **Milestone:** 0.1
+- **Owner:** `EPIC-005` · **Milestone:** M1
 - **Requirements:** HND-006 to HND-009, HND-019, VLT-020
 
 1. Send one source to B, C, and D in one command.
@@ -194,7 +194,7 @@ Expected: no operation on one Handoff changes another; the 100-recipient group i
 
 ### AJ-07: Declined, withdrawn, Note withdrawal, no-change bound, and administrative removal
 
-- **Owner:** `EPIC-005` · **Milestone:** 0.1
+- **Owner:** `EPIC-005` · **Milestone:** M1
 - **Requirements:** HND-021, HND-022, REV-015, REV-016, REV-017, LIFE-017, CLI-019
 
 1. On H1, the recipient runs `sorage decline <id> --reason <text> --expected-row-version <n>`, then the sender attempts a revise.
@@ -210,7 +210,7 @@ Expected: H1 is `declined` and the revise fails with `HANDOFF_TERMINAL`; H2 is `
 
 ### AJ-08: Row Version conflict, idempotency replay, and crash recovery
 
-- **Owner:** `EPIC-005` · **Milestone:** 0.1
+- **Owner:** `EPIC-005` · **Milestone:** M1
 - **Requirements:** HND-014, HND-015, HND-025, CLI-021, API-012, VLT-021, VLT-022, RUN-002, SEC-009
 
 1. Load one Handoff in two clients, mutate with the first, then mutate with the stale second.
@@ -224,7 +224,7 @@ Expected: step 1 fails with `ROW_VERSION_CONFLICT` and leaves the newer state un
 
 ### AJ-09: Vault move with injected failure
 
-- **Owner:** `EPIC-004` · **Milestone:** 0.1
+- **Owner:** `EPIC-004` · **Milestone:** M1
 - **Requirements:** CFG-013, CFG-014, RUN-014, VLT-019, SEC-014
 
 1. Create several Handoffs, including one with a pending Review Note.
@@ -237,7 +237,7 @@ Expected: the failed move leaves the original Vault active and the configuration
 
 ### AJ-10: Two-phase deletion with the Git warning
 
-- **Owner:** `EPIC-005` · **Milestone:** 0.1
+- **Owner:** `EPIC-005` · **Milestone:** M1
 - **Requirements:** LIFE-010 to LIFE-018, VLT-021, SEC-012, CLI-019
 
 1. A Project requests deletion of one of its Handoffs while it is still in `awaiting_recipient`.
@@ -254,7 +254,7 @@ Expected: step 2 fails with `HANDOFF_NOT_TERMINAL`, so a deletion request may be
 
 ### AJ-11: Daemon lifecycle
 
-- **Owner:** `EPIC-007` · **Milestone:** 0.2
+- **Owner:** `EPIC-007` · **Milestone:** M2
 - **Requirements:** RUN-005, RUN-006, RUN-008, RUN-013, SEC-015
 
 1. Run `sorage daemon start`, then `sorage daemon status`.
@@ -269,7 +269,7 @@ Expected: step 4 fails with `PORT_IN_USE`; the stop drains and refuses new mutat
 
 ### AJ-12: Web session and the local network boundary
 
-- **Owner:** `EPIC-007` · **Milestone:** 0.2
+- **Owner:** `EPIC-007` · **Milestone:** M2
 - **Requirements:** RUN-012, SEC-017, SEC-018, SEC-019, SEC-020, SEC-001
 
 1. With no daemon running, run `sorage web`; it starts the daemon and opens the browser at a URL whose fragment carries a one-time secret.
@@ -285,7 +285,7 @@ Expected: the replayed secret is refused with `UNAUTHENTICATED` and HTTP 401; di
 
 ### AJ-13: Web administration
 
-- **Owner:** `EPIC-007` · **Milestone:** 0.2
+- **Owner:** `EPIC-007` · **Milestone:** M2
 - **Requirements:** WEB-002 to WEB-015, WEB-017, API-003, API-005, CFG-019, LIFE-012
 
 1. Open the dashboard and verify counts for awaiting recipient, changes requested, accepted, declined, withdrawn, pinned, archived, deleted, deletion requested, and recent updates; the backup health card appears once Git backup exists at 0.3.
@@ -302,7 +302,7 @@ Expected: the counts match the database; the binary Artifact offers metadata plu
 
 ### AJ-14: Daily Git backup
 
-- **Owner:** `EPIC-008` · **Milestone:** 0.3
+- **Owner:** `EPIC-008` · **Milestone:** M3
 - **Requirements:** BKP-002 to BKP-006, BKP-009 to BKP-016, BKP-022 to BKP-026
 
 1. Initialize a Vault Git repository and run `sorage backup enable --daily-at <HH:MM> --timezone <zone> --as-user`.
@@ -318,7 +318,7 @@ Expected: the nonexistent local time runs at the next valid instant and the repe
 
 ### AJ-15: Clean restore drill
 
-- **Owner:** `EPIC-008` · **Milestone:** 0.3
+- **Owner:** `EPIC-008` · **Milestone:** M3
 - **Requirements:** BKP-021, BKP-022, BKP-023, VLT-019, SEC-014, PRJ-014, PRJ-020
 
 1. Produce a backup containing Projects, Handoffs at every review state, Review Notes, tombstones, and an unregistered-Workspace Handoff.
@@ -334,17 +334,17 @@ Expected: the `core.autocrlf=true` clone leaves every Artifact byte-identical, p
 
 ### AJ-16: Packaging on a clean macOS account
 
-- **Owner:** `EPIC-009` · **Milestone:** 0.3
+- **Owner:** `EPIC-009` · **Milestone:** M3
 - **Requirements:** GEN-002, INIT-016, RUN-007, RUN-011, NFR-012, NFR-013
 
-1. On a freshly created macOS user account, install from the Homebrew tap.
+1. On a freshly created Apple Silicon macOS user account, download the `sorage-v0.1.0-darwin-arm64` GitHub Release asset and its checksum, verify the checksum, and install only that binary.
 2. Run `sorage version` and `sorage init` non-interactively, then `sorage doctor`.
 3. Install the LaunchAgent, log out and back in, confirm the daemon is running and reachable, and confirm its record, health response, and version response report the same product version as `sorage version`.
 4. Run every earlier journey that does not require a developer checkout.
 5. Run `sorage uninstall --as-user --confirm`.
 6. Inspect the account afterwards.
 
-Expected: Gatekeeper does not quarantine the installed binary; the CLI and daemon report the package manifest's product version; the LaunchAgent bootstraps into `gui/$UID` and boots out cleanly; uninstall removes the LaunchAgent, `state`, `run`, `logs`, and `config.yaml`, leaves the Vault untouched, and prints the retained Vault path.
+Expected: the downloaded bytes match the checksum and manifest, the ad-hoc signature verifies, the CLI and daemon report the package manifest's product version, the LaunchAgent bootstraps into `gui/$UID` and boots out cleanly, and uninstall removes the LaunchAgent, `state`, `run`, `logs`, and `config.yaml`, leaves the Vault untouched, and prints the retained Vault path. Gatekeeper behavior for a hosted ad-hoc-signed download is an explicit publication-time observation, not a pre-publication claim.
 
 ## 6. Success-criteria map
 
@@ -352,24 +352,24 @@ Charter criteria are cited by meaning as well as by number, because [../product/
 
 | Charter criterion | Milestone | Journey |
 |---|---|---|
-| 1. A fresh macOS installation is initialized without manual file creation | 0.1 | AJ-01, AJ-16 |
-| 2. A registered Project sends a document to another registered Project | 0.1 | AJ-04 |
-| 3. The recipient discovers it through `inbox` | 0.1 | AJ-04, AJ-06 |
-| 4. A single Review Note is created and atomically resolved by a revision | 0.1 | AJ-04 |
-| 5. An accepted Revision cannot be silently changed | 0.1 | AJ-04, AJ-07 |
-| 6. Several recipients produce independent Handoffs | 0.1 | AJ-06 |
-| 7. Unregistered Workspaces send and resolve their own outbox | 0.1 | AJ-05, AJ-15 |
-| 8. The Web dashboard shows every review state and retention class accurately | 0.2 | AJ-13 |
-| 9. Configuration is inspected and safely edited through CLI and Web | 0.2 | AJ-01, AJ-13 |
-| 10. A scheduled Git backup completes, reports status, and fails safely | 0.3 | AJ-14 |
-| 11. No manual copy or move is needed in the normal workflow | 0.1 | AJ-04, AJ-06 |
-| 12. Every MVP acceptance journey passes on a clean macOS user account | 0.3 | AJ-16 |
-| 13. Sorage builds and tests from its own standalone repository root through `make test` | 0.1 | Section 1 `make` targets, AJ-16 |
-| 14. The `use-sorage` skill closes the discovery loop | 0.1 | `TASK-039` skill validation, AJ-04, AJ-07 |
-| 15. Every user-facing and machine-facing identifier uses the canonical naming system | 0.1 | AJ-02, section 3.3 contract snapshots |
-| 16. A git worktree of a registered repository sends and receives as that Project | 0.1 | AJ-03 |
-| 17. Declined and withdrawn Handoffs are terminal, reject content operations, and remain visible | 0.1 | AJ-07 |
-| 18. Restore into a clean account reproduces every recorded checksum | 0.3 | AJ-15 |
+| 1. A fresh macOS installation is initialized without manual file creation | M1 | AJ-01, AJ-16 |
+| 2. A registered Project sends a document to another registered Project | M1 | AJ-04 |
+| 3. The recipient discovers it through `inbox` | M1 | AJ-04, AJ-06 |
+| 4. A single Review Note is created and atomically resolved by a revision | M1 | AJ-04 |
+| 5. An accepted Revision cannot be silently changed | M1 | AJ-04, AJ-07 |
+| 6. Several recipients produce independent Handoffs | M1 | AJ-06 |
+| 7. Unregistered Workspaces send and resolve their own outbox | M1 | AJ-05, AJ-15 |
+| 8. The Web dashboard shows every review state and retention class accurately | M2 | AJ-13 |
+| 9. Configuration is inspected and safely edited through CLI and Web | M2 | AJ-01, AJ-13 |
+| 10. A scheduled Git backup completes, reports status, and fails safely | M3 | AJ-14 |
+| 11. No manual copy or move is needed in the normal workflow | M1 | AJ-04, AJ-06 |
+| 12. Every MVP acceptance journey passes on a clean macOS user account | M3 | AJ-16 |
+| 13. Sorage builds and tests from its own standalone repository root through `make test` | M1 | Section 1 `make` targets, AJ-16 |
+| 14. The `use-sorage` skill closes the discovery loop | M1 | `TASK-039` skill validation, AJ-04, AJ-07 |
+| 15. Every user-facing and machine-facing identifier uses the canonical naming system | M1 | AJ-02, section 3.3 contract snapshots |
+| 16. A git worktree of a registered repository sends and receives as that Project | M1 | AJ-03 |
+| 17. Declined and withdrawn Handoffs are terminal, reject content operations, and remain visible | M1 | AJ-07 |
+| 18. Restore into a clean account reproduces every recorded checksum | M3 | AJ-15 |
 
 The remaining journeys carry the v0.4.0 decisions that have no v0.3.0 criterion, and each is a release-gate condition in its own right.
 
@@ -434,33 +434,33 @@ TASK-060 additionally binds every row of the section 15 matrix to a permanent au
 
 ## 9. Release gates
 
-Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the 0.3 gate (GEN-013).
+Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the M3 gate (GEN-013).
 
-### 9.1 Gate 0.1, CLI release, end of `EPIC-006`
+### 9.1 Gate M1, CLI release, end of `EPIC-006`
 
 - AJ-01 to AJ-10 pass against the compiled binary on a clean temporary `SORAGE_HOME`.
 - `make test` is green, including the `test-prepare` lint rules for the import boundary and for `await` inside `UnitOfWork.run`.
-- Every requirement listed under milestone 0.1 in section 17 of [required-specification.md](required-specification.md) is satisfied.
-- The crash-point and failure matrix of section 4 passes for every 0.1 row.
+- Every requirement listed under milestone M1 in section 17 of [required-specification.md](required-specification.md) is satisfied.
+- The crash-point and failure matrix of section 4 passes for every M1 row.
 - `sorage doctor` reports no `blocking` check on a fresh installation, and the catalog matches its contract snapshot.
 - CLI JSON snapshots are approved under section 9.4.
 - `skills/use-sorage/SKILL.md` ships and states the inbox policy of GEN-014.
 - No open P0 or P1 defect.
 
-### 9.2 Gate 0.2, daemon and Web release, end of `EPIC-007`
+### 9.2 Gate M2, daemon and Web release, end of `EPIC-007`
 
 - AJ-11 to AJ-13 pass, and AJ-01 to AJ-10 still pass unchanged.
-- Every requirement listed under milestone 0.2 is satisfied.
+- Every requirement listed under milestone M2 is satisfied.
 - Every security check in section 15 of [security-reliability.md](security-reliability.md) passes.
 - The symbolic-error to HTTP-status matrix is contract-tested (API-011).
 - The axe-core check runs in `make test-e2e` and its findings are recorded; it is engineering practice, not a gate condition (WEB-018).
 - HTTP DTO and error-body snapshots are approved under section 9.4.
 - No open P0 or P1 defect.
 
-### 9.3 Gate 0.3, MVP release, end of `EPIC-009`
+### 9.3 Gate M3, MVP release, end of `EPIC-009`
 
 - AJ-14 to AJ-16 pass, and every earlier journey still passes.
-- Every requirement listed under milestone 0.3 is satisfied, and every deferred item is deferred by an accepted decision.
+- Every requirement listed under milestone M3 is satisfied, and every deferred item is deferred by an accepted decision.
 - Migration from the captured first-schema fixture passes.
 - The restore drill produces byte-identical Artifacts on a machine that never held the originals.
 - A clean macOS user account completes install, LaunchAgent lifecycle, and uninstall with the Vault retained.

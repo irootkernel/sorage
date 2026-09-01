@@ -1,12 +1,12 @@
 # Example CLI Workflow
 
-This walkthrough uses the v0.4.0 command surface defined in [../interfaces-and-operations.md](../interfaces-and-operations.md); every command without a milestone note works in milestone 0.1 with no daemon running.
+This walkthrough uses the v0.4.0 command surface defined in [../interfaces-and-operations.md](../interfaces-and-operations.md); every command without a milestone note works in milestone M1 with no daemon running.
 
 Row Version values are shown explicitly because `--expected-row-version` is always the value the client currently holds, never the value it expects afterwards (HND-025).
 
 ## Initialize
 
-Milestone 0.1, non-interactive:
+Milestone M1, non-interactive:
 
 ```bash
 sorage init \
@@ -14,7 +14,7 @@ sorage init \
   --non-interactive
 ```
 
-The ten-question interactive wizard arrives with milestone 0.3 (INIT-004):
+The ten-question interactive wizard arrives with milestone M3 (INIT-004):
 
 ```bash
 sorage init
@@ -257,7 +257,7 @@ cd "$HOME/projects/gul"
 sorage inbox --wait --timeout 600 --json
 ```
 
-In milestone 0.1 this polls the database every `--interval` seconds, default 2, and on timeout exits 0 with an empty list and `meta.timedOut: true`.
+In milestone M1 this polls the database every `--interval` seconds, default 2, and on timeout exits 0 with an empty list and `meta.timedOut: true`.
 
 The `use-sorage` skill tells every session to run `sorage inbox --json` at session start and before starting a task, which is the primary discovery path; `--wait` is for a session that is idle on purpose (GEN-014).
 
@@ -281,7 +281,7 @@ sorage review withdraw <handoff-uuid>
 
 Omitting `--as-user` on a User-admin command fails with `USER_CONTEXT_REQUIRED` (CLI-019).
 
-## Backup, milestone 0.3
+## Backup, milestone M3
 
 ```bash
 sorage backup enable --daily-at "03:00" --timezone "Asia/Seoul" --as-user
@@ -341,7 +341,7 @@ Approved deletion removes the current Artifact and the current Review Note and l
 
 Deletion never claims to purge Git history, and a Revision replaced between two backups is not preserved anywhere (LIFE-015, BKP-019).
 
-## Web UI, milestone 0.2
+## Web UI, milestone M2
 
 ```bash
 sorage daemon start

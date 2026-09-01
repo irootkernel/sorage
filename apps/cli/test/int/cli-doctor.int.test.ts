@@ -11,7 +11,7 @@ import { CONFIGURATION_DEFAULTS } from "@sorage/core";
  * The EPIC-002 acceptance journeys executed through the CLI: AJ-01 runs a fresh
  * non-interactive initialization and a clean doctor, AJ-02 verifies the
  * pre-initialization guidance and catalog. The journeys are re-run in full at the
- * 0.1 release gate; until `project list` and `completion` arrive with their epics,
+ * M1 release gate; until `project list` and `completion` arrive with their epics,
  * the gated-command step uses `config show`, the gated command this epic ships.
  */
 const homes: string[] = [];

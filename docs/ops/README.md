@@ -8,6 +8,20 @@ The installation includes the local CLI, loopback-only daemon, macOS LaunchAgent
 
 Do not expose authentication material or copy output containing secrets into an issue or runbook. Do not edit the managed Vault by hand. Tests and recovery drills must set `SORAGE_HOME` to a temporary directory instead of using the developer's real `~/.sorage`.
 
+## Release-candidate verification
+
+Before publication, build and inspect the Apple Silicon macOS candidate from the reviewed checkout:
+
+```sh
+make package
+cd dist
+shasum -a 256 -c sorage-v0.1.0-darwin-arm64.sha256
+codesign --verify --strict sorage-v0.1.0-darwin-arm64
+./sorage-v0.1.0-darwin-arm64 version
+```
+
+The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.0`, target `darwin-arm64`, binary `sorage-v0.1.0-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
+
 ## Safe diagnosis
 
 Start with read-only checks:

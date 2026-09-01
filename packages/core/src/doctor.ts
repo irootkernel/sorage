@@ -1,7 +1,7 @@
 /**
- * The doctor check catalog (INIT-014, INIT-017, NFR-010): the 0.1 snapshot held
+ * The doctor check catalog (INIT-014, INIT-017, NFR-010): the M1 snapshot held
  * exactly fourteen check identifiers, and the catalog grows only as later
- * milestones land; milestone 0.2 adds `daemon.port`, and milestone 0.3 adds
+ * milestones land; milestone M2 adds `daemon.port`, and milestone M3 adds
  * `service.installed`, `backup.schedule`, and `git.state`.
  * Each check carries a dotted id, a severity of ok, warning, or blocking, a message, and
  * an optional recovery. The catalog is a versioned part of the CLI JSON contract;

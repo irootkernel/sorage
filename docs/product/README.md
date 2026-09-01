@@ -79,7 +79,7 @@ Small does not mean stuck, so the state machine has bounded escape hatches that 
 
 ### G-04: Support safe local operation
 
-The MVP runs on one macOS machine for one operating-system user, in three milestones: `0.1` delivers the CLI, SQLite, and the Vault with no network listener at all; `0.2` adds the loopback daemon, the local HTTP API, and the Web UI behind Host validation and bearer authentication; `0.3` adds Git backup, the scheduler, the LaunchAgent, and packaging.
+The MVP runs on one macOS machine for one operating-system user, in three milestones: `M1` delivers the CLI, SQLite, and the Vault with no network listener at all; `M2` adds the loopback daemon, the local HTTP API, and the Web UI behind Host validation and bearer authentication; `M3` adds Git backup, the scheduler, the LaunchAgent, and packaging.
 
 ### G-05: Provide recoverable storage
 
@@ -110,8 +110,8 @@ Delivery is driven by the Aquarium roadmap handlers against the single active po
 | Unregistered Workspace | A directory that is not bound to any Project; it may send a Handoff and list its own outbox, but it may not receive one |
 | Recipient Project | The one active registered Project assigned to review a Handoff |
 | Local User | The human operator, who holds administrative authority and acts through the Web UI or through `--as-user` |
-| Sorage Daemon | The milestone 0.2 process that serves the Web UI and the local API, runs the scheduler, and runs garbage collection |
-| Git Backup Scheduler | The milestone 0.3 daemon-owned job that exports snapshots and commits backup state |
+| Sorage Daemon | The milestone M2 process that serves the Web UI and the local API, runs the scheduler, and runs garbage collection |
+| Git Backup Scheduler | The milestone M3 daemon-owned job that exports snapshots and commits backup state |
 
 ## 6. Key use cases
 
@@ -178,7 +178,7 @@ The MVP is successful when:
 9. Configuration can be inspected and safely edited through CLI and Web.
 10. A scheduled Git backup can complete, report status, and fail safely, demonstrated by AJ-14.
 11. No manual copy or move is needed during the normal Handoff workflow.
-12. All MVP acceptance journeys pass on a clean macOS user account: AJ-01 to AJ-10 at the 0.1 gate, AJ-11 to AJ-13 at the 0.2 gate, and AJ-14 to AJ-16 at the 0.3 gate.
+12. All MVP acceptance journeys pass on a clean macOS user account: AJ-01 to AJ-10 at the M1 gate, AJ-11 to AJ-13 at the M2 gate, and AJ-14 to AJ-16 at the M3 gate.
 13. Sorage builds and tests from the repository root through `make test` on a clean checkout.
 14. The `use-sorage` skill closes the discovery loop, demonstrated by AJ-04 and AJ-07.
 15. All user-facing and machine-facing identifiers use the canonical Sorage naming system.

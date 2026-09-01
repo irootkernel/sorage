@@ -19,18 +19,18 @@ There is one domain and application implementation, and every adapter — CLI, H
 
 The CLI links the application layer in-process and MUST NOT require a running daemon for any domain operation; writes from any process are serialized by SQLite write transactions together with the committed filesystem intent log of ADR-0013.
 
-The daemon exists to serve the Web UI, run the scheduler, and run garbage collection, and it is introduced in milestone 0.2.
+The daemon exists to serve the Web UI, run the scheduler, and run garbage collection, and it is introduced in milestone M2.
 
 ### Alternatives considered
 
-- Daemon as the sole writer, as in v0.3.0 — rejected: its stated justification does not hold, and it makes the 0.1 CLI loop depend on the full daemon lifecycle and its network surface.
+- Daemon as the sole writer, as in v0.3.0 — rejected: its stated justification does not hold, and it makes the M1 CLI loop depend on the full daemon lifecycle and its network surface.
 - Pure filesystem convention with no database — rejected: no transactional Row Version, no atomic fan-out, and no queryable inbox at 10,000 Handoffs.
 - A shared git repository as the exchange medium — rejected: merge conflicts become a user-facing workflow, and review state has no home outside commit messages.
 
 ### Consequences
 
 - One transaction boundary and one set of domain rules, regardless of which adapter is running.
-- The 0.1 release ships a complete handoff loop with no network listener at all.
+- The M1 release ships a complete handoff loop with no network listener at all.
 - Every process, not just the daemon, MUST drain the intent log at start (RUN-002).
 - Cross-process exclusion for configuration, Vault move, and backup relies on `O_EXCL` lockfiles under `~/.sorage/run/`.
 
@@ -424,9 +424,9 @@ A binding of kind `git_repository` stores the git common directory, resolved wit
 
 ## ADR-0016: Bun toolchain with `bun:sqlite` and Homebrew distribution
 
-- **Status:** Accepted
+- **Status:** Accepted (distribution decision partially superseded by ADR-0023)
 - **Date:** 2026-08-22
-- **Amended:** 2026-09-01 — the pinned Bun version moved from `1.3.14` to `1.4.0` after the 0.3 MVP gate passed; the pin mechanics, storage, test runner, and distribution decisions below are unchanged, and the full verification gate including the reproducible-build check of `make package` was re-run green under the new pin.
+- **Amended:** 2026-09-01 — the pinned Bun version moved from `1.3.14` to `1.4.0` after the M3 MVP gate passed; the pin mechanics, storage, test runner, and distribution decisions below are unchanged, and the full verification gate including the reproducible-build check of `make package` was re-run green under the new pin.
 
 ### Context
 
@@ -440,9 +440,9 @@ Sibling repositories pin their toolchain hard — podway's `Makefile:3-6` raises
 
 ### Decision
 
-The toolchain is Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from 0.2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
+The toolchain is Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from M2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
 
-`make build` compiles with `bun build --compile` into `dist/sorage` and `make package` produces the ad-hoc signed binary and the Homebrew formula inputs; `make test` is the single verification gate and `make test-prepare` asserts the pinned Bun version; verification runs locally on macOS with no hosted CI service (the GitHub Actions workflow added in TASK-002 was removed by the owner's direction on 2026-08-24).
+`make build` compiles with `bun build --compile` into `dist/sorage`; `make test` is the single verification gate and `make test-prepare` asserts the pinned Bun version; verification runs locally on macOS with no hosted CI service (the GitHub Actions workflow added in TASK-002 was removed by the owner's direction on 2026-08-24). ADR-0023 replaces only this decision's Homebrew distribution path and packaging metadata contract; the toolchain, build output, local verification, and ad-hoc signing choices remain in force.
 
 The workspace is five packages — `core`, `adapters`, `cli`, `daemon`, `web` — with the domain and application boundary enforced by lint rather than by package count.
 
@@ -508,7 +508,7 @@ A separate public handoff handler inside Aquarium is not merely unbuilt; it was 
 
 ### Decision
 
-Sorage ships `skills/use-sorage/SKILL.md` in this repository from milestone 0.1, stating the policy that a session checks `sorage inbox --json` at session start and before starting a task, supported by `inbox --wait [--timeout <s>]` for long-polling.
+Sorage ships `skills/use-sorage/SKILL.md` in this repository from milestone M1, stating the policy that a session checks `sorage inbox --json` at session start and before starting a task, supported by `inbox --wait [--timeout <s>]` for long-polling.
 
 The Podway `ExternalReference` artifact slot is the named integration seam for tools that need to reference a Handoff; plan handoff, writer handoff, and documentation sync in sibling tools are adjacent concerns and explicitly out of scope.
 
@@ -521,13 +521,13 @@ The entity keeps the name "Handoff", and the interoperability documentation stat
 
 ### Consequences
 
-- The discovery loop closes inside milestone 0.1 with no daemon, no notifications, and no MCP.
+- The discovery loop closes inside milestone M1 with no daemon, no notifications, and no MCP.
 - Adoption is a policy statement in a skill file rather than an enforced hook, which is a documented limitation.
 - The optional `handoff.inboxMarker` configuration key exists as a secondary, default-off discovery aid.
 
 ## ADR-0019: Three milestones and roadmap governance
 
-- **Status:** Accepted
+- **Status:** Accepted (release-tag naming partially superseded by ADR-0023)
 - **Date:** 2026-08-22
 
 ### Context
@@ -540,7 +540,7 @@ A single active slot occupied by a task `In Review` also made it impossible to s
 
 ### Decision
 
-The MVP is delivered in three milestones with independent release gates: 0.1 CLI core, 0.2 daemon with local HTTP API and Web UI, and 0.3 Git backup, restore, scheduler, LaunchAgent, and packaging.
+The MVP is delivered in three milestones with independent release gates: M1 CLI core, M2 daemon with local HTTP API and Web UI, and M3 Git backup, restore, scheduler, LaunchAgent, and packaging.
 
 The roadmap allows one task `In Progress` plus one task `In Review`, uses Definition-of-Done tiers Chore, Standard, and Contract, and keeps every status pointer in a single "Active pointer" section.
 
@@ -556,9 +556,11 @@ The task table carries `Milestone`, `Requirements`, and `Design Gate impact` col
 ### Consequences
 
 - The full `send → inbox → review set → revise → accept` loop is reachable by roughly task 30 of about 60.
-- Each milestone has an observable release gate, and the MVP is complete only when the 0.3 gate passes.
+- Each milestone has an observable release gate, and the MVP is complete only when the M3 gate passes.
 - Every requirement carries a milestone, so scope is a column rather than an argument.
 - Task status lives in exactly one place, which keeps status-only edits reviewable.
+
+ADR-0023 renames the three internal milestone snapshots to `M1`, `M2`, and `M3` and separates those local historical labels from the first public product release tag. The three-milestone scope, gates, governance, and task history in this decision remain in force.
 
 ## ADR-0020: A binding requires a working tree, so a bare Git repository cannot be bound
 
@@ -592,7 +594,7 @@ A directory binding must name a working tree. `project add` and `project bind` r
 
 ### Context
 
-WEB-003 requires Handoff lists to support sender, recipient, state, retention, and date filters. The EPIC-007 cold validation recorded the residual that the date filter had no contract to ride on: section 19's cursor filter set named only state, sender, recipient, and the two retention toggles, so offering a date filter would have been a material change to the versioned pagination contract, and the settlement was deferred to an EPIC-009 task before the 0.3 release could claim WEB-003 fully met.
+WEB-003 requires Handoff lists to support sender, recipient, state, retention, and date filters. The EPIC-007 cold validation recorded the residual that the date filter had no contract to ride on: section 19's cursor filter set named only state, sender, recipient, and the two retention toggles, so offering a date filter would have been a material change to the versioned pagination contract, and the settlement was deferred to an EPIC-009 task before the M3 release could claim WEB-003 fully met.
 
 ### Decision
 
@@ -642,3 +644,43 @@ The CLI JSON change is breaking: consumers must replace reads of `data.version` 
 - Human and JSON version probes match the ecosystem format byte for byte.
 - The version command is a documented exception to the common CLI JSON envelope.
 - Daemon, HTTP, and package version contracts remain unchanged and continue to compare against the shared bare runtime version.
+
+## ADR-0023: Public v0.1.0 identity and GitHub Release distribution
+
+- **Status:** Accepted
+- **Date:** 2026-09-02
+- **Supersedes in part:** ADR-0016 distribution and package-metadata decision; ADR-0019 release-tag naming
+
+### Context
+
+The completed MVP used product versions `0.1.0`, `0.2.0`, and `0.3.0` as labels for three private delivery milestones. None of those snapshots was pushed or published, so exposing the finished product first as `v0.3.0` would imply two public releases that never existed. The same pre-publication history selected Homebrew, but there is no tap in scope and the first supported artifact is only Apple Silicon macOS.
+
+The Source of Truth document version `0.4.0`, API namespace `/api/v1`, configuration schema version, database schema version, and Vault marker schema version identify independent contracts. Rebaselining the public product version must not change any of them.
+
+### Decision
+
+The private delivery snapshots are named `M1`, `M2`, and `M3`. Their existing commits may be retained only as local annotated tags with those exact names; they are not public product releases. The first public product version is `0.1.0`, presented as `v0.1.0` only where the CLI and Git tag contracts already require the `v` prefix.
+
+The initial distribution channel is a GitHub Release. `make package` retains the signed `dist/sorage` source-install output and additionally produces these Apple Silicon macOS release candidates from the same signed bytes:
+
+- `dist/sorage-v0.1.0-darwin-arm64`
+- `dist/sorage-v0.1.0-darwin-arm64.sha256`
+- `dist/sorage-v0.1.0-darwin-arm64.manifest.json`
+
+The checksum file is exactly `<sha256>  <filename>` plus one newline. The manifest records `version`, `revision`, `target`, `binary`, `sha256`, `reproducibleUnsignedDigest`, and `signature`; `binary` is the asset basename and `target` is `darwin-arm64`. Publication remains a separate task after the reviewed revision, checksum, hosted Release target, and downloaded bytes agree.
+
+### Compatibility and migration
+
+The product-version rebaseline is breaking for consumers that compare version ordering or expect the private `0.3.0` identity. The CLI text and JSON shapes remain compatible with ADR-0022, and HTTP DTO shapes, `/api/v1`, protocol schemas, and stored-data formats do not change. No configuration, database, Vault, HTTP, or protocol migration is required.
+
+### Alternatives considered
+
+- Publish the first release as `v0.3.0` — rejected: it represents internal milestone labels as public release history that never occurred.
+- Create and publish a Homebrew tap first — rejected: it expands the release boundary into another repository and adds an unverified distribution system before the first asset exists.
+- Rename the Source of Truth, API, or storage schemas to `0.1.0` — rejected: those are independent compatibility identities, not product SemVer.
+
+### Consequences
+
+- Public version probes, workspace manifests, daemon surfaces, and release metadata converge on `0.1.0` without changing their data shapes.
+- The first release supports only `darwin-arm64`; Intel macOS, Linux, Homebrew, notarization, and Developer ID signing remain unclaimed.
+- Commit, push, tag, hosted Release creation, and verification of a fresh hosted download remain separate authorization and evidence gates in TASK-078.

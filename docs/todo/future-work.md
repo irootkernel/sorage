@@ -62,7 +62,7 @@ Notifications derive from events and never become a source of truth.
 
 ## Browser-only administrative actions
 
-Milestone 0.2 exposes the User-admin actions through both the CLI and the Web UI.
+Milestone M2 exposes the User-admin actions through both the CLI and the Web UI.
 
 An option worth revisiting afterwards is restricting the most destructive of them, deletion approval and Review Note removal, to the browser, so they require a human at a screen rather than a flag any local process can pass.
 

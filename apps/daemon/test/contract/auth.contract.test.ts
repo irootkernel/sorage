@@ -41,7 +41,7 @@ beforeAll(async () => {
   const server = createDaemonServer({
     host: "127.0.0.1",
     port,
-    endpoints: { installationId: "1a2b3c4d-0000-4000-8000-000000000043", version: "0.3.0-contract" },
+    endpoints: { installationId: "1a2b3c4d-0000-4000-8000-000000000043", version: "0.1.0-contract" },
     idGenerator: { next: () => REQUEST_ID },
     auth: createSessionService({ token, webSecret, entropy: { next: () => SESSION_TOKEN } }),
     tokenRotate: () => token.rotate(),

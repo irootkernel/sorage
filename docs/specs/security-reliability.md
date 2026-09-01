@@ -25,7 +25,7 @@ The honesty clause is normative and appears in the permission matrix of [../arch
 
 The commands that require `--as-user` are `review remove`, `pin`, `unpin`, `archive`, `unarchive`, `delete approve`, `delete reject`, `project archive`, `project unarchive`, `config set`, `config edit`, `vault move`, `backup enable`, `backup disable`, `backup enable-push`, `backup disable-push`, `backup restore`, `token rotate`, and `uninstall` (CLI-019); every other command runs in whatever actor context resolution produced.
 
-## 2. Local network boundary, milestone 0.2
+## 2. Local network boundary, milestone M2
 
 The daemon binds only to `127.0.0.1` or `::1`; the configuration enum admits no other value and a non-loopback bind address MUST be rejected (SEC-001, GEN-005).
 
@@ -63,7 +63,7 @@ A cross-origin page cannot read that token, and a request without the `Authoriza
 
 The residual attack the tokens never covered — a rebinding page that is, from the browser's view, same-origin — is handled by the Host allowlist of SEC-017 instead.
 
-## 3. Tokens, milestone 0.2
+## 3. Tokens, milestone M2
 
 | Property | Rule |
 |---|---|
@@ -168,12 +168,12 @@ Both conditions block `revise`, `accept`, backup success, and any deletion claim
 
 | Point | Coverage | Milestone |
 |---|---|---|
-| Daemon periodic sweep | Once the daemon exists it rehashes current Artifacts continuously in the background, bounded to 64 MiB of hashing per garbage-collection tick, with no configuration key | 0.2 |
-| `sorage doctor` | Every live Handoff's current Artifact, exhaustively, reported as the `artifacts.checksums` check | 0.1 |
-| `sorage vault verify` | Every current Artifact, plus orphan classes and Vault layout | 0.1 |
-| `sorage backup verify` | Every current Artifact plus the `core.autocrlf` and `.gitattributes` checks of BKP-022 and VLT-024; a Handoff whose current Artifact has `materialized = 0` is skipped and reported as a warning without failing the run | 0.3 |
-| `sorage backup restore` | Every restored Artifact; a mismatch fails the restore (BKP-021, SEC-014) | 0.3 |
-| Every fetch | Only when `artifact.verifyChecksumOnFetch` is `true` | 0.1 |
+| Daemon periodic sweep | Once the daemon exists it rehashes current Artifacts continuously in the background, bounded to 64 MiB of hashing per garbage-collection tick, with no configuration key | M2 |
+| `sorage doctor` | Every live Handoff's current Artifact, exhaustively, reported as the `artifacts.checksums` check | M1 |
+| `sorage vault verify` | Every current Artifact, plus orphan classes and Vault layout | M1 |
+| `sorage backup verify` | Every current Artifact plus the `core.autocrlf` and `.gitattributes` checks of BKP-022 and VLT-024; a Handoff whose current Artifact has `materialized = 0` is skipped and reported as a warning without failing the run | M3 |
+| `sorage backup restore` | Every restored Artifact; a mismatch fails the restore (BKP-021, SEC-014) | M3 |
+| Every fetch | Only when `artifact.verifyChecksumOnFetch` is `true` | M1 |
 
 ## 7. Concurrency and locks
 
@@ -191,11 +191,11 @@ Operations that cannot be one transaction take an exclusive lockfile created wit
 
 | Lockfile | Protects | Stale when | Milestone |
 |---|---|---|---|
-| `config.lock` | Configuration writes | The recorded pid is dead, or the lock is older than 30 seconds | 0.1 |
-| `migration.lock` | Schema migration at process start | The recorded pid is dead | 0.1 |
-| `vault-move.lock` | Vault relocation and, once restore exists, `backup restore` | The recorded pid is dead | 0.1 |
-| `daemon.lock` | Single daemon instance | The recorded pid is dead | 0.2 |
-| `backup.lock` | Scheduled and manual backup runs; a run that finds it held by a live process fails with `BACKUP_IN_PROGRESS` | The recorded pid is dead | 0.3 |
+| `config.lock` | Configuration writes | The recorded pid is dead, or the lock is older than 30 seconds | M1 |
+| `migration.lock` | Schema migration at process start | The recorded pid is dead | M1 |
+| `vault-move.lock` | Vault relocation and, once restore exists, `backup restore` | The recorded pid is dead | M1 |
+| `daemon.lock` | Single daemon instance | The recorded pid is dead | M2 |
+| `backup.lock` | Scheduled and manual backup runs; a run that finds it held by a live process fails with `BACKUP_IN_PROGRESS` | The recorded pid is dead | M3 |
 
 A stale lock may be broken by the next process; a live lock produces a conflict rather than a wait loop, and a lock whose pid belongs to a different program is treated as live and reported rather than broken.
 
@@ -252,40 +252,40 @@ The table below is the normative event catalog for Sorage; other documents cite 
 
 | Event | Actor kind | Milestone |
 |---|---|---|
-| `HANDOFF_CREATED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `ARTIFACT_FETCHED_FIRST_TIME` | `registered_project` as the recipient, `user` | 0.1 |
-| `REVIEW_NOTE_CREATED` | `registered_project`, `user` | 0.1 |
-| `REVIEW_NOTE_UPDATED` | `registered_project`, `user` | 0.1 |
-| `REVIEW_NOTE_WITHDRAWN` | `registered_project`, `user` | 0.1 |
-| `REVIEW_NOTE_REMOVED` | `user` | 0.1 |
-| `REVIEW_NOTE_RESOLVED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `HANDOFF_REVISED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `HANDOFF_NO_CHANGE_RESOLVED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `HANDOFF_ACCEPTED` | `registered_project`, `user` | 0.1 |
-| `HANDOFF_DECLINED` | `registered_project`, `user` | 0.1 |
-| `HANDOFF_WITHDRAWN` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `HANDOFF_PINNED` | `user` | 0.1 |
-| `HANDOFF_UNPINNED` | `user` | 0.1 |
-| `HANDOFF_ARCHIVED` | `user` | 0.1 |
-| `HANDOFF_UNARCHIVED` | `user` | 0.1 |
-| `DELETION_REQUESTED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `DELETION_APPROVED` | `user` | 0.1 |
-| `DELETION_REJECTED` | `user` | 0.1 |
-| `ARTIFACT_ACTIVATED` | `system` | 0.1 |
-| `ARTIFACT_UNLINKED` | `system` | 0.1 |
-| `ARTIFACT_INTEGRITY_FAILED` | `system` | 0.1 |
-| `PROJECT_REGISTERED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `PROJECT_BINDING_ADDED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `PROJECT_BINDING_REMOVED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `PROJECT_STATUS_ARCHIVED` | `user` | 0.1 |
-| `PROJECT_STATUS_ACTIVE` | `user` | 0.1 |
-| `PROJECT_RENAMED` | `registered_project`, `unregistered_workspace`, `user` | 0.1 |
-| `CONFIG_CHANGED` | `user` | 0.1 |
-| `VAULT_MOVED` | `user` | 0.1 |
-| `VAULT_ADOPTED` | `user` | 0.3 |
-| `BACKUP_RUN` | `registered_project`, `unregistered_workspace`, `user`, `system` | 0.3 |
-| `RESTORE_COMPLETED` | `user` | 0.3 |
-| `TOKEN_ROTATED` | `user` | 0.2 |
+| `HANDOFF_CREATED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `ARTIFACT_FETCHED_FIRST_TIME` | `registered_project` as the recipient, `user` | M1 |
+| `REVIEW_NOTE_CREATED` | `registered_project`, `user` | M1 |
+| `REVIEW_NOTE_UPDATED` | `registered_project`, `user` | M1 |
+| `REVIEW_NOTE_WITHDRAWN` | `registered_project`, `user` | M1 |
+| `REVIEW_NOTE_REMOVED` | `user` | M1 |
+| `REVIEW_NOTE_RESOLVED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `HANDOFF_REVISED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `HANDOFF_NO_CHANGE_RESOLVED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `HANDOFF_ACCEPTED` | `registered_project`, `user` | M1 |
+| `HANDOFF_DECLINED` | `registered_project`, `user` | M1 |
+| `HANDOFF_WITHDRAWN` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `HANDOFF_PINNED` | `user` | M1 |
+| `HANDOFF_UNPINNED` | `user` | M1 |
+| `HANDOFF_ARCHIVED` | `user` | M1 |
+| `HANDOFF_UNARCHIVED` | `user` | M1 |
+| `DELETION_REQUESTED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `DELETION_APPROVED` | `user` | M1 |
+| `DELETION_REJECTED` | `user` | M1 |
+| `ARTIFACT_ACTIVATED` | `system` | M1 |
+| `ARTIFACT_UNLINKED` | `system` | M1 |
+| `ARTIFACT_INTEGRITY_FAILED` | `system` | M1 |
+| `PROJECT_REGISTERED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `PROJECT_BINDING_ADDED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `PROJECT_BINDING_REMOVED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `PROJECT_STATUS_ARCHIVED` | `user` | M1 |
+| `PROJECT_STATUS_ACTIVE` | `user` | M1 |
+| `PROJECT_RENAMED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `CONFIG_CHANGED` | `user` | M1 |
+| `VAULT_MOVED` | `user` | M1 |
+| `VAULT_ADOPTED` | `user` | M3 |
+| `BACKUP_RUN` | `registered_project`, `unregistered_workspace`, `user`, `system` | M3 |
+| `RESTORE_COMPLETED` | `user` | M3 |
+| `TOKEN_ROTATED` | `user` | M2 |
 
 `REVIEW_NOTE_RESOLVED` is appended in the same transaction as `HANDOFF_REVISED` or `HANDOFF_NO_CHANGE_RESOLVED` whenever that sender operation removed a Review Note; `REVIEW_NOTE_WITHDRAWN` means the recipient withdrew the current Note, and `REVIEW_NOTE_REMOVED` means the User removed it administratively.
 
@@ -325,13 +325,13 @@ The `platform.tcc` doctor check covers the Vault and every Project Binding direc
 
 The LaunchAgent uses the modern launchd domain-target form, `launchctl bootstrap gui/$UID <plist-path>` to install and `launchctl bootout gui/$UID/xyz.rootkernel.sorage` to remove; the legacy `load` and `unload` verbs are not used, and every value interpolated into the plist is XML-escaped (RUN-007, RUN-011).
 
-Release binaries are produced with `bun build --compile`, ad-hoc codesigned, and distributed through a Homebrew tap, because a binary downloaded outside a package manager is quarantined by Gatekeeper (ADR-0016).
+Release binaries are produced with `bun build --compile`, ad-hoc codesigned, and distributed as architecture-specific GitHub Release assets with a checksum and manifest (ADR-0023). The first release makes no notarization, Developer ID, or Gatekeeper-bypass claim.
 
 Sorage never modifies global or system Git configuration; `core.autocrlf=false` is set in the Vault repository only (BKP-022).
 
 `sorage uninstall --as-user --confirm` removes the LaunchAgent, `~/.sorage/state`, `~/.sorage/run`, `~/.sorage/logs`, and `~/.sorage/config.yaml`, never deletes the Vault, and prints the retained Vault path (INIT-016).
 
-## 13. Git safety, milestone 0.3
+## 13. Git safety, milestone M3
 
 | Rule | Statement |
 |---|---|
@@ -341,7 +341,7 @@ Sorage never modifies global or system Git configuration; `core.autocrlf=false` 
 | Missing credentials | `GIT_AUTH_REQUIRED`, with the remote and the credential mechanism named |
 | Push | Push MUST use `git push --atomic` to the configured remote and branch, so a partially applied ref update is impossible; a non-fast-forward push fails with `GIT_BACKUP_CONFLICT` and requires manual intervention (BKP-014, BKP-025) |
 | Never | Force push, rebase, merge, automatic conflict resolution, and history rewriting are not implemented (BKP-013, BKP-020) |
-| Line endings | Vault initialization writes `.gitattributes` with `artifacts/** -text -diff`, `snapshots/** text eol=lf`, and `.sorage-vault.json text eol=lf`, and `.gitignore` with `staging/`, at milestone 0.1 (VLT-024); Git initialization sets `core.autocrlf=false` and re-asserts both files idempotently at 0.3, and `sorage backup verify` checks them (BKP-022) |
+| Line endings | Vault initialization writes `.gitattributes` with `artifacts/** -text -diff`, `snapshots/** text eol=lf`, and `.sorage-vault.json text eol=lf`, and `.gitignore` with `staging/`, at milestone M1 (VLT-024); Git initialization sets `core.autocrlf=false` and re-asserts both files idempotently at M3, and `sorage backup verify` checks them (BKP-022) |
 | Commit decision | Only changed managed content is committed, decided by `git diff --cached --quiet` over the managed pathspecs (BKP-009, BKP-024) |
 | Excluded | The SQLite database, its WAL and SHM files, logs, tokens, and credentials are never committed (BKP-004) |
 
@@ -351,7 +351,7 @@ Two data-loss properties are stated to the User rather than hidden: prior Git co
 
 ## 14. `doctor` check catalog
 
-The `doctor` check catalog is normative in section 35 of [interfaces-and-operations.md](interfaces-and-operations.md), which owns every check id, its severity, its milestone, and its recovery text, and which the daemon exposes at `GET /api/v1/diagnostics` from 0.2; this document does not restate the catalog, and a check named anywhere in this document means the entry of that name there (INIT-017).
+The `doctor` check catalog is normative in section 35 of [interfaces-and-operations.md](interfaces-and-operations.md), which owns every check id, its severity, its milestone, and its recovery text, and which the daemon exposes at `GET /api/v1/diagnostics` from M2; this document does not restate the catalog, and a check named anywhere in this document means the entry of that name there (INIT-017).
 
 ## 15. Security checks
 

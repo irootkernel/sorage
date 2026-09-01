@@ -42,7 +42,7 @@ describe("the run record (RUN-013)", () => {
       host: "127.0.0.1",
       port: 46321,
       startedAt: "2026-08-30T00:00:00.000Z",
-      version: "0.3.0",
+      version: "0.1.0",
       installationId: INSTALLATION,
     });
     expect(ports.readDaemonRecord()).toMatchObject({ pid: 42, port: 46321, installationId: INSTALLATION });

@@ -514,12 +514,12 @@ flowchart LR
     AI[AI Session or Terminal User]
     Browser[Local Browser]
     CLI[sorage CLI process]
-    Daemon[Sorage daemon, 0.2]
+    Daemon[Sorage daemon, M2]
     App[Application layer in core]
     DB[(SQLite)]
     Vault[(Vault)]
-    Git[Git repository, 0.3]
-    Launchd[macOS LaunchAgent, 0.3]
+    Git[Git repository, M3]
+    Launchd[macOS LaunchAgent, M3]
 
     AI --> CLI
     Browser -->|Web SPA over loopback HTTP| Daemon
@@ -531,7 +531,7 @@ flowchart LR
     Launchd --> Daemon
 ```
 
-The CLI does not call the daemon for domain operations. It links the application layer and executes the use case in its own process, so milestone 0.1 works with no daemon installed (RUN-003). The daemon reaches the same use cases through the same application layer and adds no domain rules of its own.
+The CLI does not call the daemon for domain operations. It links the application layer and executes the use case in its own process, so milestone M1 works with no daemon installed (RUN-003). The daemon reaches the same use cases through the same application layer and adds no domain rules of its own.
 
 RUN-001 replaces the earlier single-writer rule with explicit serialization. Correctness under several concurrent writer processes comes from three mechanisms, none of which depends on how many processes exist:
 
@@ -553,7 +553,7 @@ Operations that cannot be expressed as one database transaction, such as a confi
 - Contact the daemon only for `web` and `daemon` commands, where `DAEMON_UNAVAILABLE` is meaningful.
 - Read `~/.sorage/run/daemon.json` to discover a running daemon.
 
-### 14.2 Daemon, milestone 0.2 and 0.3
+### 14.2 Daemon, milestone M2 and M3
 
 - Serve the Web SPA and `/api/v1` on a loopback interface only.
 - Validate the Host header against the allowlist before routing (SEC-017), and set `Content-Security-Policy`, `X-Content-Type-Options`, and `Referrer-Policy` on every response (SEC-018).
@@ -652,7 +652,7 @@ interface PlatformService {}
 interface UnitOfWork {}
 ```
 
-`GitClient` and `BackupService` arrive with milestone 0.3; `PlatformService` is defined in section 23. Interfaces are designed around application behavior, not adapter convenience.
+`GitClient` and `BackupService` arrive with milestone M3; `PlatformService` is defined in section 23. Interfaces are designed around application behavior, not adapter convenience.
 
 `UnitOfWork.run` is synchronous, because every candidate SQLite driver is synchronous and an awaited callback would let two logical transactions interleave on one connection:
 
@@ -675,7 +675,7 @@ Sorage home:
 ├── vault/                        # default Vault, configurable
 ├── state/
 │   ├── sorage.sqlite3            # plus -wal and -shm
-│   ├── api-token                 # 0.2, mode 0600, at least 32 random bytes, base64url
+│   ├── api-token                 # M2, mode 0600, at least 32 random bytes, base64url
 │   └── backups/                  # database snapshots taken with VACUUM INTO
 ├── logs/
 │   └── sorage.log                # plus rotated files

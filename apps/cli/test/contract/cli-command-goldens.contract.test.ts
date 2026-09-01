@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * The TASK-036 golden tour: every command in the 0.1 catalog runs as a real process
+ * The TASK-036 golden tour: every command in the M1 catalog runs as a real process
  * against one initialized temporary installation and its normalized `--json` envelope
  * is pinned byte-for-byte. The contract under test is the envelope shape, so the
  * harness applies one documented, order-fixed normalization before comparing:

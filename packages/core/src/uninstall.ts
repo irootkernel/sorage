@@ -3,7 +3,7 @@ import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type LaunchAgentPorts, type LaunchAgentUninstallOutcome, uninstallLaunchAgent } from "./launchagent";
 
 /**
- * The `sorage uninstall` use case (INIT-016, milestone 0.3): a User-admin operation
+ * The `sorage uninstall` use case (INIT-016, milestone M3): a User-admin operation
  * that requires `--as-user --confirm`, stops a running daemon, boots out and deletes
  * the LaunchAgent, removes `state`, `run`, `logs`, `config.yaml`, and its retained
  * `.bak`, never deletes the Vault, and reports the retained Vault path so the User

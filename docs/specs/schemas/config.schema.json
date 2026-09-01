@@ -76,19 +76,19 @@
           "default": "127.0.0.1"
         },
         "port": {
-          "description": "Daemon port, milestone 0.2. A change requires a controlled daemon restart (RUN-008), and a bound port fails with PORT_IN_USE (RUN-013).",
+          "description": "Daemon port, milestone M2. A change requires a controlled daemon restart (RUN-008), and a bound port fails with PORT_IN_USE (RUN-013).",
           "type": "integer",
           "minimum": 1024,
           "maximum": 65535,
           "default": 46321
         },
         "autoStart": {
-          "description": "Start the daemon automatically where the platform supports it, milestone 0.2.",
+          "description": "Start the daemon automatically where the platform supports it, milestone M2.",
           "type": "boolean",
           "default": false
         },
         "openBrowserOnStart": {
-          "description": "Open the Web UI when the daemon starts, milestone 0.2.",
+          "description": "Open the Web UI when the daemon starts, milestone M2.",
           "type": "boolean",
           "default": false
         }
@@ -163,7 +163,7 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Git backup of the Vault, milestone 0.3. Off by default so a milestone 0.1 installation has no Git dependency (BKP-001).",
+          "description": "Git backup of the Vault, milestone M3. Off by default so a milestone M1 installation has no Git dependency (BKP-001).",
           "type": "boolean",
           "default": false
         },

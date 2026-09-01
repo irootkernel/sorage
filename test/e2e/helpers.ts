@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * The AJ-01 to AJ-10 harness of the 0.1 release gate: every journey drives the
+ * The AJ-01 to AJ-10 harness of the M1 release gate: every journey drives the
  * compiled `dist/sorage` binary as a real process against a clean temporary
  * installation, so nothing in this layer can pass through in-process wiring, and no
  * daemon, Web server, Git backup, or ecosystem tool is ever required (GEN-010).

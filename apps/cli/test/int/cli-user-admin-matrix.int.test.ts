@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/main";
 
 /**
- * The CLI-019 matrix of TASK-036: every 0.1 User-admin command refuses to run without
+ * The CLI-019 matrix of TASK-036: every M1 User-admin command refuses to run without
  * `--as-user` at exit 77 with `USER_CONTEXT_REQUIRED` in its JSON envelope, so the
  * actor gate is uniform across the whole catalog rather than per-command folklore.
  */
@@ -40,7 +40,7 @@ function capture() {
 }
 
 describe("the User-admin gate without --as-user", () => {
-  it("answers exit 77 with USER_CONTEXT_REQUIRED for every 0.1 User-admin command", () => {
+  it("answers exit 77 with USER_CONTEXT_REQUIRED for every M1 User-admin command", () => {
     const home = tempHome("sorage-user-admin-");
     expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
     const workA = join(home, "work-a");

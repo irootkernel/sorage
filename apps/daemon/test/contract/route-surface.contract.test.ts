@@ -75,7 +75,7 @@ describe("the symbolic error to HTTP status matrix (API-011)", () => {
 });
 
 describe("the routing table against the endpoint catalog", () => {
-  it("serves every catalog endpoint of milestone 0.2 except the documented deferrals", () => {
+  it("serves every catalog endpoint of milestone M2 except the documented deferrals", () => {
     const catalog = parseCatalogEndpoints();
     expect(catalog.length).toBeGreaterThan(20);
     const missing = catalog.filter(({ method, path }) => {

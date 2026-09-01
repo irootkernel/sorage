@@ -53,7 +53,7 @@ pre.preview { border: 1px solid #8883; padding: 0.75rem; overflow-x: auto; white
 .counts { display: flex; gap: 1rem; flex-wrap: wrap; }
 .counts div { border: 1px solid #8883; border-radius: 6px; padding: 0.5rem 1rem; min-width: 8rem; }
 .counts strong { display: block; font-size: 1.4rem; }
-button { padding: 0.3rem 0.8rem; }
+button { padding: M3rem 0.8rem; }
 `;
 
 export const WEB_APP_JS = `(function () {
