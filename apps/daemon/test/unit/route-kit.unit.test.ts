@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { discardReplay, evaluateIdempotency, storeReplay } from "../../src/route-kit";
+import { discardReplay, evaluateIdempotency, type ReplayRecord, storeReplay } from "../../src/route-kit";
 
 /**
  * The Idempotency-Key seam of API-012: a duplicate that arrives while the first
  * execution is still in flight is refused instead of executed twice, and a failed
  * execution releases its marker so the key stays retryable.
  */
-type Store = Map<string, { requestHash: string; status: number; body: unknown }>;
+type Store = Map<string, ReplayRecord>;
 
 describe("the idempotency store (API-012)", () => {
   it("refuses a duplicate whose key is still in flight", () => {
@@ -62,5 +62,16 @@ describe("the idempotency store (API-012)", () => {
     const diverged = evaluateIdempotency(store, key, "POST /three body-b");
     expect(diverged.replayed).toBe(false);
     expect(diverged.error?.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("treats a completed response as a new request at the 24-hour boundary", () => {
+    const store: Store = new Map();
+    const key = "aaaaaaaa-0000-4000-8000-000000000007";
+    const createdAt = Date.parse("2026-08-30T00:00:00.000Z");
+    expect(evaluateIdempotency(store, key, "POST /five body-a", createdAt).replayed).toBe(false);
+    storeReplay(store, key, "POST /five body-a", 201, { marker: "stored" }, createdAt);
+
+    expect(evaluateIdempotency(store, key, "POST /five body-a", createdAt + 24 * 3_600_000 - 1).replayed).toBe(true);
+    expect(evaluateIdempotency(store, key, "POST /five body-b", createdAt + 24 * 3_600_000).replayed).toBe(false);
   });
 });

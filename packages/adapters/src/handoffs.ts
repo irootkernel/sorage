@@ -3,6 +3,15 @@ import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
 import type { SorageSqlite } from "./sqlite/connection";
 
+export interface IdempotencyLookupOptions {
+  now?: (() => Date) | undefined;
+}
+
+function removeExpiredIdempotency(db: SorageSqlite, options: IdempotencyLookupOptions): void {
+  const now = (options.now ?? (() => new Date()))().toISOString();
+  db.prepare("DELETE FROM idempotency_keys WHERE expires_at <= ?").run(now);
+}
+
 /**
  * The Row Version compare-and-set of section 19 and section 7 of security-reliability.md
  * (HND-014, HND-025, SEC-008): one statement assigns the domain columns and bumps
@@ -134,7 +143,11 @@ function messageOf(error: unknown): string {
  * dispatch group is all-or-nothing in the database (HND-008) and a duplicate
  * idempotency key in one scope surfaces as the database's own rejection.
  */
-export function createSqliteHandoffWriteStore(db: SorageSqlite, ledger: SqliteEventLedger): HandoffWritePort {
+export function createSqliteHandoffWriteStore(
+  db: SorageSqlite,
+  ledger: SqliteEventLedger,
+  options: IdempotencyLookupOptions = {},
+): HandoffWritePort {
   const insertIntent = () =>
     db.prepare(
       "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
@@ -277,6 +290,7 @@ export function createSqliteHandoffWriteStore(db: SorageSqlite, ledger: SqliteEv
 
     idempotencyLookup(key, scope) {
       try {
+        removeExpiredIdempotency(db, options);
         const row = db
           .prepare("SELECT request_hash, response_json FROM idempotency_keys WHERE key = ? AND scope = ?")
           .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;
@@ -298,8 +312,9 @@ export function createSqliteHandoffWriteStore(db: SorageSqlite, ledger: SqliteEv
 export function createSqliteRevisionStore(
   db: SorageSqlite,
   ledger: SqliteEventLedger,
+  options: IdempotencyLookupOptions = {},
 ): import("@sorage/core").RevisionMutationPort {
-  const write = createSqliteHandoffWriteStore(db, ledger);
+  const write = createSqliteHandoffWriteStore(db, ledger, options);
   const insertIntent = () =>
     db.prepare(
       "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
@@ -574,6 +589,7 @@ export function createSqliteTerminalStore(
 export function createSqliteRetentionStore(
   db: SorageSqlite,
   ledger: SqliteEventLedger,
+  options: IdempotencyLookupOptions = {},
 ): import("@sorage/core").RetentionMutationPort {
   return {
     applyRetentionMutation(input) {
@@ -675,6 +691,7 @@ export function createSqliteRetentionStore(
     },
     idempotencyLookup(key, scope) {
       try {
+        removeExpiredIdempotency(db, options);
         const row = db
           .prepare("SELECT request_hash, response_json FROM idempotency_keys WHERE key = ? AND scope = ?")
           .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;

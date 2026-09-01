@@ -74,19 +74,33 @@ export interface ReplayOutcome {
   error?: ReturnType<typeof appError>;
 }
 
+export interface ReplayRecord {
+  requestHash: string;
+  status: number;
+  body: unknown;
+  expiresAt?: number | undefined;
+}
+
+const IDEMPOTENCY_RETENTION_MS = 24 * 3_600_000;
+
 /**
  * Evaluates one idempotent request: the same key with the same request hash replays
  * the stored response verbatim, and the same key with a different hash is
  * `IDEMPOTENCY_CONFLICT`; both run before any Row Version precondition (API-012).
  */
 export function evaluateIdempotency(
-  store: Map<string, { requestHash: string; status: number; body: unknown }>,
+  store: Map<string, ReplayRecord>,
   key: string | undefined,
   requestIdentity: string,
+  now = Date.now(),
 ): ReplayOutcome {
   if (key === undefined) return { replayed: false };
   const requestHash = createHash("sha256").update(requestIdentity).digest("hex");
-  const stored = store.get(key);
+  let stored = store.get(key);
+  if (stored?.expiresAt !== undefined && stored.expiresAt <= now) {
+    store.delete(key);
+    stored = undefined;
+  }
   if (stored === undefined) {
     store.set(key, { requestHash, status: -1, body: null });
     return { replayed: false };
@@ -109,11 +123,12 @@ export function evaluateIdempotency(
 }
 
 export function storeReplay(
-  store: Map<string, { requestHash: string; status: number; body: unknown }>,
+  store: Map<string, ReplayRecord>,
   key: string | undefined,
   requestIdentity: string,
   status: number,
   body: unknown,
+  now = Date.now(),
 ): void {
   if (key === undefined) return;
   // Only completed mutations are replayable. Refusals and failures describe
@@ -124,17 +139,14 @@ export function storeReplay(
     return;
   }
   const requestHash = createHash("sha256").update(requestIdentity).digest("hex");
-  store.set(key, { requestHash, status, body });
+  store.set(key, { requestHash, status, body, expiresAt: now + IDEMPOTENCY_RETENTION_MS });
 }
 
 /**
  * Releases an in-flight marker so a failed execution leaves the key retryable: a
  * handler that throws must not pin its Idempotency-Key as permanently in flight.
  */
-export function discardReplay(
-  store: Map<string, { requestHash: string; status: number; body: unknown }>,
-  key: string | undefined,
-): void {
+export function discardReplay(store: Map<string, ReplayRecord>, key: string | undefined): void {
   if (key === undefined) return;
   const stored = store.get(key);
   if (stored !== undefined && stored.status === -1) store.delete(key);

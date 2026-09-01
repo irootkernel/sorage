@@ -65,6 +65,8 @@ export interface NodeHandoffCommandPortsOptions {
   userHome?: string | undefined;
   /** Daemon-owned connection shared by every request route and closed on drain. */
   database?: SorageSqlite | undefined;
+  /** Shared clock for domain decisions and 24-hour idempotency expiry. */
+  clock?: { now(): Date } | undefined;
 }
 
 function databaseFor(options: NodeHandoffCommandPortsOptions, stateDir: string): SorageSqlite {
@@ -88,15 +90,16 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
   }
   const effective = read.value.config;
   const ledger = createSqliteEventLedger(db);
+  const clock = options.clock ?? new SystemClock();
   return {
     projectPorts: createNodeProjectPorts({ env: env as HomeEnvironment, userHome, database: db }),
-    handoffs: createSqliteHandoffWriteStore(db, ledger),
+    handoffs: createSqliteHandoffWriteStore(db, ledger, { now: () => clock.now() }),
     artifactStore: createNodeArtifactStore({
       vaultPath: effective.vault.path,
       installationId: effective.installationId,
     }),
     ids: new UuidGenerator(),
-    clock: new SystemClock(),
+    clock,
     config: {
       vaultPath: effective.vault.path,
       maxBytes: effective.artifact.maxBytes,
@@ -175,7 +178,9 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
   });
   return {
     ...reviews,
-    retention: createSqliteRetentionStore(db, createSqliteEventLedger(db)),
+    retention: createSqliteRetentionStore(db, createSqliteEventLedger(db), {
+      now: () => options.clock?.now() ?? new Date(),
+    }),
     artifact: {
       checksum: (key) => artifactStore.checksum(key),
       pathOf: (key) => artifactStore.pathOf(key),
@@ -226,7 +231,9 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   });
   return {
     ...reviews,
-    revisions: createSqliteRevisionStore(db, createSqliteEventLedger(db)),
+    revisions: createSqliteRevisionStore(db, createSqliteEventLedger(db), {
+      now: () => options.clock?.now() ?? new Date(),
+    }),
     artifactStore,
     config: {
       vaultPath: effective.vault.path,

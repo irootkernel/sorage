@@ -29,6 +29,7 @@ interface Fixture {
   db: ReturnType<typeof makeTempDatabase>["db"];
   vaultPath: string;
   ports: SendPorts;
+  clock: FakeClock;
   cleanup: () => void;
 }
 
@@ -47,8 +48,8 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
   if (!marker.ok) throw new Error("fixture vault marker must initialize");
   const ledger = createSqliteEventLedger(temp.db);
   const repository = createSqliteProjectRepository(temp.db, { installationId: INSTALLATION, events: ledger });
-  const write = createSqliteHandoffWriteStore(temp.db, ledger);
   const clock = new FakeClock();
+  const write = createSqliteHandoffWriteStore(temp.db, ledger, { now: () => clock.now() });
   let ids = 0;
   const nextId = () => {
     ids += 1;
@@ -112,6 +113,7 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
     db: temp.db,
     vaultPath: vault.vaultPath,
     ports,
+    clock,
     cleanup: () => {},
   };
 }
@@ -292,6 +294,12 @@ describe("sorage send", () => {
     const conflict = sendHandoffs(fixture.ports, input);
     expect(!conflict.ok && conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
     expect(handoffRows(fixture)).toHaveLength(1);
+
+    fixture.clock.advance(24 * 3_600_000);
+    const afterExpiry = sendHandoffs(fixture.ports, input);
+    expect(afterExpiry.ok).toBe(true);
+    if (afterExpiry.ok) expect(afterExpiry.value.replayed).toBe(false);
+    expect(handoffRows(fixture)).toHaveLength(2);
   });
 
   it("leaves zero Handoffs and only a sweepable staged file when the intent commit fails (CP-1)", () => {

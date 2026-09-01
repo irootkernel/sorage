@@ -914,6 +914,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           lookup: (key, scope) =>
             withDatabase((db) => {
               try {
+                db.prepare("DELETE FROM idempotency_keys WHERE expires_at <= ?").run(clock.now().toISOString());
                 const row = db
                   .prepare("SELECT request_hash, response_json FROM idempotency_keys WHERE key = ? AND scope = ?")
                   .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;

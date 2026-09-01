@@ -42,6 +42,23 @@ function seedHandoff(db: ReturnType<typeof migratedDb>["db"], id: string, state:
 }
 
 describe("the whole-epic round-1 remediations", () => {
+  it("expires a stored retention idempotency response at the 24-hour boundary", () => {
+    const temp = migratedDb();
+    temp.db
+      .prepare(
+        "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("key-expired", "deletion-approve:h-1", "hash", "{}", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z");
+    const retention = createSqliteRetentionStore(temp.db, createSqliteEventLedger(temp.db), {
+      now: () => new Date("2026-01-02T00:00:00.000Z"),
+    });
+
+    const expired = retention.idempotencyLookup("key-expired", "deletion-approve:h-1");
+
+    expect(expired.ok && expired.value).toBeNull();
+    expect(temp.db.prepare("SELECT COUNT(*) AS c FROM idempotency_keys").get()).toMatchObject({ c: 0 });
+  });
+
   it("F001: a pending Deletion Request or an unmaterialized Artifact makes the User the administrative next actor", () => {
     const temp = migratedDb();
     const store = createSqliteHandoffReadStore(temp.db, createSqliteEventLedger(temp.db));

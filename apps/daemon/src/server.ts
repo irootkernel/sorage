@@ -18,6 +18,7 @@ import {
   evaluateIdempotency,
   matchRoute,
   storeReplay,
+  type ReplayRecord,
   type RouteEntryInternal,
 } from "./route-kit";
 import { createHash } from "node:crypto";
@@ -715,7 +716,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
   };
 }
 
-const idempotencyStore = new Map<string, { requestHash: string; status: number; body: unknown }>();
+const idempotencyStore = new Map<string, ReplayRecord>();
 
 /** Spools one request body to disk, hashing it in flight; memory stays bounded. */
 function spoolRequestBody(

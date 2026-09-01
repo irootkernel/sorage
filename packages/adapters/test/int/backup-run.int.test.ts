@@ -259,6 +259,24 @@ describe("backup run command surface and status over a real installation", () =>
     expect(backupRunRows(home)).toHaveLength(1);
   });
 
+  it("treats the same backup key as a new request after 24 hours", () => {
+    const { home, vault } = initializedHome("sorage-run-cmd-expiry-");
+    seedOneHandoff(home, vault);
+    const clock = new FakeClock();
+    const ports = createNodeBackupCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, clock });
+    const runPorts = ports.runPorts();
+    if (!runPorts.ok) throw new Error(runPorts.error.message);
+
+    const first = runBackupCommand(runPorts.value, { idempotencyKey: "key-expiring" });
+    expect(first.ok).toBe(true);
+    clock.advance(24 * 3_600_000);
+    const afterExpiry = runBackupCommand(runPorts.value, { idempotencyKey: "key-expiring" });
+
+    expect(afterExpiry.ok).toBe(true);
+    if (afterExpiry.ok) expect(afterExpiry.value.replayed).toBe(false);
+    expect(backupRunRows(home)).toHaveLength(2);
+  });
+
   it("exposes last attempt, success, commit, and failure through sorage backup status ports", () => {
     const { home, vault } = initializedHome("sorage-run-status-");
     seedOneHandoff(home, vault);
