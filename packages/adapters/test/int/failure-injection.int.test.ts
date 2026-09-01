@@ -138,7 +138,8 @@ function makeWorld(): World {
     makeSendPorts(seams: Seams): SendPorts {
       const db = open();
       const ledger = createSqliteEventLedger(db);
-      const write: HandoffWritePort = createSqliteHandoffWriteStore(db, ledger);
+      const clock = new FakeClock();
+      const write: HandoffWritePort = createSqliteHandoffWriteStore(db, ledger, { now: () => clock.now() });
       const wrappedWrite: HandoffWritePort = {
         ...write,
         createFanout(commit: FanoutCommit) {
@@ -158,7 +159,6 @@ function makeWorld(): World {
       };
       const artifactStore = createNodeArtifactStore({ vaultPath: vault.vaultPath, installationId: INSTALLATION });
       let activateOrdinal = 0;
-      const clock = new FakeClock();
       let ids = 0;
       const nextId = () => `00000000-0000-4000-8000-${(++ids).toString().padStart(12, "0")}`;
       const repository = createSqliteProjectRepository(db, { installationId: INSTALLATION, events: ledger });
