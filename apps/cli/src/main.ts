@@ -69,7 +69,6 @@ import {
   moveVault,
   ok,
   pinHandoff,
-  protocolVersion,
   refreshInboxMarker,
   rejectDeletion,
   removeReviewNote,
@@ -186,15 +185,13 @@ export function buildProgram(
 
   program
     .command("version")
-    .description("print the CLI, product, and protocol versions")
+    .description("print the product version")
     .action((_options, command) => {
       const json = command.optsWithGlobals().json === true;
       if (json) {
-        ports.out(
-          `${JSON.stringify(successEnvelope({ cli: CLI_NAME, version: CLI_VERSION, protocolVersion: protocolVersion() }, requestId()), null, 2)}\n`,
-        );
+        ports.out(`${JSON.stringify({ name: CLI_NAME, version: `v${CLI_VERSION}` })}\n`);
       } else {
-        ports.out(`${CLI_NAME} ${CLI_VERSION} (protocol ${protocolVersion()})\n`);
+        ports.out(`${CLI_NAME} v${CLI_VERSION}\n`);
       }
     });
 

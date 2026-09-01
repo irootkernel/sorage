@@ -86,7 +86,8 @@ describe("AJ-16 packaging on a clean account", () => {
 
     const version = installed(["version", "--json"], account);
     expect(version.status).toBe(0);
-    expect(JSON.parse(version.stdout).data.version).toBeDefined();
+    expect(version.stdout).toBe('{"name":"sorage","version":"v0.3.0"}\n');
+    expect(version.stderr).toBe("");
 
     const init = installed(["init", "--non-interactive"], account);
     expect(init.status).toBe(0);

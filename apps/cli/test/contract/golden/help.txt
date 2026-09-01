@@ -19,7 +19,7 @@ Options:
   -h, --help                      display help for the command
 
 Commands:
-  version                         print the CLI, product, and protocol versions
+  version                         print the product version
   init [options]                  create the Sorage installation: home tree,
                                   configuration, database, and Vault
   uninstall                       remove the Sorage installation while keeping

@@ -46,7 +46,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 
 | Requirement | Milestone | Citing tasks |
 |---|---|---|
-| `GEN-001` | 0.1 | `TASK-001`, `TASK-005`, `TASK-040` |
+| `GEN-001` | 0.1 | `TASK-001`, `TASK-005`, `TASK-040`, `TASK-075` |
 | `GEN-002` | 0.1 | `TASK-041`, `TASK-064` |
 | `GEN-003` | 0.1 | `TASK-001` |
 | `GEN-004` | 0.1 | `TASK-041` |
@@ -219,7 +219,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `LIFE-017` | 0.1 | `TASK-028`, `TASK-033` |
 | `LIFE-018` | 0.1 | `TASK-028`, `TASK-034` |
 | `CLI-001` | 0.1 | `TASK-005`, `TASK-036` |
-| `CLI-002` | 0.1 | `TASK-005`, `TASK-036` |
+| `CLI-002` | 0.1 | `TASK-005`, `TASK-036`, `TASK-075` |
 | `CLI-003` | 0.1 | `TASK-005`, `TASK-036` |
 | `CLI-004` | 0.1 | `TASK-004`, `TASK-037` |
 | `CLI-005` | 0.1 | `TASK-005`, `TASK-037` |
@@ -318,7 +318,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-021` | 0.1 | `TASK-028`, `TASK-040`, `TASK-060` |
 | `NFR-001` | 0.1 | `TASK-001` |
 | `NFR-002` | 0.1 | `TASK-002` |
-| `NFR-003` | 0.1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073` |
+| `NFR-003` | 0.1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073`, `TASK-075` |
 | `NFR-004` | 0.3 | `TASK-062` |
 | `NFR-005` | 0.1 | `TASK-022`, `TASK-047` |
 | `NFR-006` | 0.1 | `TASK-004`, `TASK-030`, `TASK-062` |

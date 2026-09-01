@@ -31,21 +31,18 @@ describe("cli shell", () => {
     expect(DAEMON_VERSION).toBe(SORAGE_VERSION);
   });
 
-  it("prints only the JSON envelope on stdout for version --json", () => {
+  it("prints the compact ecosystem version object on stdout for version --json", () => {
     const cap = capture();
     const code = runCli(["version", "--json"], cap.ports);
     expect(code).toBe(0);
-    const parsed = JSON.parse(cap.out) as { ok: boolean; data: Record<string, unknown>; meta: Record<string, string> };
-    expect(parsed.ok).toBe(true);
-    expect(parsed.data.cli).toBe("sorage");
-    expect(parsed.meta.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(cap.out).toBe('{"name":"sorage","version":"v0.3.0"}\n');
     expect(cap.err).toBe("");
   });
 
   it("prints human version text on stdout without --json", () => {
     const cap = capture();
     expect(runCli(["version"], cap.ports)).toBe(0);
-    expect(cap.out).toContain("sorage 0.3.0");
+    expect(cap.out).toBe("sorage v0.3.0\n");
   });
 
   it("exits 0 for help", () => {

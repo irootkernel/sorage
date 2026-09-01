@@ -187,7 +187,7 @@ describe("the LaunchAgent journey", () => {
     expect(installationId).not.toBe("");
     expect(await daemonReachable(port, installationId, 20_000)).toBe(true);
     const cliVersion = JSON.parse(sorage(["version", "--json"], { home, env: cliEnv }).stdout) as {
-      data: { version: string };
+      version: string;
     };
     const health = (await fetch(`http://127.0.0.1:${port}/api/v1/health`).then((response) => response.json())) as {
       data: { version: string };
@@ -195,8 +195,8 @@ describe("the LaunchAgent journey", () => {
     const daemonVersion = (await fetch(`http://127.0.0.1:${port}/api/v1/version`).then((response) =>
       response.json(),
     )) as { data: { version: string } };
-    expect(health.data.version).toBe(cliVersion.data.version);
-    expect(daemonVersion.data.version).toBe(cliVersion.data.version);
+    expect(`v${health.data.version}`).toBe(cliVersion.version);
+    expect(`v${daemonVersion.data.version}`).toBe(cliVersion.version);
 
     // Boot out stands in for logging out; the daemon drains and stops.
     expect(launchctl(["bootout", `gui/${uid}/${TEST_LABEL}`]).status).toBe(0);

@@ -609,3 +609,36 @@ The shared cursor filter set of section 19 gains two inclusive bounds, `updatedS
 - WEB-003's date filter rides the same cursor, CLI, HTTP, and Web surfaces as every other filter, with no second pagination path to maintain.
 - The section 19 amendment is a reviewed, re-keying contract change: the cursor filter hash gains the two bound keys even when they are absent, so cursors minted before the change stop validating and fail `CURSOR_INVALID` after the upgrade. Cursors are short-lived pagination tokens that the contract already frees from surviving a Sorage upgrade, so the re-key rides that established boundary.
 - Clients wanting a wall-clock range convert to UTC instants themselves, which keeps the server free of timezone configuration.
+
+## ADR-0022: CLI version reporting uses the ecosystem compact object and `v` prefix
+
+- **Status:** Accepted
+- **Date:** 2026-09-01
+
+### Context
+
+Sorage's version command returned a product and protocol summary in the common CLI success envelope, while sibling ecosystem tools expose a short human identity and a compact standalone JSON object. Release automation and operator probes benefit from one predictable pair of fields, but Sorage's daemon record, HTTP DTOs, and package manifest already use the shared bare semantic version and must not acquire a presentation prefix.
+
+Changing the JSON shape removes `ok`, `data`, `meta.requestId`, and `protocolVersion` from this command, so it is a breaking change to the versioned CLI JSON contract even though it does not change stored data or the HTTP protocol.
+
+### Decision
+
+`sorage version` prints exactly `sorage v<version>` followed by one newline. `sorage version --json` prints exactly the compact standalone object `{"name":"sorage","version":"v<version>"}` followed by one newline and writes no diagnostic to standard error. Both forms remain available before initialization.
+
+The `v` prefix belongs only to these CLI presentation values. The shared runtime source and the package manifest, daemon record, health endpoint, and version endpoint continue to report the bare semantic version. The command has no runtime dependency on another ecosystem tool.
+
+### Alternatives considered
+
+- Keep the common success envelope and add the ecosystem fields inside `data` | consumers would still need a Sorage-specific extraction path, defeating the format alignment.
+- Preserve protocol and build-tool versions in the output | those values describe separate compatibility and build concerns and make a simple product-version probe unstable.
+- Prefix every version surface with `v` | this would needlessly break daemon and HTTP consumers and would mix presentation syntax into the canonical runtime value.
+
+### Compatibility and migration
+
+The CLI JSON change is breaking: consumers must replace reads of `data.version` with the top-level `version` field and accept its `v` prefix; consumers that need the numeric semantic version may remove that single prefix. No configuration, database, Vault, HTTP, protocol DTO, or package-data migration is required.
+
+### Consequences
+
+- Human and JSON version probes match the ecosystem format byte for byte.
+- The version command is a documented exception to the common CLI JSON envelope.
+- Daemon, HTTP, and package version contracts remain unchanged and continue to compare against the shared bare runtime version.

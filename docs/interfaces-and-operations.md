@@ -571,7 +571,7 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 | Command | Milestone | Notes |
 |---|---|---|
 | `sorage init [flags]` | 0.1 | Section 3 |
-| `sorage version` | 0.1 | Build version, the Bun version pinned in `.bun-version`, and the database schema version |
+| `sorage version [--json]` | 0.1 | Prints exactly `sorage v0.3.0` plus one newline, or the compact JSON object `{"name":"sorage","version":"v0.3.0"}` plus one newline; available before initialization |
 | `sorage help [command]` | 0.1 | Also `--help` on every command |
 | `sorage completion <shell>` | 0.1 | CLI-015 |
 | `sorage doctor [--json]` | 0.1 | Section 35 |
@@ -743,6 +743,8 @@ Error:
 ```
 
 `meta.requestId` is the only universal meta field; `meta.timedOut` is added by `inbox --wait` and appears nowhere else.
+
+`sorage version --json` is the deliberate exception to this envelope: it returns the compact standalone object `{"name":"sorage","version":"v0.3.0"}` so ecosystem version probes can consume the same field names and `v`-prefixed value as sibling tools. This presentation prefix applies only to the two CLI version outputs; the shared runtime source, package manifest, daemon record, and HTTP health and version DTOs retain the bare semantic version `0.3.0`.
 
 The envelope is versioned and contract-tested through `make test-contract` (NFR-003, NFR-011).
 
