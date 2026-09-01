@@ -637,8 +637,9 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               }
               return originalEnd(chunk as never, ...(rest as never[]));
             }) as typeof response.end;
+            const replayRequest = replayableRequest(request, spool.path);
             try {
-              await matched.route.handler(replayableRequest(request, spool.path), response, {
+              await matched.route.handler(replayRequest, response, {
                 requestId,
                 auth: auth.context,
                 params: matched.params,
@@ -653,6 +654,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               discardReplay(idempotencyStore, idempotencyKey);
               throw error;
             } finally {
+              replayRequest.destroy();
               spool.discard();
             }
             return;
@@ -775,8 +777,10 @@ function spoolRequestBody(
 
 /** Rebuilds a consumed request around its spooled body so a handler can re-read it. */
 function replayableRequest(request: IncomingMessage, spoolPath: string): IncomingMessage {
-  const { createReadStream } = require("node:fs") as typeof import("node:fs");
-  const body = createReadStream(spoolPath);
+  const { createReadStream, openSync } = require("node:fs") as typeof import("node:fs");
+  // Own the descriptor before the handler starts. A route is allowed to ignore
+  // its body, and cleanup may unlink the spool as soon as that handler returns.
+  const body = createReadStream(spoolPath, { fd: openSync(spoolPath, "r"), autoClose: true });
   return Object.assign(body, {
     method: request.method,
     url: request.url,

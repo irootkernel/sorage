@@ -126,6 +126,42 @@ describe("the daemon endpoints over a real socket", () => {
   });
 });
 
+describe("idempotent body replay lifecycle (API-012)", () => {
+  it("closes a replay stream even when the route does not read its body", async () => {
+    const retryPort = await freePort();
+    const server = createDaemonServer({
+      host: "127.0.0.1",
+      port: retryPort,
+      endpoints: { installationId, version },
+      auth: {
+        exchange: () => ({ ok: true, context: { kind: "session" }, token: "unused" }),
+        authenticate: () => ({ ok: true, context: { kind: "api-token" } }),
+      },
+      domainRoutes: [
+        {
+          method: "POST",
+          pattern: "/api/v1/body-ignored",
+          idempotent: true,
+          handler: async (_request, response) => {
+            response.statusCode = 204;
+            response.end();
+          },
+        },
+      ],
+    });
+    await new Promise<void>((resolve) => server.listen(retryPort, "127.0.0.1", resolve));
+    cleanup.push(() => server.close());
+    const headers = {
+      authorization: "Bearer test",
+      "idempotency-key": "aaaaaaaa-0000-4000-8000-000000000004",
+    };
+
+    const response = await fetch(`http://127.0.0.1:${retryPort}/api/v1/body-ignored`, { method: "POST", headers });
+
+    expect(response.status).toBe(204);
+  });
+});
+
 describe("the security headers on every response (SEC-018)", () => {
   const cases: Array<{ name: string; path: string; init?: { method?: string; host?: string } }> = [
     { name: "health", path: "/api/v1/health" },
