@@ -1,4 +1,4 @@
-// Enforces the package import rules of docs/implementation-guide.md section 2 and the
+// Enforces the package import rules of docs/implementation-tips/README.md section 2 and the
 // rule that no `await` appears inside a `UnitOfWork.run` callback (NFR-014).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";

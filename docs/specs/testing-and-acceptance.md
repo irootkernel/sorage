@@ -2,7 +2,7 @@
 
 ## 1. Tooling
 
-The toolchain is normative, fixed by ADR-0016 in [architecture-decisions.md](architecture-decisions.md) and by NFR-016 and NFR-017 in [required-specification.md](required-specification.md); a test that cannot run under it is not a valid test.
+The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md) and by NFR-016 and NFR-017 in [required-specification.md](required-specification.md); a test that cannot run under it is not a valid test.
 
 | Layer | Tool | Milestone |
 |---|---|---|
@@ -99,7 +99,7 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 Journeys are numbered per milestone: AJ-01 to AJ-10 for 0.1, AJ-11 to AJ-13 for 0.2, and AJ-14 to AJ-16 for 0.3.
 
-`Owner` names the Epic in [roadmap.md](roadmap.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every 0.1 journey is executed through the CLI surface completed in `EPIC-006`.
+`Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every 0.1 journey is executed through the CLI surface completed in `EPIC-006`.
 
 ### AJ-01: Fresh non-interactive initialization and doctor
 
@@ -348,7 +348,7 @@ Expected: Gatekeeper does not quarantine the installed binary; the CLI and daemo
 
 ## 6. Success-criteria map
 
-Charter criteria are cited by meaning as well as by number, because [product-charter.md](product-charter.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
+Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
 
 | Charter criterion | Milestone | Journey |
 |---|---|---|
@@ -479,7 +479,7 @@ Every snapshot diff is classified in the task report as breaking or non-breaking
 | Non-breaking | An added optional field, an added member of an open enumeration, a changed human-readable message, a reordered array whose order is documented as unspecified |
 | Breaking | A removed or renamed field, a changed type or nullability, a changed symbolic error code, a changed exit-code category, a removed or renamed `doctor` check id, a removed or renamed event type |
 
-The reviewer session that confirms the acceptance gate approves the diff, as defined in section 9 of [sot-governance.md](sot-governance.md); an unclassified diff blocks the gate, and a breaking diff additionally requires an accepted architecture decision or a specification amendment before the gate can pass.
+The reviewer session that confirms the acceptance gate approves the diff, as defined in section 9 of [../governance/README.md](../governance/README.md); an unclassified diff blocks the gate, and a breaking diff additionally requires an accepted architecture decision or a specification amendment before the gate can pass.
 
 ## 10. Defect severity
 

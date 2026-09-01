@@ -65,7 +65,7 @@ The local human administrator, operating through the Web UI or through a CLI com
 
 `--as-user` selects User-admin context explicitly and records `actorKind = user` on every resulting event (CLI-019). A User-admin command invoked without it returns `USER_CONTEXT_REQUIRED`.
 
-> User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013` in [required-specification.md](required-specification.md)).
+> User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013` in [../specs/required-specification.md](../specs/required-specification.md)).
 
 ### 2.4 System actor
 
@@ -376,7 +376,7 @@ The protocol SHOULD expose `reviewNextActor` and `administrativeNextActor` separ
 | Approve or reject deletion | No | No | Yes, `--as-user` |
 | Reopen a terminal Handoff | No | No | Not supported |
 
-> User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013` in [required-specification.md](required-specification.md)).
+> User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013` in [../specs/required-specification.md](../specs/required-specification.md)).
 
 The User may act as an administrative proxy, but the event MUST record `user`, not the Project.
 

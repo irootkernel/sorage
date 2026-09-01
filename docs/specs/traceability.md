@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document connects every normative requirement in [required-specification.md](required-specification.md) to the Tasks in [roadmap.md](roadmap.md) that implement it and to the evidence that proves it.
+This document connects every normative requirement in [required-specification.md](required-specification.md) to the Tasks in [../roadmap/README.md](../roadmap/README.md) that implement it and to the evidence that proves it.
 
 It exists so that three questions have mechanical answers: which Tasks a requirement depends on, which requirements a Task is allowed to change, and which requirements are still uncovered.
 
@@ -34,7 +34,7 @@ Milestone values come from the specification and name the release gate at whose 
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
 
-Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the 0.1 CLI gate, AJ-11 to AJ-13 close the 0.2 daemon and Web gate, and AJ-14 to AJ-16 close the 0.3 MVP gate, as recorded in section 6 of [roadmap.md](roadmap.md).
+Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the 0.1 CLI gate, AJ-11 to AJ-13 close the 0.2 daemon and Web gate, and AJ-14 to AJ-16 close the 0.3 MVP gate, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
 
 ## 3. Reverse index
 
@@ -46,8 +46,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 
 | Requirement | Milestone | Citing tasks |
 |---|---|---|
-| `GEN-001` | 0.1 | `TASK-001`, `TASK-005`, `TASK-040`, `TASK-075` |
-| `GEN-002` | 0.1 | `TASK-041`, `TASK-064` |
+| `GEN-001` | 0.1 | `TASK-001`, `TASK-005`, `TASK-040`, `TASK-075`, `TASK-077` |
+| `GEN-002` | 0.1 | `TASK-041`, `TASK-064`, `TASK-077`, `TASK-078` |
 | `GEN-003` | 0.1 | `TASK-001` |
 | `GEN-004` | 0.1 | `TASK-041` |
 | `GEN-005` | 0.2 | `TASK-042` |
@@ -219,7 +219,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `LIFE-017` | 0.1 | `TASK-028`, `TASK-033` |
 | `LIFE-018` | 0.1 | `TASK-028`, `TASK-034` |
 | `CLI-001` | 0.1 | `TASK-005`, `TASK-036` |
-| `CLI-002` | 0.1 | `TASK-005`, `TASK-036`, `TASK-075` |
+| `CLI-002` | 0.1 | `TASK-005`, `TASK-036`, `TASK-075`, `TASK-077` |
 | `CLI-003` | 0.1 | `TASK-005`, `TASK-036` |
 | `CLI-004` | 0.1 | `TASK-004`, `TASK-037` |
 | `CLI-005` | 0.1 | `TASK-005`, `TASK-037` |
@@ -318,7 +318,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-021` | 0.1 | `TASK-028`, `TASK-040`, `TASK-060` |
 | `NFR-001` | 0.1 | `TASK-001` |
 | `NFR-002` | 0.1 | `TASK-002` |
-| `NFR-003` | 0.1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073`, `TASK-075` |
+| `NFR-003` | 0.1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073`, `TASK-075`, `TASK-077`, `TASK-078` |
 | `NFR-004` | 0.3 | `TASK-062` |
 | `NFR-005` | 0.1 | `TASK-022`, `TASK-047` |
 | `NFR-006` | 0.1 | `TASK-004`, `TASK-030`, `TASK-062` |
@@ -327,11 +327,11 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `NFR-009` | 0.1 | `TASK-006`, `TASK-015`, `TASK-027`, `TASK-063` |
 | `NFR-010` | 0.1 | `TASK-014`, `TASK-037` |
 | `NFR-011` | 0.1 | `TASK-004`, `TASK-036` |
-| `NFR-012` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-073` |
-| `NFR-013` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064` |
+| `NFR-012` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-073`, `TASK-077`, `TASK-078` |
+| `NFR-013` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-077`, `TASK-078` |
 | `NFR-014` | 0.1 | `TASK-002` |
-| `NFR-015` | 0.1 | `TASK-008`, `TASK-065` |
-| `NFR-016` | 0.1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074` |
+| `NFR-015` | 0.1 | `TASK-008`, `TASK-065`, `TASK-076` |
+| `NFR-016` | 0.1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074`, `TASK-076`, `TASK-078` |
 | `NFR-017` | 0.1 | `TASK-001`, `TASK-064` |
 
 ## 4. Task review requirement
@@ -339,8 +339,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 Every Task review records the following list, and a review that omits an item is incomplete rather than lenient.
 
 - Canonical Task identifier and its parent Epic identifier.
-- Milestone and Task class, one of Chore, Standard, or Contract, as defined in section 9 of [sot-governance.md](sot-governance.md).
-- Requirement identifiers implemented, which MUST equal the `Requirements` cell of the Task row in [roadmap.md](roadmap.md).
+- Milestone and Task class, one of Chore, Standard, or Contract, as defined in section 9 of [../governance/README.md](../governance/README.md).
+- Requirement identifiers implemented, which MUST equal the `Requirements` cell of the Task row in [../roadmap/README.md](../roadmap/README.md).
 - Requirement identifiers tested, with the test layer for each, one of `test-unit`, `test-int`, `test-contract`, or `test-e2e`.
 - Requirement identifiers deliberately unaffected that a reader might expect this Task to touch, with the reason.
 - Architecture decisions changed or newly relied upon, by ADR identifier.
@@ -353,7 +353,7 @@ A Contract Task additionally records the reviewed snapshot diff, and a Task that
 
 ## 5. Merge rule
 
-A code change that cannot be mapped to a requirement identifier in [required-specification.md](required-specification.md) or to an approved maintenance Task in [roadmap.md](roadmap.md) MUST NOT merge.
+A code change that cannot be mapped to a requirement identifier in [required-specification.md](required-specification.md) or to an approved maintenance Task in [../roadmap/README.md](../roadmap/README.md) MUST NOT merge.
 
 The remedy is to update the Source of Truth or to append a Task, not to merge the change and reconcile the documents afterwards.
 

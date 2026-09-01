@@ -1,6 +1,6 @@
 # Future Work
 
-None of these items are part of the MVP unless promoted through the material change control in [sot-governance.md](sot-governance.md).
+None of these items are part of the MVP unless promoted through the material change control in [../governance/README.md](../governance/README.md).
 
 This document is non-normative context: it records what was deliberately excluded and why, and it never overrides a normative document or settles a conflict.
 

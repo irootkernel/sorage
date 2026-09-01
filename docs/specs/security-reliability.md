@@ -10,7 +10,7 @@ Sorage does not isolate processes that already run with the same user permission
 
 Working-directory actor resolution is **provenance, not authorization** (CLI-017). It answers "where did this come from", so the event ledger and the inbox routing stay meaningful; it is not a permission check, and `FORBIDDEN_ACTOR` is a guardrail against acting from the wrong directory rather than a security boundary.
 
-The honesty clause is normative and appears in the permission matrix of [domain-and-architecture.md](domain-and-architecture.md) and in the `--as-user` help text (SEC-021):
+The honesty clause is normative and appears in the permission matrix of [../architecture/README.md](../architecture/README.md) and in the `--as-user` help text (SEC-021):
 
 > User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013`).
 
@@ -31,7 +31,7 @@ The daemon binds only to `127.0.0.1` or `::1`; the configuration enum admits no 
 
 Every request, including every `GET`, is checked against the Host allowlist `{127.0.0.1:<port>, localhost:<port>, [::1]:<port>}` **before routing and before authentication**, and any other value is rejected with `HOST_NOT_ALLOWED` and HTTP 421 without reaching a handler (SEC-017).
 
-The check has to precede routing because DNS rebinding defeats every later control: an attacker-controlled page whose hostname re-resolves to `127.0.0.1` issues same-origin requests from the browser's point of view, so CORS never applies and a CSRF token never enters the picture, and a plain `GET /api/v1/handoffs` would read every Handoff. The `Host` header is the only field that still carries the name the browser dialed, so comparing it to an allowlist of literal loopback authorities is what closes the read path (ADR-0017 in [architecture-decisions.md](architecture-decisions.md)).
+The check has to precede routing because DNS rebinding defeats every later control: an attacker-controlled page whose hostname re-resolves to `127.0.0.1` issues same-origin requests from the browser's point of view, so CORS never applies and a CSRF token never enters the picture, and a plain `GET /api/v1/handoffs` would read every Handoff. The `Host` header is the only field that still carries the name the browser dialed, so comparing it to an allowlist of literal loopback authorities is what closes the read path (ADR-0017 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md)).
 
 The allowlist deliberately keeps the name `localhost`, which the bind enum does not, because the browser sends the name the User typed while the socket must still be a literal loopback address.
 
@@ -119,7 +119,7 @@ Preview and download endpoints enforce Handoff ownership before streaming, and n
 
 ### 6.1 Intent-log protocol
 
-Create, fan-out, revise, and deletion approval commit their `pending_fs_ops` intents in the same transaction as the domain change, execute the filesystem work afterwards, and clear the intents in a second transaction; section 20 of [domain-and-architecture.md](domain-and-architecture.md) is the normative description and this section only states the consequences for reliability (VLT-021, ADR-0013).
+Create, fan-out, revise, and deletion approval commit their `pending_fs_ops` intents in the same transaction as the domain change, execute the filesystem work afterwards, and clear the intents in a second transaction; section 20 of [../architecture/README.md](../architecture/README.md) is the normative description and this section only states the consequences for reliability (VLT-021, ADR-0013).
 
 A committed intent is a promise the database has already made, so any process that starts next is obliged to keep it, which is what makes several concurrent writer processes safe without a single-writer daemon (RUN-001, RUN-002).
 
@@ -187,7 +187,7 @@ UPDATE handoffs SET rowVersion = rowVersion + 1 WHERE id = ? AND rowVersion = ?;
 
 Anything other than one changed row means another writer moved first, and the operation fails with `ROW_VERSION_CONFLICT` without retrying; an expected Row Version is the value the client currently holds, and reads, `fetch`, preview, and their events never increment it (HND-014, HND-025).
 
-Operations that cannot be one transaction take an exclusive lockfile created with `O_EXCL` under `~/.sorage/run/`, each containing `{pid, startedAt, hostname}`; the lock set is normative in section 19 of [domain-and-architecture.md](domain-and-architecture.md) and is restated here because the reliability claims of this document depend on it:
+Operations that cannot be one transaction take an exclusive lockfile created with `O_EXCL` under `~/.sorage/run/`, each containing `{pid, startedAt, hostname}`; the lock set is normative in section 19 of [../architecture/README.md](../architecture/README.md) and is restated here because the reliability claims of this document depend on it:
 
 | Lockfile | Protects | Stale when | Milestone |
 |---|---|---|---|
@@ -226,7 +226,7 @@ Replay detection is evaluated **before** the Row Version check and before any do
 
 Every process, CLI or daemon, drains `pending_fs_ops` in `createdAt` order at start, before executing the requested command; each intent is re-evaluated from filesystem state, `attempts` increments per try, and no intent is ever executed destructively twice (RUN-002).
 
-The protocol and its crash points are normative in section 20 of [domain-and-architecture.md](domain-and-architecture.md); the matrix below states the recovery this document's guarantees rely on.
+The protocol and its crash points are normative in section 20 of [../architecture/README.md](../architecture/README.md); the matrix below states the recovery this document's guarantees rely on.
 
 | # | Crash point | Expected recovery |
 |---|---|---|

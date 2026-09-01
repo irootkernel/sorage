@@ -106,7 +106,7 @@ function parseRoadmap(): {
   tasks: Map<string, TaskRow>;
   taskLines: Array<[string, number]>;
 } {
-  const roadmapPath = join(root, "docs", "roadmap.md");
+  const roadmapPath = join(root, "docs", "roadmap", "README.md");
   const lines = readFileSync(roadmapPath, "utf8").split("\n");
   const epics = new Map<string, number>();
   const tasks = new Map<string, TaskRow>();
@@ -150,7 +150,7 @@ function parseRoadmap(): {
 }
 
 function parseRequirements(): Map<string, string> {
-  const specPath = join(root, "docs", "required-specification.md");
+  const specPath = join(root, "docs", "specs", "required-specification.md");
   const requirements = new Map<string, string>();
   for (const match of readFileSync(specPath, "utf8").matchAll(/^\| ([A-Z]{3,6}-\d{3}) \| (0\.[123]|Deferred) \|/gm)) {
     requirements.set(match[1] as string, match[2] as string);
@@ -165,23 +165,23 @@ function checkIdentifiers(): void {
   for (const task of tasks.values()) {
     for (const dependency of task.dependencies) {
       if (dependency === task.id) {
-        fail(`docs/roadmap.md:${task.line}`, `Task ${task.id} depends on itself`);
+        fail(`docs/roadmap/README.md:${task.line}`, `Task ${task.id} depends on itself`);
         continue;
       }
       if (dependency.startsWith("TASK-")) {
         const target = tasks.get(dependency);
         if (target === undefined) {
-          fail(`docs/roadmap.md:${task.line}`, `Task ${task.id} depends on unknown Task ${dependency}`);
+          fail(`docs/roadmap/README.md:${task.line}`, `Task ${task.id} depends on unknown Task ${dependency}`);
         } else if (Number(target.id.slice(5)) >= Number(task.id.slice(5))) {
-          fail(`docs/roadmap.md:${task.line}`, `Task ${task.id} depends on later or equal Task ${dependency}`);
+          fail(`docs/roadmap/README.md:${task.line}`, `Task ${task.id} depends on later or equal Task ${dependency}`);
         }
       } else if (!epics.has(dependency)) {
-        fail(`docs/roadmap.md:${task.line}`, `Task ${task.id} depends on unknown Epic ${dependency}`);
+        fail(`docs/roadmap/README.md:${task.line}`, `Task ${task.id} depends on unknown Epic ${dependency}`);
       }
     }
     for (const requirement of task.requirements) {
       if (!requirements.has(requirement)) {
-        fail(`docs/roadmap.md:${task.line}`, `Task ${task.id} cites unknown requirement ${requirement}`);
+        fail(`docs/roadmap/README.md:${task.line}`, `Task ${task.id} cites unknown requirement ${requirement}`);
       }
     }
   }
@@ -211,7 +211,7 @@ function checkIdentifiers(): void {
     if (citers.every((task) => later(task.milestone, milestone))) {
       const firstCiter = citers[0];
       fail(
-        `docs/roadmap.md:${firstCiter?.line ?? 0}`,
+        `docs/roadmap/README.md:${firstCiter?.line ?? 0}`,
         `requirement ${requirement} (milestone ${milestone}) is cited only by later-milestone Tasks`,
       );
     }
@@ -221,7 +221,7 @@ function checkIdentifiers(): void {
 function checkTraceability(): void {
   const { tasks } = parseRoadmap();
   const requirements = parseRequirements();
-  const traceabilityPath = join(root, "docs", "traceability.md");
+  const traceabilityPath = join(root, "docs", "specs", "traceability.md");
 
   // The reverse index is generated from the roadmap's Requirements column, so it
   // is compared against a freshly derived index rather than trusted.

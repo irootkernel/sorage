@@ -387,6 +387,6 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | 0.3 | INIT-004, INIT-007..010, INIT-016; RUN-007, RUN-011; CLI-006; BKP-001..026; NFR-004 | 0.3 MVP release |
 | Deferred | WEB-016 | None; revisited after the MVP |
 
-Release gates close at the end of EPIC-006 for 0.1, EPIC-007 for 0.2, and EPIC-009 for 0.3, as recorded in `roadmap.md`.
+Release gates close at the end of EPIC-006 for 0.1, EPIC-007 for 0.2, and EPIC-009 for 0.3, as recorded in `../roadmap/README.md`.
 
 The MVP is complete only when the 0.3 MVP release gate passes with every 0.1, 0.2, and 0.3 requirement satisfied.

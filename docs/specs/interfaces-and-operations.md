@@ -2,7 +2,7 @@
 
 This document owns the concrete surfaces of Sorage: filesystem layout, CLI syntax, error and exit codes, the local HTTP API, the Web information architecture, and the operational procedures for the daemon, Git backup, and restore.
 
-It sits below [required-specification.md](required-specification.md), the accepted decisions in [architecture-decisions.md](architecture-decisions.md), and [domain-and-architecture.md](domain-and-architecture.md); where this document appears to disagree with any of them, they win.
+It sits below [required-specification.md](required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), and [../architecture/README.md](../architecture/README.md); where this document appears to disagree with any of them, they win.
 
 Every surface is tagged with the milestone at which it must exist: `0.1` CLI core, `0.2` daemon with local HTTP API and Web UI, `0.3` Git backup, scheduling, and packaging.
 
@@ -262,7 +262,7 @@ Rules:
 
 CFG-019 applies from milestone 0.1, with its daemon clause phrased conditionally: once the daemon exists, a running daemon is the only writer of `config.yaml` and the CLI routes writes through `PUT /api/v1/config` with `If-Match`.
 
-When no daemon is running the CLI writes the file itself while holding `~/.sorage/run/config.lock`, following the ten-step atomic write of `domain-and-architecture.md` section 21.
+When no daemon is running the CLI writes the file itself while holding `~/.sorage/run/config.lock`, following the ten-step atomic write of `../architecture/README.md` section 21.
 
 The ETag is the SHA-256 of the canonical file bytes, not a function of `configRevision`, because a manual edit in an external editor changes the file without touching the counter; `--expected-revision <n>` compares the counter and the recomputed ETag comparison runs underneath it, so an out-of-band edit produces `CONFIG_CONFLICT` even when the counter still matches.
 
@@ -486,7 +486,7 @@ Every other command accepts any resolved actor, including `project add`, `projec
 
 > User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013` in [required-specification.md](required-specification.md)).
 
-That sentence is printed in the `--as-user` help text and stands next to the permission matrix in [domain-and-architecture.md](domain-and-architecture.md), because a flag is a workflow marker and not an operating-system boundary (SEC-021).
+That sentence is printed in the `--as-user` help text and stands next to the permission matrix in [../architecture/README.md](../architecture/README.md), because a flag is a workflow marker and not an operating-system boundary (SEC-021).
 
 `FORBIDDEN_ACTOR` is a guardrail against acting from the wrong directory, not a security boundary.
 

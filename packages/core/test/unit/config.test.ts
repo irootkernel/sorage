@@ -14,8 +14,8 @@ import {
 } from "../../src/config";
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-const schemaPath = `${repoRoot}docs/schemas/config.schema.json`;
-const examplePath = `${repoRoot}docs/examples/config.example.yaml`;
+const schemaPath = `${repoRoot}docs/specs/schemas/config.schema.json`;
+const examplePath = `${repoRoot}docs/specs/examples/config.example.yaml`;
 
 const UUID = "9d57384c-030e-4ff7-90ca-c615d8043db2";
 

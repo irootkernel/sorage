@@ -22,7 +22,7 @@ process.env.SORAGE_HOME = home;
 const core = await import("@sorage/core");
 const cli = await import("../../src/main");
 
-const docsPath = fileURLToPath(new URL("../../../../docs/interfaces-and-operations.md", import.meta.url));
+const docsPath = fileURLToPath(new URL("../../../../docs/specs/interfaces-and-operations.md", import.meta.url));
 const goldenDir = fileURLToPath(new URL("./golden/", import.meta.url));
 const updateGoldens = process.env.SORAGE_UPDATE_GOLDENS === "1";
 

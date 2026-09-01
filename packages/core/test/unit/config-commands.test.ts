@@ -6,7 +6,7 @@ import { parseConfigurationFile } from "../../src/config";
 import { setConfigurationValue, type ConfigCommandPorts, type ConfigCommandStore } from "../../src/config-commands";
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-const exampleText = readFileSync(`${repoRoot}docs/examples/config.example.yaml`, "utf8");
+const exampleText = readFileSync(`${repoRoot}docs/specs/examples/config.example.yaml`, "utf8");
 
 function sha256Of(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");

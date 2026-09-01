@@ -35,4 +35,4 @@ Add `.sorage/` to this Project's `.git/info/exclude` or `.gitignore`. The marker
 
 ## Command reference
 
-The complete command catalog, the exit-code categories, and every symbolic error code with its recovery hint live in [../../docs/interfaces-and-operations.md](../../docs/interfaces-and-operations.md); the configuration keys live in [../../docs/examples/config.example.yaml](../../docs/examples/config.example.yaml).
+The complete command catalog, the exit-code categories, and every symbolic error code with its recovery hint live in [../../docs/specs/interfaces-and-operations.md](../../docs/specs/interfaces-and-operations.md); the configuration keys live in [../../docs/specs/examples/config.example.yaml](../../docs/specs/examples/config.example.yaml).

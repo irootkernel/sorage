@@ -544,7 +544,7 @@ The MVP is delivered in three milestones with independent release gates: 0.1 CLI
 
 The roadmap allows one task `In Progress` plus one task `In Review`, uses Definition-of-Done tiers Chore, Standard, and Contract, and keeps every status pointer in a single "Active pointer" section.
 
-The authority order has ten ranked levels — `required-specification.md`, accepted ADRs, `domain-and-architecture.md`, `interfaces-and-operations.md`, `security-reliability.md`, `testing-and-acceptance.md`, `traceability.md`, `roadmap.md`, `implementation-guide.md`, then examples and schemas — while `product-charter.md` and `future-work.md` are non-normative context.
+The authority order has ten ranked levels — `../specs/required-specification.md`, accepted ADRs, `../architecture/README.md`, `../specs/interfaces-and-operations.md`, `../specs/security-reliability.md`, `../specs/testing-and-acceptance.md`, `../specs/traceability.md`, `../roadmap/README.md`, `../implementation-tips/README.md`, then examples and schemas — while `../product/README.md` and `../todo/future-work.md` are non-normative context.
 
 The task table carries `Milestone`, `Requirements`, and `Design Gate impact` columns, and Epic and Task identifiers are immutable once committed.
 
@@ -571,7 +571,7 @@ Section 22.1 defines the workspace root of a `git_repository` binding as the mai
 
 ### Decision
 
-A directory binding must name a working tree. `project add` and `project bind` refuse a directory that is a bare Git repository with a `CONFIG_INVALID` error naming the reason and the recovery of binding a non-bare clone, and the workspace root of every `git_repository` binding is therefore always a real directory. Section 22.1 of `domain-and-architecture.md` records the same rule normatively.
+A directory binding must name a working tree. `project add` and `project bind` refuse a directory that is a bare Git repository with a `CONFIG_INVALID` error naming the reason and the recovery of binding a non-bare clone, and the workspace root of every `git_repository` binding is therefore always a real directory. Section 22.1 of `../architecture/README.md` records the same rule normatively.
 
 ### Alternatives considered
 

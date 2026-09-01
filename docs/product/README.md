@@ -99,7 +99,7 @@ The seam that makes this possible is the CLI transport adapter: commands call a 
 
 Sorage must build, test, and package from its own repository root through `make`, without changing any ecosystem tool.
 
-Delivery is driven by the Aquarium roadmap handlers against the single active pointer in `roadmap.md`, and interoperability is provided by the shipped `use-sorage` skill rather than by a handler inside another repository.
+Delivery is driven by the Aquarium roadmap handlers against the single active pointer in `../roadmap/README.md`, and interoperability is provided by the shipped `use-sorage` skill rather than by a handler inside another repository.
 
 ## 5. Primary actors
 

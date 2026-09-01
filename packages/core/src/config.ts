@@ -4,7 +4,7 @@ import { appError, err, ok, type AppError, type Result } from "./errors";
 
 /**
  * The configuration model (CFG-001 to CFG-009, CFG-018, CFG-020): the typed mirror of
- * `docs/schemas/config.schema.json`, hand-validated because the fixed dependency set
+ * `docs/specs/schemas/config.schema.json`, hand-validated because the fixed dependency set
  * of ADR-0016 deliberately contains no JSON Schema runtime. A parity test walks the
  * schema file and asserts that every leaf except `installationId` declares the same
  * fixed default this module returns.

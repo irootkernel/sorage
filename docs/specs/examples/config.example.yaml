@@ -1,6 +1,6 @@
 # Sorage (소라게) configuration example — SOT v0.4.0
 #
-# This file shows every key in schemas/config.schema.json at its normative
+# This file shows every key in ../schemas/config.schema.json at its normative
 # default, which is exactly what `sorage config show --json` returns on a fresh
 # installation (CFG-020). Only `installationId` differs, because `sorage init`
 # generates a new random UUID for every installation.

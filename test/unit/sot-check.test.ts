@@ -14,9 +14,10 @@ afterAll(() => {
 function docFixture(mutate: (root: string) => void): string {
   const root = mkdtempSync(join(tmpdir(), "sorage-sot-"));
   roots.push(root);
-  mkdirSync(join(root, "docs"), { recursive: true });
+  mkdirSync(join(root, "docs", "specs"), { recursive: true });
+  mkdirSync(join(root, "docs", "roadmap"), { recursive: true });
   writeFileSync(
-    join(root, "docs", "required-specification.md"),
+    join(root, "docs", "specs", "required-specification.md"),
     [
       "# Required specification",
       "",
@@ -29,7 +30,7 @@ function docFixture(mutate: (root: string) => void): string {
     ].join("\n"),
   );
   writeFileSync(
-    join(root, "docs", "roadmap.md"),
+    join(root, "docs", "roadmap", "README.md"),
     [
       "# Roadmap",
       "",
@@ -44,12 +45,12 @@ function docFixture(mutate: (root: string) => void): string {
       "| `TASK-001` | Planned | 0.1 | First deliverable is one long unbroken line of prose. | Gate one. | None | GEN-001, GEN-002 to GEN-002, INIT-001 | Not required |",
       "| `TASK-002` | Planned | 0.1 | Second deliverable is also one long unbroken line of prose. | Gate two. | `TASK-001` | GEN-001 | Not required |",
       "",
-      "See [required-specification.md](required-specification.md) for the requirements.",
+      "See [required-specification.md](../specs/required-specification.md) for the requirements.",
       "",
     ].join("\n"),
   );
   writeFileSync(
-    join(root, "docs", "traceability.md"),
+    join(root, "docs", "specs", "traceability.md"),
     [
       "# Requirement Traceability",
       "",
@@ -102,7 +103,7 @@ describe("sot-check", () => {
   it("fails on a duplicate Task identifier", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "roadmap.md");
+        const path = join(root, "docs", "roadmap", "README.md");
         const text = readTheFile(path);
         writeFileSync(
           path,
@@ -117,7 +118,7 @@ describe("sot-check", () => {
   it("fails on a dependency on a later Task", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "roadmap.md");
+        const path = join(root, "docs", "roadmap", "README.md");
         const text = readTheFile(path);
         writeFileSync(path, text.replace("| None | GEN-001", "| `TASK-002` | GEN-001"));
       }),
@@ -129,7 +130,7 @@ describe("sot-check", () => {
   it("fails on a self dependency", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "roadmap.md");
+        const path = join(root, "docs", "roadmap", "README.md");
         const text = readTheFile(path);
         writeFileSync(
           path,
@@ -144,7 +145,7 @@ describe("sot-check", () => {
   it("fails on a citation of an unknown requirement identifier", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "roadmap.md");
+        const path = join(root, "docs", "roadmap", "README.md");
         const text = readTheFile(path);
         writeFileSync(path, text.replace("INIT-001", "INIT-999"));
       }),
@@ -156,7 +157,7 @@ describe("sot-check", () => {
   it("fails on a 0.1 requirement cited only by later-milestone Tasks and expands range citations", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "roadmap.md");
+        const path = join(root, "docs", "roadmap", "README.md");
         const text = readTheFile(path);
         // Remove the TASK-001 citation cell content for GEN-002 so only a 0.3 task cites it.
         writeFileSync(
@@ -175,7 +176,7 @@ describe("sot-check", () => {
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "traceability.md");
+        const path = join(root, "docs", "specs", "traceability.md");
         writeFileSync(
           path,
           readTheFile(path).replace("| `GEN-001` | 0.1 | `TASK-001`, `TASK-002` |", "| `GEN-001` | 0.1 | `TASK-001` |"),
@@ -189,7 +190,7 @@ describe("sot-check", () => {
   it("fails when the reverse index is missing its row for a requirement", () => {
     const result = runCheck(
       docFixture((root) => {
-        const path = join(root, "docs", "traceability.md");
+        const path = join(root, "docs", "specs", "traceability.md");
         writeFileSync(path, readTheFile(path).replace("| `INIT-001` | 0.1 | `TASK-001` |\n", ""));
       }),
     );
@@ -200,12 +201,12 @@ describe("sot-check", () => {
   it("fails when a non-Deferred requirement has no citing Task", () => {
     const result = runCheck(
       docFixture((root) => {
-        const roadmap = join(root, "docs", "roadmap.md");
+        const roadmap = join(root, "docs", "roadmap", "README.md");
         writeFileSync(
           roadmap,
           readTheFile(roadmap).replace("GEN-001, GEN-002 to GEN-002, INIT-001", "GEN-001, GEN-002 to GEN-002"),
         );
-        const traceability = join(root, "docs", "traceability.md");
+        const traceability = join(root, "docs", "specs", "traceability.md");
         writeFileSync(
           traceability,
           readTheFile(traceability).replace("| `INIT-001` | 0.1 | `TASK-001` |", "| `INIT-001` | 0.1 | None |"),
@@ -219,7 +220,7 @@ describe("sot-check", () => {
   it("fails when the traceability reverse index is absent", () => {
     const result = runCheck(
       docFixture((root) => {
-        rmSync(join(root, "docs", "traceability.md"));
+        rmSync(join(root, "docs", "specs", "traceability.md"));
       }),
     );
     expect(result.status).toBe(1);

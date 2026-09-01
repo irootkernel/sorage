@@ -79,7 +79,7 @@ type AppError = {
 
 Map once into HTTP status, protocol error, CLI exit code, log level, and recovery hint, and never branch on human-readable error text.
 
-The mapping from symbolic code to HTTP status is published in `interfaces-and-operations.md` and is verified by `make test-contract` (API-011).
+The mapping from symbolic code to HTTP status is published in `../specs/interfaces-and-operations.md` and is verified by `make test-contract` (API-011).
 
 ## 5. Transactions
 
@@ -193,7 +193,7 @@ The finalized upgrade policy of TASK-063 covers all three versioned surfaces. Th
 Owns:
 
 - Parsing through the `yaml` Document API, preserving comments and key order on every Sorage-mediated write (CFG-018)
-- Schema validation against `schemas/config.schema.json`, with every declared default applied (CFG-020)
+- Schema validation against `../specs/schemas/config.schema.json`, with every declared default applied (CFG-020)
 - Semantic validation
 - `configRevision` maintenance
 - Atomic persistence under `~/.sorage/run/config.lock`, held with `O_EXCL` and stale after 30 seconds or a dead pid
@@ -277,7 +277,7 @@ Every HTTP request carries a UUID request id, and the same field appears on the 
 }
 ```
 
-The catalog is owned normatively by `interfaces-and-operations.md`, and it is milestone-scoped: the 0.1 snapshot carries only the 0.1 check identifiers, and a later identifier appears when its milestone is reached.
+The catalog is owned normatively by `../specs/interfaces-and-operations.md`, and it is milestone-scoped: the 0.1 snapshot carries only the 0.1 check identifiers, and a later identifier appears when its milestone is reached.
 
 Changing an existing identifier or its severity semantics is a contract change, because both are as stable as any other public JSON field.
 

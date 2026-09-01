@@ -16,20 +16,20 @@ The terms `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` are normative.
 
 When requirements conflict, use this order:
 
-1. [required-specification.md](required-specification.md)
-2. Accepted decisions in [architecture-decisions.md](architecture-decisions.md)
-3. [domain-and-architecture.md](domain-and-architecture.md)
-4. [interfaces-and-operations.md](interfaces-and-operations.md)
-5. [security-reliability.md](security-reliability.md)
-6. [testing-and-acceptance.md](testing-and-acceptance.md)
-7. [traceability.md](traceability.md)
-8. [roadmap.md](roadmap.md)
-9. [implementation-guide.md](implementation-guide.md)
+1. [../specs/required-specification.md](../specs/required-specification.md)
+2. Accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md)
+3. [../architecture/README.md](../architecture/README.md)
+4. [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md)
+5. [../specs/security-reliability.md](../specs/security-reliability.md)
+6. [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md)
+7. [../specs/traceability.md](../specs/traceability.md)
+8. [../roadmap/README.md](../roadmap/README.md)
+9. [../implementation-tips/README.md](../implementation-tips/README.md)
 10. Examples, schemas, and comments
 
-[product-charter.md](product-charter.md) and [future-work.md](future-work.md) are non-normative context rather than levels of this order: they record intent and deliberate exclusions, they may be cited as rationale, and they never override a normative document or settle a conflict.
+[../product/README.md](../product/README.md) and [../todo/future-work.md](../todo/future-work.md) are non-normative context rather than levels of this order: they record intent and deliberate exclusions, they may be cited as rationale, and they never override a normative document or settle a conflict.
 
-Where two normative documents describe the same surface, the higher level owns it and the lower level points at it; the `doctor` check catalog, for example, is normative only in [interfaces-and-operations.md](interfaces-and-operations.md).
+Where two normative documents describe the same surface, the higher level owns it and the lower level points at it; the `doctor` check catalog, for example, is normative only in [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md).
 
 A conflict MUST stop the active Task, and the team MUST update the Source of Truth or record an architecture decision before continuing.
 
@@ -65,7 +65,7 @@ A material change MUST record:
 7. New or amended architecture decision
 8. Roadmap impact
 
-Item 3 is not optional prose: every decision in [architecture-decisions.md](architecture-decisions.md) carries an `Alternatives considered` section, and a new decision without one is incomplete.
+Item 3 is not optional prose: every decision in [../architecture-decision-records/README.md](../architecture-decision-records/README.md) carries an `Alternatives considered` section, and a new decision without one is incomplete.
 
 No implementation-only shortcut may become product behavior without this process.
 
@@ -103,7 +103,7 @@ Delivery is sequential with one review overlap.
 - A Task may move from `Blocked` back to `In Progress` only when no other Task is `In Progress`.
 - A blocked Task does not prevent a dependency-safe Task from starting, but the blocker, its owner, and its dependency impact MUST be recorded on the blocked Task.
 - Epic status is advanced by the Aquarium epic handler rather than derived silently from its Tasks.
-- The active pointer section of [roadmap.md](roadmap.md) holds `Active Epic`, `Active Task`, `In Review Task`, and `Next eligible Task`; no other file in this repository records delivery status, and a second status location is a governance defect rather than redundancy.
+- The active pointer section of [../roadmap/README.md](../roadmap/README.md) holds `Active Epic`, `Active Task`, `In Review Task`, and `Next eligible Task`; no other file in this repository records delivery status, and a second status location is a governance defect rather than redundancy.
 
 ## 8. Task start checklist
 
@@ -111,7 +111,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
-- Declare the packages touched, using the five-package layout of [domain-and-architecture.md](domain-and-architecture.md).
+- Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
 - Declare the milestone the Task belongs to, one of `0.1`, `0.2`, or `0.3`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
@@ -135,13 +135,13 @@ A Standard Task is closed when all of the following hold:
 - Unit and integration tests pass.
 - Error paths are tested, not only the success path.
 - Documentation and examples affected by the change are updated in the same change.
-- The Task row in [roadmap.md](roadmap.md) and the active pointer are updated.
+- The Task row in [../roadmap/README.md](../roadmap/README.md) and the active pointer are updated.
 - No higher-authority conflict remains.
 - The Reviewer confirms the acceptance gate.
 
 ### 9.3 Contract
 
-A Contract Task is any Task that touches the `protocol` DTOs, the CLI JSON contract, an HTTP DTO, `schemas/config.schema.json`, or a database migration; it requires everything in 9.2 plus:
+A Contract Task is any Task that touches the `protocol` DTOs, the CLI JSON contract, an HTTP DTO, `../specs/schemas/config.schema.json`, or a database migration; it requires everything in 9.2 plus:
 
 - The snapshot diff of the changed contract is reviewed and explicitly classified as breaking or non-breaking.
 - The migration impact is recorded, including the upgrade fixture when the database schema changed.

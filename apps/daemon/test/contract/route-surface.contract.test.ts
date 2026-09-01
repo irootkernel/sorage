@@ -11,7 +11,7 @@ import { daemonRoutes } from "../../src/server";
  * against every row of the section 15 matrix in both directions, and the routing
  * table covers the section 18 endpoint catalog with only the documented deferrals.
  */
-const docsPath = fileURLToPath(new URL("../../../../docs/interfaces-and-operations.md", import.meta.url));
+const docsPath = fileURLToPath(new URL("../../../../docs/specs/interfaces-and-operations.md", import.meta.url));
 
 function parseSection15(): Map<string, number> {
   const text = readFileSync(docsPath, "utf8");

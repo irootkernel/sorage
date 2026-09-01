@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.3.0",
   "description": "Sorage, a local document-handoff broker for AI coding sessions.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "bun": "1.4.0"
