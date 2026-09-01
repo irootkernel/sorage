@@ -20,6 +20,8 @@ import { createConfigStore } from "./config-store";
 import { createNodeHomePaths, type HomePaths } from "./home";
 import { acquireLock, createNodeLockProbePorts, isPidAlive, releaseLock } from "./lockfile";
 import { openSorageDatabase } from "./sqlite/connection";
+import { MIGRATIONS } from "./sqlite/migrations";
+import { openAndMigrate } from "./sqlite/migrator";
 
 /**
  * The daemon composition surface (RUN-006, RUN-013, SEC-015): the atomic
@@ -70,6 +72,14 @@ export interface NodeDaemonPorts {
 
 export interface NodeDaemonPortsOptions {
   env?: NodeJS.ProcessEnv | undefined;
+}
+
+/** The daemon-owned database handle exposed only through this composition module. */
+export type NodeDaemonDatabase = ReturnType<typeof openAndMigrate>["db"];
+
+/** Opens and migrates the one connection the daemon owns for its whole lifetime. */
+export function openNodeDaemonDatabase(stateDir: string): NodeDaemonDatabase {
+  return openAndMigrate(join(stateDir, "sorage.sqlite3"), MIGRATIONS).db;
 }
 
 export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): NodeDaemonPorts {

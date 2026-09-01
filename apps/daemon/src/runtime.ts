@@ -4,10 +4,12 @@ import { appError, backupTickDecision, runBackupOnce, setConfigurationValue, sho
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import type { Configuration } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
-import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
+import {
+  createNodeDaemonPorts,
+  type DaemonRunRecord,
+  openNodeDaemonDatabase,
+} from "@sorage/adapters/src/daemon-command-ports";
 import { createLogger } from "@sorage/adapters/src/logging";
-import { MIGRATIONS } from "@sorage/adapters/src/sqlite/migrations";
-import { openAndMigrate } from "@sorage/adapters/src/sqlite/migrator";
 import {
   createNodeApiTokenStore,
   createNodeTokenEntropy,
@@ -74,7 +76,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
   }
 
   const stateDir = ports.home.stateDir;
-  const database = openAndMigrate(join(stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+  const database = openNodeDaemonDatabase(stateDir);
   let databaseClosed = false;
   const closeDatabase = () => {
     if (databaseClosed) return;

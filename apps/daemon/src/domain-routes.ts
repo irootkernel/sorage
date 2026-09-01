@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
+import type { NodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import {
   createNodeHandoffReadPorts as createHandoffReadPorts,
@@ -16,7 +17,6 @@ import {
 } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { createNodeProjectPorts as createProjectPorts } from "@sorage/adapters/src/project-command-ports";
-import type { SorageSqlite } from "@sorage/adapters/src/sqlite/connection";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type ActorRef,
@@ -88,7 +88,7 @@ export interface DomainRouteDeps {
   /** The configuration service the daemon was started with. */
   config: DaemonConfigService | undefined;
   /** One daemon-lifetime connection; all request port factories share it. */
-  database?: SorageSqlite | undefined;
+  database?: NodeDaemonDatabase | undefined;
 }
 
 export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] {
