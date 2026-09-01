@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
  * The TASK-036 golden tour: every command in the 0.1 catalog runs as a real process
@@ -36,12 +37,28 @@ afterAll(() => {
 });
 
 const handoffIds = new Map<string, string>();
+let tourPort = 0;
+
+beforeAll(async () => {
+  tourPort = await new Promise<number>((resolve, reject) => {
+    const probe = createNetServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const port = (probe.address() as AddressInfo).port;
+      probe.close(() => resolve(port));
+    });
+    probe.on("error", reject);
+  });
+});
 
 function normalize(text: string): string {
   return (
     text
       .split(home)
       .join("<home>")
+      // The tour uses an available port so an installed Sorage daemon cannot
+      // affect doctor; normalize it back to the documented default in goldens.
+      .split(String(tourPort))
+      .join("46321")
       .replace(
         /artifacts\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]+\//g,
         "artifacts/<uuid>/<key>/",
@@ -61,14 +78,16 @@ function runTour(
   cwd: string = workA,
   env: Record<string, string> = {},
 ): { status: number | null; stdout: string; stderr: string } {
-  const resolved = args.map((arg) =>
-    arg.startsWith("{") && arg.endsWith("}") ? (handoffIds.get(arg.slice(1, -1)) ?? arg) : arg,
-  );
+  const resolved = args.map((arg) => {
+    if (arg === "{PORT}") return String(tourPort);
+    return arg.startsWith("{") && arg.endsWith("}") ? (handoffIds.get(arg.slice(1, -1)) ?? arg) : arg;
+  });
   const result = spawnSync("bun", [entry, ...resolved], {
     encoding: "utf8",
     cwd,
     env: {
       ...process.env,
+      HOME: home,
       SORAGE_TEST_REQUEST_ID: "2f0ac9a0-0000-4000-8000-0000000000aa",
       SORAGE_HOME: home,
       ...env,
@@ -87,7 +106,7 @@ interface Step {
 }
 
 const steps: Step[] = [
-  { name: "01-init", args: ["init", "--non-interactive", "--json"] },
+  { name: "01-init", args: ["init", "--non-interactive", "--port", "{PORT}", "--json"] },
   { name: "02-config-show", args: ["config", "show", "--json"] },
   { name: "03-config-validate", args: ["config", "validate", "--json"] },
   { name: "04-config-set", args: ["config", "set", "ui.defaultPageSize", "25", "--as-user", "--json"] },

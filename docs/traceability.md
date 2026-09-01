@@ -103,11 +103,11 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `RUN-004` | 0.1 | `TASK-036` |
 | `RUN-005` | 0.2 | `TASK-042`, `TASK-073` |
 | `RUN-006` | 0.2 | `TASK-044` |
-| `RUN-007` | 0.3 | `TASK-059`, `TASK-069`, `TASK-073` |
+| `RUN-007` | 0.3 | `TASK-059`, `TASK-069`, `TASK-073`, `TASK-074` |
 | `RUN-008` | 0.2 | `TASK-044`, `TASK-045` |
 | `RUN-009` | 0.1 | `TASK-007` |
 | `RUN-010` | 0.1 | `TASK-007` |
-| `RUN-011` | 0.3 | `TASK-059` |
+| `RUN-011` | 0.3 | `TASK-059`, `TASK-074` |
 | `RUN-012` | 0.2 | `TASK-043` |
 | `RUN-013` | 0.2 | `TASK-044`, `TASK-068` |
 | `RUN-014` | 0.1 | `TASK-026`, `TASK-052` |
@@ -331,7 +331,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `NFR-013` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064` |
 | `NFR-014` | 0.1 | `TASK-002` |
 | `NFR-015` | 0.1 | `TASK-008`, `TASK-065` |
-| `NFR-016` | 0.1 | `TASK-001`, `TASK-002`, `TASK-003` |
+| `NFR-016` | 0.1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074` |
 | `NFR-017` | 0.1 | `TASK-001`, `TASK-064` |
 
 ## 4. Task review requirement

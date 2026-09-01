@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +33,15 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+const launchctlBin = tempDir("sorage-aj16-launchctl-");
+const fakeLaunchctl = join(launchctlBin, "launchctl");
+writeFileSync(
+  fakeLaunchctl,
+  '#!/bin/sh\nif [ "$1" = "bootout" ]; then echo "No such process" >&2; exit 3; fi\nexit 1\n',
+  "utf8",
+);
+chmodSync(fakeLaunchctl, 0o755);
+
 /** Runs the packaged binary with a clean HOME and an isolated prefix, like a new account. */
 function installed(args: string[], home: string): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(join(BINARY), args, {
@@ -42,6 +51,9 @@ function installed(args: string[], home: string): { status: number | null; stdou
       ...process.env,
       HOME: home,
       SORAGE_HOME: join(home, ".sorage"),
+      // launchd labels are scoped to the real user domain, not HOME. Keep the
+      // clean-account uninstall from addressing the developer's installed job.
+      PATH: `${launchctlBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       // A clean account has no developer checkout; nothing here may depend on one.
       SORAGE_TEST_REQUEST_ID: undefined,
     },

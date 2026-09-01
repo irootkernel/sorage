@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,17 +36,33 @@ function capture() {
 
 /** Points HOME at a temporary directory so the LaunchAgent ports stay isolated. */
 function withTempUserHome<T>(body: () => T): T {
-  const previous = process.env.HOME;
+  const previousHome = process.env.HOME;
+  const previousPath = process.env.PATH;
   const userHome = mkdtempSync(join(tmpdir(), "sorage-uninstall-user-"));
+  const binDir = join(userHome, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const fakeLaunchctl = join(binDir, "launchctl");
+  writeFileSync(
+    fakeLaunchctl,
+    '#!/bin/sh\nif [ "$1" = "bootout" ]; then echo "No such process" >&2; exit 3; fi\nexit 1\n',
+    "utf8",
+  );
+  chmodSync(fakeLaunchctl, 0o755);
   process.env.HOME = userHome;
+  process.env.PATH = `${binDir}:${previousPath ?? "/usr/bin:/bin"}`;
   homes.push(userHome);
   try {
     return body();
   } finally {
-    if (previous === undefined) {
+    if (previousHome === undefined) {
       delete process.env.HOME;
     } else {
-      process.env.HOME = previous;
+      process.env.HOME = previousHome;
+    }
+    if (previousPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = previousPath;
     }
   }
 }
