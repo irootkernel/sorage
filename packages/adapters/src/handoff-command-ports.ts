@@ -22,6 +22,7 @@ import { inspectSourceFile } from "./import-source";
 import { createNodeProjectPorts } from "./project-command-ports";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
+import type { SorageSqlite } from "./sqlite/connection";
 
 /**
  * The production wiring of the `sorage send` command of TASK-029: one migrated SQLite
@@ -62,23 +63,33 @@ function digestFile(path: string): Result<string, AppError> {
 export interface NodeHandoffCommandPortsOptions {
   env?: HomeEnvironment | undefined;
   userHome?: string | undefined;
+  /** Daemon-owned connection shared by every request route and closed on drain. */
+  database?: SorageSqlite | undefined;
+}
+
+function databaseFor(options: NodeHandoffCommandPortsOptions, stateDir: string): SorageSqlite {
+  return options.database ?? openAndMigrate(resolve(stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+}
+
+function closeOwnedDatabase(options: NodeHandoffCommandPortsOptions, db: SorageSqlite): void {
+  if (options.database === undefined) db.close();
 }
 
 export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}): SendPorts {
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
   const read = config.read();
   if (!read.ok || read.value === null) {
-    db.close();
+    closeOwnedDatabase(options, db);
     throw new Error(`the configuration at ${home.configFile} could not be read`);
   }
   const effective = read.value.config;
   const ledger = createSqliteEventLedger(db);
   return {
-    projectPorts: createNodeProjectPorts({ env: env as HomeEnvironment, userHome }),
+    projectPorts: createNodeProjectPorts({ env: env as HomeEnvironment, userHome, database: db }),
     handoffs: createSqliteHandoffWriteStore(db, ledger),
     artifactStore: createNodeArtifactStore({
       vaultPath: effective.vault.path,
@@ -151,11 +162,11 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
   const read = config.read();
   if (!read.ok || read.value === null) {
-    db.close();
+    closeOwnedDatabase(options, db);
     throw new Error(`the configuration at ${home.configFile} could not be read`);
   }
   const artifactStore = createNodeArtifactStore({
@@ -183,7 +194,7 @@ export function createNodeTerminalPorts(options: NodeHandoffCommandPortsOptions 
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = databaseFor(options, home.stateDir);
   return { ...reviews, terminals: createSqliteTerminalStore(db, createSqliteEventLedger(db)) };
 }
 
@@ -201,11 +212,11 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
   const read = config.read();
   if (!read.ok || read.value === null) {
-    db.close();
+    closeOwnedDatabase(options, db);
     throw new Error(`the configuration at ${home.configFile} could not be read`);
   }
   const effective = read.value.config;
@@ -237,7 +248,7 @@ export function createNodeReviewPorts(
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = databaseFor(options, home.stateDir);
   return { ...read, reviews: createSqliteReviewStore(db, createSqliteEventLedger(db)) };
 }
 
@@ -246,11 +257,11 @@ export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptio
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
   const read = config.read();
   if (!read.ok || read.value === null) {
-    db.close();
+    closeOwnedDatabase(options, db);
     throw new Error(`the configuration at ${home.configFile} could not be read`);
   }
   const effective = read.value.config;

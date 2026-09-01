@@ -7,15 +7,16 @@ import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-comman
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import {
-  createNodeHandoffReadPorts,
-  createNodeRetentionPorts,
-  createNodeReviewPorts,
-  createNodeRevisionPorts,
-  createNodeSendPorts,
-  createNodeTerminalPorts,
+  createNodeHandoffReadPorts as createHandoffReadPorts,
+  createNodeRetentionPorts as createRetentionPorts,
+  createNodeReviewPorts as createReviewPorts,
+  createNodeRevisionPorts as createRevisionPorts,
+  createNodeSendPorts as createSendPorts,
+  createNodeTerminalPorts as createTerminalPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
-import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import { createNodeProjectPorts as createProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import type { SorageSqlite } from "@sorage/adapters/src/sqlite/connection";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type ActorRef,
@@ -86,6 +87,8 @@ export interface DomainRouteDeps {
   vaultPath(): string | null;
   /** The configuration service the daemon was started with. */
   config: DaemonConfigService | undefined;
+  /** One daemon-lifetime connection; all request port factories share it. */
+  database?: SorageSqlite | undefined;
 }
 
 export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] {
@@ -93,6 +96,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   const configCommandPortsForValidation = createNodeConfigCommandPorts;
   const homeOf = () => createNodeHomePaths().home;
   const idempotency = new Map<string, { requestHash: string; status: number; body: unknown }>();
+  const databaseOptions = deps.database === undefined ? {} : { database: deps.database };
+  const createNodeProjectPorts = () => createProjectPorts(databaseOptions);
+  const createNodeSendPorts = () => createSendPorts(databaseOptions);
+  const createNodeHandoffReadPorts = () => createHandoffReadPorts(databaseOptions);
+  const createNodeReviewPorts = () => createReviewPorts(databaseOptions);
+  const createNodeRevisionPorts = () => createRevisionPorts(databaseOptions);
+  const createNodeTerminalPorts = () => createTerminalPorts(databaseOptions);
+  const createNodeRetentionPorts = () => createRetentionPorts(databaseOptions);
 
   const actorInputOf = (
     query: URLSearchParams,

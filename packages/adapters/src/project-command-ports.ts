@@ -11,6 +11,7 @@ import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
+import type { SorageSqlite } from "./sqlite/connection";
 
 /**
  * The production wiring of the `sorage project` commands: the migrated SQLite database,
@@ -26,6 +27,8 @@ export interface NodeProjectPortsOptions {
   git?: GitProbe | undefined;
   gitIsBare?: BareProbe | undefined;
   fs?: ProjectRepositoryFs | undefined;
+  /** Daemon-owned connection; CLI callers omit it and keep process-scoped ownership. */
+  database?: SorageSqlite | undefined;
 }
 
 export type GitProbe = (directory: string) => string | null;
@@ -55,7 +58,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const { db } = openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+  const db = options.database ?? openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS).db;
   const git = options.git ?? nativeGit;
   const isBare = options.gitIsBare ?? nativeIsBare;
   const fs = options.fs ?? { realpath: (path: string) => realpathSync(path) };
@@ -64,7 +67,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
   const read = config.read();
   if (!read.ok || read.value === null) {
-    db.close();
+    if (options.database === undefined) db.close();
     throw new Error(`the configuration at ${home.configFile} could not be read`);
   }
   return {

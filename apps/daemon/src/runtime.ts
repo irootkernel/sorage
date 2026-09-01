@@ -6,6 +6,8 @@ import type { Configuration } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
 import { createLogger } from "@sorage/adapters/src/logging";
+import { MIGRATIONS } from "@sorage/adapters/src/sqlite/migrations";
+import { openAndMigrate } from "@sorage/adapters/src/sqlite/migrator";
 import {
   createNodeApiTokenStore,
   createNodeTokenEntropy,
@@ -72,6 +74,13 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
   }
 
   const stateDir = ports.home.stateDir;
+  const database = openAndMigrate(join(stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+  let databaseClosed = false;
+  const closeDatabase = () => {
+    if (databaseClosed) return;
+    databaseClosed = true;
+    database.close();
+  };
   const token = createNodeApiTokenStore({ stateDir });
   token.ensure();
   const auth = createSessionService({
@@ -100,6 +109,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
     domainRoutes: createDomainRoutes({
       vaultPath: () => ports.vaultPath(),
       config: configService,
+      database,
     }),
     vaultPath: () => ports.vaultPath(),
     onRestartRequest: () => {
@@ -192,6 +202,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
 
   return new Promise((resolve, reject) => {
     server.once("error", (error: Error) => {
+      closeDatabase();
       lock.release?.();
       reject(appError("PORT_IN_USE", `the configured port is already bound: ${error.message}`));
     });
@@ -220,6 +231,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
           await new Promise((wake) => setTimeout(wake, 50));
         }
         server.close();
+        closeDatabase();
         ports.removeDaemonRecord();
         lock.release?.();
       };
