@@ -6,6 +6,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -45,6 +46,7 @@ import { openAndMigrate } from "./sqlite/migrator";
 import { createVaultInitializer, openVault } from "./vault";
 
 const COPY_BUFFER_BYTES = 1024 * 1024;
+const MOVE_SCRATCH_MARKER = ".sorage-move-scratch.json";
 
 export interface NodeVaultCommandPortsOptions {
   env?: HomeEnvironment | undefined;
@@ -300,19 +302,48 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             } catch {
               existed = false;
             }
+            let reusedScratch = false;
             if (existed) {
-              const foreign = readdirSync(targetPath).filter((entry) => entry !== "staging" && entry !== "artifacts");
-              if (foreign.length > 0) {
-                return err(
-                  appError(
-                    "VAULT_INTEGRITY_ERROR",
-                    `Refusing to move into the non-empty directory ${targetPath} because it is not a Vault target (VLT-003).`,
-                    { targetPath, foreignEntries: foreign },
-                  ),
+              const entries = readdirSync(targetPath);
+              if (entries.length > 0) {
+                const marker = readMoveScratchMarker(join(targetPath, MOVE_SCRATCH_MARKER));
+                const foreign = entries.filter(
+                  (entry) => entry !== MOVE_SCRATCH_MARKER && entry !== "staging" && entry !== "artifacts",
                 );
+                if (
+                  marker === null ||
+                  marker.installationId !== installationId ||
+                  marker.sourceVaultPath !== resolvePhysicalPath(vaultPath) ||
+                  foreign.length > 0
+                ) {
+                  return err(
+                    appError(
+                      "VAULT_INTEGRITY_ERROR",
+                      `Refusing to move into the non-empty directory ${targetPath} because Sorage cannot prove it owns the existing contents (VLT-003).`,
+                      { targetPath, foreignEntries: foreign },
+                    ),
+                  );
+                }
+                reusedScratch = true;
               }
             }
-            // Clear scratch a failed attempt left behind, then prepare the layout.
+            try {
+              mkdirSync(targetPath, { recursive: true });
+              if (!reusedScratch) {
+                writeMoveScratchMarker(join(targetPath, MOVE_SCRATCH_MARKER), {
+                  installationId,
+                  sourceVaultPath: resolvePhysicalPath(vaultPath),
+                });
+              }
+            } catch (error) {
+              return err(
+                appError("INTERNAL_ERROR", `Claiming the move target failed: ${messageOf(error)}.`, {
+                  targetPath,
+                  cause: String(error),
+                }),
+              );
+            }
+            // Clear only scratch carrying this Installation's exact move marker.
             try {
               rmSync(targetStaging, { recursive: true, force: true });
               rmSync(targetArtifacts, { recursive: true, force: true });
@@ -326,7 +357,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
                 }),
               );
             }
-            return ok({ reusedScratch: existed });
+            return ok({ reusedScratch });
           },
           managedFiles(): Result<string[], AppError> {
             const files: string[] = [];
@@ -388,6 +419,8 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           finalize(): Result<void, AppError> {
             const created = createVaultInitializer(clock).initialize(targetPath, installationId);
             if (!created.ok) return err(created.error);
+            rmSync(join(targetPath, MOVE_SCRATCH_MARKER), { force: true });
+            fsyncDirectory(targetPath);
             return ok(undefined);
           },
         },
@@ -461,6 +494,40 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       });
     },
   };
+}
+
+interface MoveScratchMarker {
+  installationId: string;
+  sourceVaultPath: string;
+}
+
+function readMoveScratchMarker(path: string): MoveScratchMarker | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const marker = parsed as Partial<MoveScratchMarker> & { type?: unknown };
+    if (
+      marker.type !== "sorage-vault-move-scratch" ||
+      typeof marker.installationId !== "string" ||
+      typeof marker.sourceVaultPath !== "string"
+    ) {
+      return null;
+    }
+    return { installationId: marker.installationId, sourceVaultPath: marker.sourceVaultPath };
+  } catch {
+    return null;
+  }
+}
+
+function writeMoveScratchMarker(path: string, marker: MoveScratchMarker): void {
+  const handle = openSync(path, "wx");
+  try {
+    writeSync(handle, `${JSON.stringify({ type: "sorage-vault-move-scratch", ...marker }, null, 2)}\n`, null, "utf8");
+    fsyncSync(handle);
+  } finally {
+    closeSync(handle);
+  }
+  fsyncDirectory(dirname(path));
 }
 
 /**

@@ -139,6 +139,28 @@ describe("moveVault", () => {
     expect(statusPathOf(home)).toBe(vault);
   });
 
+  it("preserves pre-existing artifacts and staging trees without an owned scratch marker", () => {
+    const { home, vault } = initializedHome("sorage-move-managed-names-");
+    const target = join(home, "foreign-target");
+    const artifact = join(target, "artifacts", "keep.txt");
+    const staged = join(target, "staging", "keep.txt");
+    mkdirSync(join(target, "artifacts"), { recursive: true });
+    mkdirSync(join(target, "staging"), { recursive: true });
+    writeFileSync(artifact, "not sorage scratch");
+    writeFileSync(staged, "also not sorage scratch");
+
+    const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+    const movePorts = ports.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+
+    expect(moved.ok).toBe(false);
+    expect(!moved.ok && moved.error.code).toBe("VAULT_INTEGRITY_ERROR");
+    expect(readFileSync(artifact, "utf8")).toBe("not sorage scratch");
+    expect(readFileSync(staged, "utf8")).toBe("also not sorage scratch");
+    expect(statusPathOf(home)).toBe(vault);
+  });
+
   it("refuses a target inside a bound Project directory with VAULT_CONTAINMENT at exit 64 (VLT-017)", () => {
     const { home, vault } = initializedHome("sorage-move-contain-");
     const project = join(home, "project");
