@@ -116,6 +116,13 @@ export function storeReplay(
   body: unknown,
 ): void {
   if (key === undefined) return;
+  // Only completed mutations are replayable. Refusals and failures describe
+  // conditions that may clear before the client retries (for example a held
+  // backup lock), so retaining them would turn a transient response permanent.
+  if (status < 200 || status >= 300) {
+    store.delete(key);
+    return;
+  }
   const requestHash = createHash("sha256").update(requestIdentity).digest("hex");
   store.set(key, { requestHash, status, body });
 }

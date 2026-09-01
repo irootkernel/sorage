@@ -162,6 +162,47 @@ describe("idempotent body replay lifecycle (API-012)", () => {
   });
 });
 
+describe("idempotent transient failures (API-012)", () => {
+  it("executes the same request again after a transient response", async () => {
+    const retryPort = await freePort();
+    let attempts = 0;
+    const server = createDaemonServer({
+      host: "127.0.0.1",
+      port: retryPort,
+      endpoints: { installationId, version },
+      auth: {
+        exchange: () => ({ ok: true, context: { kind: "session" }, token: "unused" }),
+        authenticate: () => ({ ok: true, context: { kind: "api-token" } }),
+      },
+      domainRoutes: [
+        {
+          method: "POST",
+          pattern: "/api/v1/transient",
+          idempotent: true,
+          handler: async (_request, response) => {
+            attempts += 1;
+            response.statusCode = attempts === 1 ? 409 : 201;
+            response.end(JSON.stringify(attempts === 1 ? { error: "busy" } : { created: true }));
+          },
+        },
+      ],
+    });
+    await new Promise<void>((resolve) => server.listen(retryPort, "127.0.0.1", resolve));
+    cleanup.push(() => server.close());
+    const headers = {
+      authorization: "Bearer test",
+      "idempotency-key": "aaaaaaaa-0000-4000-8000-000000000006",
+    };
+
+    const first = await fetch(`http://127.0.0.1:${retryPort}/api/v1/transient`, { method: "POST", headers });
+    const retry = await fetch(`http://127.0.0.1:${retryPort}/api/v1/transient`, { method: "POST", headers });
+
+    expect(first.status).toBe(409);
+    expect(retry.status).toBe(201);
+    expect(attempts).toBe(2);
+  });
+});
+
 describe("the security headers on every response (SEC-018)", () => {
   const cases: Array<{ name: string; path: string; init?: { method?: string; host?: string } }> = [
     { name: "health", path: "/api/v1/health" },

@@ -40,6 +40,17 @@ describe("the idempotency store (API-012)", () => {
     expect(replay.replayed).toBe(true);
   });
 
+  it("does not retain a completed error response after its transient condition clears", () => {
+    const store: Store = new Map();
+    const key = "aaaaaaaa-0000-4000-8000-000000000005";
+    expect(evaluateIdempotency(store, key, "POST /four body-a").replayed).toBe(false);
+    storeReplay(store, key, "POST /four body-a", 409, { error: { code: "BACKUP_IN_PROGRESS" } });
+
+    const retry = evaluateIdempotency(store, key, "POST /four body-a");
+    expect(retry.replayed).toBe(false);
+    expect(retry.error).toBeUndefined();
+  });
+
   it("conflicts on a different request under the same key and replays the same one", () => {
     const store: Store = new Map();
     const key = "aaaaaaaa-0000-4000-8000-000000000003";
