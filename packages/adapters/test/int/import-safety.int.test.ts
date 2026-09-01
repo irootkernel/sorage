@@ -239,7 +239,7 @@ describe("prepareArtifactImport over the real store", () => {
         expect(refused.ok).toBe(false);
         if (refused.ok) return;
         expect(refused.error.code).toBe("VAULT_CONTAINMENT");
-        expect(refused.error.details?.["side"]).toBe("project-inside-vault");
+        expect(refused.error.details?.side).toBe("project-inside-vault");
       } finally {
         around.cleanup();
       }

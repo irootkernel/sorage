@@ -162,7 +162,7 @@ describe("moveVault", () => {
   });
 
   it("refuses a target inside a bound Project directory with VAULT_CONTAINMENT at exit 64 (VLT-017)", () => {
-    const { home, vault } = initializedHome("sorage-move-contain-");
+    const { home } = initializedHome("sorage-move-contain-");
     const project = join(home, "project");
     mkdirSync(project);
     // Register one directory binding the target would live inside.

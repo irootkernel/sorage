@@ -88,7 +88,7 @@ describe("sorage token rotate (SEC-020)", () => {
   });
 
   it("requires an initialized installation", () => {
-    const home = tempHome("sorage-cli-token-uninit-");
+    const _home = tempHome("sorage-cli-token-uninit-");
     const sink = capture();
     const code = runCli(["token", "rotate", "--as-user", "--json"], sink.ports);
     expect(code).toBe(78);

@@ -146,7 +146,7 @@ describe("the interactive init wizard", () => {
   });
 
   it("registers the first Project from question 10", () => {
-    const home = tempHome("sorage-wizard-project-");
+    const _home = tempHome("sorage-wizard-project-");
     const projectDir = mkdtempSync(join(tmpdir(), "sorage-wizard-project-dir-"));
     const io = capture();
     const script = answers([

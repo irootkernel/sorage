@@ -149,7 +149,7 @@ describe("waitForNewInboxItems", () => {
     resetClock();
     // Three items with a page size of two: h3 lives on the second page of the seed.
     const items = [view("h1", 1_000), view("h2", 900), view("h3", 800)];
-    const ports = portsOf(() => items);
+    const _ports = portsOf(() => items);
     // The stub returns everything in one call, so simulate paging by slicing in the
     // test through a wrapper that respects the limit: the seed walks both pages.
     const paged = portsOf(() => items);

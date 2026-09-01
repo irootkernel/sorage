@@ -77,7 +77,7 @@ describe("the home path service", () => {
 
 describe("the O_EXCL lockfile primitive", () => {
   it("refuses a second acquisition of a live lock", async () => {
-    await withTempHome(async (home) => {
+    await withTempHome(async (_home) => {
       const path = createNodeHomePaths().lockFile("config");
       const first = acquireLock({ path, lock: "config", ports: systemPorts });
       expect(first.ok).toBe(true);

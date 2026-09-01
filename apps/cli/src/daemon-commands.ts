@@ -44,10 +44,9 @@ export function createDaemonRuntimePorts(): DaemonRuntimePorts {
     portHeld: (host, port) => selfProbe(["__port-probe", host, String(port)]),
     healthConfirms: (host, port, installationId) => selfProbe(["__health-probe", host, String(port), installationId]),
     spawnDaemon: () => {
-      const scriptArgs =
-        process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
-          ? [process.argv[1] as string, "daemon", "serve"]
-          : ["daemon", "serve"];
+      const scriptArgs = process.argv[1]?.endsWith("main.ts")
+        ? [process.argv[1] as string, "daemon", "serve"]
+        : ["daemon", "serve"];
       const child = spawn(process.execPath, scriptArgs, { detached: true, stdio: "ignore", env: process.env });
       child.unref();
     },
@@ -63,8 +62,7 @@ export function createDaemonRuntimePorts(): DaemonRuntimePorts {
 }
 
 function selfProbe(args: string[]): boolean {
-  const scriptArgs =
-    process.argv[1] !== undefined && process.argv[1].endsWith("main.ts") ? [process.argv[1] as string, ...args] : args;
+  const scriptArgs = process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string, ...args] : args;
   const probe = spawnSync(process.execPath, scriptArgs, { timeout: 5000 });
   return probe.status === 0;
 }

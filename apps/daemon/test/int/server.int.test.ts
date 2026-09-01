@@ -47,7 +47,7 @@ function request(
   });
 }
 
-function json(response: TestResponse): any {
+function json(response: TestResponse) {
   return JSON.parse(response.body);
 }
 
@@ -67,7 +67,7 @@ const installationId = "0f0e0d0c-0b0a-4000-8000-000000000001";
 const version = "9.9.99-test";
 
 let port = 0;
-const baseUrl = "";
+const _baseUrl = "";
 const cleanup: Array<() => void> = [];
 
 beforeAll(async () => {

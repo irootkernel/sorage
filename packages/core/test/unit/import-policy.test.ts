@@ -119,7 +119,7 @@ describe("checkVaultContainment", () => {
     if (refused.ok) return;
     expect(refused.error.code).toBe("VAULT_CONTAINMENT");
     expect(errorSpec(refused.error.code).exitCode).toBe(64);
-    expect(refused.error.details?.["side"]).toBe("vault-inside-project");
+    expect(refused.error.details?.side).toBe("vault-inside-project");
   });
 
   it("rejects a Project directory inside the Vault", () => {
@@ -130,7 +130,7 @@ describe("checkVaultContainment", () => {
     expect(refused.ok).toBe(false);
     if (refused.ok) return;
     expect(refused.error.code).toBe("VAULT_CONTAINMENT");
-    expect(refused.error.details?.["side"]).toBe("project-inside-vault");
+    expect(refused.error.details?.side).toBe("project-inside-vault");
   });
 
   it("rejects an identical path in both roles", () => {

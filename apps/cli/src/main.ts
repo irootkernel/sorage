@@ -36,7 +36,6 @@ import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
-  type ActorRef,
   type AddProjectOutcome,
   type AppError,
   acceptHandoff,
@@ -61,7 +60,6 @@ import {
   fetchHandoff,
   getHandoff,
   hasBlockingCheck,
-  type InitResult,
   initializeInstallation,
   installLaunchAgent,
   type ListedProject,
@@ -2089,10 +2087,9 @@ function routedConfigSet(
   value: string,
   ports: OutputPorts,
 ): number {
-  const scriptArgs =
-    process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
-      ? [process.argv[1] as string, "__config-put", address.host, String(address.port), key, value]
-      : ["__config-put", address.host, String(address.port), key, value];
+  const scriptArgs = process.argv[1]?.endsWith("main.ts")
+    ? [process.argv[1] as string, "__config-put", address.host, String(address.port), key, value]
+    : ["__config-put", address.host, String(address.port), key, value];
   const result = spawnSync(process.execPath, scriptArgs, { encoding: "utf8", timeout: 15000 });
   if (result.stdout) ports.out(result.stdout);
   if (result.stderr) ports.err(result.stderr);
@@ -2370,8 +2367,7 @@ function applyInitChoices(
     const installed = installLaunchAgent(createNodeLaunchAgentPorts(), {
       program: {
         binaryPath: process.execPath,
-        scriptArgs:
-          process.argv[1] !== undefined && process.argv[1].endsWith("main.ts") ? [process.argv[1] as string] : [],
+        scriptArgs: process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string] : [],
       },
       sorageHome: homePaths.home,
       agentsDirectory: launchAgentsDirectory(),

@@ -96,7 +96,7 @@ function upload(
   });
 }
 
-function json(response: { body: string }): any {
+function json(response: { body: string }) {
   return JSON.parse(response.body);
 }
 

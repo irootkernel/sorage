@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createReadStream, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
@@ -95,7 +95,6 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   const userHome = homedir();
   const configCommandPortsForValidation = createNodeConfigCommandPorts;
   const homeOf = () => createNodeHomePaths().home;
-  const idempotency = new Map<string, { requestHash: string; status: number; body: unknown }>();
   const databaseOptions = deps.database === undefined ? {} : { database: deps.database };
   const createNodeProjectPorts = () => createProjectPorts(databaseOptions);
   const createNodeSendPorts = () => createSendPorts(databaseOptions);
@@ -136,7 +135,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   add({
     method: "GET",
     pattern: "/api/v1/projects",
-    handler: async (request, response, context) => {
+    handler: async (_request, response, context) => {
       const result = listProjects(createNodeProjectPorts());
       return void respond(response, context, result);
     },

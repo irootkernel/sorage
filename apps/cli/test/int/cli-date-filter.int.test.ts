@@ -70,7 +70,7 @@ function seeded(): { home: string; alpha: string } {
 
 describe("the WEB-003 date bounds", () => {
   it("return the same rows through the CLI bound flags and reject a mismatched cursor", () => {
-    const { alpha } = seeded();
+    seeded();
     const bounded = capture();
     expect(
       runCli(
@@ -119,7 +119,7 @@ describe("the WEB-003 date bounds", () => {
   });
 
   it("keeps the whole-second boundary inclusive against fractional rows", () => {
-    const { alpha } = seeded();
+    seeded();
     // The stored updatedAt always carries milliseconds; a whole-second bound
     // must not lexicographically exclude rows inside its own boundary second.
     const since = capture();
@@ -181,7 +181,7 @@ describe("the WEB-003 date bounds", () => {
   });
 
   it("keeps the whole-second until boundary inclusive on its own second", () => {
-    const { alpha } = seeded();
+    seeded();
     // `until` at a past whole second excludes rows created now; `since` at a
     // future whole second excludes them too; both prove the until comparison
     // actually bounds instead of always passing.
@@ -198,7 +198,7 @@ describe("the WEB-003 date bounds", () => {
   });
 
   it("validates the bounds on the wait surface too", () => {
-    const { alpha } = seeded();
+    seeded();
     const wait = capture();
     const code = runCli(
       ["inbox", "--wait", "--timeout", "1", "--json", "--as", "alpha", "--updated-since", "garbage"],
@@ -209,7 +209,7 @@ describe("the WEB-003 date bounds", () => {
   });
 
   it("reject malformed and reversed bounds before any listing runs", () => {
-    const { alpha } = seeded();
+    seeded();
     const malformed = capture();
     expect(runCli(["inbox", "--json", "--as", "alpha", "--updated-since", "yesterday"], malformed.ports)).not.toBe(0);
     expect(malformed.errText()).toContain("ISO-8601");

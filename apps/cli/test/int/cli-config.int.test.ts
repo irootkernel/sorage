@@ -151,14 +151,14 @@ describe("the pre-initialization gate", () => {
 
 describe("sorage config", () => {
   it("shows the file view with the literal tilde vault path", () => {
-    const home = initializedHome("sorage-cli-show-");
+    const _home = initializedHome("sorage-cli-show-");
     const io = capture();
     const code = runCli(["config", "show", "--json"], io.ports);
     expect(code).toBe(0);
     const envelope = JSON.parse(io.outText()) as { ok: boolean; data: Record<string, unknown> };
     expect(envelope.ok).toBe(true);
-    expect((envelope.data["vault"] as Record<string, unknown>)["path"]).toBe("~/.sorage/vault");
-    expect(envelope.data["installationId"]).toBe("2f0ac9a0-0000-4000-8000-00000000000b");
+    expect((envelope.data.vault as Record<string, unknown>).path).toBe("~/.sorage/vault");
+    expect(envelope.data.installationId).toBe("2f0ac9a0-0000-4000-8000-00000000000b");
     const human = capture();
     expect(runCli(["config", "show"], human.ports)).toBe(0);
     expect(human.outText()).toContain("# installation configuration");

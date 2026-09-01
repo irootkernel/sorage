@@ -1,13 +1,6 @@
 import { realpathSync } from "node:fs";
-import type {
-  ActorRef,
-  NewProject,
-  NewProjectBinding,
-  Project,
-  ProjectBinding,
-  ProjectRepositoryPort,
-} from "@sorage/core";
-import { type AppError, appError, err, ok, type Result, UuidGenerator } from "@sorage/core";
+import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
+import { type AppError, appError, err, ok, UuidGenerator } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import type { SorageSqlite } from "./sqlite/connection";
 

@@ -1,6 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";

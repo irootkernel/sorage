@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -50,13 +49,6 @@ const cleanups: Array<() => void> = [];
 afterAll(() => {
   for (const cleanup of cleanups.reverse()) cleanup();
 });
-
-type Phase =
-  | "before-commit"
-  | "after-commit-before-activate"
-  | "after-activate-before-complete"
-  | "after-delete-commit-before-unlink"
-  | "mid-fanout-second-activate";
 
 interface Seams {
   failCreateFanout?: boolean;

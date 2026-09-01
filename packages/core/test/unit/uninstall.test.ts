@@ -11,7 +11,7 @@ function portsFor(config: Configuration | null): UninstallPorts & {
 } {
   const removedDirs: string[] = [];
   const removedFiles: string[] = [];
-  const agentUninstalled = false;
+  const _agentUninstalled = false;
   let daemonStopCalls = 0;
   const existing = new Set<string>([
     "/home/state",

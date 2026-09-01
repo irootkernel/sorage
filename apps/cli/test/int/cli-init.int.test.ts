@@ -115,9 +115,9 @@ describe("sorage init", () => {
     const code = runCli(["init", "--non-interactive", "--json"], io.ports);
     expect(code).toBe(0);
     const envelope = JSON.parse(io.out.join("")) as Record<string, unknown>;
-    expect(envelope["meta"]).toBeDefined();
-    const data = envelope["data"] as Record<string, unknown>;
-    expect(data["outcome"]).toBe("created");
-    expect(String(data["vaultPath"])).toBe(join(home, "vault"));
+    expect(envelope.meta).toBeDefined();
+    const data = envelope.data as Record<string, unknown>;
+    expect(data.outcome).toBe("created");
+    expect(String(data.vaultPath)).toBe(join(home, "vault"));
   });
 });

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { makeTempDir, registerCleanup, runCleanups, sorage } from "./helpers";
+import { makeTempDir, runCleanups, sorage } from "./helpers";
 
 /**
  * AJ-15, the clean restore drill, over the compiled binary: a backup holding

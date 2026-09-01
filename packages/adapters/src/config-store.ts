@@ -246,7 +246,7 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
         if (!validated.ok) return validated;
 
         // Step 5: serialize through the current document so comments and key order survive.
-        const document = existing !== null && existing.ok ? existing.value.document : emptyConfigurationDocument();
+        const document = existing?.ok ? existing.value.document : emptyConfigurationDocument();
         applyConfigurationToDocument(document, proposed);
         const serialized = serializeConfiguration({ config: proposed, document });
 

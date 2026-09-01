@@ -167,7 +167,7 @@ describe("exportSnapshot over a real installation", () => {
     const exposedShard = JSON.parse(
       exposed["handoffs/1a/1a111111-1111-4111-8111-111111111111.json"] as string,
     ) as Record<string, unknown>;
-    expect(exposedShard["senderPathSnapshot"]).toBe(workspacePath);
+    expect(exposedShard.senderPathSnapshot).toBe(workspacePath);
     expect(exposed["events.jsonl"]).toContain("/somewhere");
   });
 

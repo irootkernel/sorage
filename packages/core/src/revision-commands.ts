@@ -4,7 +4,7 @@ import { type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceA
 import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash } from "./handoff-commands";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
-import { type PreparedImport, prepareArtifactImport } from "./import-policy";
+import { prepareArtifactImport } from "./import-policy";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
@@ -130,10 +130,11 @@ function roleOf(
   );
 }
 
-function senderActorOf(
-  ports: RevisionPorts,
-  handoff: { senderKind: string; senderProjectId: string | null; senderWorkspaceKey: string | null },
-): NewDomainEvent["actor"] {
+function senderActorOf(handoff: {
+  senderKind: string;
+  senderProjectId: string | null;
+  senderWorkspaceKey: string | null;
+}): NewDomainEvent["actor"] {
   if (handoff.senderKind === "registered_project" && handoff.senderProjectId !== null)
     return projectActor(handoff.senderProjectId);
   if (handoff.senderKind === "unregistered_workspace" && handoff.senderWorkspaceKey !== null) {
@@ -235,11 +236,11 @@ function reviseContent(
     const applied = ports.revisions.applyNoChangeResolution({
       handoffId: handoff.id,
       expectedRowVersion: handoff.rowVersion,
-      events: outcome.value.events.map((eventType, index) => ({
+      events: outcome.value.events.map((eventType) => ({
         id: ports.ids.next(),
         handoffId: handoff.id,
         eventType,
-        actor: senderActorOf(ports, handoff),
+        actor: senderActorOf(handoff),
         rowVersion: handoff.rowVersion + 1,
         metadata: { reason: input.reason ?? null },
         createdAt: now,
@@ -378,11 +379,11 @@ function reviseContent(
     },
     activateIntent,
     unlinkIntent,
-    events: outcome.value.events.map((eventType, index) => ({
+    events: outcome.value.events.map((eventType) => ({
       id: ports.ids.next(),
       handoffId: handoff.id,
       eventType,
-      actor: senderActorOf(ports, handoff),
+      actor: senderActorOf(handoff),
       rowVersion: handoff.rowVersion + 1,
       metadata: { revision: handoff.revision + 1, storageKey, resolvedNote: handoff.hasReviewNote },
       createdAt: now,

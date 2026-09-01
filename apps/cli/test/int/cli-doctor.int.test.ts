@@ -73,11 +73,11 @@ describe("AJ-01: fresh non-interactive initialization and doctor", () => {
     const shown = JSON.parse(show.outText()) as { data: Record<string, unknown> };
     const expected = {
       ...CONFIGURATION_DEFAULTS,
-      installationId: shown.data["installationId"],
+      installationId: shown.data.installationId,
       vault: { ...CONFIGURATION_DEFAULTS.vault, path: vault },
     };
     expect(shown.data).toEqual(expected);
-    expect(typeof shown.data["installationId"]).toBe("string");
+    expect(typeof shown.data.installationId).toBe("string");
 
     const before = readFileSync(join(home, "config.yaml"), "utf8");
     const markerBefore = readFileSync(join(vault, ".sorage-vault.json"), "utf8");

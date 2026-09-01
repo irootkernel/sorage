@@ -99,7 +99,7 @@ describe("the bounded checksum batch", () => {
     const { MIGRATIONS } = await import("../../src/sqlite/migrations");
     const db = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), MIGRATIONS).db;
 
-    const store = createNodeArtifactStore({ vaultPath: vault, installationId: INSTALLATION });
+    const _store = createNodeArtifactStore({ vaultPath: vault, installationId: INSTALLATION });
     const handoff = "2f0ac9a0-0000-4000-8000-0000000000h1" as string;
     const key1 = `artifacts/${handoff}/a/one.md`;
     const key2 = `artifacts/${handoff}/a/two.md`;

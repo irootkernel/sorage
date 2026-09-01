@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { configureBackup, type BackupRunPorts, runBackupOnce } from "../../src/backup-commands";
 import { classifyPushFailure } from "../../src/git";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
+import { ok } from "../../src/errors";
 import type { GitClient, GitRunOutcome } from "../../src/git";
 
 /**

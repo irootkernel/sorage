@@ -41,10 +41,7 @@ export interface WebRuntimePorts {
 function selfInvocation(extraArgs: string[]): { interpreter: string; args: string[] } {
   // Under `bun apps/cli/src/main.ts` the interpreter and the entry are separate argv
   // slots; the compiled binary is a single executable.
-  const scriptArgs =
-    process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
-      ? [process.argv[1] as string, ...extraArgs]
-      : extraArgs;
+  const scriptArgs = process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string, ...extraArgs] : extraArgs;
   return { interpreter: process.execPath, args: scriptArgs };
 }
 

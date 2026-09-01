@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppError, Clock, Result } from "../../src/index";
+import type { AppError, Clock } from "../../src/index";
 import { appError, err, ok } from "../../src/index";
 import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
 import {
@@ -71,21 +71,21 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
       }
       return ok({ project: created.value, binding: added.value });
     },
-    updateProjectDisplayName(projectId, displayName, updatedAt, actor) {
+    updateProjectDisplayName(projectId, displayName, updatedAt, _actor) {
       const project = projects.find((candidate) => candidate.id === projectId);
       if (project === undefined) return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`));
       project.displayName = displayName;
       project.updatedAt = updatedAt;
       return ok({ ...project });
     },
-    updateProjectStatus(projectId, status, updatedAt, actor) {
+    updateProjectStatus(projectId, status, updatedAt, _actor) {
       const project = projects.find((candidate) => candidate.id === projectId);
       if (project === undefined) return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`));
       project.status = status;
       project.updatedAt = updatedAt;
       return ok({ ...project });
     },
-    removeBinding(bindingId, actor) {
+    removeBinding(bindingId, _actor) {
       const index = rows.findIndex((row) => row.id === bindingId);
       if (index === -1) return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`));
       const [removed] = rows.splice(index, 1);

@@ -1,6 +1,5 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { chromium } from "@playwright/test";
@@ -52,7 +51,7 @@ afterAll(() => {
   for (const close of cleanup.reverse()) close();
 });
 
-function jsonBody(text: string): any {
+function jsonBody(text: string) {
   return JSON.parse(text);
 }
 

@@ -132,7 +132,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       const row = db.prepare("SELECT COUNT(*) AS count FROM pending_fs_ops").get() as
         | Record<string, unknown>
         | undefined;
-      return ok(Number(row?.["count"] ?? 0));
+      return ok(Number(row?.count ?? 0));
     });
   }
 

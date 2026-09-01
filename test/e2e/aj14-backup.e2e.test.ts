@@ -1,6 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { BINARY, makeTempDir, registerCleanup, runCleanups, sorage } from "./helpers";

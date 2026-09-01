@@ -6,7 +6,7 @@ import {
   runBackupOnce,
 } from "../../src/backup-commands";
 import { type AppError, appError, err, ok, type Result } from "../../src/errors";
-import { type GitClient, type GitRunRequest, type GitRunOutcome } from "../../src/git";
+import type { GitClient, GitRunRequest, GitRunOutcome } from "../../src/git";
 
 /**
  * The TASK-054 run matrix (BKP-006, BKP-009, BKP-010, BKP-013, BKP-024): the

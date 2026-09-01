@@ -3,7 +3,7 @@ import { closeSync, mkdtempSync, openSync, readSync, rmSync, writeSync } from "n
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import type { HandoffDetailReadPorts, HandoffEventView, HandoffReadPorts, SendPorts } from "@sorage/core";
+import type { HandoffDetailReadPorts, HandoffEventView, SendPorts } from "@sorage/core";
 import { type AppError, type Result, appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";

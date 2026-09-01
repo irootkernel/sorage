@@ -5,7 +5,6 @@ import { ERROR_CODES, errorSpec } from "@sorage/core";
 import { createDomainRoutes } from "../../src/domain-routes";
 import { configRoutes } from "../../src/server";
 import { daemonRoutes } from "../../src/server";
-import { matchRoute } from "../../src/route-kit";
 
 /**
  * The TASK-046 contracts (API-011, API-012): the HTTP status mapping is verified

@@ -63,10 +63,10 @@ export function parseVaultMarker(raw: string): Result<VaultMarker, AppError> {
     return invalidMarker("The Vault marker is not a JSON object.");
   }
   const marker = parsed as Record<string, unknown>;
-  if (marker["type"] !== "sorage-vault") {
+  if (marker.type !== "sorage-vault") {
     return invalidMarker("The marker's type is not 'sorage-vault'.");
   }
-  const schemaVersion = marker["schemaVersion"];
+  const schemaVersion = marker.schemaVersion;
   if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion) || schemaVersion < 1) {
     return invalidMarker(`The Vault marker schemaVersion is not a positive integer: ${String(schemaVersion)}.`);
   }
@@ -78,17 +78,17 @@ export function parseVaultMarker(raw: string): Result<VaultMarker, AppError> {
       ),
     );
   }
-  if (typeof marker["installationId"] !== "string" || marker["installationId"] === "") {
+  if (typeof marker.installationId !== "string" || marker.installationId === "") {
     return invalidMarker("The Vault marker has no installationId.");
   }
-  if (typeof marker["createdAt"] !== "string" || marker["createdAt"] === "") {
+  if (typeof marker.createdAt !== "string" || marker.createdAt === "") {
     return invalidMarker("The Vault marker has no createdAt.");
   }
   return ok({
     type: "sorage-vault",
     schemaVersion,
-    installationId: marker["installationId"],
-    createdAt: marker["createdAt"],
+    installationId: marker.installationId,
+    createdAt: marker.createdAt,
   });
 }
 

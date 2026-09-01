@@ -63,7 +63,7 @@ describe("resolveArtifactForRead", () => {
     if (read.ok) return;
     expect(read.error.code).toBe("ARTIFACT_CORRUPTED");
     expect(errorSpec(read.error.code).exitCode).toBe(73);
-    expect(read.error.details?.["problem"]).toBe("missing");
+    expect(read.error.details?.problem).toBe("missing");
   });
 
   it("returns ARTIFACT_CORRUPTED for a mismatched checksum when verification is enabled", () => {
@@ -77,7 +77,7 @@ describe("resolveArtifactForRead", () => {
     expect(read.ok).toBe(false);
     if (read.ok) return;
     expect(read.error.code).toBe("ARTIFACT_CORRUPTED");
-    expect(read.error.details?.["problem"]).toBe("mismatched");
+    expect(read.error.details?.problem).toBe("mismatched");
   });
 
   it("skips hashing on the hot path when verification is disabled", () => {

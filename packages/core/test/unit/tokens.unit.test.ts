@@ -10,8 +10,8 @@ describe("token well-formedness (SEC-020)", () => {
 
   it("rejects shorter material, wrong alphabets, and padding", () => {
     expect(isWellFormedToken("A".repeat(42))).toBe(false);
-    expect(isWellFormedToken("A".repeat(43) + "+")).toBe(false);
-    expect(isWellFormedToken("A".repeat(43) + "=")).toBe(false);
+    expect(isWellFormedToken(`${"A".repeat(43)}+`)).toBe(false);
+    expect(isWellFormedToken(`${"A".repeat(43)}=`)).toBe(false);
     expect(isWellFormedToken("")).toBe(false);
   });
 

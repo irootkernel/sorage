@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";

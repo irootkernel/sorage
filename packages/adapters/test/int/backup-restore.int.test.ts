@@ -231,11 +231,11 @@ describe("backupRestore across two installations", () => {
     expect(installationIdOf(target.home)).toBe(sourceId);
     const db = new DatabaseSync(join(target.home, "state", "sorage.sqlite3"));
     const handoff = db.prepare("SELECT * FROM handoffs WHERE id = ?").get(HANDOFF_ID) as Record<string, unknown>;
-    expect(handoff["revision"]).toBe(2);
-    expect(handoff["row_version"]).toBe(3);
-    expect(handoff["review_state"]).toBe("changes_requested");
-    expect(handoff["sender_workspace_key"]).toBe(WORKSPACE_KEY);
-    expect(handoff["sender_path_snapshot"]).toBeNull();
+    expect(handoff.revision).toBe(2);
+    expect(handoff.row_version).toBe(3);
+    expect(handoff.review_state).toBe("changes_requested");
+    expect(handoff.sender_workspace_key).toBe(WORKSPACE_KEY);
+    expect(handoff.sender_path_snapshot).toBeNull();
     const tombstone = db.prepare("SELECT deleted_at FROM handoffs WHERE id = ?").get(TOMBSTONE_ID) as {
       deleted_at: string;
     };

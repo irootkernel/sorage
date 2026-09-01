@@ -91,7 +91,7 @@ describe("the daemon runtime", () => {
 
     running = await serveDaemon({
       serverFactory: createDaemonServer,
-      scheduleSweep: (run) => {
+      scheduleSweep: (_run) => {
         sweepTicks += 1;
         return () => {};
       },

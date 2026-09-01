@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type NewPendingFsOp, type PendingFsOp } from "@sorage/core";
+import type { NewPendingFsOp, PendingFsOp } from "@sorage/core";
 import { collectVaultGarbage, createSqliteIntentLog } from "../../src/intent-log";
 import { createVaultInitializer } from "../../src/vault";
 import { migrate } from "../../src/sqlite/migrator";

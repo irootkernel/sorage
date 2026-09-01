@@ -21,7 +21,6 @@ import {
   type ReplayRecord,
   type RouteEntryInternal,
 } from "./route-kit";
-import { createHash } from "node:crypto";
 
 /**
  * The daemon HTTP skeleton of TASK-042: loopback-only bind, the `Host` allowlist of

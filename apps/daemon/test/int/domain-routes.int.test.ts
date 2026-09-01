@@ -13,7 +13,6 @@ import { initializeInstallation } from "@sorage/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSessionService } from "../../src/auth";
 import { createDomainRoutes } from "../../src/domain-routes";
-import type { RouteEntryInternal } from "../../src/route-kit";
 import { createDaemonConfigService } from "../../src/runtime";
 import { createDaemonServer } from "../../src/server";
 
@@ -88,7 +87,7 @@ function call(
   });
 }
 
-function json(response: TestResponse): any {
+function json(response: TestResponse) {
   return JSON.parse(response.body);
 }
 

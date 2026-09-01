@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { type AppError, appError, err, ok, type Result } from "./errors";
+import { type AppError, ok, type Result } from "./errors";
 
 /**
  * The per-user macOS LaunchAgent (RUN-007, RUN-011, INIT-009): the canonical label

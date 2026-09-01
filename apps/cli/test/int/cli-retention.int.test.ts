@@ -145,7 +145,7 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     expect(runCli(["delete", "approve", handoffId, "--confirm", "--json"], unauthorized.ports)).toBe(77);
 
     // Step 5: a corrupted Artifact refuses without claiming deletion.
-    const vaultArtifact = join(home, "vault", "artifacts");
+    const _vaultArtifact = join(home, "vault", "artifacts");
     const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     let storageKey = "";
     try {

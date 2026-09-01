@@ -97,7 +97,7 @@ function request(
   });
 }
 
-function json(response: TestResponse): any {
+function json(response: TestResponse) {
   return JSON.parse(response.body);
 }
 

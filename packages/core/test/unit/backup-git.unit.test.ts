@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { backupVerify, ensureVaultGitRepository } from "../../src/backup-commands";
-import { type BackupCensus } from "../../src/backup-commands";
+import type { BackupCensus } from "../../src/backup-commands";
 import { GIT_ARGS, type GitClient, type GitRunRequest, type GitRunOutcome, isRuntimeTrackedPath } from "../../src/git";
 import type { AppError } from "../../src/errors";
 import { ok, type Result } from "../../src/errors";

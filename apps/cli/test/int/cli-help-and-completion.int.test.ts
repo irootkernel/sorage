@@ -13,7 +13,7 @@ import { renderAppError, runCli } from "../../src/main";
  * carries the User-admin honesty clause (SEC-021), and the recovery hint of the four
  * common failures names the next valid command (CLI-016).
  */
-const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
+const _entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
 const homes: string[] = [];
 afterEach(() => {
   while (homes.length > 0) {

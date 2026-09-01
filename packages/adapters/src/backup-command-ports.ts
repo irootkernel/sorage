@@ -25,7 +25,6 @@ import {
   type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
-  type BackupRunPorts,
   type BackupRunRow,
   type BackupVerifyPorts,
   type DrainReport,
@@ -407,7 +406,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const tables = ["projects", "handoffs", "artifacts", "review_notes", "deletion_requests", "events"];
       for (const table of tables) {
         const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as Record<string, unknown> | undefined;
-        if (Number(row?.["count"] ?? 0) > 0) return ok(false);
+        if (Number(row?.count ?? 0) > 0) return ok(false);
       }
       return ok(true);
     });
@@ -431,12 +430,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         )
         .get() as Record<string, unknown> | undefined;
       return ok({
-        projects: Number(row?.["projects"] ?? 0),
-        handoffs: Number(row?.["handoffs"] ?? 0),
-        events: Number(row?.["events"] ?? 0),
-        artifacts: Number(row?.["artifacts"] ?? 0),
-        materializing: Number(row?.["materializing"] ?? 0),
-        deletedWithArtifact: Number(row?.["deleted_with_artifact"] ?? 0),
+        projects: Number(row?.projects ?? 0),
+        handoffs: Number(row?.handoffs ?? 0),
+        events: Number(row?.events ?? 0),
+        artifacts: Number(row?.artifacts ?? 0),
+        materializing: Number(row?.materializing ?? 0),
+        deletedWithArtifact: Number(row?.deleted_with_artifact ?? 0),
       });
     });
   }
@@ -444,7 +443,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   function materializedArtifacts(data: SnapshotData): Array<{ handoff: SnapshotHandoff; artifact: SnapshotArtifact }> {
     const entries: Array<{ handoff: SnapshotHandoff; artifact: SnapshotArtifact }> = [];
     for (const handoff of data.handoffs) {
-      if (handoff.artifact !== null && handoff.artifact.materialized) {
+      if (handoff.artifact?.materialized) {
         entries.push({ handoff, artifact: handoff.artifact });
       }
     }
@@ -972,7 +971,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               | { started_at: string }
               | null
               | undefined;
-            return ok(row?.["started_at"] ?? null);
+            return ok(row?.started_at ?? null);
           }),
         repositoryBytes: () => {
           const gitDir = join(vaultPath, ".git");
@@ -1154,17 +1153,17 @@ function mapSnapshotData(rows: {
 
 function mapBackupRunRow(row: Record<string, unknown>): import("@sorage/core").BackupRunRow {
   return {
-    id: String(row["id"] ?? ""),
-    triggeredBy: (row["triggered_by"] ?? "manual") as import("@sorage/core").BackupRunRow["triggeredBy"],
-    startedAt: String(row["started_at"] ?? ""),
-    finishedAt: row["finished_at"] === null ? null : String(row["finished_at"]),
-    outcome: (row["outcome"] ?? "failure") as import("@sorage/core").BackupRunRow["outcome"],
-    snapshotOutcome: (row["snapshot_outcome"] ?? "failure") as import("@sorage/core").BackupRunRow["snapshotOutcome"],
-    commitOutcome: (row["commit_outcome"] ?? "failure") as import("@sorage/core").BackupRunRow["commitOutcome"],
-    pushOutcome: (row["push_outcome"] ?? "disabled") as import("@sorage/core").BackupRunRow["pushOutcome"],
-    commitSha: row["commit_sha"] === null ? null : String(row["commit_sha"]),
-    failureCode: row["failure_code"] === null ? null : String(row["failure_code"]),
-    failureMessage: row["failure_message"] === null ? null : String(row["failure_message"]),
+    id: String(row.id ?? ""),
+    triggeredBy: (row.triggered_by ?? "manual") as import("@sorage/core").BackupRunRow["triggeredBy"],
+    startedAt: String(row.started_at ?? ""),
+    finishedAt: row.finished_at === null ? null : String(row.finished_at),
+    outcome: (row.outcome ?? "failure") as import("@sorage/core").BackupRunRow["outcome"],
+    snapshotOutcome: (row.snapshot_outcome ?? "failure") as import("@sorage/core").BackupRunRow["snapshotOutcome"],
+    commitOutcome: (row.commit_outcome ?? "failure") as import("@sorage/core").BackupRunRow["commitOutcome"],
+    pushOutcome: (row.push_outcome ?? "disabled") as import("@sorage/core").BackupRunRow["pushOutcome"],
+    commitSha: row.commit_sha === null ? null : String(row.commit_sha),
+    failureCode: row.failure_code === null ? null : String(row.failure_code),
+    failureMessage: row.failure_message === null ? null : String(row.failure_message),
   };
 }
 

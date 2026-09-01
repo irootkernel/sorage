@@ -109,7 +109,7 @@ describe("materialization read path (section 20.7, VLT-021)", () => {
       if (read.ok) return;
       expect(read.error.code).toBe("ARTIFACT_CORRUPTED");
       expect(exitCodeOf(read.error)).toBe(73);
-      expect(read.error.details?.["problem"]).toBe("mismatched");
+      expect(read.error.details?.problem).toBe("mismatched");
     } finally {
       fx.cleanup();
     }

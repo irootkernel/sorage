@@ -247,7 +247,7 @@ export function parseSnapshotManifest(raw: string): Result<SnapshotManifest, App
   if (!isPlainObject(parsed)) {
     return err(appError("VAULT_INTEGRITY_ERROR", "The backup manifest is not a JSON object."));
   }
-  const formatVersion = parsed["formatVersion"];
+  const formatVersion = parsed.formatVersion;
   if (formatVersion !== SNAPSHOT_FORMAT_VERSION) {
     return err(
       appError(
@@ -256,23 +256,23 @@ export function parseSnapshotManifest(raw: string): Result<SnapshotManifest, App
       ),
     );
   }
-  const counts = parsed["counts"];
+  const counts = parsed.counts;
   if (
     !isPlainObject(counts) ||
-    !isCount(counts["projects"]) ||
-    !isCount(counts["handoffs"]) ||
-    !isCount(counts["events"]) ||
-    !isCount(counts["artifacts"])
+    !isCount(counts.projects) ||
+    !isCount(counts.handoffs) ||
+    !isCount(counts.events) ||
+    !isCount(counts.artifacts)
   ) {
     return err(appError("VAULT_INTEGRITY_ERROR", "The backup manifest counts are malformed."));
   }
   return ok({
     formatVersion,
     counts: {
-      projects: counts["projects"],
-      handoffs: counts["handoffs"],
-      events: counts["events"],
-      artifacts: counts["artifacts"],
+      projects: counts.projects,
+      handoffs: counts.handoffs,
+      events: counts.events,
+      artifacts: counts.artifacts,
     },
   });
 }

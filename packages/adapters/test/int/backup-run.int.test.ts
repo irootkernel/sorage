@@ -1,13 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { GitClient, GitRunOutcome, GitRunRequest } from "@sorage/core";
 import { backupStatus, initializeInstallation, ok, runBackupCommand, runBackupOnce } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createNodeBackupCommandPorts, nodeEnsureVaultGit } from "../../src/backup-command-ports";
+import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { FakeClock } from "../../src/testkit/fakes";
 

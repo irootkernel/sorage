@@ -14,7 +14,7 @@ function vaultPathOf(home: string): string {
 describe("AJ-09 vault relocation", () => {
   it("moves the Vault, pauses concurrent mutations while the lock is held, and preserves integrity", () => {
     const fixture = twoProjectFixture("aj09");
-    const id = fixture.sendTo("a", "b", "Before the move");
+    const _id = fixture.sendTo("a", "b", "Before the move");
     // The declared default renders with `~`, so the original location is derived from the home.
     const originalVault = join(fixture.home, "vault");
     const target = join(fixture.home, "moved-vault");

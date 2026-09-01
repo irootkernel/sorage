@@ -1,7 +1,7 @@
 import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
-import { deriveNextActors, type ReviewState } from "./handoffs";
+import type { ReviewState } from "./handoffs";
 import { type ProjectCommandPorts, resolveWorkspaceActor } from "./project-commands";
 import type { ReviewNoteView } from "./review-commands";
 import { workspaceKey as deriveWorkspaceKey } from "./workspace-identity";

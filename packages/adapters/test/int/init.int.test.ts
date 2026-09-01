@@ -41,10 +41,10 @@ describe("initializeInstallation", () => {
       expect(readFileSync(`${vault}/.gitattributes`, "utf8")).toBe(GITATTRIBUTES);
       expect(readFileSync(`${vault}/.gitignore`, "utf8")).toBe("staging/\n");
       const marker = JSON.parse(readFileSync(`${vault}/.sorage-vault.json`, "utf8")) as Record<string, unknown>;
-      expect(marker["type"]).toBe("sorage-vault");
-      expect(marker["schemaVersion"]).toBe(1);
-      expect(marker["installationId"]).toBe(result.value.installationId);
-      expect(typeof marker["createdAt"]).toBe("string");
+      expect(marker.type).toBe("sorage-vault");
+      expect(marker.schemaVersion).toBe(1);
+      expect(marker.installationId).toBe(result.value.installationId);
+      expect(typeof marker.createdAt).toBe("string");
 
       const loaded = loadConfiguration(readFileSync(`${home}/config.yaml`, "utf8"), { userHome: home });
       expect(loaded.ok).toBe(true);

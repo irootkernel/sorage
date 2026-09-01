@@ -147,13 +147,11 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
         const rows = fetched;
         const records: ArtifactSweepBatch["records"] = [];
         let planned = 0;
-        let cursor: string | null = null;
         for (const row of rows) {
           const size = artifactSize(vault, row.storage_key);
           if (size === null) {
             // An unreadable file is itself a mismatch the hash step reports.
             records.push({ storageKey: row.storage_key, sha256: row.sha256, bytes: 0 });
-            cursor = row.storage_key;
             continue;
           }
           if (planned > 0 && planned + size > byteBudget) {
@@ -162,7 +160,6 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
           }
           records.push({ storageKey: row.storage_key, sha256: row.sha256, bytes: size });
           planned += size;
-          cursor = row.storage_key;
         }
         return { records, nextCursor: null, plannedBytes: planned };
       } finally {

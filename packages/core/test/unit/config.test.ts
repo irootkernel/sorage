@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseDocument } from "yaml";
 import {
   CONFIGURATION_DEFAULTS,
   applyConfigurationToDocument,
@@ -275,7 +274,7 @@ function collectLeaves(
 ): void {
   if (typeof node !== "object" || node === null) return;
   const schema = node as Record<string, unknown>;
-  const properties = schema["properties"];
+  const properties = schema.properties;
   if (typeof properties === "object" && properties !== null) {
     for (const [key, child] of Object.entries(properties as Record<string, unknown>)) {
       collectLeaves(child, [...path, key], out);

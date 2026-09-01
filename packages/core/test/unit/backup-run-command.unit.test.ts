@@ -9,7 +9,7 @@ import {
   backupStatus,
   runBackupCommand,
 } from "../../src/backup-commands";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
+import { type AppError, err, ok } from "../../src/errors";
 import type { GitClient, GitRunOutcome } from "../../src/git";
 
 /**

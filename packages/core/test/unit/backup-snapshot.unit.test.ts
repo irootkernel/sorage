@@ -216,7 +216,7 @@ describe("snapshotFiles", () => {
     expect(manifestFile).toBeDefined();
     const manifest = JSON.parse((manifestFile as { content: string }).content) as Record<string, unknown>;
     expect(Object.keys(manifest).sort()).toEqual(["counts", "formatVersion"]);
-    expect(manifest["counts"]).toEqual({ projects: 1, handoffs: 2, events: 2, artifacts: 2 });
+    expect(manifest.counts).toEqual({ projects: 1, handoffs: 2, events: 2, artifacts: 2 });
   });
 
   it("never embeds an export timestamp, hostname, username, or duration anywhere", () => {

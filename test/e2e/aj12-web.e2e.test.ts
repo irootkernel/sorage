@@ -1,6 +1,5 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { chromium } from "@playwright/test";

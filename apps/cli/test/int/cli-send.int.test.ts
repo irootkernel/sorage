@@ -103,7 +103,7 @@ describe("sorage send", () => {
   });
 
   it("refuses --file and --body together as a usage error at exit 2", () => {
-    const home = tempHome("sorage-send-usage-");
+    const _home = tempHome("sorage-send-usage-");
     expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
     const send = capture();
     expect(runCli(["send", "--to", "alpha", "--title", "T", "--file", "/tmp/x", "--body", "text"], send.ports)).toBe(2);

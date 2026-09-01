@@ -73,10 +73,9 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     ((host: string, port: number) => {
       // The CLI process blocks synchronously (CLI-020), so the connect attempt runs
       // as the command's own `__port-probe` subprocess exactly like the web probe.
-      const scriptArgs =
-        process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
-          ? [process.argv[1] as string, "__port-probe", host, String(port)]
-          : ["__port-probe", host, String(port)];
+      const scriptArgs = process.argv[1]?.endsWith("main.ts")
+        ? [process.argv[1] as string, "__port-probe", host, String(port)]
+        : ["__port-probe", host, String(port)];
       const probe = spawnSync(process.execPath, scriptArgs, { timeout: 5000 });
       return probe.status === 0;
     });
@@ -246,13 +245,11 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           try {
             const integrity = db.prepare("PRAGMA integrity_check").get() as unknown;
             const row = integrity as Record<string, unknown> | undefined;
-            const verdict = row === undefined ? undefined : row["integrity_check"];
-            const journal = (db.prepare("PRAGMA journal_mode").get() as Record<string, unknown> | undefined)?.[
-              "journal_mode"
-            ];
-            const foreignKeys = (db.prepare("PRAGMA foreign_keys").get() as Record<string, unknown> | undefined)?.[
-              "foreign_keys"
-            ];
+            const verdict = row === undefined ? undefined : row.integrity_check;
+            const journal = (db.prepare("PRAGMA journal_mode").get() as Record<string, unknown> | undefined)
+              ?.journal_mode;
+            const foreignKeys = (db.prepare("PRAGMA foreign_keys").get() as Record<string, unknown> | undefined)
+              ?.foreign_keys;
             if (verdict !== "ok") return blocking(`PRAGMA integrity_check reported: ${String(verdict)}`);
             if (journal !== "wal") return blocking(`The database journal mode is ${String(journal)}, expected wal.`);
             if (foreignKeys !== 1) return blocking("Foreign keys are not enabled on this build's connections.");
@@ -281,7 +278,7 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             // bun:sqlite returns null-shaped rows as null and the test alias as
             // undefined; both shapes mean absence here only when the row itself
             // is missing, which COUNT(*) never is.
-            const count = Number(row?.["count"] ?? 0);
+            const count = Number(row?.count ?? 0);
             if (count > 0) {
               return warning(
                 `${count} pending filesystem intent${count === 1 ? "" : "s"} remain${count === 1 ? "s" : ""} unresolved after the start drain; the affected Handoffs are integrity-failed.`,
@@ -306,8 +303,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
               | Record<string, unknown>
               | undefined;
             const expected = Math.max(...MIGRATIONS.map((migration) => migration.version));
-            if (row?.["version"] !== expected) {
-              return blocking(`schema_migrations is at ${String(row?.["version"])}, expected ${expected}.`);
+            if (row?.version !== expected) {
+              return blocking(`schema_migrations is at ${String(row?.version)}, expected ${expected}.`);
             }
           } finally {
             db.close();
@@ -514,10 +511,9 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         // The CLI process blocks synchronously (CLI-020), so the health check
         // runs as the command's own subprocess exactly like the web probe; the
         // expected installationId is the configuration's, not the record's.
-        const scriptArgs =
-          process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")
-            ? [process.argv[1], "__health-probe", daemon.host, String(daemon.port), config.installationId]
-            : ["__health-probe", daemon.host, String(daemon.port), config.installationId];
+        const scriptArgs = process.argv[1]?.endsWith("main.ts")
+          ? [process.argv[1], "__health-probe", daemon.host, String(daemon.port), config.installationId]
+          : ["__health-probe", daemon.host, String(daemon.port), config.installationId];
         const probe = spawnSync(process.execPath, scriptArgs, { timeout: 5000, encoding: "utf8" });
         if (probe.status === 0) {
           return ok("The daemon answers /api/v1/health with the expected installationId.");
@@ -573,7 +569,7 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           return warning("The xyz.rootkernel.sorage LaunchAgent is not installed.");
         }
         const candidates = [process.execPath];
-        if (process.argv[1] !== undefined && process.argv[1].endsWith("main.ts")) {
+        if (process.argv[1]?.endsWith("main.ts")) {
           candidates.push(process.argv[1]);
         }
         if (!candidates.some((candidate) => plistPointsAtBinary(plist, candidate))) {
@@ -693,17 +689,17 @@ function backupRunRows(home: { stateDir: string }): BackupRunRow[] {
     try {
       const rows = db.prepare("SELECT * FROM backup_runs").all() as unknown as Array<Record<string, unknown>>;
       return rows.map((row) => ({
-        id: String(row["id"] ?? ""),
-        triggeredBy: (row["triggered_by"] ?? "manual") as BackupRunRow["triggeredBy"],
-        startedAt: String(row["started_at"] ?? ""),
-        finishedAt: row["finished_at"] === null ? null : String(row["finished_at"] ?? ""),
-        outcome: (row["outcome"] ?? "failure") as BackupRunRow["outcome"],
-        snapshotOutcome: (row["snapshot_outcome"] ?? "failure") as BackupRunRow["snapshotOutcome"],
-        commitOutcome: (row["commit_outcome"] ?? "failure") as BackupRunRow["commitOutcome"],
-        pushOutcome: (row["push_outcome"] ?? "disabled") as BackupRunRow["pushOutcome"],
-        commitSha: row["commit_sha"] === null ? null : String(row["commit_sha"]),
-        failureCode: row["failure_code"] === null ? null : String(row["failure_code"]),
-        failureMessage: row["failure_message"] === null ? null : String(row["failure_message"]),
+        id: String(row.id ?? ""),
+        triggeredBy: (row.triggered_by ?? "manual") as BackupRunRow["triggeredBy"],
+        startedAt: String(row.started_at ?? ""),
+        finishedAt: row.finished_at === null ? null : String(row.finished_at ?? ""),
+        outcome: (row.outcome ?? "failure") as BackupRunRow["outcome"],
+        snapshotOutcome: (row.snapshot_outcome ?? "failure") as BackupRunRow["snapshotOutcome"],
+        commitOutcome: (row.commit_outcome ?? "failure") as BackupRunRow["commitOutcome"],
+        pushOutcome: (row.push_outcome ?? "disabled") as BackupRunRow["pushOutcome"],
+        commitSha: row.commit_sha === null ? null : String(row.commit_sha),
+        failureCode: row.failure_code === null ? null : String(row.failure_code),
+        failureMessage: row.failure_message === null ? null : String(row.failure_message),
       }));
     } finally {
       db.close();

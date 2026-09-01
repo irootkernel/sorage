@@ -1,6 +1,4 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { makeTempDir, runCleanups, sorage } from "./helpers";
 

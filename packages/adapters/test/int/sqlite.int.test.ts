@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { MIGRATIONS, FIRST_RELEASED_SCHEMA } from "../../src/sqlite/migrations";
+import { MIGRATIONS } from "../../src/sqlite/migrations";
 import { migrate, MigrationFailedError, openAndMigrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 
