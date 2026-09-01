@@ -31,4 +31,5 @@ export * from "./tokens";
 export * from "./uninstall";
 export * from "./vault";
 export * from "./vault-commands";
+export * from "./version";
 export * from "./workspace-identity";

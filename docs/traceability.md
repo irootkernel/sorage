@@ -17,9 +17,9 @@ Milestone values come from the specification and name the release gate at whose 
 | Requirement group | Milestone | Implementing tasks | Acceptance evidence (AJ ids / test layer) |
 |---|---|---|---|
 | GEN-001 to GEN-014 | 0.1, 0.2 | `TASK-001` to `TASK-002`, `TASK-005`, `TASK-008`, `TASK-039` to `TASK-042`, `TASK-051`, `TASK-064` to `TASK-065` | AJ-01, AJ-02, AJ-16; the dependency-boundary check in `make test-prepare` and the clean-home run in `make test-int` |
-| INIT-001 to INIT-017 | 0.1, 0.3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot |
+| INIT-001 to INIT-017 | 0.1, 0.3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069`, `TASK-073` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot |
 | CFG-001 to CFG-020 | 0.1 | `TASK-010` to `TASK-013`, `TASK-015`, `TASK-026`, `TASK-045`, `TASK-061`, `TASK-063`, `TASK-072` | AJ-01, AJ-13; `make test-unit` for schema defaults and the comment round-trip, `make test-int` for atomic writes and ETag conflict, `make test-contract` for the schema against the example |
-| RUN-001 to RUN-014 | 0.1, 0.2, 0.3 | `TASK-006` to `TASK-007`, `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-042` to `TASK-045`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-068` to `TASK-069` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version |
+| RUN-001 to RUN-014 | 0.1, 0.2, 0.3 | `TASK-006` to `TASK-007`, `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-042` to `TASK-045`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-068` to `TASK-069`, `TASK-073` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version |
 | PRJ-001 to PRJ-022 | 0.1 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050`, `TASK-066` | AJ-03, AJ-05; `make test-int` for worktree folding, binding precedence, alias ambiguity, and the workspace-root downgrade guard |
 | VLT-001 to VLT-024 | 0.1, 0.2 | `TASK-003`, `TASK-012`, `TASK-021` to `TASK-026`, `TASK-029` to `TASK-030`, `TASK-032`, `TASK-034` to `TASK-035`, `TASK-044`, `TASK-046`, `TASK-052`, `TASK-055`, `TASK-063` | AJ-08 to AJ-10; `make test-int` for the intent log and the seven crash points, plus `sorage doctor` and `sorage vault verify` for exhaustive checksums |
 | HND-001 to HND-026 | 0.1 | `TASK-027` to `TASK-030`, `TASK-032` to `TASK-033`, `TASK-035`, `TASK-038` to `TASK-039` | AJ-04, AJ-06, AJ-07, AJ-08; `make test-unit` for the transition table and `make test-contract` for the public representation |
@@ -30,7 +30,7 @@ Milestone values come from the specification and name the release gate at whose 
 | WEB-001 to WEB-018 | 0.2, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060`, `TASK-067` | AJ-12, AJ-13; `make test-e2e` under Playwright with the axe-core check as engineering practice |
 | BKP-001 to BKP-026 | 0.3 | `TASK-052` to `TASK-058`, `TASK-061`, `TASK-065` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify` |
 | SEC-001 to SEC-021 | 0.1, 0.2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063`, `TASK-068`, `TASK-070` to `TASK-071` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int` |
-| NFR-001 to NFR-017 | 0.1, 0.3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
+| NFR-001 to NFR-017 | 0.1, 0.3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065`, `TASK-073` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
 
@@ -65,10 +65,10 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `INIT-003` | 0.1 | `TASK-012`, `TASK-043` |
 | `INIT-004` | 0.3 | `TASK-059`, `TASK-069` |
 | `INIT-005` | 0.1 | `TASK-012` |
-| `INIT-006` | 0.1 | `TASK-012` |
+| `INIT-006` | 0.1 | `TASK-012`, `TASK-073` |
 | `INIT-007` | 0.3 | `TASK-053`, `TASK-059` |
 | `INIT-008` | 0.3 | `TASK-056`, `TASK-059` |
-| `INIT-009` | 0.3 | `TASK-059` |
+| `INIT-009` | 0.3 | `TASK-059`, `TASK-073` |
 | `INIT-010` | 0.3 | `TASK-059` |
 | `INIT-011` | 0.1 | `TASK-013` |
 | `INIT-012` | 0.1 | `TASK-013` |
@@ -101,9 +101,9 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `RUN-002` | 0.1 | `TASK-024`, `TASK-056`, `TASK-061` |
 | `RUN-003` | 0.1 | `TASK-036` |
 | `RUN-004` | 0.1 | `TASK-036` |
-| `RUN-005` | 0.2 | `TASK-042` |
+| `RUN-005` | 0.2 | `TASK-042`, `TASK-073` |
 | `RUN-006` | 0.2 | `TASK-044` |
-| `RUN-007` | 0.3 | `TASK-059`, `TASK-069` |
+| `RUN-007` | 0.3 | `TASK-059`, `TASK-069`, `TASK-073` |
 | `RUN-008` | 0.2 | `TASK-044`, `TASK-045` |
 | `RUN-009` | 0.1 | `TASK-007` |
 | `RUN-010` | 0.1 | `TASK-007` |
@@ -318,7 +318,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-021` | 0.1 | `TASK-028`, `TASK-040`, `TASK-060` |
 | `NFR-001` | 0.1 | `TASK-001` |
 | `NFR-002` | 0.1 | `TASK-002` |
-| `NFR-003` | 0.1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065` |
+| `NFR-003` | 0.1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073` |
 | `NFR-004` | 0.3 | `TASK-062` |
 | `NFR-005` | 0.1 | `TASK-022`, `TASK-047` |
 | `NFR-006` | 0.1 | `TASK-004`, `TASK-030`, `TASK-062` |
@@ -327,7 +327,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `NFR-009` | 0.1 | `TASK-006`, `TASK-015`, `TASK-027`, `TASK-063` |
 | `NFR-010` | 0.1 | `TASK-014`, `TASK-037` |
 | `NFR-011` | 0.1 | `TASK-004`, `TASK-036` |
-| `NFR-012` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064` |
+| `NFR-012` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-073` |
 | `NFR-013` | 0.1 | `TASK-001`, `TASK-041`, `TASK-064` |
 | `NFR-014` | 0.1 | `TASK-002` |
 | `NFR-015` | 0.1 | `TASK-008`, `TASK-065` |

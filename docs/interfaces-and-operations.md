@@ -180,6 +180,7 @@ When a valid installation already exists:
 - `init` reports the current status and exits 0.
 - It does not overwrite `config.yaml`, the database, the Vault marker, or a Git repository.
 - It suggests `sorage init --reconfigure` for a deliberate change.
+- `sorage init --reconfigure --install-service --non-interactive` preserves those installation-owned files while installing or refreshing the LaunchAgent; repeating it is idempotent, and its JSON result keeps `outcome: "already-initialized"` and adds the `service` object only when that action actually ran.
 
 When an invalid configuration exists (INIT-013):
 

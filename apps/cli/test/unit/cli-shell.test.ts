@@ -1,5 +1,7 @@
+import { DAEMON_VERSION } from "@sorage/daemon";
+import { SORAGE_VERSION } from "@sorage/core";
 import { describe, expect, it } from "vitest";
-import { runCli, type OutputPorts } from "../../src/main";
+import { CLI_VERSION, runCli, type OutputPorts } from "../../src/main";
 
 function capture(): { ports: OutputPorts; out: string; err: string } {
   let out = "";
@@ -23,6 +25,12 @@ function capture(): { ports: OutputPorts; out: string; err: string } {
 }
 
 describe("cli shell", () => {
+  it("reports the same product version as the daemon", () => {
+    expect(SORAGE_VERSION).toBe("0.3.0");
+    expect(CLI_VERSION).toBe(SORAGE_VERSION);
+    expect(DAEMON_VERSION).toBe(SORAGE_VERSION);
+  });
+
   it("prints only the JSON envelope on stdout for version --json", () => {
     const cap = capture();
     const code = runCli(["version", "--json"], cap.ports);

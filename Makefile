@@ -7,6 +7,7 @@ all: test
 # Installs from the lockfile and verifies the pinned toolchain before any test runs.
 test-prepare:
 	$(BUN) run check:toolchain
+	$(BUN) run check:version
 	$(BUN) install --frozen-lockfile
 	$(BUN) run check:format
 	$(BUN) run check:lint

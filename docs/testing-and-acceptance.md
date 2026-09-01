@@ -15,7 +15,7 @@ The toolchain is normative, fixed by ADR-0016 in [architecture-decisions.md](arc
 
 | Target | Contents |
 |---|---|
-| `test-prepare` | Format check, lint including the `core`-to-`adapters` import-boundary guard (NFR-014) and the rule forbidding `await` inside a `UnitOfWork.run` callback, TypeScript strict typecheck (NFR-001), and the assertion that the running Bun matches `.bun-version` (NFR-017) |
+| `test-prepare` | Format check, lint including the `core`-to-`adapters` import-boundary guard (NFR-014) and the rule forbidding `await` inside a `UnitOfWork.run` callback, TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |
@@ -339,12 +339,12 @@ Expected: the `core.autocrlf=true` clone leaves every Artifact byte-identical, p
 
 1. On a freshly created macOS user account, install from the Homebrew tap.
 2. Run `sorage version` and `sorage init` non-interactively, then `sorage doctor`.
-3. Install the LaunchAgent, log out and back in, and confirm the daemon is running and reachable.
+3. Install the LaunchAgent, log out and back in, confirm the daemon is running and reachable, and confirm its record, health response, and version response report the same product version as `sorage version`.
 4. Run every earlier journey that does not require a developer checkout.
 5. Run `sorage uninstall --as-user --confirm`.
 6. Inspect the account afterwards.
 
-Expected: Gatekeeper does not quarantine the installed binary; the LaunchAgent bootstraps into `gui/$UID` and boots out cleanly; uninstall removes the LaunchAgent, `state`, `run`, `logs`, and `config.yaml`, leaves the Vault untouched, and prints the retained Vault path.
+Expected: Gatekeeper does not quarantine the installed binary; the CLI and daemon report the package manifest's product version; the LaunchAgent bootstraps into `gui/$UID` and boots out cleanly; uninstall removes the LaunchAgent, `state`, `run`, `logs`, and `config.yaml`, leaves the Vault untouched, and prints the retained Vault path.
 
 ## 6. Success-criteria map
 

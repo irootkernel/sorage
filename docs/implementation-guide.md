@@ -19,7 +19,7 @@ TypeScript types do not replace runtime validation.
 
 The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 
-- Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017).
+- Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017). The shipped product version has one runtime source in `packages/core/src/version.ts`; the same preparation gate rejects a workspace manifest or internal dependency declaration that drifts from it, and CLI, daemon, and packaging code consume that source directly (NFR-003, NFR-012).
 - `bun:sqlite` as the only SQLite driver; it is synchronous, which is what makes the synchronous `UnitOfWork` natural.
 - Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone 0.2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.
@@ -289,7 +289,7 @@ Use an isolated temporary home, Vault, git repository, and database per test, cr
 
 `testkit` lives in `adapters` and is owned by the foundation Epic before any test depends on it; it provides the fake `Clock` and `IdGenerator`, the fault-injection filesystem adapter that reproduces the enumerated crash points, the fault-injection git adapter, disk-full and read-only-Vault injection, bare-remote plus clone git fixtures, and the ten-thousand-Handoff seed generator.
 
-Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun version assertion, and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; and `make test` as the single gate.
+Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun and product version assertions, and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; and `make test` as the single gate.
 
 Those same targets run on the developer's macOS machine, so a check that cannot run on macOS cannot be a gate.
 

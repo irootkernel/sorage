@@ -86,6 +86,7 @@ import {
   setReviewNote,
   showConfiguration,
   showProject,
+  SORAGE_VERSION,
   successEnvelope,
   USER_ACTOR,
   unarchiveHandoff,
@@ -110,7 +111,8 @@ import * as webBindings from "./web";
 import { createWebRuntimePorts, runWebCommand } from "./web";
 
 export const CLI_NAME = "sorage" as const;
-export const CLI_VERSION = "0.3.0" as const;
+/** Kept as a CLI-facing alias while the product version has one source. */
+export const CLI_VERSION = SORAGE_VERSION;
 
 export interface GlobalOptions {
   as?: string;
@@ -2276,9 +2278,12 @@ function applyInitChoices(
     return;
   }
 
-  if (result.value.outcome !== "created") {
-    // An existing installation is reported and never reconfigured by the wizard or
-    // the flags: the optional steps are init-time choices, not repairs.
+  const created = result.value.outcome === "created";
+  const installsServiceOnExisting = !created && reconfigure && choices.installService;
+  if (!created && !installsServiceOnExisting) {
+    // A plain repeat reports status only. Explicit reconfiguration may continue
+    // into the idempotent LaunchAgent installer below because no other command
+    // can add or refresh that optional service on an existing Installation.
     if (json) {
       ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
     } else {
@@ -2301,11 +2306,17 @@ function applyInitChoices(
   // Every optional step runs before any rendering, so the JSON envelope reports
   // side effects that actually happened rather than the ones that were requested.
   const report: Record<string, unknown> = { ...result.value };
-  const lines: string[] = [
-    `Initialized Sorage at ${result.value.home}\n`,
-    `Installation: ${result.value.installationId}\n`,
-    `Vault: ${result.value.vaultPath}\n`,
-  ];
+  const lines: string[] = created
+    ? [
+        `Initialized Sorage at ${result.value.home}\n`,
+        `Installation: ${result.value.installationId}\n`,
+        `Vault: ${result.value.vaultPath}\n`,
+      ]
+    : [
+        `Sorage is already initialized at ${result.value.home}\n`,
+        `Installation: ${result.value.installationId}\n`,
+        `Vault: ${result.value.vaultPath}\n`,
+      ];
   if (result.value.git !== undefined) {
     lines.push(
       result.value.git.initialized
@@ -2314,7 +2325,7 @@ function applyInitChoices(
     );
   }
 
-  if (choices.enableDailyBackup) {
+  if (created && choices.enableDailyBackup) {
     const enabled = configureBackup(backupConfigPorts(), {
       action: "enable",
       // The wizard or the flag pair carries the same intent the backup command's
@@ -2330,7 +2341,7 @@ function applyInitChoices(
     report.backup = { enabled: true, at: choices.backupAt, timezone: choices.backupTimezone };
     lines.push(`Enabled daily backup at ${choices.backupAt} ${choices.backupTimezone}.\n`);
   }
-  if (choices.enablePush) {
+  if (created && choices.enablePush) {
     const push = configureBackup(backupConfigPorts(), {
       action: "enable-push",
       asUser: true,
@@ -2344,7 +2355,7 @@ function applyInitChoices(
     report.push = { remote: choices.pushRemote, branch: choices.pushBranch };
     lines.push(`Enabled remote push to ${choices.pushRemote} ${choices.pushBranch}.\n`);
   }
-  if (choices.registerProject) {
+  if (created && choices.registerProject) {
     const project = addProject(createNodeProjectPorts(), {
       name: choices.projectName,
       dir: choices.projectDir,
@@ -2385,7 +2396,7 @@ function applyInitChoices(
         : `Wrote the xyz.rootkernel.sorage LaunchAgent plist at ${installed.value.plistPath}; the agent was already loaded.\n`,
     );
   }
-  if (choices.startDaemon && !choices.installService) {
+  if (created && choices.startDaemon && !choices.installService) {
     const code = daemonStart(createDaemonRuntimePorts(), ports);
     if (code !== 0) {
       reportExitCode(code);

@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "check:toolchain": "bun run scripts/check-toolchain.ts",
+    "check:version": "bun run scripts/check-version.ts",
     "check:format": "biome format .",
     "check:lint": "biome lint .",
     "check:typecheck": "bun run scripts/check-typecheck.ts",

@@ -23,9 +23,9 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-009`
 - **Active Task:** None
-- **In Review Task:** None
+- **In Review Task:** `TASK-073`
 - **Next eligible Task:** None
 
 ## 3. Identifier policy
@@ -77,7 +77,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `EPIC-006` | CLI, `use-sorage` skill, and 0.1 release | 0.1 | Completed | `TASK-036` to `TASK-041` |
 | `EPIC-007` | Daemon, API, and Web | 0.2 | Completed | `TASK-042` to `TASK-051` |
 | `EPIC-008` | Git backup and restore | 0.3 | Completed | `TASK-052` to `TASK-058` |
-| `EPIC-009` | Hardening, packaging, and MVP release | 0.3 | Completed | `TASK-059` to `TASK-072` |
+| `EPIC-009` | Hardening, packaging, and MVP release | 0.3 | In Progress | `TASK-059` to `TASK-073` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -226,10 +226,11 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 
 ## EPIC-009: Hardening, packaging, and MVP release
 
-- **Status:** Completed
+- **Status:** In Progress
 - **Milestone:** 0.3
 - **Objective:** Close the security, concurrency, scale, and upgrade questions, package a macOS release, and pass the 0.3 MVP release gate with AJ-14 to AJ-16 and every earlier journey; this Epic is also where findings from any audit or journey Task land as new appended Tasks.
 - **Validation record (whole-epic review, 2026-08-31):** the whole-epic review over the tagged release state ran three rounds and converged clean: round one (run `r_01a0579f-3608-7531-b3ce-845bae27aaca`) surfaced two low-severity cross-task seams, both remediated in `10775fd` - the wizard summary now states the observed Vault-directory state instead of asserting existence, and the `--as` binding selection for a multi-bound Project is the deterministic code-point-first directory recorded in section 22.2 step 8; round two (run `r_01a057a8-3b15-7118-a204-4f2cabc783af`) confirmed the remediations and surfaced one info residual on the sort order, closed by the explicit code-point comparator with unit coverage including the astral-plane ordering; round three (run `r_01a057b0-cd4e-7c91-a65d-1d2fad399c60`) was committed with complete coverage, `ci_decision=pass`, and zero findings. `make test` exits 0 under the PATH-pinned Bun 1.3.14 with 42 unit, 70 integration, and 9 contract files, and with `make package` run first the full e2e set passes with AJ-16 active: 22 files and 40 tests covering AJ-01 to AJ-16 against the compiled, ad-hoc-signed binary. A mechanical traceability audit confirms all 287 requirements in `required-specification.md` are accounted for, with `WEB-016` the sole `Deferred` entry and the other 286 cited by at least one Completed task. The `v0.3.0` tag was re-pointed after its first placement preceded the whole-epic validation, following the documented `v0.2.0` precedent, and it sits on the epic-closeout snapshot `d8b13e9`; nothing was pushed, and publication remains local. The epic's fourteen member tasks (the seven planned plus the seven appended findings slots TASK-066 to TASK-072) all closed with committed clean Mulgae reviews and no hardening deferral. The literal freshly created macOS user account and a real Homebrew tap install remain the recorded evidence boundary of AJ-16, which the isolated clean-account journey drives to the extent a single machine permits.
+- **TASK-073 contract record:** The existing-install JSON response retains `outcome`, `installationId`, `vaultPath`, and `home` and adds `service` only when explicit service reconfiguration succeeds, so the CLI snapshot change is additive and classified as non-breaking. The HTTP DTOs, protocol DTOs, configuration schema, and database schema are unchanged; no data, configuration, or database migration is required, and the captured upgrade fixture continues to pass.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
@@ -247,6 +248,7 @@ The journeys are defined in [testing-and-acceptance.md](testing-and-acceptance.m
 | `TASK-071` | Completed | 0.3 | Land the two TASK-060 round-2 remediation items whose patches silently failed to apply: the cross-origin suite's request helper must actually send the foreign `Origin` and `Access-Control-Request-Method` headers it is already passed, and the hostile filename of matrix row 15 must be asserted verbatim as the recorded `currentArtifact.originalName` in the CLI matrix suite, so both tests fail when their controls are removed instead of passing vacuously. | The cross-origin cases in `make test-int` send requests whose wire headers carry `Origin: https://evil.example` and the preflight method, verified by asserting against a conditional CORS response shape; the CLI matrix suite parses the `get --json` envelope and asserts `originalName` equals the hostile basename exactly; `tsc` passes with no excess-property escape; findings become new tasks appended to `EPIC-009` before release. | `TASK-060` | SEC-017, SEC-004, SEC-005 | Not required |
 | `TASK-072` | Completed | 0.3 | Close the three residuals the TASK-061 round-2 review observed: fsync the retained `.bak` copy's data before its atomic rename so a power loss cannot leave the backup with unflushed bytes, assert the losing reviser in the two-revise race names `ROW_VERSION_CONFLICT` instead of relying on exit 75 alone, and wrap the daemon-restart test's mid-stream `process.kill` so an already-dead pid cannot throw uncaught inside the timer callback. | The `.bak` data is fsynced before its rename in the config-store swap and the disk-full suite still passes with the backup intact byte for byte; the two-revise loser's output contains `ROW_VERSION_CONFLICT`; the daemon-restart e2e tolerates a pid that died on its own; findings become new tasks appended to `EPIC-009` before release. | `TASK-061` | CFG-011, CFG-015 | Not required |
 | `TASK-065` | Completed | 0.3 | Finalize the documentation set, cut the release candidate, freeze the contracts, and pass the 0.3 MVP release gate with the tag `v0.3.0`. | `make test` exits 0, `scripts/sot-check` exits 0, and AJ-01 to AJ-16 all pass; every requirement in [required-specification.md](required-specification.md) that is not marked `Deferred` is cited by at least one `Completed` Task in this roadmap and appears in [traceability.md](traceability.md); the CLI JSON contract, the HTTP contract, and `schemas/config.schema.json` are versioned and frozen under the release change freeze; the command catalog covers initialization, daemon, configuration, Project, Handoff, review, revision, acceptance, retention, deletion, Vault, and backup; the tag `v0.3.0` is created only after all of it holds. | `TASK-064` | GEN-012, GEN-013, CLI-006, BKP-020, NFR-003, NFR-015 | Not required |
+| `TASK-073` | In Review | 0.3 | Close the pre-publication installation findings: make every shipped runtime and package report one 0.3.0 product version, allow an existing Installation to add the LaunchAgent through explicit reconfiguration, and bind the packaged artifact to the final release revision. | The CLI, daemon record, health endpoint, version endpoint, workspace manifests, and package manifest all report `0.3.0` from one runtime source and a preparation check fails on any workspace-version drift; `sorage init --reconfigure --install-service --non-interactive` preserves the existing configuration, installation identity, database, and Vault while installing or refreshing the LaunchAgent, returns an additive `service` result under `--json`, and is idempotent on repetition; the focused version and LaunchAgent tests pass, `make test` exits 0, `make package` followed by the packaged AJ-16 run exits 0, and the manifest revision, installed binary, HEAD, and final local `v0.3.0` peeled target agree before publication. | `TASK-065`, `TASK-069` | INIT-006, INIT-009, RUN-005, RUN-007, NFR-003, NFR-012 | Not required |
 
 ## 8. Epic completion and change rules
 

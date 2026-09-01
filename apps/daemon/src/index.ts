@@ -1,4 +1,7 @@
-export const DAEMON_VERSION = "0.2.0";
+import { SORAGE_VERSION } from "@sorage/core";
+
+/** Kept as a daemon-facing alias while the product version has one source. */
+export const DAEMON_VERSION = SORAGE_VERSION;
 
 export type {
   AuthenticatedContext,

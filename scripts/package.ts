@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SORAGE_VERSION } from "../packages/core/src/version";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
@@ -44,16 +45,6 @@ function compile(outfile: string): void {
 
 function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
-function cliVersion(): string {
-  const text = readFileSync(join(root, "apps/cli/src/main.ts"), "utf8");
-  const match = /CLI_VERSION = "([^"]+)"/.exec(text);
-  if (match === null) {
-    console.error("the CLI version could not be read from apps/cli/src/main.ts");
-    process.exit(1);
-  }
-  return match[1] as string;
 }
 
 mkdirSync(dist, { recursive: true });
@@ -97,7 +88,7 @@ if (receipt.status !== 0) {
   process.exit(1);
 }
 
-const version = cliVersion();
+const version = SORAGE_VERSION;
 const revision = sh("git", ["rev-parse", "HEAD"]);
 
 // The manifest digest describes the signed binary that actually ships: ad-hoc
