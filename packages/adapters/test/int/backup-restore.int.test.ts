@@ -7,10 +7,11 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { backupRestore, exportSnapshot, initializeInstallation } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -327,6 +328,41 @@ describe("backupRestore across two installations", () => {
       deletion_requests: 0,
       events: 0,
     });
+  });
+
+  it("rejects a traversing snapshot storageKey before touching a file outside the Vault", () => {
+    const source = initializedHome("sorage-restore-traversal-src-");
+    seedSource(source.home, source.vault);
+    const copy = vaultCopy(source.vault);
+    const shard = join(copy, `snapshots/handoffs/${HANDOFF_ID.slice(0, 2)}/${HANDOFF_ID}.json`);
+    const snapshot = JSON.parse(readFileSync(shard, "utf8")) as { artifact: { storageKey: string } };
+    snapshot.artifact.storageKey = "../victim.txt";
+    writeFileSync(shard, `${JSON.stringify(snapshot, null, 2)}\n`);
+    const victim = join(dirname(copy), "victim.txt");
+    writeFileSync(victim, "must survive\n");
+    const target = initializedHome("sorage-restore-traversal-dst-");
+
+    const result = restoreInto(target.home, copy, { dryRun: false });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("VAULT_INTEGRITY_ERROR");
+    expect(readFileSync(victim, "utf8")).toBe("must survive\n");
+  });
+
+  it("rejects a destination parent symlink that resolves outside the Vault", () => {
+    const source = initializedHome("sorage-restore-symlink-src-");
+    seedSource(source.home, source.vault);
+    const copy = vaultCopy(source.vault);
+    const target = initializedHome("sorage-restore-symlink-dst-");
+    const outside = tempDir("sorage-restore-symlink-outside-");
+    rmSync(join(target.vault, "artifacts"), { recursive: true, force: true });
+    symlinkSync(outside, join(target.vault, "artifacts"));
+
+    const result = restoreInto(target.home, copy, { dryRun: false });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("VAULT_INTEGRITY_ERROR");
+    expect(readdirSync(outside)).toEqual([]);
   });
 
   it("pauses while another process holds vault-move.lock (RUN-014)", () => {

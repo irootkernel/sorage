@@ -4,11 +4,13 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -16,7 +18,7 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AppError,
   appError,
@@ -452,7 +454,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   function verifyArtifacts(sourcePath: string) {
     return (data: SnapshotData): Result<{ verified: number }, AppError> => {
       for (const { artifact } of materializedArtifacts(data)) {
-        const source = join(sourcePath, artifact.storageKey);
+        const contained = containedSourceArtifact(sourcePath, artifact.storageKey);
+        if (!contained.ok) return err(contained.error);
+        const source = contained.value;
         let digest: string;
         try {
           digest = hashFile(source);
@@ -481,8 +485,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     return (data: SnapshotData): Result<{ copied: number }, AppError> => {
       let copied = 0;
       for (const { artifact } of materializedArtifacts(data)) {
-        const source = join(sourcePath, artifact.storageKey);
-        const destination = join(vaultPath, artifact.storageKey);
+        const containedSource = containedSourceArtifact(sourcePath, artifact.storageKey);
+        if (!containedSource.ok) return err(containedSource.error);
+        const containedDestination = containedRestoreDestination(vaultPath, artifact.storageKey);
+        if (!containedDestination.ok) return err(containedDestination.error);
+        const source = containedSource.value;
+        const destination = containedDestination.value;
         try {
           mkdirSync(dirname(destination), { recursive: true });
           const digest = streamCopy(source, destination);
@@ -1232,11 +1240,12 @@ function readLockText(path: string): string | null {
 function streamCopy(source: string, destination: string): string {
   const input = openSync(source, "r");
   let output: number | undefined;
+  const temporary = join(dirname(destination), `.${basename(destination)}.restore-${randomUUID()}.tmp`);
   try {
-    // "w", not "wx" (whole-epic validation F001): a crashed restore attempt
-    // may have placed this very file before its rebuild, and the retry must
-    // converge past it; the in-pass hash keeps the overwrite honest.
-    output = openSync(destination, "w");
+    // A retry may replace the exact managed destination, but it never opens that
+    // path for truncation: bytes first reach an exclusive sibling and rename
+    // atomically only after the copy and fsync succeed.
+    output = openSync(temporary, "wx");
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
     for (;;) {
@@ -1253,6 +1262,8 @@ function streamCopy(source: string, destination: string): string {
     fsyncSync(output);
     closeSync(output);
     output = undefined;
+    renameSync(temporary, destination);
+    fsyncDirectory(dirname(destination));
     return hash.digest("hex");
   } finally {
     closeSync(input);
@@ -1263,6 +1274,84 @@ function streamCopy(source: string, destination: string): string {
         // Best effort on the error path.
       }
     }
+    try {
+      rmSync(temporary, { force: true });
+    } catch {
+      // Best effort after a failed copy; the exclusive name cannot alias user data.
+    }
+  }
+}
+
+function isContained(root: string, candidate: string): boolean {
+  const remainder = relative(root, candidate);
+  return remainder === "" || (!remainder.startsWith("..") && !isAbsolute(remainder));
+}
+
+function containedSourceArtifact(sourcePath: string, storageKey: string): Result<string, AppError> {
+  try {
+    const root = realpathSync(sourcePath);
+    const candidate = realpathSync(resolve(sourcePath, storageKey));
+    if (!isContained(root, candidate) || !lstatSync(candidate).isFile()) {
+      return err(
+        appError(
+          "VAULT_INTEGRITY_ERROR",
+          `The backup Artifact path ${storageKey} escapes its source or is not a file.`,
+          {
+            storageKey,
+          },
+        ),
+      );
+    }
+    return ok(candidate);
+  } catch (error) {
+    return err(
+      appError("VAULT_INTEGRITY_ERROR", `The backup Artifact path ${storageKey} is not a contained readable file.`, {
+        storageKey,
+        cause: String(error),
+      }),
+    );
+  }
+}
+
+function containedRestoreDestination(vaultPath: string, storageKey: string): Result<string, AppError> {
+  try {
+    const root = realpathSync(vaultPath);
+    const lexical = resolve(vaultPath, storageKey);
+    if (!isContained(resolve(vaultPath), lexical)) {
+      return err(
+        appError("VAULT_INTEGRITY_ERROR", `The restore destination ${storageKey} escapes the Vault.`, { storageKey }),
+      );
+    }
+    let existing = dirname(lexical);
+    while (!existsSync(existing)) {
+      const parent = dirname(existing);
+      if (parent === existing) break;
+      existing = parent;
+    }
+    if (!isContained(root, realpathSync(existing))) {
+      return err(
+        appError("VAULT_INTEGRITY_ERROR", `The restore destination ${storageKey} resolves outside the Vault.`, {
+          storageKey,
+        }),
+      );
+    }
+    mkdirSync(dirname(lexical), { recursive: true });
+    const parent = realpathSync(dirname(lexical));
+    if (!isContained(root, parent)) {
+      return err(
+        appError("VAULT_INTEGRITY_ERROR", `The restore destination ${storageKey} resolves outside the Vault.`, {
+          storageKey,
+        }),
+      );
+    }
+    return ok(join(parent, basename(lexical)));
+  } catch (error) {
+    return err(
+      appError("VAULT_INTEGRITY_ERROR", `The restore destination ${storageKey} is not a safe managed path.`, {
+        storageKey,
+        cause: String(error),
+      }),
+    );
   }
 }
 

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
+import { buildStorageKey, isManagedStorageKey, isValidStorageKeySegment } from "./artifacts";
 import {
-  parseSnapshotManifest,
   redactSnapshotData,
   type SnapshotData,
   type SnapshotFile,
@@ -7,7 +8,6 @@ import {
   snapshotFiles,
   snapshotManifest,
 } from "./backup-snapshot";
-import { createHash } from "node:crypto";
 import { type Configuration, isValidTimezone, SCHEDULE_AT_PATTERN } from "./config";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import {
@@ -137,6 +137,44 @@ export function validateSnapshot(
 ): Result<{ reviewNotes: number }, AppError> {
   const projectIds = new Set(data.projects.map((project) => project.id));
   for (const handoff of data.handoffs) {
+    if (!isValidStorageKeySegment(handoff.id)) {
+      return snapshotProblem(`Handoff ${String(handoff.id)} has an invalid identifier.`);
+    }
+    if (handoff.artifact !== null) {
+      const artifact = handoff.artifact;
+      if (
+        typeof artifact !== "object" ||
+        !isValidStorageKeySegment(artifact.id) ||
+        artifact.handoffId !== handoff.id ||
+        !isValidStorageKeySegment(artifact.storedName) ||
+        !isManagedStorageKey(artifact.storageKey) ||
+        !Number.isSafeInteger(artifact.sizeBytes) ||
+        artifact.sizeBytes < 0 ||
+        !/^[0-9a-f]{64}$/i.test(artifact.sha256) ||
+        typeof artifact.materialized !== "boolean"
+      ) {
+        return snapshotProblem(`Handoff ${handoff.id} carries a malformed Artifact record.`);
+      }
+      const canonical = buildStorageKey({
+        handoffId: handoff.id,
+        artifactId: artifact.id,
+        storedName: artifact.storedName,
+      });
+      if (!canonical.ok || artifact.storageKey !== canonical.value) {
+        return snapshotProblem(
+          `Artifact ${artifact.id} has storageKey ${artifact.storageKey}, which does not match its Handoff, Artifact, and stored-name identity.`,
+        );
+      }
+      if (handoff.currentArtifactId !== artifact.id) {
+        return snapshotProblem(
+          `Handoff ${handoff.id} names current Artifact ${String(handoff.currentArtifactId)} but carries ${artifact.id}.`,
+        );
+      }
+    } else if (handoff.currentArtifactId !== null) {
+      return snapshotProblem(
+        `Handoff ${handoff.id} names current Artifact ${String(handoff.currentArtifactId)} but carries no Artifact record.`,
+      );
+    }
     if (handoff.recipientProjectId !== null && !projectIds.has(handoff.recipientProjectId)) {
       return snapshotProblem(
         `Handoff ${handoff.id} names recipient project ${handoff.recipientProjectId}, which the snapshot does not contain.`,
