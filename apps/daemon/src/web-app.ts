@@ -189,15 +189,15 @@ export const WEB_APP_JS = `(function () {
     // WEB-003: the same filter set the CLI offers, URL-addressable so a reload
     // or a shared link reproduces the same listing.
     var filters = el("div", { class: "filters" });
-    var stateInput = el("input", { placeholder: "state filter" });
+    var stateInput = el("input", { placeholder: "state filter", "aria-label": "State filter" });
     stateInput.value = params.get("state") || "";
-    var senderInput = el("input", { placeholder: "sender slug" });
+    var senderInput = el("input", { placeholder: "sender slug", "aria-label": "Sender slug" });
     senderInput.value = params.get("sender") || "";
-    var recipientInput = el("input", { placeholder: "recipient slug" });
+    var recipientInput = el("input", { placeholder: "recipient slug", "aria-label": "Recipient slug" });
     recipientInput.value = params.get("recipient") || "";
-    var sinceInput = el("input", { placeholder: "updated since (2026-08-01T00:00:00Z)" });
+    var sinceInput = el("input", { placeholder: "updated since (2026-08-01T00:00:00Z)", "aria-label": "Updated since" });
     sinceInput.value = params.get("updatedSince") || "";
-    var untilInput = el("input", { placeholder: "updated until (ISO-8601 UTC)" });
+    var untilInput = el("input", { placeholder: "updated until (ISO-8601 UTC)", "aria-label": "Updated until" });
     untilInput.value = params.get("updatedUntil") || "";
     var archived = el("input", { type: "checkbox" });
     archived.checked = params.get("includeArchived") === "true";
@@ -208,10 +208,8 @@ export const WEB_APP_JS = `(function () {
     filters.appendChild(recipientInput);
     filters.appendChild(sinceInput);
     filters.appendChild(untilInput);
-    filters.appendChild(archived);
-    filters.appendChild(el("label", { text: " include archived" }));
-    filters.appendChild(deleted);
-    filters.appendChild(el("label", { text: " include deleted" }));
+    filters.appendChild(el("label", { text: "Include archived " }, [archived]));
+    filters.appendChild(el("label", { text: "Include deleted " }, [deleted]));
     filters.appendChild(el("button", { text: "Apply", onclick: function () {
       var next = new URLSearchParams();
       if (stateInput.value !== "") next.set("state", stateInput.value);
@@ -369,7 +367,7 @@ export const WEB_APP_JS = `(function () {
     var card = el("div", { class: "card" });
     card.appendChild(el("h3", { text: "Revise" }));
     var status = el("p", {});
-    var file = el("input", { type: "file" });
+    var file = el("input", { type: "file", "aria-label": "Replacement document" });
     var submit = el("button", { type: "submit", text: "Revise through upload" });
     submit.addEventListener("click", function () {
       if (!file.files || file.files.length === 0) { status.textContent = "Choose a replacement file first."; return; }
@@ -393,7 +391,7 @@ export const WEB_APP_JS = `(function () {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Projects" }));
     var status = el("p", {});
-    var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Slug" }), el("th", { text: "Name" }), el("th", { text: "Bindings" }), el("th", { text: "State" }), el("th", { text: "" })])])]);
+    var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Slug" }), el("th", { text: "Name" }), el("th", { text: "Bindings" }), el("th", { text: "State" }), el("th", { text: "Actions" })])])]);
     var body = el("tbody", {});
     table.appendChild(body);
     view().appendChild(table);
@@ -402,8 +400,8 @@ export const WEB_APP_JS = `(function () {
     var form = el("form", {});
     var name = el("input", { placeholder: "display name", size: "30" });
     var dir = el("input", { placeholder: "directory", size: "40" });
-    form.appendChild(el("p", {}, [el("label", { text: "Name " }), name]));
-    form.appendChild(el("p", {}, [el("label", { text: "Directory " }), dir]));
+    form.appendChild(el("p", {}, [el("label", { text: "Name " }, [name])]));
+    form.appendChild(el("p", {}, [el("label", { text: "Directory " }, [dir])]));
     form.appendChild(el("button", { type: "submit", text: "Register" }));
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -423,8 +421,8 @@ export const WEB_APP_JS = `(function () {
           el("td", { text: project.status }),
         ]);
         var cell = el("td", {});
-        var rename = el("input", { placeholder: "new name", size: "18" });
-        var bindDir = el("input", { placeholder: "bind directory", size: "24" });
+        var rename = el("input", { placeholder: "new name", size: "18", "aria-label": "New name for " + project.slug });
+        var bindDir = el("input", { placeholder: "bind directory", size: "24", "aria-label": "Binding directory for " + project.slug });
         function action(label, path, init) {
           var button = el("button", { text: label });
           button.addEventListener("click", function () {
@@ -494,10 +492,10 @@ export const WEB_APP_JS = `(function () {
     var recipients = el("input", { placeholder: "recipient slugs, comma-separated", size: "40" });
     var file = el("input", { type: "file" });
     var result = el("p", {});
-    form.appendChild(el("p", {}, [el("label", { text: "Title " }), title]));
-    form.appendChild(el("p", {}, [el("label", { text: "To " }), recipients]));
+    form.appendChild(el("p", {}, [el("label", { text: "Title " }, [title])]));
+    form.appendChild(el("p", {}, [el("label", { text: "To " }, [recipients])]));
     form.appendChild(el("p", { text: "Several recipients create one independent Handoff each; every identifier and the shared dispatch group appear after submission." }));
-    form.appendChild(el("p", {}, [el("label", { text: "Document " }), file]));
+    form.appendChild(el("p", {}, [el("label", { text: "Document " }, [file])]));
     form.appendChild(el("button", { type: "submit", text: "Send" }));
     form.appendChild(result);
     form.addEventListener("submit", function (event) {
@@ -541,7 +539,7 @@ export const WEB_APP_JS = `(function () {
       });
       return button;
     }
-    var note = el("textarea", { rows: "2", cols: "40", placeholder: "User proxy review note" });
+    var note = el("textarea", { rows: "2", cols: "40", placeholder: "User proxy review note", "aria-label": "Review note" });
     card.appendChild(note);
     card.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, asUser: true }; }, "PUT"));
     card.appendChild(document.createTextNode(" "));
@@ -561,7 +559,7 @@ export const WEB_APP_JS = `(function () {
     card.appendChild(document.createTextNode(" "));
     card.appendChild(act("Reject deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-reject?asUser=true", { asUser: true }));
     card.appendChild(document.createTextNode(" "));
-    var pinnedConfirm = el("input", { placeholder: "type the Handoff id to confirm pinned deletion", size: "36" });
+    var pinnedConfirm = el("input", { placeholder: "type the Handoff id to confirm pinned deletion", size: "36", "aria-label": "Pinned deletion confirmation" });
     card.appendChild(pinnedConfirm);
     card.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, confirmPinned: pinnedConfirm.value }; }));
     card.appendChild(el("p", { text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
@@ -592,10 +590,8 @@ export const WEB_APP_JS = `(function () {
     var form = el("form", {});
     var pageSize = el("input", { type: "number", min: "1" });
     var marker = el("select", {}, [el("option", { value: "false", text: "off" }), el("option", { value: "true", text: "on" })]);
-    form.appendChild(el("label", { text: "Default page size " }));
-    form.appendChild(pageSize);
-    form.appendChild(el("label", { text: " Inbox marker " }));
-    form.appendChild(marker);
+    form.appendChild(el("label", { text: "Default page size " }, [pageSize]));
+    form.appendChild(el("label", { text: " Inbox marker " }, [marker]));
     var saveNote = el("p", {});
     form.appendChild(el("button", { type: "submit", text: "Save" }));
     form.appendChild(saveNote);

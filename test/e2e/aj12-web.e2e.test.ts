@@ -120,8 +120,24 @@ describe("AJ-12 web session and the local network boundary", () => {
     await page.waitForSelector("table tbody tr");
     expect(await page.$$eval("table tbody tr", (rows) => rows.length)).toBeGreaterThan(0);
     expect(await page.evaluate(() => window.location.href)).toBe(filteredUrl);
+    expect(await page.getByLabel("Include archived").count()).toBe(1);
+    expect(await page.getByLabel("Include deleted").count()).toBe(1);
+
+    // Every editable control and the Projects action column has a semantic name.
+    await page.goto(`http://127.0.0.1:${port}/#/compose`);
+    expect(await page.getByLabel("Title").count()).toBe(1);
+    expect(await page.getByLabel("To").count()).toBe(1);
+    expect(await page.getByLabel("Document").count()).toBe(1);
+    await page.goto(`http://127.0.0.1:${port}/#/projects`);
+    await page.waitForSelector("table tbody tr");
+    expect(await page.getByRole("columnheader", { name: "Actions" }).count()).toBe(1);
+    await page.goto(`http://127.0.0.1:${port}/#/settings`);
+    expect(await page.getByLabel("Default page size").count()).toBe(1);
+    expect(await page.getByLabel("Inbox marker").count()).toBe(1);
 
     // The detail view shows the identity, revision, and row version.
+    await page.goto(filteredUrl);
+    await page.waitForSelector("table tbody tr");
     const detailHref = await page.$eval("table tbody a", (link) => link.getAttribute("href"));
     await page.goto(`http://127.0.0.1:${port}${detailHref ?? ""}`);
     await page.waitForSelector("dl.meta");
