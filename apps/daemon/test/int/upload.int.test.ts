@@ -25,7 +25,9 @@ import { createDaemonServer } from "../../src/server";
  */
 const home = mkdtempSync(join(tmpdir(), "sorage-upload-"));
 const recipientDir = join(home, "recipient");
+const idempotencySpoolRoot = join(home, "idempotency-spool");
 mkdirSync(recipientDir, { recursive: true });
+mkdirSync(idempotencySpoolRoot, { recursive: true });
 
 let port = 0;
 let apiToken: string;
@@ -124,6 +126,7 @@ beforeAll(async () => {
     tokenRotate: () => tokenStore.rotate(),
     config: createDaemonConfigService({ host: "127.0.0.1", port, startedAt: "2026-08-30T00:00:00.000Z" }),
     domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined }),
+    idempotencySpoolRoot,
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   closer.push(() => server.close());
@@ -330,5 +333,17 @@ describe("browser upload (API-003, NFR-005)", () => {
     const replay = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts, idempotencyKey: key });
     expect(replay.status).toBe(201);
     expect(json(replay).data.handoffs[0].handoffId).toBe(json(first).data.handoffs[0].handoffId);
+    expect(readdirSync(idempotencySpoolRoot)).toEqual([]);
+  });
+
+  it("rejects an idempotent body above the outer replay bound without leaving a spool", async () => {
+    const oversized = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      idempotencyKey: "99999999-8888-4777-8666-555555555556",
+      parts: [{ name: "file", filename: "huge.md", value: "x".repeat(1_100_000) }],
+    });
+    expect(oversized.status).toBe(422);
+    expect(json(oversized).error.code).toBe("CONFIG_INVALID");
+    expect(readdirSync(idempotencySpoolRoot)).toEqual([]);
   });
 });

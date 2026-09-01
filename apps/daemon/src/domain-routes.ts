@@ -104,6 +104,12 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   const createNodeRevisionPorts = () => createRevisionPorts(databaseOptions);
   const createNodeTerminalPorts = () => createTerminalPorts(databaseOptions);
   const createNodeRetentionPorts = () => createRetentionPorts(databaseOptions);
+  const uploadReplayLimit = () => {
+    const current = createNodeConfigCommandPorts().store.read();
+    // Multipart field names, headers, and boundaries receive a fixed framing
+    // allowance; the file itself remains governed by artifact.maxBytes.
+    return current.ok && current.value !== null ? current.value.config.artifact.maxBytes + 1_048_576 : 1_048_576;
+  };
 
   const actorInputOf = (
     query: URLSearchParams,
@@ -435,6 +441,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "POST",
     pattern: "/api/v1/handoffs/upload",
     idempotent: true,
+    idempotencyBodyLimit: uploadReplayLimit,
     handler: async (request, response, context) => {
       const configPorts = createNodeConfigCommandPorts();
       const current = configPorts.store.read();

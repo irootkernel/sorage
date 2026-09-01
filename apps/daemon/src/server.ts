@@ -117,6 +117,8 @@ export interface DaemonServerOptions {
   domainRoutes?: RouteEntryInternal[];
   /** The daemon's Vault root, for serving Artifact content. */
   vaultPath?: () => string | null;
+  /** Test seam and deployment override for bounded idempotency body spools. */
+  idempotencySpoolRoot?: string | undefined;
 }
 
 export interface DaemonConfigSnapshot {
@@ -598,9 +600,14 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
           if (matched.route.idempotent === true) {
             // The body is spooled to disk and hashed in flight, so an idempotent
             // upload never sits whole in memory and the identity covers the bytes.
-            const spool = spoolRequestBody(request);
+            const spool = spoolRequestBody(
+              request,
+              matched.route.idempotencyBodyLimit?.() ?? MAX_JSON_BODY_BYTES,
+              options.idempotencySpoolRoot,
+            );
             await spool.finished;
             if (spool.error !== undefined) {
+              spool.discard();
               sendError(response, requestId, spool.error);
               return;
             }
@@ -645,6 +652,8 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               // client retrying after the failure would meet a permanent conflict.
               discardReplay(idempotencyStore, idempotencyKey);
               throw error;
+            } finally {
+              spool.discard();
             }
             return;
           }
@@ -707,7 +716,11 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
 const idempotencyStore = new Map<string, { requestHash: string; status: number; body: unknown }>();
 
 /** Spools one request body to disk, hashing it in flight; memory stays bounded. */
-function spoolRequestBody(request: IncomingMessage): {
+function spoolRequestBody(
+  request: IncomingMessage,
+  maxBytes: number,
+  spoolRoot?: string,
+): {
   finished: Promise<void>;
   path: string;
   hash: string;
@@ -718,14 +731,20 @@ function spoolRequestBody(request: IncomingMessage): {
   const { createWriteStream, mkdtempSync, rmSync } = require("node:fs") as typeof import("node:fs");
   const { tmpdir } = require("node:os") as typeof import("node:os");
   const { join } = require("node:path") as typeof import("node:path");
-  const dir = mkdtempSync(join(tmpdir(), "sorage-idem-"));
+  const dir = mkdtempSync(join(spoolRoot ?? tmpdir(), "sorage-idem-"));
   const path = join(dir, "body");
   const digest = createHash("sha256");
   const spoolState: { error?: AppError } = {};
   const stream = createWriteStream(path);
+  let size = 0;
   const finished = new Promise<void>((resolve) => {
     request.on("data", (chunk: Buffer) => {
       if (spoolState.error !== undefined) return;
+      size += chunk.length;
+      if (size > maxBytes) {
+        spoolState.error = appError("CONFIG_INVALID", `the request body exceeds the ${maxBytes}-byte replay bound`);
+        return;
+      }
       digest.update(chunk);
       stream.write(chunk);
     });

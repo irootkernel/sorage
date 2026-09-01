@@ -18,6 +18,8 @@ export interface RouteEntryInternal {
   cliTokenOnly?: boolean;
   /** True when the route participates in `Idempotency-Key` replay (API-012). */
   idempotent?: boolean;
+  /** Maximum bytes the replay spool accepts before the route consumes the body. */
+  idempotencyBodyLimit?: (() => number) | undefined;
 }
 
 export interface MatchedRoute {
