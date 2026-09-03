@@ -252,9 +252,9 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `API-011` | M2 | `TASK-046` |
 | `API-012` | M2 | `TASK-046` |
 | `WEB-001` | M2 | `TASK-048` |
-| `WEB-002` | M2 | `TASK-048`, `TASK-058` |
-| `WEB-003` | M2 | `TASK-048`, `TASK-067` |
-| `WEB-004` | M2 | `TASK-048` |
+| `WEB-002` | M2 | `TASK-048`, `TASK-058`, `TASK-079` |
+| `WEB-003` | M2 | `TASK-048`, `TASK-067`, `TASK-079` |
+| `WEB-004` | M2 | `TASK-048`, `TASK-079` |
 | `WEB-005` | M2 | `TASK-048` |
 | `WEB-006` | M2 | `TASK-048`, `TASK-060` |
 | `WEB-007` | M2 | `TASK-047` |
@@ -268,7 +268,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `WEB-015` | M2 | `TASK-045` |
 | `WEB-016` | Deferred | None |
 | `WEB-017` | M2 | `TASK-048` |
-| `WEB-018` | M2 | `TASK-051` |
+| `WEB-018` | M2 | `TASK-051`, `TASK-079` |
 | `BKP-001` | M3 | `TASK-053` |
 | `BKP-002` | M3 | `TASK-056` |
 | `BKP-003` | M3 | `TASK-052` |

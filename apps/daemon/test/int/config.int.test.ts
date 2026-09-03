@@ -205,4 +205,21 @@ describe("the static Web shell (SEC-018, SEC-019)", () => {
     const script = await authed("/assets/app.js");
     expect(script.body).toContain("renderMarkdownSafe");
   });
+
+  it("serves the TASK-079 token stylesheet and drops the invalid button padding", async () => {
+    const css = await authed("/assets/app.css");
+    expect(css.status).toBe(200);
+    // The stylesheet is a light-and-dark token system: the custom properties the
+    // screens consume, and the dark-scheme override, must both ship.
+    expect(css.body).toContain("--surface:");
+    expect(css.body).toContain("--state-awaiting:");
+    expect(css.body).toContain("prefers-color-scheme: dark");
+    // The invalid `M3rem` padding rule of the pre-refresh stylesheet is gone.
+    expect(css.body).not.toContain("M3rem");
+    // The active nav link is a class with an aria-current attribute, not an
+    // inline font weight.
+    const script = await authed("/assets/app.js");
+    expect(script.body).toContain("aria-current");
+    expect(script.body).toContain("badge");
+  });
 });

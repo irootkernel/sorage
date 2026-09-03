@@ -4,6 +4,8 @@
  * session bootstrap of SEC-019, hash routing with URL-addressable filters that
  * survive a reload, the dashboard, the Handoff lists, the detail view with its safe
  * preview, and the settings view of TASK-045. There is no Artifact editor anywhere.
+ * TASK-079 restyles the same screens over a light-and-dark token system without
+ * changing any endpoint, DTO, or query parameter the shell talks to.
  */
 export const WEB_INDEX_HTML = `<!doctype html>
 <html lang="en">
@@ -16,7 +18,6 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <body>
 <header>
 <h1>Sorage</h1>
-<p id="session-note">This is the Sorage control plane. Run <code>sorage web</code> to open it with a one-time session secret.</p>
 <nav>
 <a href="#/dashboard" data-nav>Dashboard</a>
 <a href="#/projects" data-nav>Projects</a>
@@ -28,6 +29,7 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <a href="#/settings" data-nav>Settings</a>
 <a href="#/diagnostics" data-nav>Diagnostics</a>
 </nav>
+<p id="session-note" role="status">This is the Sorage control plane. Run <code>sorage web</code> to open it with a one-time session secret.</p>
 </header>
 <main id="view"></main>
 <script src="/assets/app.js"></script>
@@ -35,25 +37,153 @@ export const WEB_INDEX_HTML = `<!doctype html>
 </html>
 `;
 
-export const WEB_CSS = `:root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-body { margin: 0; }
-header { display: flex; gap: 1rem; align-items: baseline; padding: 0.75rem 1rem; border-bottom: 1px solid #8883; }
-header h1 { font-size: 1.1rem; margin: 0; }
-nav a { margin-right: 0.75rem; }
-main { padding: 1rem; max-width: 48rem; }
+export const WEB_CSS = `:root {
+  color-scheme: light dark;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eceef2;
+  --text: #191c22;
+  --text-muted: #5b626e;
+  --border: #d9dde4;
+  --border-strong: #b9c0cb;
+  --accent: #2b62ce;
+  --accent-strong: #2456b8;
+  --accent-soft: #e5eefc;
+  --accent-contrast: #ffffff;
+  --danger: #b3373a;
+  --danger-border: #e2b3b4;
+  --danger-surface: #faeeee;
+  --warning: #8a5b00;
+  --warning-surface: #fbf3de;
+  --success: #1f7a4d;
+  --state-awaiting: #24549c;
+  --state-awaiting-bg: #e4edfb;
+  --state-changes: #7c5405;
+  --state-changes-bg: #faeecd;
+  --state-accepted: #197047;
+  --state-accepted-bg: #ddf0e6;
+  --state-declined: #a12f33;
+  --state-declined-bg: #f9e3e3;
+  --state-withdrawn: #5b626e;
+  --state-withdrawn-bg: #e8eaee;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 2px rgba(20, 24, 32, 0.05), 0 4px 12px rgba(20, 24, 32, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131519;
+    --surface: #1c1f26;
+    --surface-2: #262a33;
+    --text: #e8eaef;
+    --text-muted: #9aa2af;
+    --border: #303541;
+    --border-strong: #454c5a;
+    --accent: #6d9dff;
+    --accent-strong: #8ab2ff;
+    --accent-soft: #1f2b44;
+    --accent-contrast: #10141d;
+    --danger: #e27b7e;
+    --danger-border: #5d3234;
+    --danger-surface: #2e2123;
+    --warning: #d9a94e;
+    --warning-surface: #2b2418;
+    --success: #57b98a;
+    --state-awaiting: #8ab2ff;
+    --state-awaiting-bg: #1e2a42;
+    --state-changes: #d9b25e;
+    --state-changes-bg: #322a17;
+    --state-accepted: #63c092;
+    --state-accepted-bg: #173024;
+    --state-declined: #e58588;
+    --state-declined-bg: #382122;
+    --state-withdrawn: #9aa2af;
+    --state-withdrawn-bg: #262a33;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-sans); line-height: 1.5; }
+a { color: var(--accent); }
+a:hover { color: var(--accent-strong); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+header { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; padding: 0.7rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+header h1 { font-size: 1.05rem; margin: 0; letter-spacing: 0.01em; }
+nav { display: flex; flex-wrap: wrap; gap: 0.2rem; }
+nav a { padding: 0.3rem 0.7rem; border-radius: 999px; text-decoration: none; color: var(--text-muted); font-size: 0.88rem; }
+nav a:hover { background: var(--surface-2); color: var(--text); }
+nav a.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+#session-note { flex-basis: 100%; margin: 0.15rem 0 0; font-size: 0.8rem; color: var(--text-muted); min-height: 1.2em; }
+main { max-width: 72rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+h2 { font-size: 1.3rem; margin: 0 0 1rem; }
+h3 { font-size: 1rem; margin: 1.5rem 0 0.6rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
+.counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.75rem; margin: 0 0 1.5rem; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--stat-accent, var(--border-strong)); border-radius: var(--radius-sm); padding: 0.55rem 0.8rem; box-shadow: var(--shadow); }
+.stat strong { display: block; font-size: 1.5rem; line-height: 1.25; }
+.stat span { color: var(--text-muted); font-size: 0.78rem; }
+.stat[data-state="awaiting_recipient"] { --stat-accent: var(--state-awaiting); }
+.stat[data-state="changes_requested"] { --stat-accent: var(--state-changes); }
+.stat[data-state="accepted"] { --stat-accent: var(--state-accepted); }
+.stat[data-state="declined"] { --stat-accent: var(--state-declined); }
+.stat[data-state="withdrawn"] { --stat-accent: var(--state-withdrawn); }
+.stat[data-state="backup-ok"] { --stat-accent: var(--success); }
+.stat[data-state="backup-warn"] { --stat-accent: var(--danger); }
 table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #8882; font-size: 0.9rem; }
-.filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1rem; }
-dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
-dl.meta dt { color: #888; }
-dl.meta dd { margin: 0; word-break: break-all; }
-pre.preview { border: 1px solid #8883; padding: 0.75rem; overflow-x: auto; white-space: pre-wrap; }
-.tombstone { border: 1px solid #b33; padding: 0.75rem; }
-.card { border: 1px solid #8883; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
-.counts { display: flex; gap: 1rem; flex-wrap: wrap; }
-.counts div { border: 1px solid #8883; border-radius: 6px; padding: 0.5rem 1rem; min-width: 8rem; }
-.counts strong { display: block; font-size: 1.4rem; }
-button { padding: M3rem 0.8rem; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+th { text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
+tbody tr:hover { background: var(--surface-2); }
+.badge { display: inline-block; padding: 0.12rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; background: var(--state-withdrawn-bg); color: var(--state-withdrawn); }
+.badge-awaiting { background: var(--state-awaiting-bg); color: var(--state-awaiting); }
+.badge-changes { background: var(--state-changes-bg); color: var(--state-changes); }
+.badge-accepted { background: var(--state-accepted-bg); color: var(--state-accepted); }
+.badge-declined { background: var(--state-declined-bg); color: var(--state-declined); }
+.badge-withdrawn { background: var(--state-withdrawn-bg); color: var(--state-withdrawn); }
+.badge-neutral { background: var(--state-withdrawn-bg); color: var(--state-withdrawn); }
+.mono { font-family: var(--font-mono); font-size: 0.85em; }
+.time { font-variant-numeric: tabular-nums; color: var(--text-muted); white-space: nowrap; }
+.muted { color: var(--text-muted); font-size: 0.85rem; }
+.filters { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin: 0 0 1rem; }
+.filter-error { color: var(--danger); font-size: 0.85rem; }
+input, select, textarea { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0.4rem 0.6rem; }
+input[type="checkbox"] { width: 1rem; height: 1rem; padding: 0; accent-color: var(--accent); }
+input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1; }
+label { font-size: 0.85rem; color: var(--text-muted); display: inline-flex; align-items: center; gap: 0.4rem; }
+dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0.5rem 0 0; }
+dl.meta dt { color: var(--text-muted); font-size: 0.8rem; padding-top: 0.1rem; }
+dl.meta dd { margin: 0; word-break: break-all; font-size: 0.9rem; }
+pre.preview { border: 1px solid var(--border); background: var(--surface-2); border-radius: var(--radius-sm); padding: 0.75rem 1rem; overflow-x: auto; white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.85rem; }
+button, .btn { font: inherit; font-weight: 600; font-size: 0.88rem; padding: 0.4rem 0.85rem; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; text-decoration: none; display: inline-block; }
+button:hover, .btn:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+button.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+button.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
+button.danger:hover { background: var(--danger-surface); }
+.empty { border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--text-muted); text-align: center; padding: 1.25rem; margin: 0 0 1rem; }
+.loading { display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted); margin: 0 0 1rem; }
+.loading::before { content: ""; width: 0.9rem; height: 0.9rem; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading::before { animation: none; } }
+.tombstone { background: var(--danger-surface); border: 1px solid var(--danger-border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 1rem 1.25rem; margin: 0 0 1rem; }
+.tombstone p { margin: 0.4rem 0 0; }
+.warning { background: var(--warning-surface); color: var(--warning); border-left: 4px solid var(--warning); border-radius: var(--radius-sm); padding: 0.6rem 0.9rem; }
+.card.note { border-left: 4px solid var(--warning); }
+.card.note p { margin: 0.35rem 0 0; }
+.timeline ul { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.timeline li { position: relative; padding: 0 0 0.65rem 1.15rem; font-size: 0.9rem; }
+.timeline li::before { content: ""; position: absolute; left: 0; top: 0.42rem; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--accent); }
+.timeline li::after { content: ""; position: absolute; left: 0.23rem; top: 1.1rem; bottom: -0.1rem; width: 1px; background: var(--border); }
+.timeline li:last-child::after { display: none; }
+.timeline p { margin: 0.6rem 0 0; }
+.action-group { padding: 0.75rem 0; border-top: 1px solid var(--border); }
+.action-group:first-of-type { border-top: 0; padding-top: 0.15rem; }
+.action-group h4 { margin: 0 0 0.55rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.actions-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.cell-fields { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.4rem 0 0; }
+.danger-zone { border: 1px solid var(--danger-border); background: var(--danger-surface); border-radius: var(--radius-sm); padding: 0.75rem 0.9rem; margin-top: 0.75rem; }
+.danger-zone h4 { color: var(--danger); }
+.field { margin: 0 0 0.75rem; }
 `;
 
 export const WEB_APP_JS = `(function () {
@@ -82,6 +212,49 @@ export const WEB_APP_JS = `(function () {
 
   function note(text) {
     document.getElementById("session-note").textContent = text;
+  }
+
+  var REVIEW_STATES = ["awaiting_recipient", "changes_requested", "accepted", "declined", "withdrawn"];
+  var BADGE_TONES = {
+    awaiting_recipient: "awaiting",
+    changes_requested: "changes",
+    accepted: "accepted",
+    declined: "declined",
+    withdrawn: "withdrawn",
+    ok: "accepted",
+    warning: "changes",
+    blocking: "declined",
+    active: "awaiting",
+    archived: "withdrawn",
+  };
+
+  function badge(value) {
+    var text = value === null || value === undefined ? "" : String(value);
+    return el("span", { class: "badge badge-" + (BADGE_TONES[text] || "neutral"), text: text });
+  }
+
+  function pad2(value) {
+    return (value < 10 ? "0" : "") + value;
+  }
+
+  // Section 21 renders mutation times in the system zone; the title keeps the
+  // raw UTC instant for copy-paste.
+  function timeNode(value) {
+    var raw = value === null || value === undefined ? "" : String(value);
+    if (raw === "") return el("span", { text: "" });
+    var parsed = new Date(raw);
+    var text = isNaN(parsed.getTime())
+      ? raw.replace("T", " ").slice(0, 19)
+      : parsed.getFullYear() + "-" + pad2(parsed.getMonth() + 1) + "-" + pad2(parsed.getDate()) + " " + pad2(parsed.getHours()) + ":" + pad2(parsed.getMinutes());
+    return el("span", { class: "time", text: text, title: raw.replace("T", " ").slice(0, 19) });
+  }
+
+  function loading(text) {
+    return el("p", { class: "loading", text: text });
+  }
+
+  function emptyState(text) {
+    return el("div", { class: "empty", role: "status", text: text });
   }
 
   // -- Safe preview: text renders escaped, everything else offers download only ---
@@ -120,59 +293,69 @@ export const WEB_APP_JS = `(function () {
   function dashboard() {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Dashboard" }));
+    var pending = loading("Loading the dashboard…");
+    view().appendChild(pending);
     var counts = el("div", { class: "counts" });
-    view().appendChild(counts);
     var states = {};
-    var retention = { pinned: 0, archived: 0, deletionRequested: 0 };
+    var retention = { pinned: 0, archived: 0, deletionRequested: 0, deleted: 0 };
     api("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200").then(function (result) {
+      // A late response must not paint into whatever view navigated in meanwhile.
+      if (!pending.isConnected) return;
+      pending.remove();
       if (result.status !== 200) { note("The dashboard could not load: " + result.body.error.code); return; }
       result.body.data.handoffs.forEach(function (handoff) {
         states[handoff.reviewState] = (states[handoff.reviewState] || 0) + 1;
         if (handoff.pinned === true) retention.pinned += 1;
         if (handoff.archivedAt !== null) retention.archived += 1;
-        if (handoff.pendingDeletionRequest !== null && handoff.pendingDeletionRequest !== undefined) retention.deletionRequested += 1;
+        if (handoff.pendingDeletionRequest === true) retention.deletionRequested += 1;
         if (handoff.deletedAt !== null && handoff.deletedAt !== undefined) retention.deleted += 1;
       });
       // WEB-002: every review state and retention class shows as a fixed card,
       // including at a zero count, so the dashboard is a census rather than a
       // list of whatever happens to be non-empty.
-      var STATE_CARDS = ["awaiting_recipient", "changes_requested", "accepted", "declined", "withdrawn"];
-      STATE_CARDS.forEach(function (state) {
-        counts.appendChild(el("div", {}, [el("strong", { text: String(states[state] || 0) }), el("span", { text: state })]));
+      REVIEW_STATES.forEach(function (state) {
+        counts.appendChild(el("div", { class: "stat", "data-state": state }, [el("strong", { text: String(states[state] || 0) }), el("span", { text: state })]));
       });
-      counts.appendChild(el("div", {}, [el("strong", { text: String(retention.pinned) }), el("span", { text: "pinned" })]));
-      counts.appendChild(el("div", {}, [el("strong", { text: String(retention.archived) }), el("span", { text: "archived" })]));
-      counts.appendChild(el("div", {}, [el("strong", { text: String(retention.deletionRequested) }), el("span", { text: "deletion requested" })]));
-      counts.appendChild(el("div", {}, [el("strong", { text: String(retention.deleted) }), el("span", { text: "deleted" })]));
+      counts.appendChild(el("div", { class: "stat" }, [el("strong", { text: String(retention.pinned) }), el("span", { text: "pinned" })]));
+      counts.appendChild(el("div", { class: "stat" }, [el("strong", { text: String(retention.archived) }), el("span", { text: "archived" })]));
+      counts.appendChild(el("div", { class: "stat" }, [el("strong", { text: String(retention.deletionRequested) }), el("span", { text: "deletion requested" })]));
+      counts.appendChild(el("div", { class: "stat" }, [el("strong", { text: String(retention.deleted) }), el("span", { text: "deleted" })]));
       // WEB-002: Backup Health, shown once Git backup exists, populated from
       // the same backup_runs data the backup page lists.
-      var health = el("div", { class: "backup-health" });
+      var health = el("div", { class: "stat backup-health", "data-state": "backup-ok" });
       counts.appendChild(health);
-      api("/api/v1/backup/status").then(function (result) {
-        if (result.status !== 200) {
+      api("/api/v1/backup/status").then(function (statusResult) {
+        if (statusResult.status !== 200) {
+          health.setAttribute("data-state", "backup-warn");
           health.appendChild(el("strong", { text: "Backup: unknown" }));
           health.appendChild(el("span", { text: "the status endpoint is unavailable" }));
           return;
         }
-        var status = result.body.data;
+        var status = statusResult.body.data;
         var protection = status.schedule.enabled
           ? (status.lastPush !== null ? "scheduled, remote push" : "scheduled, local commits")
           : (status.lastPush !== null ? "manual, remote push" : "local commits only");
         var healthy = status.lastFailure === null && (status.lastSuccess !== null || status.lastAttempt === null);
+        health.setAttribute("data-state", healthy ? "backup-ok" : "backup-warn");
         health.appendChild(el("strong", { text: healthy ? "Backup: healthy" : "Backup: needs attention" }));
         health.appendChild(el("span", { text: protection + (status.lastAttempt !== null ? ", last run " + status.lastAttempt.outcome : ", never run") }));
       });
+      view().appendChild(counts);
+      view().appendChild(el("h3", { text: "Recent updates" }));
+      if (result.body.data.handoffs.length === 0) {
+        view().appendChild(emptyState("No Handoffs yet; compose one from the Compose tab."));
+        return;
+      }
       var recent = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Updated" }), el("th", { text: "Title" }), el("th", { text: "State" })])])]);
       var body = el("tbody", {});
       result.body.data.handoffs.slice(0, 10).forEach(function (handoff) {
         body.appendChild(el("tr", {}, [
-          el("td", { text: (handoff.updatedAt || handoff.createdAt || "").replace("T", " ").slice(0, 19) }),
+          el("td", {}, [timeNode(handoff.updatedAt || handoff.createdAt || "")]),
           el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
-          el("td", { text: handoff.reviewState }),
+          el("td", {}, [badge(handoff.reviewState)]),
         ]));
       });
       recent.appendChild(body);
-      view().appendChild(el("h3", { text: "Recent updates" }));
       view().appendChild(recent);
     });
   }
@@ -189,20 +372,49 @@ export const WEB_APP_JS = `(function () {
     // WEB-003: the same filter set the CLI offers, URL-addressable so a reload
     // or a shared link reproduces the same listing.
     var filters = el("div", { class: "filters" });
-    var stateInput = el("input", { placeholder: "state filter", "aria-label": "State filter" });
-    stateInput.value = params.get("state") || "";
+    var stateInput = el("select", { "aria-label": "State filter" }, [el("option", { value: "", text: "any state" })]
+      .concat(REVIEW_STATES.map(function (state) { return el("option", { value: state, text: state }); })));
+    var stateParam = params.get("state") || "";
+    stateInput.value = stateParam;
+    // A URL value outside the five review states still filters the listing, so
+    // it needs a visible option instead of a blank select (WEB-003).
+    if (stateParam !== "" && stateInput.value !== stateParam) {
+      stateInput.appendChild(el("option", { value: stateParam, text: stateParam }));
+      stateInput.value = stateParam;
+    }
     var senderInput = el("input", { placeholder: "sender slug", "aria-label": "Sender slug" });
     senderInput.value = params.get("sender") || "";
     var recipientInput = el("input", { placeholder: "recipient slug", "aria-label": "Recipient slug" });
     recipientInput.value = params.get("recipient") || "";
-    var sinceInput = el("input", { placeholder: "updated since (2026-08-01T00:00:00Z)", "aria-label": "Updated since" });
+    var sinceInput = el("input", { placeholder: "updated since (ISO-8601)", "aria-label": "Updated since" });
     sinceInput.value = params.get("updatedSince") || "";
-    var untilInput = el("input", { placeholder: "updated until (ISO-8601 UTC)", "aria-label": "Updated until" });
+    var untilInput = el("input", { placeholder: "updated until (ISO-8601)", "aria-label": "Updated until" });
     untilInput.value = params.get("updatedUntil") || "";
     var archived = el("input", { type: "checkbox" });
     archived.checked = params.get("includeArchived") === "true";
     var deleted = el("input", { type: "checkbox" });
     deleted.checked = params.get("includeDeleted") === "true";
+    var invalid = el("span", { class: "filter-error", role: "alert", text: "" });
+    var apply = el("button", { class: "primary", text: "Apply" });
+    apply.addEventListener("click", function () {
+      var sinceBound = sinceInput.value.trim();
+      var untilBound = untilInput.value.trim();
+      var isoLike = /^\\d{4}-\\d{2}-\\d{2}([T ].*)?$/;
+      if ((sinceBound !== "" && !isoLike.test(sinceBound)) || (untilBound !== "" && !isoLike.test(untilBound))) {
+        invalid.textContent = "Date bounds need ISO-8601 form, for example 2026-08-01T00:00:00Z.";
+        return;
+      }
+      invalid.textContent = "";
+      var next = new URLSearchParams();
+      if (stateInput.value !== "") next.set("state", stateInput.value);
+      if (senderInput.value !== "") next.set("sender", senderInput.value);
+      if (recipientInput.value !== "") next.set("recipient", recipientInput.value);
+      if (sinceBound !== "") next.set("updatedSince", sinceBound);
+      if (untilBound !== "") next.set("updatedUntil", untilBound);
+      if (archived.checked) next.set("includeArchived", "true");
+      if (deleted.checked) next.set("includeDeleted", "true");
+      location.hash = "#/" + kind + (next.toString() !== "" ? "?" + next.toString() : "");
+    });
     filters.appendChild(stateInput);
     filters.appendChild(senderInput);
     filters.appendChild(recipientInput);
@@ -210,76 +422,91 @@ export const WEB_APP_JS = `(function () {
     filters.appendChild(untilInput);
     filters.appendChild(el("label", { text: "Include archived " }, [archived]));
     filters.appendChild(el("label", { text: "Include deleted " }, [deleted]));
-    filters.appendChild(el("button", { text: "Apply", onclick: function () {
-      var next = new URLSearchParams();
-      if (stateInput.value !== "") next.set("state", stateInput.value);
-      if (senderInput.value !== "") next.set("sender", senderInput.value);
-      if (recipientInput.value !== "") next.set("recipient", recipientInput.value);
-      var sinceBound = sinceInput.value.trim();
-      var untilBound = untilInput.value.trim();
-      if (sinceBound !== "") next.set("updatedSince", sinceBound);
-      if (untilBound !== "") next.set("updatedUntil", untilBound);
-      if (archived.checked) next.set("includeArchived", "true");
-      if (deleted.checked) next.set("includeDeleted", "true");
-      location.hash = "#/" + kind + (next.toString() !== "" ? "?" + next.toString() : "");
-    } }));
+    filters.appendChild(apply);
+    filters.appendChild(invalid);
     view().appendChild(filters);
+    var pending = loading("Loading the " + (kind === "inbox" ? "inbox" : "outbox") + "…");
+    view().appendChild(pending);
     var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Handoff" }), el("th", { text: "State" }), el("th", { text: "Revision" })])])]);
     var body = el("tbody", {});
     table.appendChild(body);
-    view().appendChild(table);
     api(url).then(function (result) {
+      if (!pending.isConnected) return;
+      pending.remove();
       if (result.status !== 200) { note("The listing could not load: " + result.body.error.code); return; }
+      if (result.body.data.handoffs.length === 0) {
+        view().appendChild(emptyState("No Handoffs match the current filters."));
+        return;
+      }
       result.body.data.handoffs.forEach(function (handoff) {
         body.appendChild(el("tr", {}, [
           el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
-          el("td", { text: handoff.reviewState }),
-          el("td", { text: String(handoff.revision) }),
+          el("td", {}, [badge(handoff.reviewState)]),
+          el("td", {}, [el("span", { class: "mono", text: String(handoff.revision) })]),
         ]));
       });
+      view().appendChild(table);
     });
   }
 
   function deletionRequests() {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Deletion Requests" }));
-    var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Handoff" }), el("th", { text: "State" }), el("th", { text: "Pinned" })])])]);
-    var body = el("tbody", {});
-    table.appendChild(body);
-    view().appendChild(table);
-    view().appendChild(el("p", { text: "Approve or reject a request from the Handoff detail view; approval of a pinned Handoff asks for the distinct confirmation there." }));
+    var pending = loading("Loading the deletion requests…");
+    view().appendChild(pending);
+    view().appendChild(el("p", { class: "muted", text: "Approve or reject a request from the Handoff detail view; approval of a pinned Handoff asks for the distinct confirmation there." }));
     api("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200").then(function (result) {
+      if (!pending.isConnected) return;
+      pending.remove();
       if (result.status !== 200) { note("The deletion requests could not load: " + result.body.error.code); return; }
-      result.body.data.handoffs
-        .filter(function (handoff) { return handoff.pendingDeletionRequest === true; })
-        .forEach(function (handoff) {
-          body.appendChild(el("tr", {}, [
-            el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
-            el("td", { text: handoff.reviewState }),
-            el("td", { text: handoff.pinned === true ? "pinned" : "" }),
-          ]));
-        });
+      var requested = result.body.data.handoffs.filter(function (handoff) { return handoff.pendingDeletionRequest === true; });
+      if (requested.length === 0) {
+        view().appendChild(emptyState("No pending deletion requests."));
+        return;
+      }
+      var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Handoff" }), el("th", { text: "State" }), el("th", { text: "Pinned" })])])]);
+      var body = el("tbody", {});
+      table.appendChild(body);
+      requested.forEach(function (handoff) {
+        body.appendChild(el("tr", {}, [
+          el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
+          el("td", {}, [badge(handoff.reviewState)]),
+          el("td", { text: handoff.pinned === true ? "pinned" : "" }),
+        ]));
+      });
+      view().appendChild(table);
     });
   }
 
   function detail(id) {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Handoff" }));
+    var pending = loading("Loading the Handoff…");
+    view().appendChild(pending);
     api("/api/v1/handoffs/" + id + "?asUser=true").then(function (result) {
+      if (!pending.isConnected) return;
+      pending.remove();
       if (result.status !== 200) { view().appendChild(el("p", { text: "Not found: " + result.body.error.code })); return; }
       var handoff = result.body.data;
+      var metaCard = el("div", { class: "card" });
+      metaCard.appendChild(el("h3", { text: handoff.title === null || handoff.title === undefined ? "Handoff" : handoff.title }));
       var meta = el("dl", { class: "meta" });
-      function row(term, value) { meta.appendChild(el("dt", { text: term })); meta.appendChild(el("dd", { text: value })); }
-      row("id", handoff.id);
+      function row(term, value) {
+        var cell = typeof value === "string" ? el("dd", { text: value }) : el("dd", {}, [value]);
+        meta.appendChild(el("dt", { text: term }));
+        meta.appendChild(cell);
+      }
+      row("id", el("span", { class: "mono", text: handoff.id }));
       row("sender", handoff.senderDisplayName || handoff.senderKind || "");
       row("recipient", handoff.recipientProjectSlug || handoff.recipientProjectId || "");
-      row("review state", handoff.reviewState);
-      row("revision", String(handoff.revision));
-      row("row version", String(handoff.rowVersion));
+      row("review state", badge(handoff.reviewState));
+      row("revision", el("span", { class: "mono", text: String(handoff.revision) }));
+      row("row version", el("span", { class: "mono", text: String(handoff.rowVersion) }));
       row("next actor", nextActorText(handoff));
       row("first fetched", handoff.firstFetchedAt === null || handoff.firstFetchedAt === undefined ? "never fetched (the sender may still withdraw)" : handoff.firstFetchedAt);
       row("created", handoff.createdAt || "");
-      view().appendChild(meta);
+      metaCard.appendChild(meta);
+      view().appendChild(metaCard);
       renderTimeline(id);
       if (handoff.deletedAt !== null && handoff.deletedAt !== undefined) {
         var tomb = el("div", { class: "tombstone" });
@@ -293,21 +520,26 @@ export const WEB_APP_JS = `(function () {
         var card = el("div", { class: "card" });
         card.appendChild(el("h3", { text: "Artifact" }));
         var am = el("dl", { class: "meta" });
-        ["originalName", "mimeType", "sizeBytes", "sha256", "revision"].forEach(function (key) {
+        // storageKey ships instead of the artifact DTO's absent revision; the
+        // Handoff revision already shows in the metadata card above (WEB-004).
+        ["originalName", "mimeType", "sizeBytes", "sha256", "storageKey"].forEach(function (key) {
           am.appendChild(el("dt", { text: key }));
-          am.appendChild(el("dd", { text: String(artifact[key] === null || artifact[key] === undefined ? "" : artifact[key]) }));
+          var value = String(artifact[key] === null || artifact[key] === undefined ? "" : artifact[key]);
+          am.appendChild(key === "sha256" || key === "storageKey" ? el("dd", {}, [el("span", { class: "mono", text: value })]) : el("dd", { text: value }));
         });
         card.appendChild(am);
-        var revealStatus = el("span", {});
+        var revealStatus = el("span", { class: "muted", text: "" });
         var reveal = el("button", { text: "Reveal in Finder" });
         reveal.addEventListener("click", function () {
           api("/api/v1/handoffs/" + id + "/artifact/reveal?asUser=true", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(function (outcome) {
             revealStatus.textContent = outcome.body.ok ? " " + outcome.body.data.localPath : " " + outcome.body.error.code;
           });
         });
-        card.appendChild(el("a", { href: "/api/v1/handoffs/" + id + "/artifact/content?asUser=true", text: "Download" }));
-        card.appendChild(reveal);
-        card.appendChild(revealStatus);
+        var actions = el("div", { class: "actions-row" });
+        actions.appendChild(el("a", { class: "btn", href: "/api/v1/handoffs/" + id + "/artifact/content?asUser=true", text: "Download" }));
+        actions.appendChild(reveal);
+        actions.appendChild(revealStatus);
+        card.appendChild(actions);
         view().appendChild(card);
         if (isPreviewable(artifact.mimeType || "", artifact.originalName || "")) {
           fetch("/api/v1/handoffs/" + id + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
@@ -343,7 +575,7 @@ export const WEB_APP_JS = `(function () {
       var noteCard = el("div", { class: "card note" });
       noteCard.appendChild(el("h3", { text: "Review note" }));
       noteCard.appendChild(el("p", { text: noteView.body || "" }));
-      noteCard.appendChild(el("p", { text: "target revision " + noteView.targetRevision + " — author " + noteView.authorKind }));
+      noteCard.appendChild(el("p", { class: "muted", text: "target revision " + noteView.targetRevision + " — author " + noteView.authorKind }));
       view().appendChild(noteCard);
     });
   }
@@ -352,13 +584,21 @@ export const WEB_APP_JS = `(function () {
     api("/api/v1/handoffs/" + id + "/events?asUser=true").then(function (result) {
       var timelineCard = el("div", { class: "card timeline" });
       timelineCard.appendChild(el("h3", { text: "Timeline" }));
-      var list = el("ul", {});
       var events = result.status === 200 && result.body.data ? result.body.data : [];
-      events.forEach(function (entry) {
-        list.appendChild(el("li", { text: (entry.createdAt || "") + " — " + entry.eventType + " (" + (entry.actorKind || "") + ")" }));
-      });
-      timelineCard.appendChild(list);
-      timelineCard.appendChild(el("p", { text: "Metadata events only; the timeline never implies historical Artifact content is retrievable." }));
+      if (events.length === 0) {
+        timelineCard.appendChild(el("p", { class: "muted", text: "No events recorded." }));
+      } else {
+        var list = el("ul", {});
+        events.forEach(function (entry) {
+          var item = el("li", {});
+          item.appendChild(timeNode(entry.createdAt));
+          item.appendChild(el("strong", { text: " " + entry.eventType + " " }));
+          item.appendChild(el("span", { class: "muted", text: "(" + (entry.actorKind || "") + ")" }));
+          list.appendChild(item);
+        });
+        timelineCard.appendChild(list);
+      }
+      timelineCard.appendChild(el("p", { class: "muted", text: "Metadata events only; the timeline never implies historical Artifact content is retrievable." }));
       view().appendChild(timelineCard);
     });
   }
@@ -366,7 +606,7 @@ export const WEB_APP_JS = `(function () {
   function reviseCard(id) {
     var card = el("div", { class: "card" });
     card.appendChild(el("h3", { text: "Revise" }));
-    var status = el("p", {});
+    var status = el("p", { class: "muted", text: "" });
     var file = el("input", { type: "file", "aria-label": "Replacement document" });
     var submit = el("button", { type: "submit", text: "Revise through upload" });
     submit.addEventListener("click", function () {
@@ -378,8 +618,10 @@ export const WEB_APP_JS = `(function () {
         if (outcome.body.ok) detail(id);
       });
     });
-    card.appendChild(file);
-    card.appendChild(submit);
+    var row = el("div", { class: "actions-row" });
+    row.appendChild(file);
+    row.appendChild(submit);
+    card.appendChild(row);
     card.appendChild(status);
     return card;
   }
@@ -390,19 +632,20 @@ export const WEB_APP_JS = `(function () {
     var stale = function (payload) { projectsRender !== ticket ? null : payload(); };
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Projects" }));
-    var status = el("p", {});
+    var status = el("p", { class: "muted", text: "" });
+    var pending = loading("Loading the projects…");
+    view().appendChild(pending);
     var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Slug" }), el("th", { text: "Name" }), el("th", { text: "Bindings" }), el("th", { text: "State" }), el("th", { text: "Actions" })])])]);
     var body = el("tbody", {});
     table.appendChild(body);
-    view().appendChild(table);
     view().appendChild(status);
     view().appendChild(el("h3", { text: "Register a Project" }));
     var form = el("form", {});
     var name = el("input", { placeholder: "display name", size: "30" });
     var dir = el("input", { placeholder: "directory", size: "40" });
-    form.appendChild(el("p", {}, [el("label", { text: "Name " }, [name])]));
-    form.appendChild(el("p", {}, [el("label", { text: "Directory " }, [dir])]));
-    form.appendChild(el("button", { type: "submit", text: "Register" }));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "Name " }, [name])]));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "Directory " }, [dir])]));
+    form.appendChild(el("button", { class: "primary", type: "submit", text: "Register" }));
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       api("/api/v1/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name.value, dir: dir.value, asUser: true }) })
@@ -411,60 +654,65 @@ export const WEB_APP_JS = `(function () {
     view().appendChild(form);
     api("/api/v1/projects").then(function (result) {
       stale(function () {
-      if (result.status !== 200) { status.textContent = "Projects could not load."; return; }
-      result.body.data.forEach(function (entry) {
-        var project = entry.project;
-        var row = el("tr", {}, [
-          el("td", { text: project.slug }),
-          el("td", { text: project.displayName }),
-          el("td", { text: String(entry.bindingCount) + (entry.unbound ? " (unbound)" : "") }),
-          el("td", { text: project.status }),
-        ]);
-        var cell = el("td", {});
-        var rename = el("input", { placeholder: "new name", size: "18", "aria-label": "New name for " + project.slug });
-        var bindDir = el("input", { placeholder: "bind directory", size: "24", "aria-label": "Binding directory for " + project.slug });
-        function action(label, path, init) {
-          var button = el("button", { text: label });
-          button.addEventListener("click", function () {
-            // Path and body are built at click time so the row's inputs are read
-            // live rather than captured empty at render.
-            api(typeof path === "function" ? path() : path, typeof init === "function" ? init() : init).then(function (outcome) {
-              status.textContent = outcome.body.ok ? label + " done" : outcome.body.error.code;
-              projects();
-            });
-          });
-          return button;
+        if (!pending.isConnected) return;
+        pending.remove();
+        if (result.status !== 200) { status.textContent = "Projects could not load."; return; }
+        if (result.body.data.length === 0) {
+          view().insertBefore(emptyState("No Projects registered yet; register one below."), status);
+          return;
         }
-        var renameButton = el("button", { text: "Rename" });
-        renameButton.addEventListener("click", function () {
-          if (rename.value === "") return;
-          api("/api/v1/projects/" + project.slug, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: rename.value, asUser: true }) })
-            .then(function () { projects(); });
+        result.body.data.forEach(function (entry) {
+          var project = entry.project;
+          var row = el("tr", {}, [
+            el("td", {}, [el("span", { class: "mono", text: project.slug })]),
+            el("td", { text: project.displayName }),
+            el("td", { text: String(entry.bindingCount) + (entry.unbound ? " (unbound)" : "") }),
+            el("td", {}, [badge(project.status)]),
+          ]);
+          var cell = el("td", {});
+          var rename = el("input", { placeholder: "new name", size: "18", "aria-label": "New name for " + project.slug });
+          var bindDir = el("input", { placeholder: "bind directory", size: "24", "aria-label": "Binding directory for " + project.slug });
+          function action(label, path, init) {
+            var button = el("button", { text: label });
+            button.addEventListener("click", function () {
+              // Path and body are built at click time so the row's inputs are read
+              // live rather than captured empty at render.
+              api(typeof path === "function" ? path() : path, typeof init === "function" ? init() : init).then(function (outcome) {
+                status.textContent = outcome.body.ok ? label + " done" : outcome.body.error.code;
+                projects();
+              });
+            });
+            return button;
+          }
+          var renameButton = el("button", { text: "Rename" });
+          renameButton.addEventListener("click", function () {
+            if (rename.value === "") return;
+            api("/api/v1/projects/" + project.slug, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: rename.value, asUser: true }) })
+              .then(function () { projects(); });
+          });
+          var rowActions = el("div", { class: "actions-row" });
+          rowActions.appendChild(renameButton);
+          rowActions.appendChild(action("Bind", "/api/v1/projects/" + project.slug + "/bindings", function () {
+            return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dir: bindDir.value, asUser: true }) };
+          }));
+          rowActions.appendChild(action("Unbind", function () {
+            return "/api/v1/projects/" + project.slug + "/bindings/x?dir=" + encodeURIComponent(bindDir.value) + "&confirm=true";
+          }, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+          rowActions.appendChild(action("Archive", "/api/v1/projects/" + project.slug + "/archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+          rowActions.appendChild(action("Unarchive", "/api/v1/projects/" + project.slug + "/unarchive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+          cell.appendChild(rowActions);
+          cell.appendChild(el("p", { class: "cell-fields" }, [rename, bindDir]));
+          row.appendChild(cell);
+          body.appendChild(row);
         });
-        cell.appendChild(renameButton);
-        cell.appendChild(document.createTextNode(" "));
-        cell.appendChild(action("Bind", "/api/v1/projects/" + project.slug + "/bindings", function () {
-          return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dir: bindDir.value, asUser: true }) };
-        }));
-        cell.appendChild(document.createTextNode(" "));
-        cell.appendChild(action("Unbind", function () {
-          return "/api/v1/projects/" + project.slug + "/bindings/x?dir=" + encodeURIComponent(bindDir.value) + "&confirm=true";
-        }, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
-        cell.appendChild(document.createTextNode(" "));
-        cell.appendChild(action("Archive", "/api/v1/projects/" + project.slug + "/archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
-        cell.appendChild(document.createTextNode(" "));
-        cell.appendChild(action("Unarchive", "/api/v1/projects/" + project.slug + "/unarchive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
-        cell.appendChild(el("p", {}, [rename, bindDir]));
-        row.appendChild(cell);
-        body.appendChild(row);
-      });
+        view().insertBefore(table, status);
       });
     });
 
     // Unregistered Workspaces: senders with no Project, listed separately and never
     // offered as recipients.
     view().appendChild(el("h3", { text: "Unregistered Workspaces" }));
-    var unregistered = el("ul", {});
+    var unregistered = el("ul", { class: "muted" });
     view().appendChild(unregistered);
     api("/api/v1/handoffs?asUser=true&includeArchived=true").then(function (result) {
       if (result.status !== 200) return;
@@ -492,11 +740,11 @@ export const WEB_APP_JS = `(function () {
     var recipients = el("input", { placeholder: "recipient slugs, comma-separated", size: "40" });
     var file = el("input", { type: "file" });
     var result = el("p", {});
-    form.appendChild(el("p", {}, [el("label", { text: "Title " }, [title])]));
-    form.appendChild(el("p", {}, [el("label", { text: "To " }, [recipients])]));
-    form.appendChild(el("p", { text: "Several recipients create one independent Handoff each; every identifier and the shared dispatch group appear after submission." }));
-    form.appendChild(el("p", {}, [el("label", { text: "Document " }, [file])]));
-    form.appendChild(el("button", { type: "submit", text: "Send" }));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "Title " }, [title])]));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "To " }, [recipients])]));
+    form.appendChild(el("p", { class: "muted", text: "Several recipients create one independent Handoff each; every identifier and the shared dispatch group appear after submission." }));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "Document " }, [file])]));
+    form.appendChild(el("button", { class: "primary", type: "submit", text: "Send" }));
     form.appendChild(result);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -511,7 +759,7 @@ export const WEB_APP_JS = `(function () {
           if (!body.ok) { result.textContent = "Send failed: " + body.error.code; return; }
           result.textContent = "";
           var list = el("ul", {});
-          body.data.handoffs.forEach(function (sent) { list.appendChild(el("li", { text: sent.handoffId + " → " + sent.recipientSlug + " (group " + (body.data.dispatchGroupId || "none") + ")" })); });
+          body.data.handoffs.forEach(function (sent) { list.appendChild(el("li", {}, [el("span", { class: "mono", text: sent.handoffId }), el("span", { text: " → " + sent.recipientSlug + " (group " + (body.data.dispatchGroupId || "none") + ")" })])); });
           result.appendChild(list);
         });
     });
@@ -521,9 +769,9 @@ export const WEB_APP_JS = `(function () {
   function actionsCard(handoff) {
     var card = el("div", { class: "card" });
     card.appendChild(el("h3", { text: "Actions" }));
-    var status = el("p", {});
-    function act(label, path, body, method) {
-      var button = el("button", { text: label });
+    var status = el("p", { class: "muted", text: "" });
+    function act(label, path, body, method, tone) {
+      var button = el("button", tone === undefined ? { text: label } : { class: tone, text: label });
       button.addEventListener("click", function () {
         status.textContent = "";
         var payload = typeof body === "function" ? body() : body || { asUser: true };
@@ -539,30 +787,43 @@ export const WEB_APP_JS = `(function () {
       });
       return button;
     }
+    var noteGroup = el("div", { class: "action-group" });
+    noteGroup.appendChild(el("h4", { text: "Review note" }));
     var note = el("textarea", { rows: "2", cols: "40", placeholder: "User proxy review note", "aria-label": "Review note" });
-    card.appendChild(note);
-    card.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, asUser: true }; }, "PUT"));
-    card.appendChild(document.createTextNode(" "));
-    card.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { asUser: true }, "DELETE"));
-    card.appendChild(el("p", { text: "" }));
-    card.appendChild(act("Accept", "/api/v1/handoffs/" + handoff.id + "/accept?asUser=true", { expectedRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }));
-    card.appendChild(document.createTextNode(" "));
-    card.appendChild(act("Decline", "/api/v1/handoffs/" + handoff.id + "/decline?asUser=true", { reason: "Declined from the Web UI", expectedRowVersion: handoff.rowVersion, asUser: true }));
-    card.appendChild(el("p", { text: "" }));
-    card.appendChild(act(handoff.pinned === true ? "Unpin" : "Pin", "/api/v1/handoffs/" + handoff.id + "/" + (handoff.pinned === true ? "unpin" : "pin") + "?asUser=true", { asUser: true }));
-    card.appendChild(document.createTextNode(" "));
-    card.appendChild(act("Archive", "/api/v1/handoffs/" + handoff.id + "/archive?asUser=true", { asUser: true }));
-    card.appendChild(document.createTextNode(" "));
-    card.appendChild(act("Unarchive", "/api/v1/handoffs/" + handoff.id + "/unarchive?asUser=true", { asUser: true }));
-    card.appendChild(el("p", { text: "" }));
-    card.appendChild(act("Request deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-request?asUser=true", { asUser: true }));
-    card.appendChild(document.createTextNode(" "));
-    card.appendChild(act("Reject deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-reject?asUser=true", { asUser: true }));
-    card.appendChild(document.createTextNode(" "));
+    var noteRow = el("div", { class: "actions-row" });
+    noteRow.appendChild(note);
+    noteRow.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, asUser: true }; }, "PUT"));
+    noteRow.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { asUser: true }, "DELETE", "danger"));
+    noteGroup.appendChild(noteRow);
+    card.appendChild(noteGroup);
+
+    var decisionGroup = el("div", { class: "action-group" });
+    decisionGroup.appendChild(el("h4", { text: "Review decision" }));
+    var decisionRow = el("div", { class: "actions-row" });
+    decisionRow.appendChild(act("Accept", "/api/v1/handoffs/" + handoff.id + "/accept?asUser=true", { expectedRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }, "POST", "primary"));
+    decisionRow.appendChild(act("Decline", "/api/v1/handoffs/" + handoff.id + "/decline?asUser=true", { reason: "Declined from the Web UI", expectedRowVersion: handoff.rowVersion, asUser: true }, "POST", "danger"));
+    decisionGroup.appendChild(decisionRow);
+    card.appendChild(decisionGroup);
+
+    var organizationGroup = el("div", { class: "action-group" });
+    organizationGroup.appendChild(el("h4", { text: "Organization" }));
+    var organizationRow = el("div", { class: "actions-row" });
+    organizationRow.appendChild(act(handoff.pinned === true ? "Unpin" : "Pin", "/api/v1/handoffs/" + handoff.id + "/" + (handoff.pinned === true ? "unpin" : "pin") + "?asUser=true", { asUser: true }));
+    organizationRow.appendChild(act(handoff.archivedAt !== null && handoff.archivedAt !== undefined ? "Unarchive" : "Archive", "/api/v1/handoffs/" + handoff.id + "/" + (handoff.archivedAt !== null && handoff.archivedAt !== undefined ? "unarchive" : "archive") + "?asUser=true", { asUser: true }));
+    organizationGroup.appendChild(organizationRow);
+    card.appendChild(organizationGroup);
+
+    var deletionGroup = el("div", { class: "action-group danger-zone" });
+    deletionGroup.appendChild(el("h4", { text: "Deletion" }));
+    var deletionRow = el("div", { class: "actions-row" });
+    deletionRow.appendChild(act("Request deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-request?asUser=true", { asUser: true }, "POST", "danger"));
+    deletionRow.appendChild(act("Reject deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-reject?asUser=true", { asUser: true }));
     var pinnedConfirm = el("input", { placeholder: "type the Handoff id to confirm pinned deletion", size: "36", "aria-label": "Pinned deletion confirmation" });
-    card.appendChild(pinnedConfirm);
-    card.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, confirmPinned: pinnedConfirm.value }; }));
-    card.appendChild(el("p", { text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
+    deletionRow.appendChild(pinnedConfirm);
+    deletionRow.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, confirmPinned: pinnedConfirm.value }; }, "POST", "danger"));
+    deletionGroup.appendChild(deletionRow);
+    deletionGroup.appendChild(el("p", { class: "muted", text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
+    card.appendChild(deletionGroup);
     card.appendChild(status);
     return card;
   }
@@ -570,30 +831,42 @@ export const WEB_APP_JS = `(function () {
   function diagnostics() {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Diagnostics" }));
+    var pending = loading("Loading the diagnostics…");
+    view().appendChild(pending);
     var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Check" }), el("th", { text: "Severity" }), el("th", { text: "Message" })])])]);
     var body = el("tbody", {});
     table.appendChild(body);
-    view().appendChild(table);
     api("/api/v1/diagnostics").then(function (result) {
+      if (!pending.isConnected) return;
+      pending.remove();
       if (result.status !== 200) { note("Diagnostics could not load."); return; }
+      if (result.body.data.checks.length === 0) {
+        view().appendChild(emptyState("No diagnostics recorded."));
+        return;
+      }
       result.body.data.checks.forEach(function (check) {
-        body.appendChild(el("tr", {}, [el("td", { text: check.id }), el("td", { text: check.severity }), el("td", { text: check.message })]));
+        body.appendChild(el("tr", {}, [
+          el("td", {}, [el("span", { class: "mono", text: check.id })]),
+          el("td", {}, [badge(check.severity)]),
+          el("td", { text: check.message }),
+        ]));
       });
+      view().appendChild(table);
     });
   }
 
   function settings() {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Settings" }));
-    var path = el("p", {});
+    var path = el("p", { class: "muted", text: "" });
     var yaml = el("pre", { class: "preview", text: "Loading…" });
     var form = el("form", {});
     var pageSize = el("input", { type: "number", min: "1" });
     var marker = el("select", {}, [el("option", { value: "false", text: "off" }), el("option", { value: "true", text: "on" })]);
-    form.appendChild(el("label", { text: "Default page size " }, [pageSize]));
-    form.appendChild(el("label", { text: " Inbox marker " }, [marker]));
-    var saveNote = el("p", {});
-    form.appendChild(el("button", { type: "submit", text: "Save" }));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "Default page size " }, [pageSize])]));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: " Inbox marker " }, [marker])]));
+    var saveNote = el("p", { class: "muted", text: "" });
+    form.appendChild(el("button", { class: "primary", type: "submit", text: "Save" }));
     form.appendChild(saveNote);
     // The form saves against the ETag it was loaded with: a save after an
     // out-of-band write conflicts instead of silently overwriting (CFG-019).
@@ -651,7 +924,11 @@ export const WEB_APP_JS = `(function () {
   function backupPage() {
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Backup" }));
+    var pending = loading("Loading the backup status…");
+    view().appendChild(pending);
     api("/api/v1/backup/status").then(function (result) {
+      if (!pending.isConnected) return;
+      pending.remove();
       if (result.status !== 200) { note("The backup status could not load: " + result.body.error.code); return; }
       var status = result.body.data;
       var remote = status.lastPush !== null;
@@ -691,7 +968,7 @@ export const WEB_APP_JS = `(function () {
       });
       runs.forEach(function (run) {
         body.appendChild(el("tr", {}, [
-          el("td", { text: String(run.startedAt).replace("T", " ").slice(0, 19) }),
+          el("td", {}, [timeNode(run.startedAt)]),
           el("td", { text: String(run.triggeredBy) }),
           el("td", { text: String(run.outcome) }),
           el("td", { text: String(run.snapshotOutcome) }),
@@ -702,8 +979,8 @@ export const WEB_APP_JS = `(function () {
       table.appendChild(body);
       view().appendChild(el("h3", { text: "Recent runs" }));
       view().appendChild(table);
-      view().appendChild(el("p", { text: "Restore is a bootstrap command: stop the daemon and run sorage backup restore --from <vault-path> --dry-run --as-user first." }));
-      view().appendChild(el("p", { text: "Deleting a Handoff removes its current file only; prior Git commits may retain earlier content, and Sorage offers no history purge." }));
+      view().appendChild(el("p", { class: "muted", text: "Restore is a bootstrap command: stop the daemon and run sorage backup restore --from <vault-path> --dry-run --as-user first." }));
+      view().appendChild(el("p", { class: "muted", text: "Deleting a Handoff removes its current file only; prior Git commits may retain earlier content, and Sorage offers no history purge." }));
     });
   }
 
@@ -727,7 +1004,10 @@ export const WEB_APP_JS = `(function () {
     else if (path === "/settings") settings();
     else dashboard();
     document.querySelectorAll("[data-nav]").forEach(function (link) {
-      link.style.fontWeight = link.getAttribute("href") === "#" + path ? "bold" : "normal";
+      var active = link.getAttribute("href") === "#" + path;
+      link.className = active ? "active" : "";
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
     });
   }
 
