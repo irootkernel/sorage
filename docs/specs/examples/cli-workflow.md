@@ -259,7 +259,7 @@ sorage inbox --wait --timeout 600 --json
 
 In milestone M1 this polls the database every `--interval` seconds, default 2, and on timeout exits 0 with an empty list and `meta.timedOut: true`.
 
-The `use-sorage` skill tells every session to run `sorage inbox --json` at session start and before starting a task, which is the primary discovery path; `--wait` is for a session that is idle on purpose (GEN-014).
+The `use-sorage` skill checks the inbox or outbox only on explicit user request and reports the requested results without processing Handoffs. Session start, task boundaries, and Sorage code work do not trigger checks; `--wait` requires an explicit request to wait, and Handoff processing requires a request covering that work (GEN-014).
 
 ## Administrative unblock
 

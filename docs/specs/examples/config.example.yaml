@@ -33,7 +33,7 @@ server:
 
 # Milestone M1 — sender and discovery policy. `inboxMarker` writes the derived
 # marker `.sorage/INBOX.md` into each recipient binding directory; recipients
-# should git-ignore `.sorage/` (HND-026).
+# should include `.sorage/` in the Project's `.gitignore` during setup (HND-026).
 handoff:
   allowUnregisteredSenders: true
   requireRegisteredRecipient: true

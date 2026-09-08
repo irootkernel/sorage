@@ -33,7 +33,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | GEN-011 | M1 | Sorage MUST NOT require any change to the Aquarium repository or to any other ecosystem tool, and MUST ship its own agent policy as `skills/use-sorage/SKILL.md` in this repository. |
 | GEN-012 | M1 | Epic identifiers `EPIC-NNN` and globally sequential Task identifiers `TASK-NNN` MUST be immutable once committed to this repository. |
 | GEN-013 | M1 | The MVP MUST be delivered in the three milestones defined in section 17, each closed by its own release gate. |
-| GEN-014 | M1 | The `use-sorage` skill MUST instruct an agent to run `sorage inbox --json` at session start and before starting a task, to act on `changes_requested` items in its outbox before beginning new work, and to never edit managed Vault files directly. |
+| GEN-014 | M1 | The `use-sorage` skill MUST start broker operations only on explicit user request, MUST NOT trigger inbox or outbox checks at session start, task or turn boundaries, or from Sorage mentions or code work, and MUST limit checks to reporting the requested results without processing Handoffs. It MUST permit continuation of an authorized operation to completion without resuming discovery during later unrelated work, MUST require an explicit request for inbox waiting or Handoff processing, and MUST forbid editing managed Vault files directly. |
 
 ## 3. Initialization
 
@@ -186,7 +186,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | HND-023 | M1 | `sorage send --body <text>` MUST materialize the supplied text as a Markdown Artifact so that every non-tombstone Handoff still has exactly one current Artifact. |
 | HND-024 | M1 | Public Handoff representations MUST expose `firstFetchedAt`. |
 | HND-025 | M1 | Row Version MUST increment on every state-changing operation and MUST NOT increment on reads, `fetch`, preview, or their events, and an expected Row Version MUST be the value the client currently holds. |
-| HND-026 | M1 | When the global configuration key `handoff.inboxMarker`, which defaults to `false` and has no per-Project override, is enabled, every Handoff creation and every state change MUST rewrite the derived inbox marker `.sorage/INBOX.md` under each recipient binding directory, the marker MUST never be treated as authoritative, and the `use-sorage` skill MUST instruct Projects to ignore `.sorage/` in git. |
+| HND-026 | M1 | When the global configuration key `handoff.inboxMarker`, which defaults to `false` and has no per-Project override, is enabled, every Handoff creation and every state change MUST rewrite the derived inbox marker `.sorage/INBOX.md` under each recipient binding directory. The marker MUST never be treated as authoritative. Independently of `handoff.inboxMarker`, the `use-sorage` skill MUST instruct agents performing requested Sorage project setup to ensure `.sorage/` is ignored in the Project's `.gitignore` by default, preserving existing entries and avoiding duplicates; this setup policy does not require automatic CLI edits. |
 
 ## 9. Review and revision
 

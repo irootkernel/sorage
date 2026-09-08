@@ -19,12 +19,12 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |
-| `test-e2e` | Whole journeys: the compiled CLI from M1, and Playwright plus axe-core from M2 |
-| `test` | All of the above in order |
+| `test-e2e` | Run `package` first, then all whole journeys against the compiled CLI and signed candidate, including AJ-16, Playwright, and axe-core; missing package artifacts fail rather than skip |
+| `test` | `test-prepare`, `test-unit`, `test-int`, `test-contract`, then `test-e2e`, in order even under `make -j`; a failed stage stops the gate |
 | `build` | `bun build --compile` producing `dist/sorage` |
 | `package` | The signed source-install binary plus the versioned `darwin-arm64` release candidate, checksum, and manifest |
 
-Verification runs locally on the developer's macOS machine through `make test`; `test-prepare` asserts Bun `1.4.0` as pinned in `.bun-version` at the repository root and mirrored in the `package.json` `engines` field, so no environment can silently drift from the pin; a mismatch fails in `test-prepare` before any test executes. This repository uses no hosted continuous-integration service.
+Verification runs locally on the developer's macOS machine through `make test`; `test-prepare` asserts Bun `1.4.2` as pinned in `.bun-version` at the repository root and mirrored in the `package.json` `engines` field, so no environment can silently drift from the pin; a mismatch fails in `test-prepare` before any test executes. This repository uses no hosted continuous-integration service.
 
 ## 2. `testkit` contract
 
@@ -444,8 +444,10 @@ Each milestone closes with its own gate, and a gate passes only when every condi
 - The crash-point and failure matrix of section 4 passes for every M1 row.
 - `sorage doctor` reports no `blocking` check on a fresh installation, and the catalog matches its contract snapshot.
 - CLI JSON snapshots are approved under section 9.4.
-- `skills/use-sorage/SKILL.md` ships and states the inbox policy of GEN-014.
+- `skills/use-sorage/SKILL.md` ships and follows GEN-014 and HND-026. `test/unit/use-sorage-skill.test.ts`, run by `make test-unit`, checks the shipped file, metadata, and relative links; `scripts/sot-check` checks the documentation set, not the skill directory. Neither check proves agent behavior. Separately validate that session start, task and turn boundaries, ordinary code work, and a Sorage mention cause no broker checks; explicit inbox or outbox requests only inspect and report the requested box; processing and waiting occur only within a request covering them; completion does not trigger checks in later unrelated work; managed Vault files are never edited directly. For requested project setup, verify `.gitignore` exclusion of `.sorage/` is the default with `handoff.inboxMarker` either enabled or disabled, existing entries are preserved without duplication, and a check alone causes no setup edits. Record the observed agent decisions separately from automated structural checks; prose matching is not behavior verification.
 - No open P0 or P1 defect.
+
+The [2026-09-08 shipped skill acceptance record](../implementation-tips/use-sorage-acceptance.md) records a controlled independent walkthrough and its limits for the inspected skill bytes; it does not replace the gate requirements above.
 
 ### 9.2 Gate M2, daemon and Web release, end of `EPIC-007`
 

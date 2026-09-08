@@ -22,7 +22,7 @@ Documents remain ordinary files. Sorage tracks their custody and review, but it 
 
 - Apple Silicon Mac
 - Git
-- [Bun 1.4.0](https://bun.sh/) only when building from source
+- [Bun 1.4.2](https://bun.sh/) only when building from source
 
 ## Install v0.1.0
 
@@ -69,6 +69,10 @@ sorage init
 sorage project add --name sender --slug sender --dir /path/to/sender
 sorage project add --name recipient --slug recipient --dir /path/to/recipient
 ```
+
+During project setup, add `.sorage/` to each project's `.gitignore` unless an existing entry already ignores it. The directory contains derived local state; the CLI does not update project ignore files automatically.
+
+The shipped `use-sorage` skill operates on explicit requests. Ask it to check an inbox or outbox when needed; a check reports results, while processing Handoffs requires a request covering that work. Sessions and ordinary coding tasks do not trigger checks.
 
 Send a document from the sender project:
 

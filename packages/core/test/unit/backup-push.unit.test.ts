@@ -12,10 +12,13 @@ import type { GitClient, GitRunOutcome } from "../../src/git";
  */
 
 describe("classifyPushFailure", () => {
-  it("maps a disabled credential prompt to GIT_AUTH_REQUIRED", () => {
+  it.each([
+    "fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+    "fatal: unable to get password from user",
+  ])("maps a missing credential to GIT_AUTH_REQUIRED: %s", (stderr) => {
     const error = classifyPushFailure({
       exitCode: 128,
-      stderr: "fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+      stderr,
       stdout: "",
     });
     expect(error.code).toBe("GIT_AUTH_REQUIRED");

@@ -50,7 +50,7 @@ Sorage is a standalone repository, `irootkernel/sorage`, holding both its code a
 
 Aquarium, Podway, Mulgae, Gaori, and Sanho are development tooling for this repository; none of them is a source dependency of any Sorage package, and Sorage requires no change to any of them.
 
-Discovery ships as the `use-sorage` skill at `skills/use-sorage/SKILL.md` in this repository, which states the session policy that closes the loop described in G-01.
+Discovery ships as the `use-sorage` skill at `skills/use-sorage/SKILL.md` in this repository, which states the explicit-request broker policy that closes the loop described in G-01.
 
 The named integration seam for another tool that needs to point at a Handoff is the Podway `ExternalReference` artifact slot; a tool references a Handoff by its UUID through the public CLI or the local API and never by importing a Sorage package.
 

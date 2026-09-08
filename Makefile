@@ -25,10 +25,16 @@ test-int:
 test-contract:
 	$(BUN) run test:contract
 
-test-e2e: build
+test-e2e: package
 	$(BUN) run test:e2e
 
-test: test-prepare test-unit test-int test-contract test-e2e
+# Recursive targets keep the gate ordered even when the caller uses make -j.
+test:
+	$(MAKE) test-prepare
+	$(MAKE) test-unit
+	$(MAKE) test-int
+	$(MAKE) test-contract
+	$(MAKE) test-e2e
 
 build:
 	$(BUN) run build:cli

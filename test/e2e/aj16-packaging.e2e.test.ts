@@ -62,13 +62,12 @@ function installed(args: string[], home: string): { status: number | null; stdou
 }
 
 describe("AJ-16 packaging on a clean account", () => {
-  // `make test` builds without packaging, and the journey's subject is the
-  // packaged artifact, so it runs whenever the packaging pipeline has produced
-  // its manifest and reports a precise skip otherwise.
+  // `make test-e2e` prepares the signed candidate before running every journey.
+  // Missing artifacts are preparation failures, never a reason to skip AJ-16.
   const manifestPath = `${BINARY}.manifest.json`;
   const checksumPath = `${BINARY}.sha256`;
-  const packaged = existsSync(manifestPath);
-  it.skipIf(!packaged)("installs nothing but the binary and completes the journey", () => {
+  it("installs nothing but the binary and completes the journey", () => {
+    expect(existsSync(manifestPath), "run make test-e2e to prepare the packaged candidate").toBe(true);
     expect(existsSync(BINARY)).toBe(true);
     const account = tempDir("sorage-aj16-account-");
     const workA = join(account, "work-a");

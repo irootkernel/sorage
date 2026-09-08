@@ -428,6 +428,8 @@ A binding of kind `git_repository` stores the git common directory, resolved wit
 - **Date:** 2026-08-22
 - **Amended:** 2026-09-01 — the pinned Bun version moved from `1.3.14` to `1.4.0` after the M3 MVP gate passed; the pin mechanics, storage, test runner, and distribution decisions below are unchanged, and the full verification gate including the reproducible-build check of `make package` was re-run green under the new pin.
 
+- **Amended:** 2026-09-08 — the pinned Bun version moves from `1.4.0` to `1.4.2` to match the user's installed system runtime. The strict version gate remains in force; no product API, configuration, storage, migration, or roadmap lifecycle change is introduced. Validation uses the focused toolchain tests, `make test`, and `make package`.
+
 ### Context
 
 v0.3.0 left the runtime, SQLite driver, test runner, and distribution mechanism entirely unspecified, while the ecosystem convention is TypeScript tested with Vitest executed through Bun and gated by a single `make test`.
@@ -440,7 +442,7 @@ Sibling repositories pin their toolchain hard — podway's `Makefile:3-6` raises
 
 ### Decision
 
-The toolchain is Bun `1.4.0`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from M2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
+The toolchain is Bun `1.4.2`, pinned in `.bun-version` at the repository root and mirrored in `package.json` `engines`, with `bun:sqlite` for storage, Vitest executed through Bun for unit, integration, and contract tests, Playwright for Web end-to-end from M2, `commander` for the CLI surface, comment-preserving `yaml` for configuration, and Vite with Preact for the Web application.
 
 `make build` compiles with `bun build --compile` into `dist/sorage`; `make test` is the single verification gate and `make test-prepare` asserts the pinned Bun version; verification runs locally on macOS with no hosted CI service (the GitHub Actions workflow added in TASK-002 was removed by the owner's direction on 2026-08-24). ADR-0023 replaces only this decision's Homebrew distribution path and packaging metadata contract; the toolchain, build output, local verification, and ad-hoc signing choices remain in force.
 
@@ -508,7 +510,7 @@ A separate public handoff handler inside Aquarium is not merely unbuilt; it was 
 
 ### Decision
 
-Sorage ships `skills/use-sorage/SKILL.md` in this repository from milestone M1, stating the policy that a session checks `sorage inbox --json` at session start and before starting a task, supported by `inbox --wait [--timeout <s>]` for long-polling.
+Sorage ships `skills/use-sorage/SKILL.md` in this repository from milestone M1. As amended on 2026-09-08, broker operations start only on explicit user request (GEN-014). Inbox and outbox checks report results without processing Handoffs; processing and `inbox --wait [--timeout <s>]` require requests covering that work. Authorized work continues to completion, and later unrelated work does not resume discovery. Requested Sorage project setup ensures `.sorage/` is ignored in `.gitignore` by default without duplicating existing entries (HND-026); the CLI does not edit project ignore files automatically.
 
 The Podway `ExternalReference` artifact slot is the named integration seam for tools that need to reference a Handoff; plan handoff, writer handoff, and documentation sync in sibling tools are adjacent concerns and explicitly out of scope.
 
@@ -518,11 +520,16 @@ The entity keeps the name "Handoff", and the interoperability documentation stat
 
 - An `$aquarium:handoff` handler inside Aquarium — rejected: already rejected in Aquarium commit `56c297e`, and it would require changing a repository Sorage must not change (GEN-011).
 - Renaming the entity to avoid the ecosystem collision — rejected: Sorage is the tool that owns this concept, and the other three uses are internal mechanisms of their own tools.
+- Keeping session-start and per-task checks — rejected in the 2026-09-08 amendment: this causes repeated unsolicited broker operations during ordinary coding work.
+- Treating `.git/info/exclude` as an equal setup default — rejected in the amendment: `.gitignore` records the derived-state policy for every checkout.
+- Automatically editing `.gitignore` from the CLI — rejected in the amendment: the requested change belongs to agent setup guidance and requires no new CLI file mutation.
 
 ### Consequences
 
 - The discovery loop closes inside milestone M1 with no daemon, no notifications, and no MCP.
-- Adoption is a policy statement in a skill file rather than an enforced hook, which is a documented limitation.
+- Adoption is a policy statement in a skill file rather than an enforced hook, which is a documented limitation. Users explicitly initiate discovery; pending items do not interrupt unrelated work.
+- The 2026-09-08 amendment changes agent policy only: no CLI/API, configuration validation, storage, or migration changes. The configuration schema's `handoff.inboxMarker` description is aligned with HND-026; this documentation-only schema diff is non-breaking and changes no keys, types, defaults, or accepted values. Existing installed skills and repository instructions need a separate update before the new policy takes effect there.
+- Required SOT edits cover GEN-014, HND-026, this decision, operational guidance, the configuration schema description, product context, skill acceptance, and the corresponding `TASK-039` acceptance wording. Roadmap identities, lifecycle statuses, and active pointers are unchanged; no new delivery unit is introduced for this documentation amendment.
 - The optional `handoff.inboxMarker` configuration key exists as a secondary, default-off discovery aid.
 
 ## ADR-0019: Three milestones and roadmap governance

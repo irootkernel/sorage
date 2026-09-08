@@ -114,7 +114,7 @@
           "default": true
         },
         "inboxMarker": {
-          "description": "When true, every Handoff creation or state change rewrites the recipient's derived marker `.sorage/INBOX.md` under each recipient binding directory. The marker is never authoritative and `.sorage/` should be git-ignored by the recipient project (HND-026).",
+          "description": "When true, every Handoff creation or state change rewrites the recipient's derived marker `.sorage/INBOX.md` under each recipient binding directory. The marker is never authoritative. Independently of this key, requested Sorage project setup ensures `.sorage/` is ignored in the Project's `.gitignore` by default, preserving existing entries and avoiding duplicates; the CLI does not automatically edit that file (HND-026).",
           "type": "boolean",
           "default": false
         }

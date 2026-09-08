@@ -4,10 +4,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * The TASK-039 gate made observable: the shipped agent policy exists, carries the
- * GEN-014 instructions verbatim enough for a session to follow, keeps its links
- * resolvable the way scripts/sot-check demands, and needs no file outside this
- * repository to work.
+ * The structural part of the TASK-039 gate: the shipped skill exists, identifies
+ * itself, and resolves its references within this repository. GEN-014 and HND-026
+ * behavior is reviewed separately under the M1 skill acceptance scenarios; prose
+ * matching cannot establish an agent's decisions.
  */
 const skillPath = fileURLToPath(new URL("../../skills/use-sorage/SKILL.md", import.meta.url));
 
@@ -18,19 +18,6 @@ describe("the shipped use-sorage skill", () => {
     expect(existsSync(skillPath)).toBe(true);
     expect(text.startsWith("---\n")).toBe(true);
     expect(text.slice(0, text.indexOf("\n---\n", 4))).toContain("name: use-sorage");
-  });
-
-  it("states the GEN-014 inbox policy for session start and before every task", () => {
-    expect(text).toContain("sorage inbox --json");
-    expect(text).toContain("at session start");
-    expect(text).toContain("before starting any task");
-    expect(text).toContain("changes_requested");
-  });
-
-  it("forbids editing the managed Vault and instructs ignoring .sorage/ in Git", () => {
-    expect(text).toContain("Never create, edit, rename, or delete anything inside the Vault");
-    expect(text).toContain("Ignore `.sorage/` in Git");
-    expect(text).toContain("handoff.inboxMarker");
   });
 
   it("resolves every relative link it contains from the skill directory", () => {

@@ -60,7 +60,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 
 - Use `$use-mulgae` for authorized asynchronous reviews and `$use-gaori` for selected asynchronous checks. Use `$use-gaori-status` for command timing and history questions. Global MCP registrations supply Mulgae and Gaori; do not add project-local registrations without explicit intent.
 - Use `$use-podway` for explicitly requested Podway operations. Aquarium workflows may use the configured Procedures; setup does not start a session.
-- Use `$use-sorage` at session start and before each task for this registered Project. Resolve broker operations through that skill and never edit the managed Vault or derived `.sorage/INBOX.md` directly.
+- Use `$use-sorage` only when Master explicitly requests a Sorage broker operation or Sorage project setup. Session start, task boundaries, and Sorage code work do not trigger inbox or outbox checks. During requested project setup, ensure `.sorage/` is ignored in `.gitignore` without duplicating an existing entry. Resolve broker operations through that skill and never edit the managed Vault or derived `.sorage/INBOX.md` directly.
 - Use `$use-dolgorae` for explicitly requested workspace, Profile, review, engagement, or recovery operations. A capability or global-state failure blocks the dependent operation; never initialize over incompatible state or edit its files directly.
 - Use `$aquarium:dev-setup-global` for user-global tools and `$aquarium:dev-setup` for repository-local configuration.
 - Keep `.mulgae/**`, `.gaori/runs/**`, `.podway/runtime/**`, and `.sorage/**` as local runtime evidence. Do not cite runtime paths or identities as durable evidence in tracked documents or commit messages; use an approved tracked `aquarium.promoted-evidence/v1` package only when a downstream consumer needs retained evidence.
@@ -79,7 +79,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 - A conflict with a higher-authority document stops the active Task; record the conflict and resolve it in the Source of Truth before writing implementation code.
 - Never let an implementation shortcut become product behavior without the material change process in [docs/governance/README.md](docs/governance/README.md).
 
-- Bun is pinned to `1.4.0`. `make build` builds the CLI and `make package` creates the packaged executable. `make test` is the canonical code gate; `make test-prepare` includes format, lint, type, boundary, and SOT checks.
+- Bun is pinned to `1.4.2`. `make build` builds the CLI and `make package` creates the packaged executable. `make test` is the canonical code gate; `make test-prepare` includes format, lint, type, boundary, and SOT checks.
 - Gaori command `test` runs `["make", "test"]` with the `generic` parser and a 3600-second timeout because the full gate combines preparation and several test stages. Configuration validation is `gaori --json config check`.
 
 ### Commit Messages

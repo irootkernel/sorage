@@ -120,6 +120,7 @@ export const GIT_ARGS_PUSH = (remote: string, branch: string): string[] => ["pus
 const AUTH_FAILURE_PATTERNS = [
   "terminal prompts disabled",
   "could not read username",
+  "unable to get password from user",
   "authentication failed",
   "permission denied",
   "publickey",
