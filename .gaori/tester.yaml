@@ -1,0 +1,7 @@
+version: 2
+commands:
+  test:
+    command: ["make", "test"]
+    tags: [sorage, test, full]
+    parser: generic
+    timeout_sec: 3600

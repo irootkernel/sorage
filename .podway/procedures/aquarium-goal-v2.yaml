@@ -1,6 +1,6 @@
 schema: podway.procedure/v2
 id: aquarium-goal-v2
-version: "2"
+version: "9"
 name: Aquarium Goal
 purpose: Deliver one epic member, remediation, or closeout goal with current evidence.
 description: A flexible goal-centered Podway procedure for epic-handler work.
@@ -36,21 +36,37 @@ node_definitions:
     title: Record verification and review
     intent: Record current checks and complete Mulgae evidence for this goal.
     items:
-      - id: review-round
-        type: integer
-        prompt: Record the positive ordinal of this operationally complete Mulgae root review for the current goal revision.
-        required: true
       - id: review-mode
         type: choice
-        prompt: Record whether this member-task review may be remediated now or deferred to epic hardening.
+        prompt: Record the applicable member-goal review mode, or the final epic closeout exception after successful validation.
         required: true
         choices:
           - remediation-eligible
           - hardening-deferral-eligible
+          - closeout-not-required
+      - id: extra-review-authorization
+        type: choice
+        prompt: Record whether an additional hardening-deferral-eligible remediation-and-review pass is not required, awaiting user authorization, or explicitly authorized.
+        required: true
+        choices:
+          - not-required
+          - pending
+          - authorized
+      - id: review-round
+        type: integer
+        prompt: Record the positive ordinal of this operationally complete Mulgae review, counting each original root once through its root or verified composite, for the current goal revision.
+        required: false
+        required_when:
+          - item: review-mode
+            not_equals: closeout-not-required
+        minimum: 1
       - id: review-run-id
         type: text
-        prompt: Record the exact committed Mulgae root review run ID.
-        required: true
+        prompt: Record the exact committed Mulgae root or verified composite review run ID; verify the original root and role sources through review_composition for a composite.
+        required: false
+        required_when:
+          - item: review-mode
+            not_equals: closeout-not-required
         min_length: 1
         max_length: 128
         multiline: true
@@ -65,22 +81,58 @@ node_definitions:
         type: integer
         prompt: Record the number of unresolved valid findings.
         required: true
+        minimum: 0
+      - id: effective-medium-or-higher-findings
+        type: integer
+        prompt: Record the number of valid unresolved findings with effective priority Blocker, Critical, High, or Medium.
+        required: true
+        minimum: 0
+      - id: effective-low-findings
+        type: integer
+        prompt: Record the number of valid Low findings that require a completed shared disposition.
+        required: true
+        minimum: 0
+      - id: confirmation-needed-findings
+        type: integer
+        prompt: Record the number of findings whose validity still needs confirmation.
+        required: true
+        minimum: 0
+      - id: finding-disposition-summary
+        type: text
+        prompt: Record reported severity, effective priority, validity, disposition, checks, and stale-review status for each finding, or none.
+        required: true
+        min_length: 1
+        max_length: 7000
+        multiline: true
   hardening-deferral-record:
     type: action
     title: Record epic hardening deferral
     intent: Preserve the bounded second-review findings that epic hardening must reconcile.
     items:
+      - id: hardening-deferral-state
+        type: choice
+        prompt: Record whether a verified hardening deferral is required for the current review evidence.
+        required: true
+        choices:
+          - not-applicable
+          - recorded
       - id: hardening-deferral-run-id
         type: text
-        prompt: Record the exact committed second-round Mulgae root review run ID.
-        required: true
+        prompt: Record the exact committed second-round Mulgae root or verified composite review run ID; verify the original root and role sources through review_composition for a composite.
+        required: false
+        required_when:
+          - item: hardening-deferral-state
+            equals: recorded
         min_length: 1
         max_length: 128
         multiline: true
       - id: hardening-deferral-finding-ids
         type: list
         prompt: Record every exact unresolved valid finding ID from that run.
-        required: true
+        required: false
+        required_when:
+          - item: hardening-deferral-state
+            equals: recorded
         min_items: 1
         max_items: 200
         max_item_length: 128
@@ -89,10 +141,43 @@ node_definitions:
       - id: hardening-deferral-summary
         type: text
         prompt: Record the member task and bounded finding severities, dispositions, and repository-relative paths; the exact run and finding IDs are recorded separately.
-        required: true
+        required: false
+        required_when:
+          - item: hardening-deferral-state
+            equals: recorded
         min_length: 1
         max_length: 7000
         multiline: true
+      - id: hardening-deferral-owner
+        type: text
+        prompt: Record the canonical deferred-feedback entry for a small independent Low future risk, including its impact or reason and re-entry condition.
+        required: false
+        required_when:
+          - item: hardening-deferral-state
+            equals: recorded
+        min_length: 1
+        max_length: 2048
+        multiline: true
+      - id: hardening-deferral-evidence-path
+        type: text
+        prompt: Record the staged repository-relative aquarium.promoted-evidence/v1 manifest path that durably preserves this deferral.
+        required: false
+        required_when:
+          - item: hardening-deferral-state
+            equals: recorded
+        min_length: 1
+        max_length: 1024
+        multiline: true
+      - id: hardening-deferral-evidence-sha256
+        type: text
+        prompt: Record the exact promoted manifest digest as sha256 followed by a colon and 64 lowercase hexadecimal characters.
+        required: false
+        required_when:
+          - item: hardening-deferral-state
+            equals: recorded
+        min_length: 71
+        max_length: 71
+        multiline: false
   evidence-decision:
     type: decision
     title: Evaluate goal evidence
@@ -100,19 +185,101 @@ node_definitions:
     prompt: Does the current evidence support this goal?
     evidence_guidance:
       - Read the goal work, checks, Mulgae status, and finding dispositions.
+      - Select no option while confirmation-needed-findings is non-zero.
+      - Resolve each finding to Valid or Invalid with authorized evidence or bounded confirmation authority, then manually rework record-evidence and evaluate this decision again.
     options:
       - id: supported
         label: Evidence supports goal
-        criteria: Required checks and review are complete, CI passed, and no unresolved valid finding remains.
+        criteria: Required checks and review are complete, CI passed, and no unresolved valid finding remains; for the final epic closeout only, successful current validation and closeout verification replace a redundant Mulgae review.
+        guards:
+          - evidence:
+              node: record-evidence
+              item: unresolved-valid-findings
+            equals: 0
+          - evidence:
+              node: record-hardening-deferral
+              item: hardening-deferral-state
+            equals: not-applicable
+          - evidence:
+              node: record-evidence
+              item: confirmation-needed-findings
+            equals: 0
       - id: deferred-for-hardening
         label: Findings deferred to epic hardening
-        criteria: Required checks are current, this is an epic member task, its complete second review is recorded in hardening-deferral-eligible mode, and every remaining valid finding is durably linked to its authoritative Mulgae run and bounded Podway evidence for epic hardening.
+        criteria: Required checks are current, this is an epic member task, its complete second review is recorded in hardening-deferral-eligible mode, no valid Medium-or-higher finding remains, and every remaining finding is a small independent Low future risk linked before this decision to its canonical deferred-feedback owner and a verified staged aquarium.promoted-evidence/v1 manifest and payload digests; structural work belongs in the TODO owner instead.
+        guards:
+          - evidence:
+              node: record-evidence
+              item: review-mode
+            equals: hardening-deferral-eligible
+          - evidence:
+              node: record-evidence
+              item: effective-medium-or-higher-findings
+            equals: 0
+          - evidence:
+              node: record-hardening-deferral
+              item: hardening-deferral-state
+            equals: recorded
+          - evidence:
+              node: record-evidence
+              item: confirmation-needed-findings
+            equals: 0
       - id: rework-required
         label: Rework required
-        criteria: Evidence or CI failed, evidence is stale or incomplete, or a valid finding remains without the exact second-review member-task deferral above.
+        criteria: Evidence or CI failed, evidence is stale or incomplete, or a remediation-eligible review has an unresolved valid finding that requires rework.
+        guards:
+          - evidence:
+              node: record-evidence
+              item: review-mode
+            equals: remediation-eligible
+          - evidence:
+              node: record-evidence
+              item: effective-medium-or-higher-findings
+            at_least: 1
+          - evidence:
+              node: record-evidence
+              item: confirmation-needed-findings
+            equals: 0
+      - id: authorized-rework
+        label: Authorized additional rework
+        criteria: A hardening-deferral-eligible review has a valid Medium-or-higher finding and the user explicitly authorized one additional bounded remediation-and-review pass.
+        guards:
+          - evidence:
+              node: record-evidence
+              item: review-mode
+            equals: hardening-deferral-eligible
+          - evidence:
+              node: record-evidence
+              item: extra-review-authorization
+            equals: authorized
+          - evidence:
+              node: record-evidence
+              item: effective-medium-or-higher-findings
+            at_least: 1
+          - evidence:
+              node: record-evidence
+              item: confirmation-needed-findings
+            equals: 0
     reason:
       required: true
       prompt: Explain the selection using the recorded evidence.
+  authorized-rework-decision:
+    type: decision
+    title: Confirm additional rework authority
+    objective: Re-enter goal work only while the recorded additional review authorization remains current.
+    prompt: Is the additional remediation-and-review pass still authorized?
+    evidence_guidance:
+      - Read the current extra-review authorization and account for any later change before starting another bounded work pass.
+    options:
+      - id: proceed
+        label: Proceed with authorized rework
+        criteria: The user authorization remains current for exactly one additional remediation-and-review pass.
+      - id: reconsider
+        label: Reconsider authorization
+        criteria: The authorization is no longer current or its bounded scope must be reconsidered before work resumes.
+    reason:
+      required: true
+      prompt: Explain the current authorization state and bounded next action.
   goal-assessment:
     type: decision
     title: Assess the goal
@@ -139,6 +306,18 @@ node_definitions:
         achieved: achieved
         not-achieved: not_achieved
         superseded: superseded
+  hardening-deferral-disposition:
+    type: action
+    title: Confirm epic hardening handoff
+    intent: Record that the pre-decision deferral evidence is the bounded handoff for this member task.
+    items:
+      - id: hardening-handoff-summary
+        type: text
+        prompt: Record the adopted hardening evidence path, digest, finding IDs, canonical deferred-feedback owner, and owning epic task.
+        required: true
+        min_length: 1
+        max_length: 3000
+        multiline: true
   closeout-record:
     type: action
     title: Record goal closeout
@@ -159,36 +338,128 @@ graph:
       next: record-evidence
     - id: record-evidence
       use: evidence-record
+      next: record-hardening-deferral
+    - id: record-hardening-deferral
+      use: hardening-deferral-record
+      evidence_from:
+        - node: record-evidence
+          required: true
+          items:
+            - review-mode
+            - extra-review-authorization
+            - review-run-id
+            - unresolved-valid-findings
+            - effective-medium-or-higher-findings
+            - effective-low-findings
+            - confirmation-needed-findings
+            - finding-disposition-summary
       next: decide-evidence
     - id: decide-evidence
       use: evidence-decision
       evidence_from:
         - node: complete-work
           required: true
+          items:
+            - work-summary
+            - source-revision
         - node: record-evidence
           required: true
+          items:
+            - review-round
+            - review-mode
+            - extra-review-authorization
+            - review-run-id
+            - evidence-summary
+            - unresolved-valid-findings
+            - effective-medium-or-higher-findings
+            - effective-low-findings
+            - confirmation-needed-findings
+            - finding-disposition-summary
+        - node: record-hardening-deferral
+          required: true
+          items:
+            - hardening-deferral-state
+            - hardening-deferral-run-id
+            - hardening-deferral-finding-ids
+            - hardening-deferral-summary
+            - hardening-deferral-owner
+            - hardening-deferral-evidence-path
+            - hardening-deferral-evidence-sha256
       routes:
         supported:
           to: assess-goal
           effect: advance
         deferred-for-hardening:
-          to: record-hardening-deferral
+          to: record-hardening-handoff
           effect: advance
         rework-required:
           to: complete-work
           effect: rework
-    - id: record-hardening-deferral
-      use: hardening-deferral-record
+        authorized-rework:
+          to: decide-authorized-rework
+          effect: advance
+    - id: decide-authorized-rework
+      use: authorized-rework-decision
+      evidence_from:
+        - node: record-evidence
+          required: true
+          items:
+            - extra-review-authorization
+      routes:
+        proceed:
+          to: complete-work
+          effect: rework
+        reconsider:
+          to: record-evidence
+          effect: rework
+    - id: record-hardening-handoff
+      use: hardening-deferral-disposition
+      evidence_from:
+        - node: record-hardening-deferral
+          required: true
+          items:
+            - hardening-deferral-run-id
+            - hardening-deferral-finding-ids
+            - hardening-deferral-summary
+            - hardening-deferral-owner
+            - hardening-deferral-evidence-path
+            - hardening-deferral-evidence-sha256
       next: assess-goal
     - id: assess-goal
       use: goal-assessment
       evidence_from:
         - node: complete-work
           required: true
+          items:
+            - work-summary
+            - source-revision
         - node: record-evidence
           required: true
+          items:
+            - review-round
+            - review-mode
+            - extra-review-authorization
+            - review-run-id
+            - evidence-summary
+            - unresolved-valid-findings
+            - effective-medium-or-higher-findings
+            - effective-low-findings
+            - confirmation-needed-findings
+            - finding-disposition-summary
         - node: record-hardening-deferral
+          required: true
+          items:
+            - hardening-deferral-state
+            - hardening-deferral-run-id
+            - hardening-deferral-finding-ids
+            - hardening-deferral-summary
+            - hardening-deferral-owner
+            - hardening-deferral-evidence-path
+            - hardening-deferral-evidence-sha256
+        - node: record-hardening-handoff
           required: false
+          items:
+            - hardening-handoff-summary
       routes:
         achieved:
           to: closeout
