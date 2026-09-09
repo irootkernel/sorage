@@ -70,6 +70,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 ### Repository Index and Authorities
 
 - Read [README.md](README.md) for the public product overview, installation, and basic usage.
+- Read [CHANGELOG.md](CHANGELOG.md) for cumulative release notes and the planned next stable release.
 - Read [docs/README.md](docs/README.md) before development; it owns the documentation map, role ownership, authority order, and roadmap identity contract.
 - Read [docs/governance/README.md](docs/governance/README.md) before changing a Task status, closing a Task, or making a material change.
 - Read [docs/roadmap/README.md](docs/roadmap/README.md) to learn what is eligible to start; nothing else in this repository records delivery status.

@@ -1,13 +1,13 @@
 # Sorage documentation
 
-The repository root [README](../README.md) introduces Sorage to users. This directory is for maintainers and contributors. It contains the implementation contracts, architecture, decisions, development guidance, operations, and delivery state.
+The repository root [README](../README.md) introduces Sorage to users. The root [CHANGELOG](../CHANGELOG.md) records concise shipped outcomes and the planned next stable release. This directory is for maintainers and contributors. It contains the implementation contracts, architecture, decisions, development guidance, operations, and delivery state.
 
 ## Documentation profile
 
 - **Profile:** `single-scope`
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
-- **Language:** English
+- **Language:** English for the root README, changelog, and all Markdown under `docs/`
 - **Source of Truth version:** `0.5.0`
 
 ## Role ownership
@@ -23,7 +23,7 @@ The repository root [README](../README.md) introduces Sorage to users. This dire
 | TODO | [todo/README.md](todo/README.md) | Future candidates and temporary active-Epic dossiers |
 | Deferred feedback | [deferred-feedback/README.md](deferred-feedback/README.md) | Small actionable findings intentionally postponed |
 
-[governance/README.md](governance/README.md) defines SOT change control and Task completion. [product/README.md](product/README.md) provides non-normative product context.
+[governance/README.md](governance/README.md) defines SOT change control and Task completion. [product/README.md](product/README.md) provides non-normative product context. The changelog is a public release-notes document. It is not a Source of Truth role and does not record roadmap status.
 
 ## Source of Truth precedence
 
