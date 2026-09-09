@@ -4,7 +4,7 @@ This directory stores future epic-sized candidates and temporary dossiers for ad
 
 ## Adopted dossiers
 
-- [CLI Handoff detail reads](TODO-CLI-HANDOFF-DETAIL-READS.md) (`EPIC-010`)
+None.
 
 ## Future candidates
 

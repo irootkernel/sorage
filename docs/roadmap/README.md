@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-010`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -79,7 +79,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-007` | Daemon, API, and Web | M2 | Completed | `TASK-042` to `TASK-051` |
 | `EPIC-008` | Git backup and restore | M3 | Completed | `TASK-052` to `TASK-058` |
 | `EPIC-009` | Hardening, packaging, and first public release | M3 | Completed | `TASK-059` to `TASK-079` |
-| `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Planned | `TASK-080` to `TASK-082` |
+| `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -265,10 +265,10 @@ ADR-0023 classifies the `0.3.0` to `0.1.0` product-version reset as a breaking o
 
 ## EPIC-010: CLI Handoff detail reads for agent sessions
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** M4
 - **Objective:** Close the CLI gap against the HTTP detail surface so a sender or recipient AI session can read the current Review Note and the bounded metadata timeline through `sorage … --json` without a daemon, without changing `get`, fetch semantics, or the review state machine.
-- **Detailed SOT:** [CLI Handoff detail reads](../todo/TODO-CLI-HANDOFF-DETAIL-READS.md)
+- **Canonical Outcomes:** [ADR-0024](../architecture-decision-records/README.md), [Required specification](../specs/required-specification.md), [Testing and acceptance](../specs/testing-and-acceptance.md), [Shipped skill](../../skills/use-sorage/SKILL.md), [Skill acceptance](../implementation-tips/use-sorage-acceptance.md)
 - **Prerequisite:** `EPIC-009` is `Completed`. Do not append these Tasks to `EPIC-009`.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
