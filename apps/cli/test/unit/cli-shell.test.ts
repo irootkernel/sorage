@@ -26,7 +26,7 @@ function capture(): { ports: OutputPorts; out: string; err: string } {
 
 describe("cli shell", () => {
   it("reports the same product version as the daemon", () => {
-    expect(SORAGE_VERSION).toBe("0.1.0");
+    expect(SORAGE_VERSION).toBe("0.1.1");
     expect(CLI_VERSION).toBe(SORAGE_VERSION);
     expect(DAEMON_VERSION).toBe(SORAGE_VERSION);
   });
@@ -35,14 +35,14 @@ describe("cli shell", () => {
     const cap = capture();
     const code = runCli(["version", "--json"], cap.ports);
     expect(code).toBe(0);
-    expect(cap.out).toBe('{"name":"sorage","version":"v0.1.0"}\n');
+    expect(cap.out).toBe('{"name":"sorage","version":"v0.1.1"}\n');
     expect(cap.err).toBe("");
   });
 
   it("prints human version text on stdout without --json", () => {
     const cap = capture();
     expect(runCli(["version"], cap.ports)).toBe(0);
-    expect(cap.out).toBe("sorage v0.1.0\n");
+    expect(cap.out).toBe("sorage v0.1.1\n");
   });
 
   it("exits 0 for help", () => {

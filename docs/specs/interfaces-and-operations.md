@@ -571,7 +571,7 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 | Command | Milestone | Notes |
 |---|---|---|
 | `sorage init [flags]` | M1 | Section 3 |
-| `sorage version [--json]` | M1 | Prints exactly `sorage v0.1.0` plus one newline, or the compact JSON object `{"name":"sorage","version":"v0.1.0"}` plus one newline; available before initialization |
+| `sorage version [--json]` | M1 | Prints exactly `sorage v0.1.1` plus one newline, or the compact JSON object `{"name":"sorage","version":"v0.1.1"}` plus one newline; available before initialization |
 | `sorage help [command]` | M1 | Also `--help` on every command |
 | `sorage completion <shell>` | M1 | CLI-015 |
 | `sorage doctor [--json]` | M1 | Section 35 |
@@ -746,7 +746,7 @@ Error:
 
 `meta.requestId` is the only universal meta field; `meta.timedOut` is added by `inbox --wait` and appears nowhere else.
 
-`sorage version --json` is the deliberate exception to this envelope: it returns the compact standalone object `{"name":"sorage","version":"v0.1.0"}` so ecosystem version probes can consume the same field names and `v`-prefixed value as sibling tools. This presentation prefix applies only to the two CLI version outputs; the shared runtime source, package manifest, daemon record, and HTTP health and version DTOs retain the bare semantic version `0.1.0`.
+`sorage version --json` is the deliberate exception to this envelope: it returns the compact standalone object `{"name":"sorage","version":"v0.1.1"}` so ecosystem version probes can consume the same field names and `v`-prefixed value as sibling tools. This presentation prefix applies only to the two CLI version outputs; the shared runtime source, package manifest, daemon record, and HTTP health and version DTOs retain the bare semantic version `0.1.1`.
 
 The envelope is versioned and contract-tested through `make test-contract` (NFR-003, NFR-011).
 
@@ -1367,7 +1367,7 @@ The plist carries the canonical `Label`, the `ProgramArguments` running `<sorage
 
 The default Vault lives under `~/.sorage/vault` rather than `~/Documents` specifically so that a launchd-started daemon does not trigger a macOS privacy prompt that no one is present to answer.
 
-The binary the LaunchAgent points at is produced by `make build`, which compiles to `dist/sorage`. `make package` signs that source-install binary and emits the same signed bytes as `dist/sorage-v0.1.0-darwin-arm64` together with its `.sha256` checksum and `.manifest.json` metadata (NFR-013, NFR-016, ADR-0023).
+The binary the LaunchAgent points at is produced by `make build`, which compiles to `dist/sorage`. `make package` signs that source-install binary and emits the same signed bytes as `dist/sorage-v0.1.1-darwin-arm64` together with its `.sha256` checksum and `.manifest.json` metadata (NFR-013, NFR-016, ADR-0023).
 
 ### 34.3 Logging
 

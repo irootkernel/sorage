@@ -4,7 +4,7 @@ Sorage (소라게) is a local broker for document handoffs between AI coding ses
 
 Copying a file into another repository, pasting it into chat, or passing around a temporary path can lose track of who owns the document, where its review stands, and which Revision was accepted. Sorage keeps that context. If one send names several recipients, Sorage creates a separate Handoff for each one, so their reviews and retention decisions stay independent.
 
-> **Release status:** Sorage `v0.1.0` is the first public release on GitHub Releases. The supported release target is Apple Silicon macOS. See [CHANGELOG.md](CHANGELOG.md) for shipped outcomes and the planned next stable release.
+> **Release status:** Sorage `v0.1.1` is the current public release on GitHub Releases. The supported release target is Apple Silicon macOS. See [CHANGELOG.md](CHANGELOG.md) for shipped outcomes.
 
 ## Features
 
@@ -24,23 +24,23 @@ Documents remain ordinary files. Sorage tracks their custody and review, but it 
 - Git
 - [Bun 1.4.2](https://bun.sh/) only when building from source
 
-## Install v0.1.0
+## Install v0.1.1
 
 Download the Apple Silicon macOS binary, its checksum, and its release manifest from GitHub Releases:
 
 ```sh
-release_url="https://github.com/irootkernel/sorage/releases/download/v0.1.0"
-curl -fLO "$release_url/sorage-v0.1.0-darwin-arm64"
-curl -fLO "$release_url/sorage-v0.1.0-darwin-arm64.sha256"
-curl -fLO "$release_url/sorage-v0.1.0-darwin-arm64.manifest.json"
-shasum -a 256 -c sorage-v0.1.0-darwin-arm64.sha256
-codesign --verify --strict sorage-v0.1.0-darwin-arm64
+release_url="https://github.com/irootkernel/sorage/releases/download/v0.1.1"
+curl -fLO "$release_url/sorage-v0.1.1-darwin-arm64"
+curl -fLO "$release_url/sorage-v0.1.1-darwin-arm64.sha256"
+curl -fLO "$release_url/sorage-v0.1.1-darwin-arm64.manifest.json"
+shasum -a 256 -c sorage-v0.1.1-darwin-arm64.sha256
+codesign --verify --strict sorage-v0.1.1-darwin-arm64
 mkdir -p "$HOME/.local/bin"
-install -m 0755 sorage-v0.1.0-darwin-arm64 "$HOME/.local/bin/sorage"
+install -m 0755 sorage-v0.1.1-darwin-arm64 "$HOME/.local/bin/sorage"
 "$HOME/.local/bin/sorage" version
 ```
 
-The expected version output is `sorage v0.1.0`. The adjacent manifest records the reviewed Git revision, target, binary name, signed SHA-256 digest, reproducible unsigned digest, and `ad-hoc` signature mode. This release does not claim Intel macOS, Linux, Homebrew, notarization, or Developer ID support.
+The expected version output is `sorage v0.1.1`. The adjacent manifest records the reviewed Git revision, target, binary name, signed SHA-256 digest, reproducible unsigned digest, and `ad-hoc` signature mode. This release does not claim Intel macOS, Linux, Homebrew, notarization, or Developer ID support.
 
 ## Build from source
 

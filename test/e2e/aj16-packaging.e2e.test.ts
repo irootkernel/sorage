@@ -16,7 +16,7 @@ import { afterAll, describe, expect, it } from "vitest";
  * the recorded evidence boundary. This journey drives the exact versioned
  * release candidate that `make package` produces.
  */
-const BINARY_NAME = "sorage-v0.1.0-darwin-arm64";
+const BINARY_NAME = "sorage-v0.1.1-darwin-arm64";
 const BINARY = fileURLToPath(new URL(`../../dist/${BINARY_NAME}`, import.meta.url));
 
 const scratch: string[] = [];
@@ -89,7 +89,7 @@ describe("AJ-16 packaging on a clean account", () => {
     const digest = createHash("sha256").update(readFileSync(BINARY)).digest("hex");
     expect(digest).toBe(manifest.sha256);
     expect(manifest).toMatchObject({
-      version: "0.1.0",
+      version: "0.1.1",
       target: "darwin-arm64",
       binary: BINARY_NAME,
       signature: "ad-hoc",
@@ -103,7 +103,7 @@ describe("AJ-16 packaging on a clean account", () => {
 
     const version = installed(["version", "--json"], account);
     expect(version.status).toBe(0);
-    expect(version.stdout).toBe('{"name":"sorage","version":"v0.1.0"}\n');
+    expect(version.stdout).toBe('{"name":"sorage","version":"v0.1.1"}\n');
     expect(version.stderr).toBe("");
 
     const init = installed(["init", "--non-interactive"], account);

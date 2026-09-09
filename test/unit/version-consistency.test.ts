@@ -16,12 +16,12 @@ function manifest(root: string, relativePath: string, value: Record<string, unkn
 function fixture(): string {
   const root = mkdtempSync(join(tmpdir(), "sorage-version-check-"));
   scratchDirectories.push(root);
-  writeFileSync(join(root, "package.json"), '{"name":"sorage","version":"0.1.0"}\n');
-  manifest(root, "packages/core", { name: "@sorage/core", version: "0.1.0" });
+  writeFileSync(join(root, "package.json"), '{"name":"sorage","version":"0.1.1"}\n');
+  manifest(root, "packages/core", { name: "@sorage/core", version: "0.1.1" });
   manifest(root, "apps/cli", {
     name: "@sorage/cli",
-    version: "0.1.0",
-    dependencies: { "@sorage/core": "0.1.0" },
+    version: "0.1.1",
+    dependencies: { "@sorage/core": "0.1.1" },
   });
   return root;
 }
@@ -41,7 +41,7 @@ describe("product version consistency check", () => {
   it("accepts matching workspace and internal dependency versions", () => {
     const result = check(fixture());
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("match Sorage 0.1.0");
+    expect(result.stdout).toContain("match Sorage 0.1.1");
   });
 
   it("rejects workspace and internal dependency version drift", () => {
@@ -54,7 +54,7 @@ describe("product version consistency check", () => {
     const result = check(root);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("version consistency check failed");
-    expect(result.stderr).toContain('version "0.2.0" does not match "0.1.0"');
+    expect(result.stderr).toContain('version "0.2.0" does not match "0.1.1"');
     expect(result.stderr).toContain("dependencies.@sorage/core");
   });
 });
