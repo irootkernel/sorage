@@ -26,7 +26,7 @@ This section is the only place in the repository where delivery status pointers 
 - **Active Epic:** `EPIC-010`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** `TASK-082`
+- **Next eligible Task:** None
 
 ## 3. Identifier policy
 
@@ -275,7 +275,7 @@ ADR-0023 classifies the `0.3.0` to `0.1.0` product-version reset as a breaking o
 |---|---|---|---|---|---|---|---|
 | `TASK-080` | Completed | M4 | Adopt post-MVP milestone `M4` and the CLI detail-read Source of Truth: ADR-0024, Source of Truth version `0.5.0`, `GEN-015`, `CLI-022`, `CLI-023`, the command catalog, examples, traceability, skill acceptance scenarios, and the M4 gate. No CLI command implementation. | `bun run check:sot` exits 0; `make test-prepare` exits 0; the material-change record in ADR-0024 covers problem, decision, alternatives, compatibility, and migration; `sorage review show` and `sorage events` are absent from the compiled binary. | `EPIC-009` | GEN-015, CLI-022, CLI-023, HND-017, HND-020, NFR-015 | Not required |
 | `TASK-081` | Completed | M4 | Implement `sorage review show` and `sorage events` through `readReviewNote` and `readHandoffTimeline`, with `--json` goldens, help and completion, and the documented error paths for a non-participant, a missing Note, and a tombstone. | `make test` exits 0; `sorage review show --json` and `sorage events --json` match the HTTP detail use cases; `sorage get` JSON is byte-identical to its pre-change golden; the CLI snapshot diff is classified additive non-breaking with no configuration, database, Vault, HTTP, or protocol migration; findings become new Tasks appended to `EPIC-010`. | `TASK-080` | CLI-001, CLI-002, CLI-004, CLI-022, CLI-023, HND-017, HND-020, HND-025, LIFE-018 | Not required |
-| `TASK-082` | Planned | M4 | Rewrite `skills/use-sorage/SKILL.md` so requested Handoff processing reads the Note through `review show` before `revise`, keep GEN-014 for box checks, extend the CLI workflow example, add AJ-17, and record a fresh skill walkthrough. | `make test` exits 0 including `test/unit/use-sorage-skill.test.ts`; AJ-17 passes against the compiled binary; the skill walkthrough records a box-only outbox check that does not call `review show` or `revise`, and a processing request that runs `get`, `review show`, `fetch`, then `revise`; the 2026-09-08 skill acceptance record is superseded for these bytes; findings become new Tasks appended to `EPIC-010`. | `TASK-081` | GEN-011, GEN-014, GEN-015, CLI-022, HND-026 | Not required |
+| `TASK-082` | Completed | M4 | Rewrite `skills/use-sorage/SKILL.md` so requested Handoff processing reads the Note through `review show` before `revise`, keep GEN-014 for box checks, extend the CLI workflow example, add AJ-17, and record a fresh skill walkthrough. | `make test` exits 0 including `test/unit/use-sorage-skill.test.ts`; AJ-17 passes against the compiled binary; the skill walkthrough records a box-only outbox check that does not call `review show` or `revise`, and a processing request that runs `get`, `review show`, `fetch`, then `revise`; the 2026-09-08 skill acceptance record is superseded for these bytes; findings become new Tasks appended to `EPIC-010`. | `TASK-081` | GEN-011, GEN-014, GEN-015, CLI-022, HND-026 | Not required |
 
 ### TASK-081 contract record
 

@@ -11,7 +11,7 @@ Sorage hands one current document at a time between AI coding sessions: one proj
 
 Start broker operations only in response to an explicit user request. Session start, a new task or turn, a mention of Sorage, and work on Sorage code are not triggers. Continue an authorized operation to completion without asking again for each step, then stop; later unrelated work does not resume discovery.
 
-For an inbox check, run `sorage inbox --json`; for an outbox check, run `sorage outbox --json`. Check both only when requested. Report the requested results: a check does not authorize fetching Artifacts, revising documents, sending, reviewing, accepting, declining, or withdrawing Handoffs. An outbox item in `changes_requested` is information to report, not an obligation to interrupt other work.
+For an inbox check, run `sorage inbox --json`; for an outbox check, run `sorage outbox --json`. Check both only when requested. Report the requested results: a check does not authorize `sorage review show`, fetching Artifacts, revising documents, sending, reviewing, accepting, declining, or withdrawing Handoffs. An outbox item in `changes_requested` is information to report, not an obligation to interrupt other work.
 
 When the user requests Handoff processing, perform the operations needed within that request. Revisions supersede older content through the review loop.
 
@@ -19,9 +19,13 @@ When the user requests Handoff processing, perform the operations needed within 
 
 ## Working a received Handoff
 
-Read the current document with `sorage get <handoff-id>` and `sorage fetch <handoff-id>`; `fetch` also records that the recipient has engaged, which is what later makes a sender withdrawal impossible. Request changes with `sorage review set <handoff-id> --text "<note>"`, and close the exchange with `sorage accept <handoff-id> --expected-revision <n> --expected-row-version <n>` or `sorage decline <handoff-id> --reason "<why>" --expected-row-version <n>`; both expected values come from the `get` or `fetch` output you just read.
+Read the current document with `sorage get <handoff-id>` and `sorage fetch <handoff-id>`; `fetch` also records that the recipient has engaged, which is what later makes a sender withdrawal impossible. `sorage get` is metadata only and does not carry the Review Note body. Request changes with `sorage review set <handoff-id> --text "<note>"`, and close the exchange with `sorage accept <handoff-id> --expected-revision <n> --expected-row-version <n>` or `sorage decline <handoff-id> --reason "<why>" --expected-row-version <n>`; both expected values come from the `get` or `fetch` output you just read.
 
-When you are the sender, revise with `sorage revise <handoff-id> --file <path>` (or `--no-change --reason "<why>"` when the Note needs no content change) and let the recipient decide; withdraw only what the recipient has neither fetched nor reviewed, with `sorage withdraw <handoff-id>`.
+## Answering a Review Note as the sender
+
+When Handoff processing is requested and the current Handoff has a Review Note, read that Note through `sorage review show <handoff-id> --json` before `revise`. The sender sequence is `get`, `review show`, `fetch`, then `revise` (or `--no-change --reason "<why>"` when the Note needs no content change). `sorage get` still has no Note body. A sender `fetch` returns the in-Vault path and does not set `firstFetchedAt`. Edit a workspace copy of that document, not the Vault file. `sorage events <handoff-id> --json` reconstructs recent metadata and is not required on every revision.
+
+Withdraw only what the recipient has neither fetched nor reviewed, with `sorage withdraw <handoff-id>`.
 
 Every command accepts `--json` and prints a versioned envelope with a stable symbolic error code; the `recovery.suggestedCommand` field of a failure names the next valid command.
 
