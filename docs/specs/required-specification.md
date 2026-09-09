@@ -2,17 +2,17 @@
 
 ## 1. Scope
 
-This document is the normative product requirement set for the Sorage (소라게) MVP and is the highest authority in the Source of Truth.
+This document is the normative product requirement set for Sorage (소라게) and is the highest authority in the Source of Truth.
 
 Sorage is developed, tested, and released from the standalone repository `irootkernel/sorage`; ecosystem tools are used only as development tooling and are never source dependencies.
 
-The MVP is delivered in three milestones: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, and `M3` Git backup, scheduling, and packaging.
+The MVP is delivered in three milestones: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, and `M3` Git backup, scheduling, and packaging. Those three gates are closed. Post-MVP work uses milestone identifiers `M4` and above (ADR-0024).
 
-Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the MVP.
+Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
 
 A requirement whose clauses span gates carries the earliest of them and phrases the later clause conditionally, as in "once the daemon exists".
 
-The MVP is complete when the M3 MVP release gate passes; passing the M1 CLI release gate or the M2 daemon and Web release gate does not complete it.
+The MVP is complete when the M3 MVP release gate passes; passing the M1 CLI release gate or the M2 daemon and Web release gate does not complete it. Post-MVP requirements are satisfied at their own gates and MUST NOT reopen `M1`, `M2`, or `M3`.
 
 Section 17 summarizes the milestones, their requirement scope, and their release gates.
 
@@ -34,6 +34,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | GEN-012 | M1 | Epic identifiers `EPIC-NNN` and globally sequential Task identifiers `TASK-NNN` MUST be immutable once committed to this repository. |
 | GEN-013 | M1 | The MVP MUST be delivered in the three milestones defined in section 17, each closed by its own release gate. |
 | GEN-014 | M1 | The `use-sorage` skill MUST start broker operations only on explicit user request, MUST NOT trigger inbox or outbox checks at session start, task or turn boundaries, or from Sorage mentions or code work, and MUST limit checks to reporting the requested results without processing Handoffs. It MUST permit continuation of an authorized operation to completion without resuming discovery during later unrelated work, MUST require an explicit request for inbox waiting or Handoff processing, and MUST forbid editing managed Vault files directly. |
+| GEN-015 | M4 | The `use-sorage` skill MUST keep GEN-014, and when Handoff processing is requested and the current Handoff has a Review Note, it MUST instruct the acting session to read that Note through `sorage review show` before `revise`. A requested inbox or outbox check MUST NOT authorize `review show`, `fetch`, or `revise`. The skill MUST state that `sorage get` does not carry the Note body, that a sender `fetch` does not set `firstFetchedAt`, and that `sorage events` reconstructs recent metadata and is not required on every revision. |
 
 ## 3. Initialization
 
@@ -258,6 +259,8 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | CLI-019 | M1 | The explicit `--as-user` flag MUST be required by `review remove`, `pin`, `unpin`, `archive`, `unarchive`, `delete approve`, `delete reject`, `project archive`, `project unarchive`, `config set`, `config edit`, `vault move`, `backup enable`, `backup disable`, `backup enable-push`, `backup disable-push`, `backup restore`, `token rotate`, and `uninstall`, MUST record `actorKind = user`, and MUST fail with `USER_CONTEXT_REQUIRED` when it is absent, while every other command MUST remain executable in any resolved actor context. |
 | CLI-020 | M1 | The CLI MUST support `--as <project-slug>` on every actor-resolving command, an optional `--expected-row-version <n>` on every mutating command, and `inbox --wait`, which MUST poll SQLite every `--interval` seconds defaulting to 2 until a new inbox item for the resolved actor appears or `--timeout` seconds defaulting to 300 elapse, then exit 0 with an empty list and `meta.timedOut: true`. |
 | CLI-021 | M1 | `send` and `revise` MUST accept `--idempotency-key <uuid>`, MUST return the original result for a replay with the same key and request hash, and MUST fail with `IDEMPOTENCY_CONFLICT` for a different request under the same key. |
+| CLI-022 | M4 | `sorage review show <handoff-id>` MUST return the current Review Note, including body, target Revision, and author kind, or JSON `null` when none exists. It MUST use the same participant gate as `sorage get`, MUST record nothing, MUST NOT set `firstFetchedAt` or increment Row Version, MUST return `HANDOFF_NOT_FOUND` for a non-participant, MUST return `null` rather than `HANDOFF_DELETED` on a tombstone that has no Note, and MUST support `--json`. |
+| CLI-023 | M4 | `sorage events <handoff-id>` MUST return the bounded recent metadata timeline for that Handoff, newest first, including on a tombstone, with each event's type, actor kind, and Row Version, and MUST NOT carry Artifact bytes or imply that historical content is retrievable. It MUST use the same participant gate as `sorage get`, MUST record nothing, MUST NOT set `firstFetchedAt` or increment Row Version, MUST return `HANDOFF_NOT_FOUND` for a non-participant, MUST bound the list at 50 events matching the HTTP detail timeline, and MUST support `--json`. |
 
 ## 12. Local HTTP API
 
@@ -385,8 +388,9 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | M1 | GEN-001..004, GEN-007..014; INIT-001..003, INIT-005, INIT-006, INIT-011..015, INIT-017; CFG-001..020; RUN-001..004, RUN-009, RUN-010, RUN-014; PRJ-001..022; VLT-001..009, VLT-011..024; HND-001..026; REV-001..017; LIFE-001..018; CLI-001..005, CLI-007..021; SEC-004..014, SEC-016, SEC-021; NFR-001..003, NFR-005..017 | M1 CLI release |
 | M2 | GEN-005, GEN-006; RUN-005, RUN-006, RUN-008, RUN-012, RUN-013; VLT-010; API-001..012; WEB-001..015, WEB-017, WEB-018; SEC-001..003, SEC-015, SEC-017..020 | M2 daemon and Web release |
 | M3 | INIT-004, INIT-007..010, INIT-016; RUN-007, RUN-011; CLI-006; BKP-001..026; NFR-004 | M3 MVP release |
+| M4 | GEN-015; CLI-022, CLI-023 | M4 CLI detail-read release |
 | Deferred | WEB-016 | None; revisited after the MVP |
 
-Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, and EPIC-009 for M3, as recorded in `../roadmap/README.md`.
+Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, and EPIC-010 for M4, as recorded in `../roadmap/README.md`.
 
-The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied.
+The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4 does not reopen those gates.

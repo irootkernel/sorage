@@ -2,7 +2,7 @@
 
 On 2026-09-08, a separate reviewer session exercised 25 controlled scenarios for the [shipped skill](../../skills/use-sorage/SKILL.md), following the behavior acceptance in [testing and acceptance, section 9.1](../specs/testing-and-acceptance.md). All selected scenarios matched GEN-014 and HND-026. This record concerns observed agent decisions, not roadmap lifecycle or release approval.
 
-The inspected skill had SHA256 `2ba6537f0721ad2404e5f6331d1eeac253299f6b91db8b872033dcd93434851c` before and after the walkthrough. A later skill edit requires reassessing this evidence.
+The inspected skill had SHA256 `2ba6537f0721ad2404e5f6331d1eeac253299f6b91db8b872033dcd93434851c` before and after the walkthrough. A later skill edit requires reassessing this evidence. `TASK-082` of `EPIC-010` rewrites the skill for GEN-015 and MUST replace this record for those new bytes; this walkthrough remains the M1 evidence for GEN-014 and HND-026 on the inspected hash.
 
 ## Method
 

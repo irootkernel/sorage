@@ -82,7 +82,9 @@ const MILESTONE_ORDER = new Map([
   ["M1", 1],
   ["M2", 2],
   ["M3", 3],
+  ["M4", 4],
 ]);
+const MILESTONE_ALT = "M[1-4]|Deferred";
 
 /** Expands range notation like `CFG-001 to CFG-009` into the full inclusive id set. */
 function expandRanges(cell: string): string[] {
@@ -158,7 +160,9 @@ function parseRoadmap(): {
 function parseRequirements(): Map<string, string> {
   const specPath = join(root, "docs", "specs", "required-specification.md");
   const requirements = new Map<string, string>();
-  for (const match of readFileSync(specPath, "utf8").matchAll(/^\| ([A-Z]{3,6}-\d{3}) \| (M[123]|Deferred) \|/gm)) {
+  for (const match of readFileSync(specPath, "utf8").matchAll(
+    new RegExp(`^\\| ([A-Z]{3,6}-\\d{3}) \\| (${MILESTONE_ALT}) \\|`, "gm"),
+  )) {
     requirements.set(match[1] as string, match[2] as string);
   }
   return requirements;
@@ -172,7 +176,7 @@ function checkIdentifiers(): void {
     if (!MILESTONE_ORDER.has(task.milestone)) {
       fail(
         `docs/roadmap/README.md:${task.line}`,
-        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected M1, M2, or M3`,
+        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected M1, M2, M3, or M4`,
       );
     }
     for (const dependency of task.dependencies) {
@@ -257,7 +261,7 @@ function checkTraceability(): void {
     const line = lines[index] ?? "";
     if (line.startsWith("## ")) inReverseIndex = line.startsWith("## 3.");
     if (!inReverseIndex) continue;
-    const match = line.match(/^\| `([A-Z]{3,6}-\d{3})` \| (M[123]|Deferred) \| (.+) \|$/);
+    const match = line.match(new RegExp(`^\\| \`([A-Z]{3,6}-\\d{3})\` \\| (${MILESTONE_ALT}) \\| (.+) \\|$`));
     if (match === null) continue;
     const id = match[1] as string;
     if (rows.has(id)) fail(`${traceabilityPath}:${index + 1}`, `duplicate reverse-index row ${id}`);

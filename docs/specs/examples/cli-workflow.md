@@ -1,6 +1,6 @@
 # Example CLI Workflow
 
-This walkthrough uses the v0.4.0 command surface defined in [../interfaces-and-operations.md](../interfaces-and-operations.md); every command without a milestone note works in milestone M1 with no daemon running.
+This walkthrough uses the v0.5.0 command surface defined in [../interfaces-and-operations.md](../interfaces-and-operations.md); every command without a milestone note works in milestone M1 with no daemon running.
 
 Row Version values are shown explicitly because `--expected-row-version` is always the value the client currently holds, never the value it expects afterwards (HND-025).
 
@@ -105,9 +105,22 @@ The Handoff is now `changes_requested` at Revision 1 and Row Version 2.
 
 ## Sender revises
 
+Milestone M4 adds the CLI reads the sender process needs. `get` and `outbox` still do not carry the Note body (HND-020, CLI-022):
+
 ```bash
 cd "$HOME/projects/dolgorae"
 
+sorage outbox --json
+sorage get <handoff-uuid> --json
+sorage review show <handoff-uuid> --json
+sorage fetch <handoff-uuid> --json
+```
+
+`review show` returns the current Note, or JSON `null` when none exists, and records nothing. A sender `fetch` returns the in-Vault path and does not set `firstFetchedAt`. Edit a workspace copy of that document, not the Vault file.
+
+Before milestone M4 the sender has no CLI command for the Note body; the HTTP detail surface already exposes it.
+
+```bash
 sorage revise <handoff-uuid> \
   --file "./docs/gul-stream-proposal.md" \
   --expected-row-version 2

@@ -4,7 +4,7 @@ This document owns the concrete surfaces of Sorage: filesystem layout, CLI synta
 
 It sits below [required-specification.md](required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), and [../architecture/README.md](../architecture/README.md); where this document appears to disagree with any of them, they win.
 
-Every surface is tagged with the milestone at which it must exist: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, `M3` Git backup, scheduling, and packaging.
+Every surface is tagged with the milestone at which it must exist: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, `M3` Git backup, scheduling, and packaging, and `M4` CLI Handoff detail reads.
 
 ## 1. Canonical product and runtime identity
 
@@ -549,7 +549,7 @@ Only the first successful fetch by the recipient Project or the User records an 
 
 Exactly two surfaces count as a fetch: `sorage fetch <id>` and `GET /api/v1/handoffs/{id}/artifact/content`, which is the endpoint that hands over the bytes.
 
-`sorage get <id>` and the Web detail screen never count: they read metadata only, so they never set `firstFetchedAt` and never emit an event, and opening a Handoff in the Web UI therefore does not quietly disarm the sender's `withdraw`.
+`sorage get <id>`, `sorage review show <id>`, `sorage events <id>`, and the Web detail screen never count: they read metadata or the current Note, so they never set `firstFetchedAt` and never emit an event, and opening a Handoff in the Web UI therefore does not quietly disarm the sender's `withdraw`. `sorage get` does not carry the Note body; that body is `sorage review show` and `GET /api/v1/handoffs/{handoffId}/review-note` (CLI-022, ADR-0024).
 
 A fetch of a Handoff whose current Artifact is not yet materialized returns `ARTIFACT_MATERIALIZING`, and a fetch whose recomputed checksum fails while `artifact.verifyChecksumOnFetch` is enabled returns `ARTIFACT_CORRUPTED`.
 
@@ -621,7 +621,7 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 | `sorage send --to <project> [--to <project> ...] --title <t> (--file <path> \| --body <text>) [--supersedes <id>] [--allow-external-source] [--allow-unregistered] [--idempotency-key <uuid>]` | M1 | One Handoff per recipient, one Dispatch Group, all-or-nothing (HND-006, HND-008) |
 | `sorage inbox [--wait] [--timeout <s>] [--interval <s>]` | M1 | Section 13.9 |
 | `sorage outbox [--current-workspace]` | M1 | Sender view for the resolved Project or Workspace |
-| `sorage get <handoff-id>` | M1 | Metadata only; never sets `firstFetchedAt` and never emits an event |
+| `sorage get <handoff-id>` | M1 | Metadata only; never sets `firstFetchedAt` and never emits an event; does not carry the Review Note body (CLI-022, ADR-0024) |
 | `sorage fetch <handoff-id>` | M1 | Section 11.3 |
 
 The derived inbox marker (HND-026): when `handoff.inboxMarker` is `true`, every Handoff creation and every state change — including the recipient's first `fetch` and the User-admin retention decisions — rewrites `.sorage/INBOX.md` under each binding directory of the recipient Project. The marker is a rendered view of that recipient's current inbox, one line per non-archived, non-deleted Handoff as `- <handoff-id> <review-state> "<title>" revision <n>` under a header that states the file is derived, must never be edited, and is never read back as authority; corrupting or deleting it changes no command result, and the next state change recreates it. A marker that cannot be written — a read-only binding directory, for example — prints a warning on standard error and never fails the command, because the marker is advisory. During requested Sorage project setup, the shipped `use-sorage` skill instructs agents to ensure `.sorage/` is ignored in the Project's `.gitignore` by default, preserving existing entries and avoiding duplicates. The CLI does not automatically edit that file. The marker itself does not trigger broker operations (GEN-014).
@@ -631,8 +631,10 @@ The derived inbox marker (HND-026): when `handoff.inboxMarker` is `true`, every 
 | Command | Milestone | Notes |
 |---|---|---|
 | `sorage review set <id> (--text <text> \| --file <path>) [--target-revision <n>]` | M1 | Stale target Revision returns `REVISION_CONFLICT` (REV-005, REV-006) |
+| `sorage review show <id>` | M4 | Current Note or JSON `null`; records nothing; participant-gated like `get`; tombstone with no Note returns `null` (CLI-022) |
 | `sorage review withdraw <id>` | M1 | Recipient withdraws the current Note whichever actor authored it; Revision unchanged (REV-016); the User uses `review remove --as-user` |
 | `sorage review remove <id> --as-user --confirm` | M1 | Audited administrative removal (REV-015) |
+| `sorage events <id>` | M4 | Bounded metadata timeline, newest first, including a tombstone; never Artifact bytes; records nothing (CLI-023, HND-017) |
 | `sorage revise <id> --file <path> [--idempotency-key <uuid>]` | M1 | Identical content returns `NO_CONTENT_CHANGE` (HND-015) |
 | `sorage revise <id> --no-change --reason <text>` | M1 | Valid only in `changes_requested`, else `NO_REVIEW_NOTE`; at most one consecutive, else `NO_CHANGE_LIMIT` (REV-017) |
 | `sorage accept <id> --expected-revision <n> --expected-row-version <n>` | M1 | Both expected values are mandatory; an Artifact still at `materialized = 0` fails with `ARTIFACT_MATERIALIZING` (LIFE-002, CLI-013) |
@@ -958,9 +960,9 @@ POST /api/v1/handoffs/{handoffId}/artifact/reveal
 
 `GET /api/v1/handoffs/{handoffId}/artifact/content` returns `Content-Length`, an `ETag` equal to the recorded SHA-256, `Accept-Ranges: bytes` with `Range` support for resumable download, the `Content-Type` decided by section 11.2, and `Content-Disposition: attachment; filename="<originalName>"` for everything that is not previewable text.
 
-`GET /api/v1/handoffs/{handoffId}/review-note` returns the current Review Note with its target Revision and author kind, or `null` when none exists, participant-gated exactly like the detail itself so a non-participant learns nothing (HND-020, WEB-004).
+`GET /api/v1/handoffs/{handoffId}/review-note` returns the current Review Note with its target Revision and author kind, or `null` when none exists, participant-gated exactly like the detail itself so a non-participant learns nothing (HND-020, WEB-004). From milestone M4 the CLI command `sorage review show` calls the same use case (CLI-022).
 
-`GET /api/v1/handoffs/{handoffId}/events` returns the bounded recent metadata timeline with each event's type, actor kind, and Row Version, newest first, including for a tombstone; it never carries Artifact bytes and never implies that historical content is retrievable (HND-017, WEB-004).
+`GET /api/v1/handoffs/{handoffId}/events` returns the bounded recent metadata timeline with each event's type, actor kind, and Row Version, newest first, including for a tombstone; it never carries Artifact bytes and never implies that historical content is retrievable (HND-017, WEB-004). From milestone M4 the CLI command `sorage events` calls the same use case and the same 50-event bound (CLI-023).
 
 `GET /api/v1/handoffs` accepts the same filters as `inbox` and `outbox`, including `includeArchived` and `includeDeleted`.
 

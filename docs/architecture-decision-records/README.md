@@ -691,3 +691,49 @@ The product-version rebaseline is breaking for consumers that compare version or
 - Public version probes, workspace manifests, daemon surfaces, and release metadata converge on `0.1.0` without changing their data shapes.
 - The first release supports only `darwin-arm64`; Intel macOS, Linux, Homebrew, notarization, and Developer ID signing remain unclaimed.
 - Commit, push, tag, hosted Release creation, and verification of a fresh hosted download remain separate authorization and evidence gates in TASK-078.
+
+## ADR-0024: Post-MVP milestone M4 and CLI Handoff detail reads
+
+- **Status:** Accepted
+- **Date:** 2026-09-09
+- **Amends:** ADR-0018 (skill processing sequence); ADR-0019 (milestone series after the MVP)
+
+### Context
+
+The M3 MVP release gate and the public `v0.1.0` identity are complete. The primary actor is still an AI session that drives Sorage through `sorage … --json` without a daemon (ADR-0001, ADR-0007). HTTP already exposes the current Review Note and the bounded metadata timeline as `GET /api/v1/handoffs/{handoffId}/review-note` and `GET /api/v1/handoffs/{handoffId}/events`, and the Web detail view renders both (WEB-004). The CLI does not: `sorage get` is metadata only, `sorage review` can set, withdraw, or remove a Note but cannot read one, and no command lists events. A sender session that sees `changes_requested` therefore cannot read the feedback it is asked to answer unless it starts the daemon and calls HTTP.
+
+`scripts/sot-check` and the Task start checklist accept only `M1`, `M2`, and `M3`. New requirements cannot be dated `M1` without claiming they belonged to a closed gate, and dating them `M3` would reopen the MVP gate after `TASK-078`.
+
+Folding the Note body into `sorage get` would change the existing CLI JSON envelope and would make the public Handoff representation carry content that HND-020 does not list.
+
+### Decision
+
+Post-MVP work uses milestone identifiers `M4` and above. `M1`, `M2`, and `M3` remain closed. Source of Truth document version `0.5.0` records this amendment; product SemVer, `/api/v1`, configuration schema `1`, database schema `1`, and Vault schema `1` stay independent.
+
+The CLI grows two read commands that call the same application use cases as the HTTP detail surface and that record nothing:
+
+- `sorage review show <handoff-id>` returns the current Review Note or JSON `null`.
+- `sorage events <handoff-id>` returns the bounded recent metadata timeline, newest first, including for a tombstone, and never carries Artifact bytes.
+
+`sorage get` stays metadata only. Neither command is a fetch: they do not set `firstFetchedAt` and they do not increment Row Version.
+
+The shipped `use-sorage` skill keeps GEN-014. When Handoff processing is requested and a Review Note exists, it instructs the acting session to read that Note through `review show` before `revise`. A requested inbox or outbox check still reports only the requested box.
+
+### Alternatives considered
+
+- Enrich `sorage get --json` with `reviewNote` and `events` | rejected: it changes the frozen get envelope, mixes the HND-020 public representation with detail resources the HTTP API already split, and makes a metadata read pay for a 50-event timeline.
+- Append the work to `EPIC-009` as further `M3` Tasks | rejected: every member Task of that Epic is terminal, and dating new requirements `M3` would reopen a passed MVP gate.
+- Date the new requirements `M1` | rejected: `sot-check` would then require an `M1` citing Task, which cannot be added after `EPIC-006` closed.
+- Defer the timeline command and ship only `review show` | rejected: the HTTP and Web detail surfaces already pair the two reads, the use case `readHandoffTimeline` already exists, and a second identical CLI wiring is cheaper than a later contract change.
+- Teach agents to call the local HTTP API for the Note | rejected: ADR-0001 requires the CLI loop to work with no daemon, and GEN-014's skill is a CLI policy.
+- Open the Note automatically on an outbox check | rejected: GEN-014 limits a check to reporting the requested box.
+
+### Compatibility and migration
+
+The CLI JSON change is additive and non-breaking: new commands gain new goldens, and the `sorage get` snapshot is unchanged. No configuration, database, Vault, HTTP, or protocol DTO migration applies. Installations pick up the commands by upgrading the binary. The skill file in this repository changes in the M4 skill Task; copies installed elsewhere need a separate update before agents follow the new sequence.
+
+### Consequences
+
+- Milestone `M4` is the first post-MVP release gate and closes after `EPIC-010`.
+- `core` already implements `readReviewNote` and `readHandoffTimeline`; M4 work is CLI wiring, contract goldens, the skill sequence, and the sender journey.
+- Findings that block the M4 gate append to `EPIC-010`, not to `EPIC-009`.

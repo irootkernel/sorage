@@ -73,7 +73,7 @@ Every Handoff derives and exposes its next actor:
 
 ### G-03: Keep review semantics small
 
-A Handoff carries one current Review Note rather than a comment thread, and the sender answers by revising the document itself.
+A Handoff carries one current Review Note rather than a comment thread, and the sender answers by revising the document itself. From milestone M4 the sender reads that Note through `sorage review show`; `sorage get` stays metadata only (ADR-0024).
 
 Small does not mean stuck, so the state machine has bounded escape hatches that need no human: the recipient may withdraw the current Note whichever actor authored it, the sender may record one no-change resolution with a reason, the recipient may decline with a reason, and the sender may withdraw a Handoff the recipient has neither fetched nor reviewed.
 

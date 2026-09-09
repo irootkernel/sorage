@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap plans the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md).
+This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024.
 
 It sits below [../specs/required-specification.md](../specs/required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), [../architecture/README.md](../architecture/README.md), and [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md) in the authority order of [../governance/README.md](../governance/README.md); where this roadmap disagrees with any of them, they win and this file is corrected.
 
@@ -17,16 +17,16 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 - Epic and Task identifiers become immutable once committed to this repository (GEN-012).
 - A Task becomes `Completed` only when its acceptance gate has been observed to pass, never on a percentage or a summary.
 - The Task start checklist and the Definition of Done tiers Chore, Standard, and Contract live in [../governance/README.md](../governance/README.md) sections 8 and 9; a Task whose deliverable begins with `Chore:` is closed under the Chore tier.
-- Work discovered by an audit or a journey Task becomes new Tasks appended to `EPIC-009` before the release it blocks, so that a finding always has a slot and never expands the Task that found it.
+- Work discovered by an audit or a journey Task becomes new Tasks appended to the Active Epic before the release it blocks, so that a finding always has a slot and never expands the Task that found it.
 
 ## 2. Active pointer
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-009`
+- **Active Epic:** `EPIC-010`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-080`
 
 ## 3. Identifier policy
 
@@ -62,8 +62,9 @@ This repository has not enrolled a Design Gate registry; every task records `Des
 | M1 CLI release | M1 | `EPIC-006` | AJ-01 to AJ-10 | local `M1` snapshot |
 | M2 daemon and Web release | M2 | `EPIC-007` | AJ-11 to AJ-13 | local `M2` snapshot |
 | M3 MVP release | M3 | `EPIC-009` | AJ-14 to AJ-16, with every earlier journey still passing | local `M3` snapshot |
+| M4 CLI detail-read release | M4 | `EPIC-010` | AJ-17, with every earlier journey still passing | local `M4` snapshot |
 
-The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. These tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
+The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
 
 ## 7. Epic registry
 
@@ -77,7 +78,8 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-006` | CLI, `use-sorage` skill, and M1 release | M1 | Completed | `TASK-036` to `TASK-041` |
 | `EPIC-007` | Daemon, API, and Web | M2 | Completed | `TASK-042` to `TASK-051` |
 | `EPIC-008` | Git backup and restore | M3 | Completed | `TASK-052` to `TASK-058` |
-| `EPIC-009` | Hardening, packaging, and first public release | M3 | In Progress | `TASK-059` to `TASK-079` |
+| `EPIC-009` | Hardening, packaging, and first public release | M3 | Completed | `TASK-059` to `TASK-079` |
+| `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Planned | `TASK-080` to `TASK-082` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -226,10 +228,10 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 
 ## EPIC-009: Hardening, packaging, and first public release
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M3
 - **Objective:** Close the security, concurrency, scale, and upgrade questions, package the macOS MVP, and turn the completed internal milestones into the first public Sorage release; this Epic is also where findings from any audit or journey Task land as new appended Tasks.
-- **Detailed SOT:** [Public v0.1.0 Release](../todo/TODO-PUBLIC-V0.1.0.md)
+- **Canonical Outcomes:** [Public README](../../README.md), [ADR-0023](../architecture-decision-records/README.md), [Operations runbook](../ops/README.md)
 - **Validation record (whole-epic review, 2026-08-31):** the whole-epic review over the tagged release state ran three rounds and converged clean: round one (run `r_01a0579f-3608-7531-b3ce-845bae27aaca`) surfaced two low-severity cross-task seams, both remediated in `10775fd` - the wizard summary now states the observed Vault-directory state instead of asserting existence, and the `--as` binding selection for a multi-bound Project is the deterministic code-point-first directory recorded in section 22.2 step 8; round two (run `r_01a057a8-3b15-7118-a204-4f2cabc783af`) confirmed the remediations and surfaced one info residual on the sort order, closed by the explicit code-point comparator with unit coverage including the astral-plane ordering; round three (run `r_01a057b0-cd4e-7c91-a65d-1d2fad399c60`) was committed with complete coverage, `ci_decision=pass`, and zero findings. `make test` exits 0 under the PATH-pinned Bun 1.3.14 with 42 unit, 70 integration, and 9 contract files, and with `make package` run first the full e2e set passes with AJ-16 active: 22 files and 40 tests covering AJ-01 to AJ-16 against the compiled, ad-hoc-signed binary. A mechanical traceability audit confirms all 287 requirements in `../specs/required-specification.md` are accounted for, with `WEB-016` the sole `Deferred` entry and the other 286 cited by at least one Completed task. The `v0.3.0` tag was re-pointed after its first placement preceded the whole-epic validation, following the documented `v0.2.0` precedent, and it sits on the epic-closeout snapshot `d8b13e9`; nothing was pushed, and publication remains local. The epic's fourteen member tasks (the seven planned plus the seven appended findings slots TASK-066 to TASK-072) all closed with committed clean Mulgae reviews and no hardening deferral. The literal freshly created macOS user account and a real Homebrew tap install remain the recorded evidence boundary of AJ-16, which the isolated clean-account journey drives to the extent a single machine permits.
 - **TASK-073 contract record:** The existing-install JSON response retains `outcome`, `installationId`, `vaultPath`, and `home` and adds `service` only when explicit service reconfiguration succeeds, so the CLI snapshot change is additive and classified as non-breaking. The HTTP DTOs, protocol DTOs, configuration schema, and database schema are unchanged; no data, configuration, or database migration is required, and the captured upgrade fixture continues to pass.
 
@@ -260,6 +262,24 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 ### TASK-077 contract record
 
 ADR-0023 classifies the `0.3.0` to `0.1.0` product-version reset as a breaking ordering change for version-aware consumers, not a payload-shape change. The CLI text and compact JSON contracts keep the shapes accepted in TASK-075, daemon and HTTP surfaces keep bare SemVer, and Source of Truth `0.4.0`, `/api/v1`, configuration schema `1`, database schema `1`, and Vault schema `1` remain independent and unchanged. No configuration, database, Vault, HTTP, or protocol migration applies.
+
+## EPIC-010: CLI Handoff detail reads for agent sessions
+
+- **Status:** Planned
+- **Milestone:** M4
+- **Objective:** Close the CLI gap against the HTTP detail surface so a sender or recipient AI session can read the current Review Note and the bounded metadata timeline through `sorage … --json` without a daemon, without changing `get`, fetch semantics, or the review state machine.
+- **Detailed SOT:** [CLI Handoff detail reads](../todo/TODO-CLI-HANDOFF-DETAIL-READS.md)
+- **Prerequisite:** `EPIC-009` is `Completed`. Do not append these Tasks to `EPIC-009`.
+
+| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
+|---|---|---|---|---|---|---|---|
+| `TASK-080` | Planned | M4 | Adopt post-MVP milestone `M4` and the CLI detail-read Source of Truth: ADR-0024, Source of Truth version `0.5.0`, `GEN-015`, `CLI-022`, `CLI-023`, the command catalog, examples, traceability, skill acceptance scenarios, and the M4 gate. No CLI command implementation. | `bun run check:sot` exits 0; `make test-prepare` exits 0; the material-change record in ADR-0024 covers problem, decision, alternatives, compatibility, and migration; `sorage review show` and `sorage events` are absent from the compiled binary. | `EPIC-009` | GEN-015, CLI-022, CLI-023, HND-017, HND-020, NFR-015 | Not required |
+| `TASK-081` | Planned | M4 | Implement `sorage review show` and `sorage events` through `readReviewNote` and `readHandoffTimeline`, with `--json` goldens, help and completion, and the documented error paths for a non-participant, a missing Note, and a tombstone. | `make test` exits 0; `sorage review show --json` and `sorage events --json` match the HTTP detail use cases; `sorage get` JSON is byte-identical to its pre-change golden; the CLI snapshot diff is classified additive non-breaking with no configuration, database, Vault, HTTP, or protocol migration; findings become new Tasks appended to `EPIC-010`. | `TASK-080` | CLI-001, CLI-002, CLI-004, CLI-022, CLI-023, HND-017, HND-020, HND-025, LIFE-018 | Not required |
+| `TASK-082` | Planned | M4 | Rewrite `skills/use-sorage/SKILL.md` so requested Handoff processing reads the Note through `review show` before `revise`, keep GEN-014 for box checks, extend the CLI workflow example, add AJ-17, and record a fresh skill walkthrough. | `make test` exits 0 including `test/unit/use-sorage-skill.test.ts`; AJ-17 passes against the compiled binary; the skill walkthrough records a box-only outbox check that does not call `review show` or `revise`, and a processing request that runs `get`, `review show`, `fetch`, then `revise`; the 2026-09-08 skill acceptance record is superseded for these bytes; findings become new Tasks appended to `EPIC-010`. | `TASK-081` | GEN-011, GEN-014, GEN-015, CLI-022, HND-026 | Not required |
+
+### TASK-081 contract record
+
+Reserved for the `TASK-081` implementation: classify the new CLI JSON goldens as additive non-breaking and record that `sorage get` is unchanged. HTTP DTOs, protocol DTOs, the configuration schema, and the database schema are not in scope.
 
 ## 8. Epic completion and change rules
 

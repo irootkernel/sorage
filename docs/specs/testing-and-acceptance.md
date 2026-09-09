@@ -97,7 +97,7 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, and AJ-14 to AJ-16 for M3.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, and AJ-17 for M4.
 
 `Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
 
@@ -346,6 +346,23 @@ Expected: the `core.autocrlf=true` clone leaves every Artifact byte-identical, p
 
 Expected: the downloaded bytes match the checksum and manifest, the ad-hoc signature verifies, the CLI and daemon report the package manifest's product version, the LaunchAgent bootstraps into `gui/$UID` and boots out cleanly, and uninstall removes the LaunchAgent, `state`, `run`, `logs`, and `config.yaml`, leaves the Vault untouched, and prints the retained Vault path. Gatekeeper behavior for a hosted ad-hoc-signed download is an explicit publication-time observation, not a pre-publication claim.
 
+### AJ-17: Sender reads the Review Note through the CLI before revising
+
+- **Owner:** `EPIC-010` · **Milestone:** M4
+- **Requirements:** GEN-015, CLI-022, CLI-023, HND-020, HND-025
+
+1. From two working directories bound to different Projects, send a Handoff, list it in the recipient inbox, and set a Review Note whose body is not known to the sender process.
+2. In the sender directory, run `sorage outbox --json` and confirm `hasReviewNote` is true and that the envelope has no Note body.
+3. Run `sorage get <id> --json` and confirm it still has no Note body.
+4. Run `sorage review show <id> --json` and read the Note body, target Revision, and author kind.
+5. Run `sorage fetch <id> --json` and confirm `firstFetchedAt` is still null on a subsequent `get`.
+6. Revise from a workspace copy of the fetched path, not by editing the Vault.
+7. In the recipient directory, `get` and `fetch` again, then accept with the revision and row version just returned.
+8. Run `sorage events <id> --json` and confirm a bounded metadata timeline with no Artifact bytes.
+9. Repeat steps 1–2 as a box-only check: `outbox --json` against `changes_requested` is the only command.
+
+Expected: the sender cannot learn the Note body from `inbox`, `outbox`, or `get`; `review show` returns it without recording a fetch or incrementing Row Version; sender `fetch` does not set `firstFetchedAt`; `revise` then `accept` close the loop; `events` is newest-first metadata; a box-only check never calls `review show`, `fetch`, or `revise`. AJ-01 to AJ-16 still pass.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -365,7 +382,7 @@ Charter criteria are cited by meaning as well as by number, because [../product/
 | 11. No manual copy or move is needed in the normal workflow | M1 | AJ-04, AJ-06 |
 | 12. Every MVP acceptance journey passes on a clean macOS user account | M3 | AJ-16 |
 | 13. Sorage builds and tests from its own standalone repository root through `make test` | M1 | Section 1 `make` targets, AJ-16 |
-| 14. The `use-sorage` skill closes the discovery loop | M1 | `TASK-039` skill validation, AJ-04, AJ-07 |
+| 14. The `use-sorage` skill closes the discovery loop | M1, M4 | `TASK-039` skill validation, AJ-04, AJ-07, AJ-17 |
 | 15. Every user-facing and machine-facing identifier uses the canonical naming system | M1 | AJ-02, section 3.3 contract snapshots |
 | 16. A git worktree of a registered repository sends and receives as that Project | M1 | AJ-03 |
 | 17. Declined and withdrawn Handoffs are terminal, reject content operations, and remain visible | M1 | AJ-07 |
@@ -378,6 +395,7 @@ The remaining journeys carry the v0.4.0 decisions that have no v0.3.0 criterion,
 | AJ-03 | Worktree-aware identity, many bindings per Project, and nested resolution (ADR-0015) |
 | AJ-07 | Every reachable state has a next move without a human, through decline, withdraw, Note withdrawal, and the bounded no-change resolution (ADR-0014) |
 | AJ-08 | The intent-log protocol survives all seven crash points, and retries are idempotent (ADR-0013) |
+| AJ-17 | A sender AI session reads the Review Note through `sorage review show` before revising, and a box-only outbox check does not open it (ADR-0024) |
 | AJ-09 | Vault relocation is atomic in effect and pauses the service instead of racing it |
 | AJ-10 | Deletion stays two-phase, requires a terminal review state, and never overstates what it removed |
 | AJ-11 | Daemon discovery, port conflict, and graceful drain |
@@ -434,7 +452,7 @@ TASK-060 additionally binds every row of the section 15 matrix to a permanent au
 
 ## 9. Release gates
 
-Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the M3 gate (GEN-013).
+Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the M3 gate (GEN-013). M4 is the first post-MVP gate (ADR-0024).
 
 ### 9.1 Gate M1, CLI release, end of `EPIC-006`
 
@@ -447,7 +465,7 @@ Each milestone closes with its own gate, and a gate passes only when every condi
 - `skills/use-sorage/SKILL.md` ships and follows GEN-014 and HND-026. `test/unit/use-sorage-skill.test.ts`, run by `make test-unit`, checks the shipped file, metadata, and relative links; `scripts/sot-check` checks the documentation set, not the skill directory. Neither check proves agent behavior. Separately validate that session start, task and turn boundaries, ordinary code work, and a Sorage mention cause no broker checks; explicit inbox or outbox requests only inspect and report the requested box; processing and waiting occur only within a request covering them; completion does not trigger checks in later unrelated work; managed Vault files are never edited directly. For requested project setup, verify `.gitignore` exclusion of `.sorage/` is the default with `handoff.inboxMarker` either enabled or disabled, existing entries are preserved without duplication, and a check alone causes no setup edits. Record the observed agent decisions separately from automated structural checks; prose matching is not behavior verification.
 - No open P0 or P1 defect.
 
-The [2026-09-08 shipped skill acceptance record](../implementation-tips/use-sorage-acceptance.md) records a controlled independent walkthrough and its limits for the inspected skill bytes; it does not replace the gate requirements above.
+The [2026-09-08 shipped skill acceptance record](../implementation-tips/use-sorage-acceptance.md) records a controlled independent walkthrough and its limits for the inspected skill bytes; it does not replace the gate requirements above. `TASK-082` supersedes that record for the M4 skill bytes.
 
 ### 9.2 Gate M2, daemon and Web release, end of `EPIC-007`
 
@@ -482,6 +500,15 @@ Every snapshot diff is classified in the task report as breaking or non-breaking
 | Breaking | A removed or renamed field, a changed type or nullability, a changed symbolic error code, a changed exit-code category, a removed or renamed `doctor` check id, a removed or renamed event type |
 
 The reviewer session that confirms the acceptance gate approves the diff, as defined in section 9 of [../governance/README.md](../governance/README.md); an unclassified diff blocks the gate, and a breaking diff additionally requires an accepted architecture decision or a specification amendment before the gate can pass.
+
+### 9.5 Gate M4, CLI detail-read release, end of `EPIC-010`
+
+- AJ-17 passes against the compiled binary, and AJ-01 to AJ-16 still pass unchanged.
+- Every requirement listed under milestone M4 in section 17 of [required-specification.md](required-specification.md) is satisfied.
+- `sorage get --json` matches its pre-M4 golden envelope.
+- The `review show` and `events` CLI JSON goldens are classified additive non-breaking under section 9.4.
+- `skills/use-sorage/SKILL.md` follows GEN-014 and GEN-015. A requested inbox or outbox check does not call `review show`, `fetch`, or `revise`. A requested Handoff processing sequence for a Handoff with a Review Note runs `get`, `review show`, `fetch`, then `revise` or `--no-change`. Record the observed agent decisions separately from automated structural checks; prose matching is not behavior verification.
+- No open P0 or P1 defect.
 
 ## 10. Defect severity
 

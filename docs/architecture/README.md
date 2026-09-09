@@ -456,6 +456,8 @@ All-or-nothing creation is a pure database property under the intent log. Every 
 - It belongs to one exact target Revision, and creation or update against a stale target Revision fails.
 - `authorKind` records whether the recipient Project or the User wrote it; `authorProjectId` is null for a User-authored Note.
 - The sender MUST NOT author a Review Note on its own Handoff.
+- `sorage get` exposes `hasReviewNote` and never the Note body. From milestone M4 the current Note is read through `sorage review show`, which calls the same use case as `GET /api/v1/handoffs/{id}/review-note` and records nothing (CLI-022, ADR-0024).
+- From milestone M4 the bounded metadata timeline is read through `sorage events`, which calls the same use case as `GET /api/v1/handoffs/{id}/events`, includes tombstones, and never carries Artifact bytes (CLI-023, HND-017).
 - The recipient may update the body while the state remains `changes_requested`.
 - The recipient may withdraw the current Note whichever actor authored it, which returns the Handoff to `awaiting_recipient` with the Revision unchanged and emits `REVIEW_NOTE_WITHDRAWN` (REV-016); the User removes a Note only through `review remove --as-user` (REV-015).
 - The sender cannot clear a Note directly. The sender resolves it either by revising with changed content, which removes the Note in the same transaction, or by one bounded no-change resolution.

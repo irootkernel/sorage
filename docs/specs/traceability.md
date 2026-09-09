@@ -16,25 +16,25 @@ Milestone values come from the specification and name the release gate at whose 
 
 | Requirement group | Milestone | Implementing tasks | Acceptance evidence (AJ ids / test layer) |
 |---|---|---|---|
-| GEN-001 to GEN-014 | M1, M2 | `TASK-001` to `TASK-002`, `TASK-005`, `TASK-008`, `TASK-039` to `TASK-042`, `TASK-051`, `TASK-064` to `TASK-065` | AJ-01, AJ-02, AJ-16; the dependency-boundary check in `make test-prepare` and the clean-home run in `make test-int` |
+| GEN-001 to GEN-015 | M1, M2, M4 | `TASK-001` to `TASK-002`, `TASK-005`, `TASK-008`, `TASK-039` to `TASK-042`, `TASK-051`, `TASK-064` to `TASK-065`, `TASK-080`, `TASK-082` | AJ-01, AJ-02, AJ-16, AJ-17; the dependency-boundary check in `make test-prepare` and the clean-home run in `make test-int` |
 | INIT-001 to INIT-017 | M1, M3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069`, `TASK-073` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot |
 | CFG-001 to CFG-020 | M1 | `TASK-010` to `TASK-013`, `TASK-015`, `TASK-026`, `TASK-045`, `TASK-061`, `TASK-063`, `TASK-072` | AJ-01, AJ-13; `make test-unit` for schema defaults and the comment round-trip, `make test-int` for atomic writes and ETag conflict, `make test-contract` for the schema against the example |
 | RUN-001 to RUN-014 | M1, M2, M3 | `TASK-006` to `TASK-007`, `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-042` to `TASK-045`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-068` to `TASK-069`, `TASK-073` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version |
 | PRJ-001 to PRJ-022 | M1 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050`, `TASK-066` | AJ-03, AJ-05; `make test-int` for worktree folding, binding precedence, alias ambiguity, and the workspace-root downgrade guard |
 | VLT-001 to VLT-024 | M1, M2 | `TASK-003`, `TASK-012`, `TASK-021` to `TASK-026`, `TASK-029` to `TASK-030`, `TASK-032`, `TASK-034` to `TASK-035`, `TASK-044`, `TASK-046`, `TASK-052`, `TASK-055`, `TASK-063` | AJ-08 to AJ-10; `make test-int` for the intent log and the seven crash points, plus `sorage doctor` and `sorage vault verify` for exhaustive checksums |
-| HND-001 to HND-026 | M1 | `TASK-027` to `TASK-030`, `TASK-032` to `TASK-033`, `TASK-035`, `TASK-038` to `TASK-039` | AJ-04, AJ-06, AJ-07, AJ-08; `make test-unit` for the transition table and `make test-contract` for the public representation |
+| HND-001 to HND-026 | M1 | `TASK-027` to `TASK-030`, `TASK-032` to `TASK-033`, `TASK-035`, `TASK-038` to `TASK-039`, `TASK-080` to `TASK-082` | AJ-04, AJ-06, AJ-07, AJ-08, AJ-17; `make test-unit` for the transition table and `make test-contract` for the public representation |
 | REV-001 to REV-017 | M1 | `TASK-027`, `TASK-031` to `TASK-032`, `TASK-049` | AJ-04, AJ-07, AJ-13; `make test-unit` for the Note rules and `make test-int` for atomic resolution |
-| LIFE-001 to LIFE-018 | M1 | `TASK-028`, `TASK-033` to `TASK-034`, `TASK-049` | AJ-04, AJ-07, AJ-10; `make test-int` for terminal immutability, tombstone rejection, retention, and the two-phase deletion |
-| CLI-001 to CLI-021 | M1, M3 | `TASK-004` to `TASK-005`, `TASK-013`, `TASK-017` to `TASK-018`, `TASK-026`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-064` to `TASK-065`, `TASK-067` | AJ-01 to AJ-10; `make test-contract` for golden envelopes, exit-code categories, and cursors |
+| LIFE-001 to LIFE-018 | M1 | `TASK-028`, `TASK-033` to `TASK-034`, `TASK-049`, `TASK-081` | AJ-04, AJ-07, AJ-10, AJ-17; `make test-int` for terminal immutability, tombstone rejection, retention, and the two-phase deletion |
+| CLI-001 to CLI-023 | M1, M3, M4 | `TASK-004` to `TASK-005`, `TASK-013`, `TASK-017` to `TASK-018`, `TASK-026`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-064` to `TASK-065`, `TASK-067`, `TASK-080` to `TASK-082` | AJ-01 to AJ-10, AJ-17; `make test-contract` for golden envelopes, exit-code categories, and cursors |
 | API-001 to API-012 | M2 | `TASK-042`, `TASK-045` to `TASK-048`, `TASK-060`, `TASK-067`, `TASK-070` | AJ-11, AJ-12, AJ-13; `make test-contract` for the symbolic-error to HTTP-status matrix and the DTOs |
 | WEB-001 to WEB-018 | M2, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060`, `TASK-067` | AJ-12, AJ-13; `make test-e2e` under Playwright with the axe-core check as engineering practice |
 | BKP-001 to BKP-026 | M3 | `TASK-052` to `TASK-058`, `TASK-061`, `TASK-065` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify` |
 | SEC-001 to SEC-021 | M1, M2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063`, `TASK-068`, `TASK-070` to `TASK-071` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int` |
-| NFR-001 to NFR-017 | M1, M3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065`, `TASK-073` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
+| NFR-001 to NFR-017 | M1, M3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065`, `TASK-073`, `TASK-080` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
 
-Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, and AJ-14 to AJ-16 close the M3 MVP gate, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
+Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, and AJ-17 closes the M4 CLI detail-read gate, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
 
 ## 3. Reverse index
 
@@ -56,10 +56,11 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `GEN-008` | M1 | `TASK-041` |
 | `GEN-009` | M1 | `TASK-002` |
 | `GEN-010` | M1 | `TASK-002`, `TASK-041` |
-| `GEN-011` | M1 | `TASK-039` |
+| `GEN-011` | M1 | `TASK-039`, `TASK-082` |
 | `GEN-012` | M1 | `TASK-008`, `TASK-065` |
 | `GEN-013` | M1 | `TASK-041`, `TASK-051`, `TASK-065` |
-| `GEN-014` | M1 | `TASK-039` |
+| `GEN-014` | M1 | `TASK-039`, `TASK-082` |
+| `GEN-015` | M4 | `TASK-080`, `TASK-082` |
 | `INIT-001` | M1 | `TASK-009` |
 | `INIT-002` | M1 | `TASK-009` |
 | `INIT-003` | M1 | `TASK-012`, `TASK-043` |
@@ -173,16 +174,16 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `HND-014` | M1 | `TASK-028`, `TASK-033` |
 | `HND-015` | M1 | `TASK-032` |
 | `HND-016` | M1 | `TASK-028` |
-| `HND-017` | M1 | `TASK-028` |
+| `HND-017` | M1 | `TASK-028`, `TASK-080`, `TASK-081` |
 | `HND-018` | M1 | `TASK-029` |
 | `HND-019` | M1 | `TASK-028` |
-| `HND-020` | M1 | `TASK-030` |
+| `HND-020` | M1 | `TASK-030`, `TASK-080`, `TASK-081` |
 | `HND-021` | M1 | `TASK-033` |
 | `HND-022` | M1 | `TASK-033` |
 | `HND-023` | M1 | `TASK-029` |
 | `HND-024` | M1 | `TASK-030` |
-| `HND-025` | M1 | `TASK-028` |
-| `HND-026` | M1 | `TASK-038`, `TASK-039` |
+| `HND-025` | M1 | `TASK-028`, `TASK-081` |
+| `HND-026` | M1 | `TASK-038`, `TASK-039`, `TASK-082` |
 | `REV-001` | M1 | `TASK-027` |
 | `REV-002` | M1 | `TASK-031` |
 | `REV-003` | M1 | `TASK-031` |
@@ -217,11 +218,11 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `LIFE-015` | M1 | `TASK-034` |
 | `LIFE-016` | M1 | `TASK-034` |
 | `LIFE-017` | M1 | `TASK-028`, `TASK-033` |
-| `LIFE-018` | M1 | `TASK-028`, `TASK-034` |
-| `CLI-001` | M1 | `TASK-005`, `TASK-036` |
-| `CLI-002` | M1 | `TASK-005`, `TASK-036`, `TASK-075`, `TASK-077` |
+| `LIFE-018` | M1 | `TASK-028`, `TASK-034`, `TASK-081` |
+| `CLI-001` | M1 | `TASK-005`, `TASK-036`, `TASK-081` |
+| `CLI-002` | M1 | `TASK-005`, `TASK-036`, `TASK-075`, `TASK-077`, `TASK-081` |
 | `CLI-003` | M1 | `TASK-005`, `TASK-036` |
-| `CLI-004` | M1 | `TASK-004`, `TASK-037` |
+| `CLI-004` | M1 | `TASK-004`, `TASK-037`, `TASK-081` |
 | `CLI-005` | M1 | `TASK-005`, `TASK-037` |
 | `CLI-006` | M3 | `TASK-055`, `TASK-065` |
 | `CLI-007` | M1 | `TASK-029` |
@@ -239,6 +240,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `CLI-019` | M1 | `TASK-013`, `TASK-017`, `TASK-026`, `TASK-031`, `TASK-034`, `TASK-036`, `TASK-057` |
 | `CLI-020` | M1 | `TASK-018`, `TASK-036` |
 | `CLI-021` | M1 | `TASK-029` |
+| `CLI-022` | M4 | `TASK-080`, `TASK-081`, `TASK-082` |
+| `CLI-023` | M4 | `TASK-080`, `TASK-081` |
 | `API-001` | M2 | `TASK-042` |
 | `API-002` | M2 | `TASK-046` |
 | `API-003` | M2 | `TASK-047` |
@@ -330,7 +333,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `NFR-012` | M1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-073`, `TASK-077`, `TASK-078` |
 | `NFR-013` | M1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-077`, `TASK-078` |
 | `NFR-014` | M1 | `TASK-002` |
-| `NFR-015` | M1 | `TASK-008`, `TASK-065`, `TASK-076` |
+| `NFR-015` | M1 | `TASK-008`, `TASK-065`, `TASK-076`, `TASK-080` |
 | `NFR-016` | M1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074`, `TASK-076`, `TASK-078` |
 | `NFR-017` | M1 | `TASK-001`, `TASK-064` |
 
@@ -346,8 +349,8 @@ Every Task review records the following list, and a review that omits an item is
 - Architecture decisions changed or newly relied upon, by ADR identifier.
 - Contract snapshots changed, meaning protocol DTOs, CLI JSON envelopes, HTTP DTOs, the error table, `schemas/config.schema.json`, or the `doctor` catalog, each classified explicitly as breaking or non-breaking.
 - Migration impact, including the schema version reached, whether the captured upgrade fixture still passes, and whether a configuration migration is required.
-- Design Gate impact, which is `Not required` for every Task in v0.4.0 because no Design Gate registry is enrolled for this repository, recorded rather than left empty.
-- Remaining known gaps, each either a new Task appended to `EPIC-009` or an explicit statement that the gap is out of MVP scope.
+- Design Gate impact, which is `Not required` for every Task in this repository because no Design Gate registry is enrolled, recorded rather than left empty.
+- Remaining known gaps, each either a new Task appended to the Active Epic or an explicit statement that the gap is out of the current milestone's scope.
 
 A Contract Task additionally records the reviewed snapshot diff, and a Task that reports a breaking contract change without an accepted architecture decision MUST NOT reach `Completed`.
 
