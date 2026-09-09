@@ -150,6 +150,9 @@ const steps: Step[] = [
     args: ["review", "set", "{H1}", "--as", "beta", "--text", "Tighten the title again", "--json"],
     cwd: workB,
   },
+  { name: "21a-review-show", args: ["review", "show", "{H1}", "--as", "beta", "--json"], cwd: workB },
+  { name: "21b-review-show-sender", args: ["review", "show", "{H1}", "--as", "alpha", "--json"] },
+  { name: "21c-events", args: ["events", "{H1}", "--as", "alpha", "--json"] },
   {
     name: "22-revise",
     args: ["revise", "{H1}", "--as", "alpha", "--file", replacement, "--allow-external-source", "--json"],
@@ -179,6 +182,7 @@ const steps: Step[] = [
     cwd: workB,
   },
   { name: "31-review-remove", args: ["review", "remove", "{H2}", "--as-user", "--confirm", "--json"] },
+  { name: "31a-review-show-null", args: ["review", "show", "{H2}", "--as", "beta", "--json"], cwd: workB },
   {
     name: "32-send-h3",
     args: ["send", "--as", "alpha", "--to", "beta", "--title", "Decline case", "--body", "# Three", "--json"],
@@ -207,6 +211,8 @@ const steps: Step[] = [
   },
   { name: "38-delete-request", args: ["delete", "request", "{H5}", "--as", "beta", "--json"], cwd: workB },
   { name: "39-delete-approve", args: ["delete", "approve", "{H5}", "--as-user", "--confirm", "--json"] },
+  { name: "39a-events-tombstone", args: ["events", "{H5}", "--as", "beta", "--json"], cwd: workB },
+  { name: "39b-review-show-tombstone", args: ["review", "show", "{H5}", "--as", "beta", "--json"], cwd: workB },
   {
     name: "40-send-h6",
     args: ["send", "--as", "alpha", "--to", "beta", "--title", "Deletion reject case", "--body", "# Six", "--json"],

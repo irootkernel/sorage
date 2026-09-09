@@ -69,6 +69,8 @@ import {
   moveVault,
   ok,
   pinHandoff,
+  readHandoffTimeline,
+  readReviewNote,
   refreshInboxMarker,
   rejectDeletion,
   removeReviewNote,
@@ -979,7 +981,55 @@ export function buildProgram(
       }
     });
 
-  const review = program.command("review").description("create, withdraw, and remove Review Notes");
+  program
+    .command("events <handoff-id>")
+    .description("read the bounded recent metadata timeline; records nothing")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = readHandoffTimeline(createNodeHandoffReadPorts(), actorInputOf(globals), id);
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else if (result.value.length === 0) {
+        ports.out("no events\n");
+      } else {
+        for (const event of result.value) {
+          const rowVersion = event.rowVersion === null ? "-" : String(event.rowVersion);
+          ports.out(`${event.eventType}  actor ${event.actorKind}  rowVersion ${rowVersion}\n`);
+        }
+      }
+    });
+
+  const review = program.command("review").description("read, create, withdraw, and remove Review Notes");
+
+  review
+    .command("show <handoff-id>")
+    .description("read the current Review Note; records nothing")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = readReviewNote(createNodeHandoffReadPorts(), actorInputOf(globals), id);
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+      } else if (result.value === null) {
+        ports.out("no Review Note\n");
+      } else {
+        ports.out(`${result.value.body}\n`);
+        ports.out(`  targetRevision ${result.value.targetRevision}, author ${result.value.authorKind}\n`);
+      }
+    });
 
   review
     .command("set <handoff-id>")

@@ -66,15 +66,13 @@ describe("cli shell", () => {
     expect(cap.err.match(/unknown command/g)).toHaveLength(1);
   });
 
-  it("does not register review show or events before TASK-081", () => {
-    const show = capture();
-    expect(runCli(["review", "show", "00000000-0000-4000-8000-000000000001"], show.ports)).toBe(2);
-    expect(show.out).toBe("");
-    expect(show.err).toContain("unknown command 'show'");
-    const events = capture();
-    expect(runCli(["events", "00000000-0000-4000-8000-000000000001"], events.ports)).toBe(2);
-    expect(events.out).toBe("");
-    expect(events.err).toContain("unknown command 'events'");
+  it("registers review show and events as catalog commands", () => {
+    const reviewHelp = capture();
+    expect(runCli(["review", "--help"], reviewHelp.ports)).toBe(0);
+    expect(reviewHelp.out).toContain("show");
+    const eventsHelp = capture();
+    expect(runCli(["events", "--help"], eventsHelp.ports)).toBe(0);
+    expect(eventsHelp.out).toContain("bounded recent metadata timeline");
   });
 
   it("exits 0 and prints help for a bare invocation", () => {

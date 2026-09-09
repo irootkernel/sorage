@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "handoffId": "<uuid>",
+    "authorKind": "registered_project",
+    "authorProjectId": "<uuid>",
+    "targetRevision": 1,
+    "body": "Tighten the title again",
+    "createdAt": "<ts>",
+    "updatedAt": "<ts>"
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

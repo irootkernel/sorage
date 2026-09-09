@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "data": [
+    {
+      "id": "<uuid>",
+      "eventType": "ARTIFACT_UNLINKED",
+      "actorKind": "system",
+      "actorId": null,
+      "rowVersion": null,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "DELETION_APPROVED",
+      "actorKind": "user",
+      "actorId": null,
+      "rowVersion": 4,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "DELETION_REQUESTED",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 3,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "HANDOFF_ACCEPTED",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 2,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "ARTIFACT_ACTIVATED",
+      "actorKind": "system",
+      "actorId": null,
+      "rowVersion": null,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "HANDOFF_CREATED",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 1,
+      "createdAt": "<ts>"
+    }
+  ],
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

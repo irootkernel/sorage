@@ -125,6 +125,8 @@ describe("the shared route and CLI table", () => {
     { route: "POST /api/v1/handoffs/import-path", cli: "sorage send", useCase: "sendHandoffs" },
     { route: "GET /api/v1/handoffs", cli: "sorage inbox / outbox", useCase: "listInbox / listOutbox" },
     { route: "GET /api/v1/handoffs/{id}", cli: "sorage get", useCase: "getHandoff" },
+    { route: "GET /api/v1/handoffs/{id}/review-note", cli: "sorage review show", useCase: "readReviewNote" },
+    { route: "GET /api/v1/handoffs/{id}/events", cli: "sorage events", useCase: "readHandoffTimeline" },
     { route: "GET /api/v1/handoffs/{id}/artifact/content", cli: "sorage fetch", useCase: "fetchHandoff" },
     { route: "PUT /api/v1/handoffs/{id}/review-note", cli: "sorage review set", useCase: "setReviewNote" },
     { route: "DELETE /api/v1/handoffs/{id}/review-note", cli: "sorage review remove", useCase: "removeReviewNote" },

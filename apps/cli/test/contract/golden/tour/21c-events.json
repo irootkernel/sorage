@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "data": [
+    {
+      "id": "<uuid>",
+      "eventType": "REVIEW_NOTE_CREATED",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 4,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "REVIEW_NOTE_WITHDRAWN",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 3,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "REVIEW_NOTE_CREATED",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 2,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "ARTIFACT_FETCHED_FIRST_TIME",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": null,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "ARTIFACT_ACTIVATED",
+      "actorKind": "system",
+      "actorId": null,
+      "rowVersion": null,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "HANDOFF_CREATED",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 1,
+      "createdAt": "<ts>"
+    }
+  ],
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}
