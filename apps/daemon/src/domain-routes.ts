@@ -451,17 +451,36 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const upload = await consumeMultipartUpload(request, { maxBytes, spoolDir: join(homeOf(), "state", "uploads") });
       if (!upload.ok) return void respondError(response, context, upload.error);
       const file = upload.value.file;
-      if (file === null)
-        return void respondError(response, context, appError("CONFIG_INVALID", "the upload carried no file part"));
+      const bodyPart = upload.value.body;
+      if (file !== null && bodyPart !== null) {
+        upload.value.cleanup();
+        return void respondError(
+          response,
+          context,
+          appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
+        );
+      }
+      if (file === null && bodyPart === null) {
+        upload.value.cleanup();
+        return void respondError(
+          response,
+          context,
+          appError("CONFIG_INVALID", "the upload must carry a file part or a body field"),
+        );
+      }
       const to = upload.value.fields.to ?? [];
-      const title = (upload.value.fields.title ?? [file.filename])[0] ?? file.filename;
+      const title = (upload.value.fields.title ?? (file !== null ? [file.filename] : []))[0] ?? file?.filename ?? "";
       const result = sendHandoffs(createNodeSendPorts(), {
         to,
         title,
-        file: file.path,
-        // The spool path is an opaque UUID, so the browser's filename is the
-        // original name the Artifact must record (VLT-007).
-        originalName: file.filename,
+        ...(file !== null
+          ? {
+              file: file.path,
+              // The spool path is an opaque UUID, so the browser's filename is the
+              // original name the Artifact must record (VLT-007).
+              originalName: file.filename,
+            }
+          : { bodyFile: bodyPart?.path }),
         allowExternalSource: true, // the browser upload is already the authenticated source
         allowUnregistered: false,
         ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),

@@ -2,6 +2,12 @@
 
 This file records concise shipped outcomes and the planned next stable release.
 
+## v0.1.2 - Unreleased
+
+### Added
+
+- Let the local User create a Handoff from the Web compose form by supplying a Markdown body instead of a file.
+
 ## v0.1.1 - 2026-09-09
 
 ### Added

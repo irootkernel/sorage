@@ -20,6 +20,8 @@ export interface SendInput {
   title: string;
   file?: string | undefined;
   body?: string | undefined;
+  /** Streamed HTTP `body` spool; mutually exclusive with `file` and `body` (API-013). */
+  bodyFile?: string | undefined;
   supersedes?: string | undefined;
   allowExternalSource: boolean;
   allowUnregistered: boolean;
@@ -185,7 +187,8 @@ export function sendHandoffs(ports: SendPorts, input: SendInput): Result<SendOut
   if (title === "") {
     return err(appError("CONFIG_INVALID", "the Handoff title must not be empty"));
   }
-  if ((input.file === undefined) === (input.body === undefined)) {
+  const sources = [input.file !== undefined, input.body !== undefined, input.bodyFile !== undefined].filter(Boolean);
+  if (sources.length !== 1) {
     return err(appError("CONFIG_INVALID", "send takes exactly one of --file or --body"));
   }
   if (input.body !== undefined && input.body.trim() === "") {
@@ -211,13 +214,19 @@ function sendStaged(
   // supersedes, or Row Version check (API-012).
   let contentSha256: string;
   let bodySource: { sourcePath: string; cleanup: () => void } | null = null;
-  const storedName = input.body !== undefined ? `${titleSlug(title)}-1.md` : "";
+  const asBody = input.body !== undefined || input.bodyFile !== undefined;
+  const storedName = asBody ? `${titleSlug(title)}-1.md` : "";
   if (input.body !== undefined) {
     contentSha256 = createHash("sha256").update(input.body, "utf8").digest("hex");
     const written = ports.writeBodySource(input.body, storedName);
     if (!written.ok) return err(written.error);
     bodySource = written.value;
     cleanups.push(written.value.cleanup);
+  } else if (input.bodyFile !== undefined) {
+    const digest = ports.digestSource(input.bodyFile);
+    if (!digest.ok) return err(digest.error);
+    contentSha256 = digest.value;
+    bodySource = { sourcePath: input.bodyFile, cleanup: () => undefined };
   } else {
     const file = input.file as string;
     const digest = ports.digestSource(file);
@@ -229,7 +238,7 @@ function sendStaged(
     title,
     contentSha256,
     supersedes: input.supersedes,
-    kind: input.body !== undefined ? "body" : "file",
+    kind: asBody ? "body" : "file",
   });
 
   if (input.idempotencyKey !== undefined) {

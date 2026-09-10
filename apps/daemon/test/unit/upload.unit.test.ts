@@ -81,6 +81,120 @@ describe("upload cleanup isolation", () => {
     }
   });
 
+  it("streams a body field to disk without a file part", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      request.emit("data", part("title", undefined, "Note"));
+      request.emit("data", part("body", undefined, "# Hello\n"));
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.file).toBeNull();
+      expect(result.value.body?.bytes).toBe(Buffer.byteLength("# Hello\n"));
+      expect(readFileSync(result.value.body?.path ?? "").toString("utf8")).toBe("# Hello\n");
+      result.value.cleanup();
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a file part and a body field together", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      request.emit("data", part("file", "a.md", "# a\n"));
+      request.emit("data", part("body", undefined, "# b\n"));
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(result.error.message).toContain("both");
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a duplicate body field", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      request.emit("data", part("body", undefined, "# one\n"));
+      request.emit("data", part("body", undefined, "# two\n"));
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(result.error.message).toContain("more than one body");
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a whitespace-only body and leaves no spool", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      request.emit("data", part("body", undefined, "  \n\t  "));
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(result.error.message).toContain("empty after trimming");
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts a body that crosses artifact.maxBytes mid-stream", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 16,
+        spoolDir,
+      });
+      request.emit("data", part("body", undefined, "x".repeat(64)));
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("ARTIFACT_TOO_LARGE");
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a multipart preamble that never finds its boundary", async () => {
     const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
     try {

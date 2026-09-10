@@ -571,7 +571,7 @@ Operations that cannot be expressed as one database transaction, such as a confi
 ### 14.3 Web SPA
 
 - Present dashboard, Handoff lists, detail, Projects, backup, and settings screens.
-- Upload files through streaming multipart.
+- Upload files through streaming multipart, or from milestone M5 supply inline Markdown body text mutually exclusive with a file (WEB-019, API-013).
 - Render safe previews.
 - Invoke User-admin actions.
 - Show configuration as a read-only YAML view (WEB-014).

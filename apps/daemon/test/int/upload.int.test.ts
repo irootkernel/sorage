@@ -336,6 +336,176 @@ describe("browser upload (API-003, NFR-005)", () => {
     expect(readdirSync(idempotencySpoolRoot)).toEqual([]);
   });
 
+  it("creates a Markdown Artifact from a body field named title-slug-1.md as the User", async () => {
+    const markdown = "# Compose body\n\nstreamed, not buffered.\n";
+    const created = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      parts: [
+        { name: "title", value: "Compose Body" },
+        { name: "to", value: "web-app" },
+        { name: "body", value: markdown },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const outcome = json(created);
+    expect(outcome.data.handoffs).toHaveLength(1);
+    const storageKey = outcome.data.handoffs[0].storageKey as string;
+    expect(readFileSync(join(home, "vault", storageKey)).toString("utf8")).toBe(markdown);
+    const detail = await new Promise<string>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: `/api/v1/handoffs/${outcome.data.handoffs[0].handoffId}?asUser=true`,
+          method: "GET",
+          headers: { host: `127.0.0.1:${port}`, authorization: `Bearer ${apiToken}` },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.end();
+    });
+    const data = json({ body: detail }).data;
+    expect(data.senderKind).toBe("user");
+    expect(data.currentArtifact.originalName).toBe("compose-body-1.md");
+    expect(data.currentArtifact.mimeType).toBe("text/markdown");
+    expect(existsSync(join(home, "state", "uploads")) ? readdirSync(join(home, "state", "uploads")) : []).toHaveLength(
+      0,
+    );
+  });
+
+  it("fans a body upload out to two recipients under one dispatch group", async () => {
+    const created = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      parts: [
+        { name: "title", value: "Body Fan" },
+        { name: "to", value: "web-app" },
+        { name: "to", value: "second" },
+        { name: "body", value: "# fan body\n" },
+      ],
+    });
+    expect(created.status).toBe(201);
+    const outcome = json(created);
+    expect(outcome.data.handoffs).toHaveLength(2);
+    expect(outcome.data.dispatchGroupId).toBeTypeOf("string");
+    expect(new Set(outcome.data.handoffs.map((entry: { handoffId: string }) => entry.handoffId)).size).toBe(2);
+  });
+
+  it("rejects both, neither, empty, whitespace-only, and duplicate body fields with no Handoff", async () => {
+    const titles = ["Both", "Neither", "Empty body", "Whitespace body", "Duplicate body"];
+    const cases: Array<{ title: string; parts: Array<{ name: string; filename?: string; value: string | Buffer }> }> = [
+      {
+        title: "Both",
+        parts: [
+          { name: "title", value: "Both" },
+          { name: "to", value: "web-app" },
+          { name: "file", filename: "both.md", value: "# file\n" },
+          { name: "body", value: "# body\n" },
+        ],
+      },
+      {
+        title: "Neither",
+        parts: [
+          { name: "title", value: "Neither" },
+          { name: "to", value: "web-app" },
+        ],
+      },
+      {
+        title: "Empty body",
+        parts: [
+          { name: "title", value: "Empty body" },
+          { name: "to", value: "web-app" },
+          { name: "body", value: "" },
+        ],
+      },
+      {
+        title: "Whitespace body",
+        parts: [
+          { name: "title", value: "Whitespace body" },
+          { name: "to", value: "web-app" },
+          { name: "body", value: " \n\t " },
+        ],
+      },
+      {
+        title: "Duplicate body",
+        parts: [
+          { name: "title", value: "Duplicate body" },
+          { name: "to", value: "web-app" },
+          { name: "body", value: "# one\n" },
+          { name: "body", value: "# two\n" },
+        ],
+      },
+    ];
+    for (const trial of cases) {
+      const created = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts: trial.parts });
+      expect(created.status, trial.title).toBe(422);
+      expect(json(created).error.code, trial.title).toBe("CONFIG_INVALID");
+    }
+    const listing = await new Promise<string>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: "/api/v1/handoffs?asUser=true&includeArchived=true",
+          method: "GET",
+          headers: { host: `127.0.0.1:${port}`, authorization: `Bearer ${apiToken}` },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.end();
+    });
+    const listed = json({ body: listing }).data.handoffs.map((entry: { title: string }) => entry.title);
+    for (const title of titles) expect(listed).not.toContain(title);
+  });
+
+  it("aborts a body over artifact.maxBytes mid-stream and leaves no spool", async () => {
+    const created = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      parts: [
+        { name: "title", value: "Body too big" },
+        { name: "to", value: "web-app" },
+        { name: "body", value: "x".repeat(4096) },
+      ],
+    });
+    expect(created.status).toBe(413);
+    expect(json(created)).toMatchObject({ error: { code: "ARTIFACT_TOO_LARGE" } });
+    expect(readdirSync(join(home, "state", "uploads"))).toHaveLength(0);
+  });
+
+  it("replays an identical body idempotency key and conflicts on a different body", async () => {
+    const key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const parts = [
+      { name: "title", value: "Body Replay" },
+      { name: "to", value: "web-app" },
+      { name: "body", value: "# original body\n" },
+    ];
+    const first = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts, idempotencyKey: key });
+    expect(first.status).toBe(201);
+    const replay = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts, idempotencyKey: key });
+    expect(replay.status).toBe(201);
+    expect(json(replay).data.handoffs[0].handoffId).toBe(json(first).data.handoffs[0].handoffId);
+    const conflict = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      idempotencyKey: key,
+      parts: [
+        { name: "title", value: "Body Replay" },
+        { name: "to", value: "web-app" },
+        { name: "body", value: "# different body\n" },
+      ],
+    });
+    expect(conflict.status).toBe(409);
+    expect(json(conflict).error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
   it("rejects an idempotent body above the outer replay bound without leaving a spool", async () => {
     const oversized = await upload("/api/v1/handoffs/upload", {
       bearer: sessionToken,

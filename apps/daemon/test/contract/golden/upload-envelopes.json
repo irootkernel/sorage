@@ -1,0 +1,67 @@
+{
+  "fileSuccess": {
+    "status": 201,
+    "body": {
+      "ok": true,
+      "data": {
+        "handoffs": [
+          {
+            "handoffId": "<uuid>",
+            "recipientSlug": "web-app",
+            "artifactId": "<uuid>",
+            "storageKey": "artifacts/<uuid>/<uuid>/source.md",
+            "revision": 1,
+            "rowVersion": 1,
+            "reviewState": "awaiting_recipient"
+          }
+        ],
+        "dispatchGroupId": null,
+        "replayed": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "bodySuccess": {
+    "status": 201,
+    "body": {
+      "ok": true,
+      "data": {
+        "handoffs": [
+          {
+            "handoffId": "<uuid>",
+            "recipientSlug": "web-app",
+            "artifactId": "<uuid>",
+            "storageKey": "artifacts/<uuid>/<uuid>/compose-body-1.md",
+            "revision": 1,
+            "rowVersion": 1,
+            "reviewState": "awaiting_recipient"
+          }
+        ],
+        "dispatchGroupId": null,
+        "replayed": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "inputError": {
+    "status": 422,
+    "body": {
+      "ok": false,
+      "error": {
+        "code": "CONFIG_INVALID",
+        "message": "the upload carries both a file part and a body field",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage config validate"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  }
+}

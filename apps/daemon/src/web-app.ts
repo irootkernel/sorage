@@ -739,27 +739,34 @@ export const WEB_APP_JS = `(function () {
     var title = el("input", { placeholder: "title", size: "40" });
     var recipients = el("input", { placeholder: "recipient slugs, comma-separated", size: "40" });
     var file = el("input", { type: "file" });
+    var body = el("textarea", { rows: "8", cols: "40", placeholder: "Markdown body", "aria-label": "Body" });
     var result = el("p", {});
     form.appendChild(el("p", { class: "field" }, [el("label", { text: "Title " }, [title])]));
     form.appendChild(el("p", { class: "field" }, [el("label", { text: "To " }, [recipients])]));
     form.appendChild(el("p", { class: "muted", text: "Several recipients create one independent Handoff each; every identifier and the shared dispatch group appear after submission." }));
     form.appendChild(el("p", { class: "field" }, [el("label", { text: "Document " }, [file])]));
+    form.appendChild(el("p", { class: "field" }, [el("label", { text: "Body " }, [body])]));
+    form.appendChild(el("p", { class: "muted", text: "Supply a file or a Markdown body, not both. The sender is the User." }));
     form.appendChild(el("button", { class: "primary", type: "submit", text: "Send" }));
     form.appendChild(result);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      if (file.files.length === 0) { result.textContent = "Choose a document."; return; }
+      var hasFile = file.files.length > 0;
+      var hasBody = body.value.trim() !== "";
+      if (hasFile && hasBody) { result.textContent = "Choose a file or a Markdown body, not both."; return; }
+      if (!hasFile && !hasBody) { result.textContent = "Choose a document or enter a Markdown body."; return; }
       var data = new FormData();
       data.append("title", title.value);
       recipients.value.split(",").map(function (slug) { return slug.trim(); }).filter(function (slug) { return slug !== ""; }).forEach(function (slug) { data.append("to", slug); });
-      data.append("file", file.files[0]);
+      if (hasFile) data.append("file", file.files[0]);
+      else data.append("body", body.value);
       fetch("/api/v1/handoffs/upload", { method: "POST", headers: { authorization: "Bearer " + store.token }, body: data })
         .then(function (response) { return response.json(); })
-        .then(function (body) {
-          if (!body.ok) { result.textContent = "Send failed: " + body.error.code; return; }
+        .then(function (outcome) {
+          if (!outcome.ok) { result.textContent = "Send failed: " + outcome.error.code; return; }
           result.textContent = "";
           var list = el("ul", {});
-          body.data.handoffs.forEach(function (sent) { list.appendChild(el("li", {}, [el("span", { class: "mono", text: sent.handoffId }), el("span", { text: " → " + sent.recipientSlug + " (group " + (body.data.dispatchGroupId || "none") + ")" })])); });
+          outcome.data.handoffs.forEach(function (sent) { list.appendChild(el("li", {}, [el("span", { class: "mono", text: sent.handoffId }), el("span", { text: " → " + sent.recipientSlug + " (group " + (outcome.data.dispatchGroupId || "none") + ")" })])); });
           result.appendChild(list);
         });
     });

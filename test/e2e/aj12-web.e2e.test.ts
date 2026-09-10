@@ -127,6 +127,7 @@ describe("AJ-12 web session and the local network boundary", () => {
     expect(await page.getByLabel("Title").count()).toBe(1);
     expect(await page.getByLabel("To").count()).toBe(1);
     expect(await page.getByLabel("Document").count()).toBe(1);
+    expect(await page.getByLabel("Body").count()).toBe(1);
     await page.goto(`http://127.0.0.1:${port}/#/projects`);
     await page.waitForSelector("table tbody tr");
     expect(await page.getByRole("columnheader", { name: "Actions" }).count()).toBe(1);
