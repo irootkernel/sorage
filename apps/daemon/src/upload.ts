@@ -136,6 +136,11 @@ export function consumeMultipartUpload(
                 (fields[currentField] as string[]).push(value);
               }
               buffer = buffer.subarray(index + delimiter.length);
+              if (buffer.subarray(0, 2).toString("latin1") === "--") {
+                stage = "done";
+                finish();
+                return;
+              }
               stage = "headers";
               continue;
             }
@@ -167,6 +172,13 @@ export function consumeMultipartUpload(
             else file = part;
           }
           buffer = buffer.subarray(index + delimiter.length);
+          // `--boundary--` is the terminator. Detect it here, not after headers,
+          // so a body or file whose bytes start with `--` (YAML frontmatter) is kept.
+          if (buffer.subarray(0, 2).toString("latin1") === "--") {
+            stage = "done";
+            finish();
+            return;
+          }
           stage = "headers";
           continue;
         }
@@ -183,12 +195,6 @@ export function consumeMultipartUpload(
           buffer = buffer.subarray(terminator + 4);
           currentField = /name="([^"]*)"/.exec(headerBlock)?.[1] ?? "";
           currentFilename = /filename="([^"]*)"/.exec(headerBlock)?.[1] ?? null;
-          if (buffer.subarray(0, 2).toString("latin1") === "--") {
-            // The closing boundary: the form is complete.
-            stage = "done";
-            finish();
-            return;
-          }
           if (currentField === "body") {
             if (bodyPresent || body !== null) {
               fail(appError("CONFIG_INVALID", "the upload carries more than one body field"));

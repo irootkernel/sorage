@@ -106,6 +106,59 @@ describe("upload cleanup isolation", () => {
     }
   });
 
+  it("keeps a body whose Markdown starts with YAML frontmatter dashes", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    const markdown = "---\ntitle: x\n---\n\n# Hello\n";
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      request.emit("data", part("title", undefined, "Frontmatter"));
+      request.emit("data", part("body", undefined, markdown));
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(readFileSync(result.value.body?.path ?? "").toString("utf8")).toBe(markdown);
+      result.value.cleanup();
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid UTF-8 body and leaves no spool", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      request.emit("data", part("title", undefined, "Broken"));
+      request.emit(
+        "data",
+        Buffer.concat([
+          Buffer.from('--b\r\nContent-Disposition: form-data; name="body"\r\n\r\n'),
+          Buffer.from([0xff, 0xfe]),
+          Buffer.from("\r\n"),
+        ]),
+      );
+      request.emit("data", closing);
+      request.emit("end");
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a file part and a body field together", async () => {
     const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-unit-"));
     try {
