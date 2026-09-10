@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-011`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -81,7 +81,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-008` | Git backup and restore | M3 | Completed | `TASK-052` to `TASK-058` |
 | `EPIC-009` | Hardening, packaging, and first public release | M3 | Completed | `TASK-059` to `TASK-079` |
 | `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
-| `EPIC-011` | Web User body compose for Handoff creation | M5 | Planned | `TASK-083` to `TASK-084` |
+| `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -285,10 +285,10 @@ The `review show` and `events` CLI JSON goldens are additive and classified as n
 
 ## EPIC-011: Web User body compose for Handoff creation
 
-- **Status:** Planned
+- **Status:** Completed
 - **Milestone:** M5
 - **Objective:** Let the local User create a Handoff from the Web compose form by supplying a title and inline Markdown body, without a file, without inventing a ticket domain, and without pretending the browser is an unregistered workspace.
-- **Detailed SOT:** none; execution context lives in this section and [ADR-0025](../architecture-decision-records/README.md)
+- **Canonical Outcomes:** [ADR-0025](../architecture-decision-records/README.md), [Required specification](../specs/required-specification.md), [Interfaces and operations](../specs/interfaces-and-operations.md), [Testing and acceptance](../specs/testing-and-acceptance.md), [Architecture](../architecture/README.md)
 - **Prerequisite:** `EPIC-010` is `Completed`. Do not append these Tasks to `EPIC-010`.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |

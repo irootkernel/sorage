@@ -17,3 +17,13 @@ These two Low findings were confirmed during the EPIC-010 validation audit. Curr
 - **Impact:** `createNodeReviewPorts` opens a second SQLite connection and a second review store after `createNodeHandoffReadPorts` already returned one. `sorage review show` uses only the read factory, so current CLI detail reads are unaffected. Later store statefulness or connection-affine locking could split mutation and read behavior.
 - **Owner:** `docs/deferred-feedback/README.md` (originating factory in the adapters package)
 - **Re-entry:** Reuse the read factory's review store and connection from `createNodeReviewPorts` if the review store becomes stateful or connection-affine. Do not reopen EPIC-010 for this factory cleanup.
+
+## EPIC-011 whole-epic audit
+
+This Low finding was confirmed during the EPIC-011 validation audit. Current body-upload emptiness rejection is correct; the entry captures independent event-loop hardening.
+
+### Body emptiness rescan on the request callback
+
+- **Impact:** After a `body` field is streamed to a spool, `utf8EmptyAfterTrim` re-reads the file with `readSync` on the daemon request callback so empty and whitespace-only UTF-8 text fail with `CONFIG_INVALID`. A body near `artifact.maxBytes` that is only whitespace can stall the loopback event loop for the duration of that scan. Non-whitespace bodies return as soon as the first non-trim character is decoded, and current AJ-18 plus upload tests pass.
+- **Owner:** `docs/deferred-feedback/README.md` (originating requirement API-013 / TASK-084)
+- **Re-entry:** Track non-whitespace UTF-8 while spooling the `body` field, or move the post-stream scan off the request callback, then add a focused test that a large whitespace-only body still fails with `CONFIG_INVALID` and leaves no spool. Do not reopen EPIC-011 for this scan.
