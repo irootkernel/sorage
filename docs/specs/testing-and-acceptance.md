@@ -97,7 +97,7 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, and AJ-17 for M4.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, and AJ-18 for M5.
 
 `Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
 
@@ -363,6 +363,20 @@ Expected: the downloaded bytes match the checksum and manifest, the ad-hoc signa
 
 Expected: the sender cannot learn the Note body from `inbox`, `outbox`, or `get`; `review show` returns it without recording a fetch or incrementing Row Version; sender `fetch` does not set `firstFetchedAt`; `revise` then `accept` close the loop; `events` is newest-first metadata; a box-only check never calls `review show`, `fetch`, or `revise`. AJ-01 to AJ-16 still pass.
 
+### AJ-18: User creates a Handoff from Web compose body text
+
+- **Owner:** `EPIC-011` · **Milestone:** M5
+- **Requirements:** WEB-019, API-013, HND-023
+
+1. Register two Projects and open the Web compose form as the User.
+2. Send a title and a non-empty Markdown body to one recipient, with no file selected.
+3. Confirm the created Handoff UUID appears, `senderKind` is `user`, and the current Artifact is Markdown named `<title-slug>-1.md`.
+4. Open the recipient inbox and preview the Artifact; the body text is the supplied Markdown.
+5. On the compose form, attempt both a file and a body, then neither; the UI refuses to submit.
+6. Send a file-only upload on the same form, with no `body` part, and confirm it still creates a Handoff whose Artifact bytes match the file.
+
+Expected: step 2 creates exactly one Handoff in `awaiting_recipient` with User sender and a materialized Markdown Artifact; step 5 never reaches the server; step 6 keeps the M2 file-upload path; the form never offers a Project-sender picker, unregistered-workspace identity, or an allow-unregistered control. Body fan-out, UI-bypassed XOR and empty-body rejections, `artifact.maxBytes` abort with spool cleanup, and idempotency replay are proven by `apps/daemon/test/int/upload.int.test.ts` and the upload contract fixtures of `TASK-084`, not by this journey. AJ-01 to AJ-17 still pass.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -396,6 +410,7 @@ The remaining journeys carry the v0.4.0 decisions that have no v0.3.0 criterion,
 | AJ-07 | Every reachable state has a next move without a human, through decline, withdraw, Note withdrawal, and the bounded no-change resolution (ADR-0014) |
 | AJ-08 | The intent-log protocol survives all seven crash points, and retries are idempotent (ADR-0013) |
 | AJ-17 | A sender AI session reads the Review Note through `sorage review show` before revising, and a box-only outbox check does not open it (ADR-0024) |
+| AJ-18 | The User creates a Handoff from Web compose body text without a file, as User, with the M2 file-upload path unchanged (ADR-0025) |
 | AJ-09 | Vault relocation is atomic in effect and pauses the service instead of racing it |
 | AJ-10 | Deletion stays two-phase, requires a terminal review state, and never overstates what it removed |
 | AJ-11 | Daemon discovery, port conflict, and graceful drain |
@@ -452,7 +467,7 @@ TASK-060 additionally binds every row of the section 15 matrix to a permanent au
 
 ## 9. Release gates
 
-Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the M3 gate (GEN-013). M4 is the first post-MVP gate (ADR-0024).
+Each milestone closes with its own gate, and a gate passes only when every condition below holds; the MVP is complete only at the M3 gate (GEN-013). M4 is the first post-MVP gate (ADR-0024). M5 is the next post-MVP gate (ADR-0025).
 
 ### 9.1 Gate M1, CLI release, end of `EPIC-006`
 
@@ -508,6 +523,19 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 - `sorage get --json` matches its pre-M4 golden envelope.
 - The `review show` and `events` CLI JSON goldens are classified additive non-breaking under section 9.4.
 - `skills/use-sorage/SKILL.md` follows GEN-014 and GEN-015. A requested inbox or outbox check does not call `review show`, `fetch`, or `revise`. A requested Handoff processing sequence for a Handoff with a Review Note runs `get`, `review show`, `fetch`, then `revise` or `--no-change`. Record the observed agent decisions separately from automated structural checks; prose matching is not behavior verification.
+- No open P0 or P1 defect.
+
+### 9.6 Gate M5, Web body-compose release, end of `EPIC-011`
+
+- AJ-18 passes against the compiled binary, and AJ-01 to AJ-17 still pass unchanged.
+- Every requirement listed under milestone M5 in section 17 of [required-specification.md](required-specification.md) is satisfied.
+- A body-only upload materializes one Markdown Artifact through the HND-023 rule; a present `body` streams to disk under `artifact.maxBytes` and is not buffered whole in memory.
+- A body fan-out to two recipients creates independent Handoffs and one dispatch group (WEB-008).
+- Requests that carry both a file and a `body` field, neither, an empty or whitespace-only `body`, or more than one `body` field fail with `CONFIG_INVALID` and create no Handoff, including when the UI is bypassed.
+- A `body` that crosses `artifact.maxBytes` fails with `ARTIFACT_TOO_LARGE` mid-stream and leaves no spool file.
+- A replay with the same `Idempotency-Key` and the same body returns the original result; a different body under that key fails with `IDEMPOTENCY_CONFLICT`.
+- The existing file-only upload path is unchanged when it omits `body`.
+- Contract fixtures pin file-success, body-success, and input-error request/response envelopes; the snapshot diff is classified additive non-breaking under section 9.4, with no configuration, database, Vault, CLI, or protocol migration.
 - No open P0 or P1 defect.
 
 ## 10. Defect severity

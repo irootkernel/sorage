@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024.
+This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024 and milestone `M5` under ADR-0025.
 
 It sits below [../specs/required-specification.md](../specs/required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), [../architecture/README.md](../architecture/README.md), and [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md) in the authority order of [../governance/README.md](../governance/README.md); where this roadmap disagrees with any of them, they win and this file is corrected.
 
@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-011`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-084`
 
 ## 3. Identifier policy
 
@@ -63,8 +63,9 @@ This repository has not enrolled a Design Gate registry; every task records `Des
 | M2 daemon and Web release | M2 | `EPIC-007` | AJ-11 to AJ-13 | local `M2` snapshot |
 | M3 MVP release | M3 | `EPIC-009` | AJ-14 to AJ-16, with every earlier journey still passing | local `M3` snapshot |
 | M4 CLI detail-read release | M4 | `EPIC-010` | AJ-17, with every earlier journey still passing | local `M4` snapshot |
+| M5 Web body-compose release | M5 | `EPIC-011` | AJ-18, with every earlier journey still passing | local `M5` snapshot |
 
-The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
+The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. `M5` is the next post-MVP gate (ADR-0025) and does not reopen `M1` through `M4`. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
 
 ## 7. Epic registry
 
@@ -80,6 +81,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-008` | Git backup and restore | M3 | Completed | `TASK-052` to `TASK-058` |
 | `EPIC-009` | Hardening, packaging, and first public release | M3 | Completed | `TASK-059` to `TASK-079` |
 | `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
+| `EPIC-011` | Web User body compose for Handoff creation | M5 | Planned | `TASK-083` to `TASK-084` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -280,6 +282,19 @@ ADR-0023 classifies the `0.3.0` to `0.1.0` product-version reset as a breaking o
 ### TASK-081 contract record
 
 The `review show` and `events` CLI JSON goldens are additive and classified as non-breaking. The `sorage get` snapshot `apps/cli/test/contract/golden/tour/17-get.json` is unchanged. HTTP DTOs, protocol DTOs, the configuration schema, and the database schema are not in scope; no configuration, database, Vault, HTTP, or protocol migration applies.
+
+## EPIC-011: Web User body compose for Handoff creation
+
+- **Status:** Planned
+- **Milestone:** M5
+- **Objective:** Let the local User create a Handoff from the Web compose form by supplying a title and inline Markdown body, without a file, without inventing a ticket domain, and without pretending the browser is an unregistered workspace.
+- **Detailed SOT:** none; execution context lives in this section and [ADR-0025](../architecture-decision-records/README.md)
+- **Prerequisite:** `EPIC-010` is `Completed`. Do not append these Tasks to `EPIC-010`.
+
+| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
+|---|---|---|---|---|---|---|---|
+| `TASK-083` | Completed | M5 | Chore: adopt post-MVP milestone `M5` and the Web body-compose Source of Truth: ADR-0025, Source of Truth version `0.6.0`, `WEB-019`, `API-013`, the upload XOR-by-presence and body-streaming contract, AJ-18, traceability, and the M5 gate. No daemon, Web, or CLI implementation. | `bun run check:sot` exits 0; `make test-prepare` exits 0; the material-change record in ADR-0025 covers problem, decision, alternatives, compatibility, and migration; the Web compose form still requires a file in the compiled binary. | `EPIC-010` | NFR-015 | Not required |
+| `TASK-084` | Planned | M5 | Implement Web compose body text mutually exclusive with file upload by field presence, extend `POST /api/v1/handoffs/upload` so a present `body` streams to disk under `artifact.maxBytes` with the same mid-stream abort and spool cleanup as a file, materialize Markdown through the HND-023 rule as the User with `allowUnregistered` false, reject empty, whitespace-only, and duplicate `body` fields, omit a `body` part from file submits, and add AJ-18. | `make test` exits 0; a body-only upload creates one Markdown Artifact named `<title-slug>-1.md`; a body fan-out to two recipients returns independent Handoffs and one dispatch group; requests that carry both a file and a `body` field, neither, an empty or whitespace-only `body`, or more than one `body` field fail with `CONFIG_INVALID` and create no Handoff even when the UI is bypassed; a `body` that crosses `artifact.maxBytes` fails with `ARTIFACT_TOO_LARGE` mid-stream and leaves no spool file; a replay with the same `Idempotency-Key` and the same body returns the original result, and a different body under that key fails with `IDEMPOTENCY_CONFLICT`; the existing file-upload path is unchanged when it omits `body`; contract fixtures pin file-success, body-success, and input-error request/response envelopes and the snapshot diff is classified additive non-breaking with no configuration, database, Vault, CLI, or protocol migration; findings become new Tasks appended to `EPIC-011`. | `TASK-083` | WEB-019, API-013, HND-023, WEB-007, WEB-008, API-003, API-005, WEB-017, NFR-005 | Not required |
 
 ## 8. Epic completion and change rules
 

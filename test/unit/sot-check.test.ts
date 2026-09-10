@@ -184,7 +184,7 @@ describe("sot-check", () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, or M4');
+    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, or M5');
   });
 
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {

@@ -129,7 +129,7 @@ Project A targets Projects B, C, and D; Sorage creates three independent Handoff
 
 ### UC-04: User uploads through the Web
 
-The User uploads a document, selects a sender identity, selects recipient Projects, and creates independent Handoffs, each with its own displayed UUID.
+The User uploads a document or, from milestone M5, supplies inline Markdown body text, selects recipient Projects, and creates independent Handoffs, each with its own displayed UUID. The Web sender is the User; unregistered-workspace identity stays a CLI provenance path.
 
 ### UC-05: Review and revision
 

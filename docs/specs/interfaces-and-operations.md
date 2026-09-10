@@ -4,7 +4,7 @@ This document owns the concrete surfaces of Sorage: filesystem layout, CLI synta
 
 It sits below [required-specification.md](required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), and [../architecture/README.md](../architecture/README.md); where this document appears to disagree with any of them, they win.
 
-Every surface is tagged with the milestone at which it must exist: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, `M3` Git backup, scheduling, and packaging, and `M4` CLI Handoff detail reads.
+Every surface is tagged with the milestone at which it must exist: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, `M3` Git backup, scheduling, and packaging, `M4` CLI Handoff detail reads, and `M5` Web User body compose.
 
 ## 1. Canonical product and runtime identity
 
@@ -956,7 +956,7 @@ GET  /api/v1/handoffs/{handoffId}/events
 POST /api/v1/handoffs/{handoffId}/artifact/reveal
 ```
 
-`POST /api/v1/handoffs/upload` streams multipart with a bounded buffer and enforces `artifact.maxBytes` mid-stream (API-003, NFR-005).
+`POST /api/v1/handoffs/upload` streams multipart with a bounded buffer and enforces `artifact.maxBytes` mid-stream (API-003, NFR-005). From milestone M5 the same endpoint treats a file part and a `body` field as mutually exclusive by field presence (API-013). A request that carries both, neither, more than one `body` field, or a `body` whose UTF-8 text is empty after trimming fails with `CONFIG_INVALID` and creates no Handoff. A present `body` is streamed to disk under the same `artifact.maxBytes` mid-stream abort and spool-cleanup rules as a file part, then materialized through the HND-023 Markdown Artifact rule, while the actor remains the User with `allowUnregistered` false (WEB-019, NFR-005). A file-only upload MUST omit the `body` field entirely; an empty `body=""` next to a file is both, not a file-only send.
 
 `GET /api/v1/handoffs/{handoffId}/artifact/content` returns `Content-Length`, an `ETag` equal to the recorded SHA-256, `Accept-Ranges: bytes` with `Range` support for resumable download, the `Content-Type` decided by section 11.2, and `Content-Disposition: attachment; filename="<originalName>"` for everything that is not previewable text.
 
@@ -1117,11 +1117,13 @@ The timeline must never imply that historical Artifact content is retrievable.
 
 The upload form is milestone M2 and includes (WEB-007):
 
-- Sender: a registered Project or User upload
+- Sender: the User. The M2 draft listed a registered-Project-or-User choice, but the shipped form always sends as the User and has no sender picker; WEB-007 requires upload creation, not that picker. A Project-sender picker remains unshipped residual work outside EPIC-011.
 - One or more recipient Projects
 - Title
 - File upload, streamed as multipart
 - Optional superseded Handoff
+
+From milestone M5 the same form also accepts inline Markdown body text in place of a file (WEB-019, API-013). File and body are mutually exclusive by field presence. The acting sender is the User; the form does not offer a Project-sender picker, unregistered-workspace identity, or an allow-unregistered analogue, and a file submit does not include a `body` part. A body is streamed to disk and materialized as a Markdown Artifact through the same rule as `send --body` (HND-023). The body field is a compose control, not an embedded Artifact editor (WEB-017).
 
 For several recipients the form states explicitly that independent Handoffs will be created, and after submission it displays every Handoff UUID together with the Dispatch Group UUID (WEB-008).
 

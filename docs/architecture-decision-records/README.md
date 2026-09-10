@@ -694,7 +694,7 @@ The product-version rebaseline is breaking for consumers that compare version or
 
 ## ADR-0024: Post-MVP milestone M4 and CLI Handoff detail reads
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-09-10 by ADR-0025)
 - **Date:** 2026-09-09
 - **Amends:** ADR-0018 (skill processing sequence); ADR-0019 (milestone series after the MVP)
 
@@ -737,3 +737,49 @@ The CLI JSON change is additive and non-breaking: new commands gain new goldens,
 - Milestone `M4` is the first post-MVP release gate and closes after `EPIC-010`.
 - `core` already implements `readReviewNote` and `readHandoffTimeline`; M4 work is CLI wiring, contract goldens, the skill sequence, and the sender journey.
 - Findings that block the M4 gate append to `EPIC-010`, not to `EPIC-009`.
+- ADR-0025 opens milestone `M5` after this gate closes and does not reopen `M4`.
+
+## ADR-0025: Post-MVP milestone M5 and Web User body compose
+
+- **Status:** Accepted
+- **Date:** 2026-09-10
+- **Amends:** ADR-0024 (milestone series after `M4`)
+
+### Context
+
+A human can already send a short request without a file through `sorage send --title <t> --body <text>`, including from an unregistered workspace when `--allow-unregistered` is supplied (HND-023, PRJ-019, UC-02). The Web compose form cannot: `POST /api/v1/handoffs/upload` requires a file part, the SPA refuses an empty file input, and the JSON `--body` path is `POST /api/v1/handoffs/import-path`, which is CLI-token-only because it carries a filesystem path (API-004).
+
+The browser session is User-admin context (architecture §2.3, UC-04). Unregistered identity is `SHA-256(installationId + "\n" + normalizedWorkspacePath)` and exists so a later bind can inherit sender authority. A compose form has no working directory, so offering unregistered identity would invent provenance the operator did not stand in and would need a Web analogue of the downgrade guard.
+
+`scripts/sot-check` and the Task start checklist accept only `M1` through `M4`. New Web-creation requirements cannot be dated `M2` without reopening the closed daemon-and-Web gate, and dating them `M4` would reopen `EPIC-010` after its gate closed.
+
+The charter still excludes a ticket tracker: one Handoff, one current Artifact, one current Review Note.
+
+### Decision
+
+Post-MVP work after `M4` uses milestone identifier `M5` for Web User body compose. `M1` through `M4` remain closed. Source of Truth document version `0.6.0` records this amendment; product SemVer, `/api/v1`, configuration schema `1`, database schema `1`, and Vault schema `1` stay independent.
+
+The Web compose form gains inline Markdown body text, mutually exclusive with file upload by field presence (WEB-019). The shipped form's sender is the User; this records the M2 implementation rather than adding a picker. `POST /api/v1/handoffs/upload` treats a file part and a `body` field as XOR by presence, rejects both, neither, a duplicate `body`, or a `body` that is empty after trimming, streams a present `body` to disk under `artifact.maxBytes` with the same mid-stream abort and spool cleanup as a file, and materializes it through the HND-023 Markdown Artifact rule (API-013). `allowUnregistered` stays false. The form does not offer a Project-sender picker, unregistered-workspace identity, or an `--allow-unregistered` analogue, and a file submit omits the `body` part. The body field is a compose control, not an embedded Artifact editor (WEB-017).
+
+The resulting object remains a Handoff. No ticket entity, board, or comment thread is introduced.
+
+### Alternatives considered
+
+- Call the feature a ticket and add tracker semantics | rejected: the charter excludes a ticket tracker, and G-03 keeps review at one current Note.
+- Send as `unregistered_workspace` from the browser, with a path field and an allow-unregistered confirmation | rejected: unregistered identity is cwd provenance; the browser has none, and faking a path would mis-attribute later outbox inheritance.
+- Date the work `M4` and append it to `EPIC-010` | rejected: every member Task of that Epic is terminal, and dating new requirements `M4` would reopen a passed gate.
+- Date the work `M2` and reinterpret WEB-007 as allowing a missing file | rejected: WEB-007 is an M2 file-upload requirement; stretching it is a silent material change to a closed gate.
+- Add a new JSON create route for browser body-only sends | rejected for this Epic: the upload endpoint already creates Handoffs for the User; extending it with a `body` field keeps one create path. A second route remains available later if the multipart parser cannot treat a text field honestly.
+- Ship a Project-sender picker on the same form | rejected for this Epic: the shipped compose path is already User-only; WEB-007 requires upload creation, not a sender picker; a picker remains unshipped residual work outside EPIC-011.
+- Buffer `body` as an ordinary multipart text field | rejected: the parser already caps unseen-boundary text at 64 KiB in memory, which is a different limit from `artifact.maxBytes` and would violate NFR-005 if raised.
+
+### Compatibility and migration
+
+The HTTP change is additive: an existing file-only multipart upload keeps working when it omits a `body` field. A present `body` field is new. The Web compose sender remains the User; this corrects the M2 form description to match the shipped path rather than changing actor provenance. No CLI, configuration, database, Vault, or protocol DTO migration applies. Installations pick up the form by upgrading the binary that serves the Web assets.
+
+### Consequences
+
+- Milestone `M5` is the next post-MVP release gate and closes after `EPIC-011`.
+- Findings that block the M5 gate append to `EPIC-011`, not to `EPIC-010`.
+- CLI `send --body` and unregistered-workspace sends are unchanged.
+- `TASK-083` is the documentation-adoption Chore; `TASK-084` implements the streamed upload XOR, the compose textarea, and the upload contract fixtures.

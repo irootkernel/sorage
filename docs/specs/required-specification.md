@@ -8,11 +8,11 @@ Sorage is developed, tested, and released from the standalone repository `irootk
 
 The MVP is delivered in three milestones: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, and `M3` Git backup, scheduling, and packaging. Those three gates are closed. Post-MVP work uses milestone identifiers `M4` and above (ADR-0024).
 
-Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
+Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, `M5`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
 
 A requirement whose clauses span gates carries the earliest of them and phrases the later clause conditionally, as in "once the daemon exists".
 
-The MVP is complete when the M3 MVP release gate passes; passing the M1 CLI release gate or the M2 daemon and Web release gate does not complete it. Post-MVP requirements are satisfied at their own gates and MUST NOT reopen `M1`, `M2`, or `M3`.
+The MVP is complete when the M3 MVP release gate passes; passing the M1 CLI release gate or the M2 daemon and Web release gate does not complete it. Post-MVP requirements are satisfied at their own gates and MUST NOT reopen `M1`, `M2`, `M3`, or `M4`.
 
 Section 17 summarizes the milestones, their requirement scope, and their release gates.
 
@@ -278,6 +278,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | API-010 | M2 | Preview endpoints MUST enforce ownership and safe MIME handling. |
 | API-011 | M2 | The mapping from symbolic error code to HTTP status MUST be published in `interfaces-and-operations.md` and MUST be verified by `make test-contract`. |
 | API-012 | M2 | Endpoints that accept `Idempotency-Key: <uuid>` MUST evaluate replay detection before the Row Version check. |
+| API-013 | M5 | `POST /api/v1/handoffs/upload` MUST treat a file part and a `body` field as mutually exclusive by field presence, MUST reject a request that carries both, neither, more than one `body` field, or a `body` whose UTF-8 text is empty after trimming, MUST stream a present `body` to disk under the same `artifact.maxBytes` mid-stream abort and spool-cleanup rules as a file part (NFR-005), MUST materialize a `body` through the same Markdown Artifact rule as HND-023, and MUST keep User context with `allowUnregistered` false. |
 
 ## 13. Web UI
 
@@ -301,6 +302,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | WEB-016 | Deferred | A dedicated Web Vault relocation screen MAY be added after the MVP, and within the MVP relocation MUST use `sorage vault move --to <path>`. |
 | WEB-017 | M2 | The MVP Web UI MUST NOT provide an embedded Artifact editor. |
 | WEB-018 | M2 | Web SHOULD meet basic keyboard, semantic labeling, focus, contrast, and error-announcement requirements, checked by axe-core in `make test-e2e` as engineering practice rather than as a release gate. |
+| WEB-019 | M5 | User MUST be able to create Handoffs from the Web compose form by supplying inline Markdown body text, mutually exclusive with file upload. The acting sender MUST be the User. The form MUST NOT offer a Project-sender picker, unregistered-workspace identity, or an `--allow-unregistered` analogue, and MUST NOT include a `body` part when sending a file. |
 
 ## 14. Git backup
 
@@ -389,8 +391,9 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | M2 | GEN-005, GEN-006; RUN-005, RUN-006, RUN-008, RUN-012, RUN-013; VLT-010; API-001..012; WEB-001..015, WEB-017, WEB-018; SEC-001..003, SEC-015, SEC-017..020 | M2 daemon and Web release |
 | M3 | INIT-004, INIT-007..010, INIT-016; RUN-007, RUN-011; CLI-006; BKP-001..026; NFR-004 | M3 MVP release |
 | M4 | GEN-015; CLI-022, CLI-023 | M4 CLI detail-read release |
+| M5 | API-013; WEB-019 | M5 Web body-compose release |
 | Deferred | WEB-016 | None; revisited after the MVP |
 
-Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, and EPIC-010 for M4, as recorded in `../roadmap/README.md`.
+Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, EPIC-010 for M4, and EPIC-011 for M5, as recorded in `../roadmap/README.md`.
 
-The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4 does not reopen those gates.
+The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4 and M5 do not reopen those gates.

@@ -112,7 +112,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
 - Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
-- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, or `M4`.
+- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, or `M5`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
 - Confirm the `Design Gate impact` cell, which is `Not required` for every Task in this repository because no Design Gate registry is enrolled, and record that reason rather than leaving the cell empty.
@@ -176,7 +176,7 @@ A review MUST verify:
 
 ## 12. Release change freeze
 
-Each milestone has its own release gate, and the freeze applies from the moment a milestone enters its release candidate until that gate passes. `M1`, `M2`, and `M3` are closed; post-MVP freezes apply per later milestone, beginning with `M4`.
+Each milestone has its own release gate, and the freeze applies from the moment a milestone enters its release candidate until that gate passes. `M1`, `M2`, `M3`, and `M4` are closed; post-MVP freezes apply per later milestone, beginning with `M4`, and `M5` is the current post-MVP gate (ADR-0025).
 
 - Schema changes require an accepted architecture decision.
 - CLI or API breaking changes require an accepted architecture decision.

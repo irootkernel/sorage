@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.5.0`
+- **Source of Truth version:** `0.6.0`
 
 ## Role ownership
 
