@@ -1,9 +1,10 @@
-version: 3
+version: 4
 project:
   name: "sorage"
 providers:
   zcode: {}
-  agy: {}
+  grok: {}
+  codex: {}
 execution:
   workspace_access: "none"
 roles:
