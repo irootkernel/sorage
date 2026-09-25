@@ -53,7 +53,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 ## Aquarium Development Guide
 
 - Use `$aquarium:task-handler` for one named roadmap task, `$aquarium:epic-handler` for one roadmap epic, and `$aquarium:epic-validator` to cold-validate a completed epic.
-- Use `$aquarium:task-commit` for every authorized commit and the `task-review` phase of `$aquarium:task-handler` for the Task review.
+- Use `$aquarium:task-commit` for every authorized commit. A standalone Task uses the `task-review` phase of `$aquarium:task-handler`; a member Task in an explicitly invoked Epic uses the approved delegated review route of `$aquarium:epic-handler`.
 - Use `$aquarium:dev-setup` to diagnose or configure development tooling.
 - Podway, Mulgae, Gaori, and Sanho are optional development tooling configured by `$aquarium:dev-setup`; none of them is required to build, test, or release Sorage.
 - Use `$lore-commits` for non-trivial commit messages and `$lore-query` to inspect recorded decision context.
@@ -97,7 +97,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 - Task statuses are exactly `Planned`, `In Progress`, `In Review`, `Completed`, `Blocked`, and `Deferred`, case-sensitive, because the Aquarium roadmap hook matches them literally.
 - At most one Task may be `In Progress` and at most one other Task may be `In Review`; the `In Review` Task must close before a third Task starts.
 - Every commit goes through `$aquarium:task-commit` once a roadmap file is tracked, which runs the gate as `AQUARIUM_COMMIT_GATE=task-commit-v1 git commit ...`.
-- The Reviewer is a separate AI session that runs the `task-review` phase of `$aquarium:task-handler`, which drives Mulgae against the completed Task target; the implementing session never reviews its own diff.
+- The Reviewer is a separate AI session with no write access to the implementation diff. A standalone Task uses `$aquarium:task-handler`'s `task-review` phase; a member Task under `$aquarium:epic-handler` uses its approved delegated review route. The implementing session never reviews its own diff.
 
 #### Definition Of Done
 

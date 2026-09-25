@@ -148,7 +148,7 @@ A Contract Task is any Task that touches the `protocol` DTOs, the CLI JSON contr
 
 ## 10. Reviewer and review rules
 
-The Reviewer is a separate AI session that runs the `task-review` phase of `$aquarium:task-handler`, which drives Mulgae against the completed Task target; it has no write access to the implementation diff, and its verdict is recorded in the Task implementation report.
+The Reviewer is a separate AI session with no write access to the implementation diff. A standalone Task uses the `task-review` phase of `$aquarium:task-handler`; a member Task in an explicitly invoked `$aquarium:epic-handler` workflow uses that handler's approved delegated review route against the exact Task candidate. The verdict and criterion assessments are recorded in the Task implementation report or the Epic handler's Goal evidence and commit handoff, respectively. A review waiver does not satisfy the Reviewer requirement for a Standard or Contract Task.
 
 The implementing session MUST NOT review its own work, and an unreviewed Standard or Contract Task MUST NOT reach `Completed`.
 
