@@ -192,7 +192,14 @@ describe("AJ-13 web administration", () => {
     const markerSet = sorage(["config", "show", "--json"], { home });
     expect(jsonBody(markerSet.stdout).data.handoff.inboxMarker).toBe(true);
     await page.selectOption("select", "false");
+    const markerSave = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/v1/config") &&
+        response.request().method() === "PUT" &&
+        response.request().postDataJSON().key === "handoff.inboxMarker",
+    );
     await page.click('button[type="submit"]');
+    await markerSave;
     await page.waitForFunction(() => document.body.textContent?.includes("Saved."));
     const markerReset = sorage(["config", "show", "--json"], { home });
     expect(jsonBody(markerReset.stdout).data.handoff.inboxMarker).toBe(false);

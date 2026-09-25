@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   errorEnvelopeOf,
@@ -22,6 +24,72 @@ function unboundDir(prefix: string): string {
 }
 
 describe("AJ-05 unregistered workspaces", () => {
+  it.each([
+    { legacy: false, nested: false, format: "sender-aware", registration: "Workspace" },
+    { legacy: true, nested: false, format: "legacy", registration: "Workspace" },
+    { legacy: false, nested: true, format: "sender-aware", registration: "descendant" },
+    { legacy: true, nested: true, format: "legacy", registration: "descendant" },
+  ])("replays a $format send after $registration registration", ({ legacy, nested }) => {
+    const fixture = twoProjectFixture(`aj05-replay-${legacy}-${nested}`);
+    const workspace = unboundDir("aj05-replay-workspace-");
+    const key = legacy ? "fe9f5720-ac90-45b1-94cb-17983799b095" : "2540037e-e9c7-47b3-ab48-046713784db2";
+    const args = [
+      "send",
+      "--to",
+      "beta",
+      "--title",
+      "Workspace replay",
+      "--body",
+      "# Same",
+      "--idempotency-key",
+      key,
+      "--json",
+    ];
+    const first = sorage(args, { home: fixture.home, cwd: workspace });
+    expect(first.status).toBe(0);
+    const firstId = (envelopeOf(first) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
+      ?.handoffId;
+    if (legacy) {
+      const canonical = JSON.stringify({
+        kind: "body",
+        title: "Workspace replay",
+        to: ["beta"],
+        content: createHash("sha256").update("# Same").digest("hex"),
+        supersedes: null,
+      });
+      const db = new DatabaseSync(join(fixture.home, "state", "sorage.sqlite3"));
+      db.prepare("UPDATE idempotency_keys SET request_hash = ? WHERE key = ? AND scope = 'send'").run(
+        createHash("sha256").update(canonical).digest("hex"),
+        key,
+      );
+      db.close();
+    }
+    const registered = nested ? join(workspace, "nested") : workspace;
+    if (nested) mkdirSync(registered);
+    expect(sorage(["project", "add", "--name", "Gamma", "--dir", registered], { home: fixture.home }).status).toBe(0);
+    if (nested) {
+      expect(
+        sorage(["config", "set", "handoff.allowUnregisteredSenders", "false", "--as-user", "--json"], {
+          home: fixture.home,
+        }).status,
+      ).toBe(0);
+    }
+    const replay = sorage(args, { home: fixture.home, cwd: workspace });
+    expect(replay.status).toBe(0);
+    const data = (envelopeOf(replay) as { data: { handoffs: Array<{ handoffId: string }>; replayed: boolean } }).data;
+    expect(data.replayed).toBe(true);
+    expect(data.handoffs[0]?.handoffId).toBe(firstId);
+    if (nested) {
+      const newSend = sorage([...args.slice(0, -2), "9b7689b1-095c-4a17-aa02-8074d9ea02d9", "--json"], {
+        home: fixture.home,
+        cwd: workspace,
+      });
+      expect(errorEnvelopeOf(newSend).error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
+    }
+    const wrong = sorage(args, { home: fixture.home, cwd: fixture.workA });
+    expect(wrong.status).toBe(75);
+    expect(errorEnvelopeOf(wrong).error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
   it("sends from an unbound directory, lists the workspace outbox, and guards downgrades", () => {
     const fixture = twoProjectFixture("aj05");
     const workspace = unboundDir("aj05-workspace-");

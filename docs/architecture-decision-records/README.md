@@ -810,7 +810,7 @@ M6 adds an atomic `project rebind <project> --from <recorded-path> --to <existin
 
 ### Compatibility and migration
 
-The new CLI command, Project event type, and implicit User context are additive to the wire surfaces; existing `--as-user` and `asUser` requests continue to work. Rejecting new outgoing Handoffs from an archived Project is an intentional behavior change. The Project Binding row is updated in place, so no database, configuration, Vault, or protocol migration is required. Current backup snapshots reflect the new binding at their next generation; old Git commits are not rewritten.
+The new CLI command, Project event type, and implicit User context are additive to the wire surfaces; existing `--as-user` and `asUser` requests continue to work. The exact `PROJECT_ARCHIVED.recovery.suggestedCommand` JSON value changes and is breaking for clients that compare that text; HTTP DTO shapes remain non-breaking. Rejecting new outgoing Handoffs from an archived Project is an intentional behavior change. Retained send idempotency records written before sender-aware hashing remain replayable when the stored Handoff sender matches the current sender or the same Workspace was subsequently registered as a Project. The Project Binding row is updated in place, so no database, configuration, Vault, or protocol migration is required. Current backup snapshots reflect the new binding at their next generation; old Git commits are not rewritten.
 
 ### Consequences
 

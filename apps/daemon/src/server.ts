@@ -611,7 +611,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
               sendError(response, requestId, spool.error);
               return;
             }
-            const requestIdentity = `${method} ${url.pathname} ${spool.hash}`;
+            const requestIdentity = `${method} ${url.pathname} ${JSON.stringify({ as, asUser })} ${spool.hash}`;
             const replay = evaluateIdempotency(idempotencyStore, idempotencyKey, requestIdentity);
             if (replay.error !== undefined) {
               spool.discard();

@@ -25,7 +25,7 @@ This section is the only place in the repository where delivery status pointers 
 
 - **Active Epic:** `EPIC-012`
 - **Active Task:** None
-- **In Review Task:** `TASK-086`
+- **In Review Task:** None
 - **Next eligible Task:** None
 
 ## 3. Identifier policy
@@ -315,9 +315,9 @@ The `TASK-017` acceptance gate records the original M1 requirement for `project 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
 | `TASK-085` | Completed | M6 | Chore: adopt ADR-0026, Source of Truth version `0.7.0`, the M6 requirements and AJ-19, and update the milestone validator and traceability before implementation. | `bun run check:sot` and `make test-prepare` exit 0; the material-change record states alternatives, compatibility, and migration impact. | `EPIC-011` | NFR-015 | Not required |
-| `TASK-086` | In Review | M6 | Implement implicit User Project archive and unarchive, archived-sender rejection, and atomic `project rebind` with binding event, derived marker refresh, CLI JSON and HTTP route contracts, documentation, and AJ-19. | `make test` exits 0; AJ-19 covers lifecycle provenance, archived send rejection, rebind success and rollback; the CLI and HTTP snapshot diff is classified, and a separate Reviewer confirms the Task. | `TASK-085` | PRJ-023, PRJ-024, CLI-024, CLI-025, HND-026 | Not required |
+| `TASK-086` | Completed | M6 | Implement implicit User Project archive and unarchive, archived-sender rejection, and atomic `project rebind` with binding event, derived marker refresh, CLI JSON and HTTP route contracts, documentation, and AJ-19. | `make test` exits 0; AJ-19 covers lifecycle provenance, archived send rejection, rebind success and rollback; the CLI and HTTP snapshot diff is classified, and a separate Reviewer confirms the Task. | `TASK-085` | PRJ-023, PRJ-024, CLI-024, CLI-025, HND-026 | Not required |
 
-The `TASK-086` contract diff adds the `project rebind` CLI JSON golden without changing existing success-envelope shapes. It also changes the existing `PROJECT_ARCHIVED` error's `recovery.suggestedCommand` value to omit `--as-user`; clients that treat this human guidance as opaque remain compatible, while clients that compare its exact text must update. The archive and unarchive CLI success envelopes and HTTP DTO shapes are unchanged, while their actor context becomes implicit User. Refusing a new outgoing Handoff from an archived Project is an intentional behavior change. No database, configuration, Vault, or protocol migration is required (ADR-0026).
+The `TASK-086` CLI JSON snapshot diff is classified as breaking for clients that compare the exact `PROJECT_ARCHIVED.recovery.suggestedCommand` value, which now omits `--as-user`; those clients must update that comparison. The added `project rebind` golden and unchanged archive and unarchive success-envelope shapes are additive or non-breaking. The HTTP DTO snapshot diff is classified as non-breaking because its shapes are unchanged; archive and unarchive actor context becomes implicit User. Refusing a new outgoing Handoff from an archived Project is an intentional behavior change. Retained send idempotency records from the prior hash format remain replayable after the original Handoff's sender is verified, including a Workspace subsequently registered as a Project; a different sender cannot reuse that response. No database, configuration, Vault, or protocol migration is required (ADR-0026).
 
 ## 8. Epic completion and change rules
 

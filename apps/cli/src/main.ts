@@ -72,6 +72,7 @@ import {
   readHandoffTimeline,
   readReviewNote,
   refreshInboxMarker,
+  refreshProjectInboxMarker,
   reconcileReboundInboxMarker,
   rebindProject,
   rejectDeletion,
@@ -520,6 +521,7 @@ export function buildProgram(
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshProjectMarker(result.value.project.id, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(renderAddedProject(result.value), requestId()), null, 2)}\n`);
       } else {
@@ -649,6 +651,7 @@ export function buildProgram(
         reportExitCode(renderAppError(result.error, ports, json));
         return;
       }
+      refreshProjectMarker(result.value.projectId, ports);
       if (json) {
         ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
       } else {
@@ -2274,6 +2277,11 @@ function refreshMarker(handoffId: string, ports: OutputPorts): void {
   if (!refreshed.ok) {
     ports.err(`warning: ${refreshed.error.message}\n`);
   }
+}
+
+function refreshProjectMarker(projectId: string, ports: OutputPorts): void {
+  const refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(), projectId);
+  if (!refreshed.ok) ports.err(`warning: ${refreshed.error.message}\n`);
 }
 
 function renderUsageError(error: unknown, program: Command, ports: OutputPorts): number {

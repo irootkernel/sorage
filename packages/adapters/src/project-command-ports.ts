@@ -75,6 +75,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
     vaultPath: read.value.config.vault.path,
     projects: createSqliteProjectRepository(db, {
       installationId: read.value.config.installationId,
+      vaultPath: read.value.config.vault.path,
       fs,
       events: createSqliteEventLedger(db),
     }),

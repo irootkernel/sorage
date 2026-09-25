@@ -98,6 +98,101 @@ describe("project registry migration", () => {
 });
 
 describe("project repository", () => {
+  it("resolves replacement paths before opening the SQLite write transaction", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "web-app");
+    const oldDir = tempDir();
+    const newDir = tempDir();
+    const vault = tempDir();
+    const base = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+    });
+    const added = base.addBinding(
+      {
+        id: "21111111-1111-4111-8111-211111111111",
+        projectId: project.id,
+        directory: oldDir,
+        bindingKind: "directory",
+        createdAt: "t1",
+      },
+      TEST_ACTOR,
+    );
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    let inWriteTransaction = false;
+    const tracked: SorageSqlite = {
+      exec(sql) {
+        temp.db.exec(sql);
+        if (sql === "BEGIN IMMEDIATE") inWriteTransaction = true;
+        if (sql === "COMMIT" || sql === "ROLLBACK") inWriteTransaction = false;
+      },
+      prepare<Row = Record<string, unknown>>(sql: string) {
+        return temp.db.prepare<Row>(sql);
+      },
+      close: () => temp.db.close(),
+    };
+    const repository = createSqliteProjectRepository(tracked, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(tracked),
+      vaultPath: vault,
+      fs: {
+        realpath(path) {
+          if (inWriteTransaction) throw new Error("filesystem resolution occurred inside the write transaction");
+          return realpathSync(path);
+        },
+      },
+    });
+    const result = repository.replaceBinding(
+      added.value.id,
+      added.value.directory,
+      { directory: newDir, bindingKind: "directory", physicalPath: newDir, updatedAt: "t2" },
+      TEST_ACTOR,
+    );
+    expect(result.ok).toBe(true);
+    expect(inWriteTransaction).toBe(false);
+  });
+  it("rejects a replacement that resolves into the Vault after command validation", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "web-app");
+    const oldDir = tempDir();
+    const target = tempDir();
+    const vault = tempDir();
+    const original = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+    });
+    const added = original.addBinding(
+      {
+        id: "21111111-1111-4111-8111-211111111111",
+        projectId: project.id,
+        directory: oldDir,
+        bindingKind: "directory",
+        createdAt: "t1",
+      },
+      TEST_ACTOR,
+    );
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    const replacement = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+      vaultPath: vault,
+      fs: { realpath: (path) => (path === target ? realpathSync(vault) : realpathSync(path)) },
+    });
+    const changed = replacement.replaceBinding(
+      added.value.id,
+      added.value.directory,
+      { directory: target, bindingKind: "directory", physicalPath: target, updatedAt: "t2" },
+      TEST_ACTOR,
+    );
+    expect(changed.ok).toBe(false);
+    expect(!changed.ok && changed.error.code).toBe("VAULT_CONTAINMENT");
+    const stored = original.listBindingsForProject(project.id);
+    expect(stored.ok && stored.value[0]?.directory).toBe(realpathSync(oldDir));
+    const events = temp.db.prepare("SELECT event_type FROM events WHERE event_type = 'PROJECT_BINDING_REBOUND'").all();
+    expect(events).toHaveLength(0);
+  });
   it("returns its committed binding even when another writer rebinds before the response", () => {
     const temp = migratedDb();
     const project = seedProject(temp, "web-app");

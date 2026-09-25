@@ -5,7 +5,7 @@ import { type ArtifactStore, buildStorageKey } from "./artifacts";
 import { classifyMimeType, type PreparedImport, prepareArtifactImport } from "./import-policy";
 import { type ProjectCommandPorts, checkRecipientEligibility } from "./project-commands";
 import type { NewPendingFsOp } from "./intent-log";
-import { resolveSenderIdentity, type SenderIdentity } from "./workspace-identity";
+import { resolveSenderIdentity, type SenderIdentity, workspaceKey } from "./workspace-identity";
 import type { Clock, IdGenerator } from "./ids";
 
 /**
@@ -79,6 +79,8 @@ export interface NewArtifactRecord {
 
 export interface FanoutCommit {
   handoffs: NewHandoffRecord[];
+  /** Filesystem identity captured before staging; SQLite rechecks binding ownership at commit. */
+  unregisteredSenderPath?: { directory: string; gitCommonDirectory: string | null; allowUnregistered: boolean };
   artifacts: NewArtifactRecord[];
   intents: NewPendingFsOp[];
   events: NewDomainEvent[];
@@ -101,6 +103,12 @@ export interface HandoffWritePort {
   /** The review facts a `--supersedes` target must show, or null when it does not exist. */
   findSupersedesTarget(id: string): Result<{ reviewState: string; deletedAt: string | null } | null, AppError>;
   idempotencyLookup(key: string, scope: string): Result<{ requestHash: string; responseJson: string } | null, AppError>;
+  senderOfHandoff(
+    id: string,
+  ): Result<
+    { kind: NewHandoffRecord["senderKind"]; projectId: string | null; workspaceKey: string | null } | null,
+    AppError
+  >;
 }
 
 export interface SendPorts {
@@ -140,6 +148,7 @@ export function sendRequestHash(input: {
   contentSha256: string;
   supersedes?: string | undefined;
   kind: "file" | "body";
+  sender?: string | undefined;
 }): string {
   const canonical = JSON.stringify({
     kind: input.kind,
@@ -147,6 +156,7 @@ export function sendRequestHash(input: {
     to: [...new Set(input.to)].sort(),
     content: input.contentSha256,
     supersedes: input.supersedes ?? null,
+    ...(input.sender === undefined ? {} : { sender: input.sender }),
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -233,35 +243,18 @@ function sendStaged(
     if (!digest.ok) return err(digest.error);
     contentSha256 = digest.value;
   }
-  const requestHash = sendRequestHash({
+  const seen =
+    input.idempotencyKey === undefined ? ok(null) : ports.handoffs.idempotencyLookup(input.idempotencyKey, "send");
+  if (!seen.ok) return err(seen.error);
+  // A newly registered descendant may activate the downgrade guard for a Workspace
+  // that sent before registration. Its own exact stored request remains replayable.
+  const legacyRequestHash = sendRequestHash({
     to: input.to,
     title,
     contentSha256,
     supersedes: input.supersedes,
     kind: asBody ? "body" : "file",
   });
-
-  if (input.idempotencyKey !== undefined) {
-    const seen = ports.handoffs.idempotencyLookup(input.idempotencyKey, "send");
-    if (!seen.ok) return err(seen.error);
-    if (seen.value !== null) {
-      if (seen.value.requestHash !== requestHash) {
-        return err(
-          appError(
-            "IDEMPOTENCY_CONFLICT",
-            "this idempotency key was used with a different request; use a new key or replay the identical request",
-            {
-              idempotencyKey: input.idempotencyKey,
-            },
-          ),
-        );
-      }
-      const replayed = JSON.parse(seen.value.responseJson) as SendOutcome;
-      return ok({ ...replayed, replayed: true });
-    }
-  }
-
-  // The sender identity, with the downgrade guard of section 22.3 (PRJ-019).
   const sender: Result<SenderIdentity | { kind: "user" }, AppError> =
     input.asUser === true
       ? ok({ kind: "user" })
@@ -272,7 +265,113 @@ function sendStaged(
           allowUnregistered: input.allowUnregistered || ports.config.allowUnregisteredSenders,
           as: input.as,
         });
-  if (!sender.ok) return err(sender.error);
+  if (!sender.ok) {
+    if (sender.error.code === "SENDER_IDENTITY_DOWNGRADE" && seen.value !== null && input.as === undefined) {
+      const path = ports.projectPorts.bindings.realPath(input.path, input.userHome);
+      if (!path.ok) return err(path.error);
+      const key = workspaceKey(ports.projectPorts.installationId, path.value);
+      const original = JSON.parse(seen.value.responseJson) as SendOutcome;
+      const firstId = original.handoffs[0]?.handoffId;
+      if (firstId !== undefined) {
+        const originalSender = ports.handoffs.senderOfHandoff(firstId);
+        if (!originalSender.ok) return err(originalSender.error);
+        const workspaceRequestHash = sendRequestHash({
+          to: input.to,
+          title,
+          contentSha256,
+          supersedes: input.supersedes,
+          kind: asBody ? "body" : "file",
+          sender: `unregistered_workspace:${key}`,
+        });
+        if (
+          originalSender.value?.kind === "unregistered_workspace" &&
+          originalSender.value.workspaceKey === key &&
+          (seen.value.requestHash === workspaceRequestHash || seen.value.requestHash === legacyRequestHash)
+        ) {
+          return ok({ ...original, replayed: true });
+        }
+      }
+    }
+    return err(sender.error);
+  }
+  const senderId = senderColumns(sender.value);
+  const requestHash = sendRequestHash({
+    to: input.to,
+    title,
+    contentSha256,
+    supersedes: input.supersedes,
+    kind: asBody ? "body" : "file",
+    sender: `${senderId.senderKind}:${senderId.senderProjectId ?? senderId.senderWorkspaceKey ?? "user"}`,
+  });
+  const replaySeen = (
+    record: { requestHash: string; responseJson: string } | null,
+  ): Result<SendOutcome | null, AppError> => {
+    if (record !== null) {
+      let identical = record.requestHash === requestHash;
+      if (!identical) {
+        const prior = JSON.parse(record.responseJson) as SendOutcome;
+        const firstId = prior.handoffs[0]?.handoffId;
+        if (firstId !== undefined) {
+          const originalSender = ports.handoffs.senderOfHandoff(firstId);
+          if (!originalSender.ok) return err(originalSender.error);
+          const sameSender =
+            originalSender.value?.kind === senderId.senderKind &&
+            originalSender.value.projectId === senderId.senderProjectId &&
+            originalSender.value.workspaceKey === senderId.senderWorkspaceKey;
+          let inheritedWorkspace = false;
+          let priorWorkspaceHash: string | null = null;
+          if (
+            sender.value.kind === "registered_project" &&
+            input.as === undefined &&
+            originalSender.value?.kind === "unregistered_workspace"
+          ) {
+            const path = ports.projectPorts.bindings.realPath(input.path, input.userHome);
+            if (!path.ok) return err(path.error);
+            const key = workspaceKey(ports.projectPorts.installationId, path.value);
+            inheritedWorkspace = originalSender.value.workspaceKey === key;
+            priorWorkspaceHash = sendRequestHash({
+              to: input.to,
+              title,
+              contentSha256,
+              supersedes: input.supersedes,
+              kind: asBody ? "body" : "file",
+              sender: `unregistered_workspace:${key}`,
+            });
+          }
+          identical =
+            (record.requestHash === legacyRequestHash && (sameSender || inheritedWorkspace)) ||
+            (priorWorkspaceHash !== null && record.requestHash === priorWorkspaceHash && inheritedWorkspace);
+        }
+      }
+      if (!identical) {
+        if (sender.value.kind === "registered_project" && sender.value.project.status === "archived") {
+          return err(
+            appError("PROJECT_ARCHIVED", "the sender Project is archived and sends no new Handoffs", {
+              slug: sender.value.project.slug,
+            }),
+          );
+        }
+        return err(
+          appError(
+            "IDEMPOTENCY_CONFLICT",
+            "this idempotency key was used with a different request; use a new key or replay the identical request",
+            {
+              idempotencyKey: input.idempotencyKey,
+            },
+          ),
+        );
+      }
+      const replayed = JSON.parse(record.responseJson) as SendOutcome;
+      return ok({ ...replayed, replayed: true });
+    }
+    return ok(null);
+  };
+  const replay = replaySeen(seen.value);
+  if (!replay.ok) return err(replay.error);
+  if (replay.value !== null) {
+    return ok(replay.value);
+  }
+
   if (sender.value.kind === "registered_project" && sender.value.project.status === "archived") {
     return err(
       appError("PROJECT_ARCHIVED", "the sender Project is archived and sends no new Handoffs", {
@@ -449,6 +548,15 @@ function sendStaged(
   };
   const committed = ports.handoffs.createFanout({
     handoffs: handoffRecords,
+    ...(sender.value.kind === "unregistered_workspace"
+      ? {
+          unregisteredSenderPath: {
+            directory: sender.value.pathSnapshot,
+            gitCommonDirectory: ports.projectPorts.bindings.gitCommonDirectory(sender.value.pathSnapshot),
+            allowUnregistered: input.allowUnregistered || ports.config.allowUnregisteredSenders,
+          },
+        }
+      : {}),
     artifacts: artifactRecords,
     intents,
     events,
@@ -463,7 +571,18 @@ function sendStaged(
           }
         : undefined,
   });
-  if (!committed.ok) return err(committed.error);
+  if (!committed.ok) {
+    // Another writer may have committed the same key after the first lookup but
+    // before this transaction. Re-evaluate the stored request after rollback.
+    if (input.idempotencyKey !== undefined) {
+      const latest = ports.handoffs.idempotencyLookup(input.idempotencyKey, "send");
+      if (!latest.ok) return err(latest.error);
+      const racedReplay = replaySeen(latest.value);
+      if (!racedReplay.ok) return err(racedReplay.error);
+      if (racedReplay.value !== null) return ok(racedReplay.value);
+    }
+    return err(committed.error);
+  }
 
   // Execute the committed intents outside any transaction, then complete each in one
   // short transaction: materialized, intent cleared, activation event appended. A

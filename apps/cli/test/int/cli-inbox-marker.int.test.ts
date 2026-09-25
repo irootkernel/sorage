@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
+import { acquireLock, createNodeLockProbePorts } from "@sorage/adapters/src/lockfile";
 import { reconcileReboundInboxMarker } from "@sorage/core";
 import { runCli } from "../../src/main";
 
@@ -128,6 +129,33 @@ describe("the derived inbox marker behind handoff.inboxMarker", () => {
     expect(readFileSync(markerOf(workB1), "utf8")).toContain(id);
   });
 
+  it("commits a new binding when advisory marker lock contention times out", () => {
+    const { home } = fixture();
+    const extra = join(home, "extra-binding");
+    mkdirSync(extra);
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const held = acquireLock({
+      path: join(home, "run", "inbox-marker.lock"),
+      lock: "inbox-marker",
+      ports: createNodeLockProbePorts(),
+    });
+    expect(held.ok).toBe(true);
+    if (!held.ok) return;
+    try {
+      const bound = run(["project", "bind", "beta", "--dir", extra]);
+      expect(bound.exit).toBe(0);
+      expect(bound.err).toContain("warning:");
+    } finally {
+      held.release();
+    }
+    const markerPorts = createNodeInboxMarkerPorts();
+    const beta = markerPorts.projectPorts.projects.findProjectBySlug("beta");
+    expect(beta.ok && beta.value !== null).toBe(true);
+    if (!beta.ok || beta.value === null) return;
+    const bindings = markerPorts.projectPorts.projects.listBindingsForProject(beta.value.id);
+    expect(bindings.ok && bindings.value.some((binding) => binding.directory === realpathSync(extra))).toBe(true);
+  });
+
   it("moves the derived marker when a recipient binding is rebound", () => {
     const { home, workB1, workB2 } = fixture();
     const workB3 = join(home, "work-b3");
@@ -155,12 +183,33 @@ describe("the derived inbox marker behind handoff.inboxMarker", () => {
     if (!beta.ok || beta.value === null) return;
     expect(run(["project", "rebind", "beta", "--from", workB1, "--to", workB3]).exit).toBe(0);
     expect(run(["project", "add", "--name", "Gamma", "--dir", workB1]).exit).toBe(0);
+    expect(readFileSync(markerOf(workB1), "utf8")).toContain("(no open Handoffs)");
     expect(run(["send", "--as", "alpha", "--to", "gamma", "--title", "Gamma inbox", "--body", "# Gamma"]).exit).toBe(0);
     const gammaMarker = readFileSync(markerOf(workB1), "utf8");
     expect(gammaMarker).toContain("Gamma inbox");
     const delayed = reconcileReboundInboxMarker(markerPorts, beta.value.id, realpathSync(workB1), realpathSync(workB3));
     expect(delayed.ok).toBe(true);
     expect(readFileSync(markerOf(workB1), "utf8")).toBe(gammaMarker);
+  });
+
+  it("replaces a retired marker with a new owner's empty inbox after path reuse", () => {
+    const { home, workB1 } = fixture();
+    const workB3 = join(home, "work-b3");
+    mkdirSync(workB3);
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const betaHandoff = send("Beta before reuse");
+    const stale = readFileSync(markerOf(workB1), "utf8");
+    const markerPorts = createNodeInboxMarkerPorts();
+    const beta = markerPorts.projectPorts.projects.findProjectBySlug("beta");
+    expect(beta.ok && beta.value !== null).toBe(true);
+    if (!beta.ok || beta.value === null) return;
+    expect(run(["project", "rebind", "beta", "--from", workB1, "--to", workB3]).exit).toBe(0);
+    expect(run(["project", "add", "--name", "Gamma", "--dir", workB1]).exit).toBe(0);
+    writeFileSync(markerOf(workB1), stale);
+    const delayed = reconcileReboundInboxMarker(markerPorts, beta.value.id, realpathSync(workB1), realpathSync(workB3));
+    expect(delayed.ok).toBe(true);
+    expect(readFileSync(markerOf(workB1), "utf8")).toContain("(no open Handoffs)");
+    expect(readFileSync(markerOf(workB1), "utf8")).not.toContain(betaHandoff);
   });
 
   it("keeps the marker when a binding changes kind at the same stored directory", () => {

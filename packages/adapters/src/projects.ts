@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
-import { type AppError, appError, err, ok, UuidGenerator, workspaceRootOf } from "@sorage/core";
+import { type AppError, appError, checkVaultContainment, err, ok, UuidGenerator, workspaceRootOf } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import type { SorageSqlite } from "./sqlite/connection";
 
@@ -45,6 +46,8 @@ export interface SqliteProjectRepositoryOptions {
    * from the config store and the repository never trusts a caller-supplied identity.
    */
   installationId: string;
+  /** Physical Vault path rechecked alongside a binding mutation. */
+  vaultPath?: string;
   fs?: ProjectRepositoryFs;
   /** The append-only ledger every mutation's event lands in, inside the same transaction. */
   events: SqliteEventLedger;
@@ -122,6 +125,7 @@ export function createSqliteProjectRepository(
     createProjectWithBinding(project, binding, actor) {
       try {
         const installationId = options.installationId;
+        const directory = fs.realpath(binding.directory);
         db.exec("BEGIN IMMEDIATE");
         try {
           db.prepare(
@@ -134,7 +138,6 @@ export function createSqliteProjectRepository(
             project.createdAt,
             project.createdAt,
           );
-          const directory = fs.realpath(binding.directory);
           db.prepare(
             "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
           ).run(
@@ -355,6 +358,16 @@ export function createSqliteProjectRepository(
     replaceBinding(bindingId, expectedDirectory, replacement, actor) {
       try {
         const directory = fs.realpath(replacement.directory);
+        const physicalPath = fs.realpath(replacement.physicalPath);
+        if (options.vaultPath !== undefined) {
+          const vault = fs.realpath(options.vaultPath);
+          const root = replacement.bindingKind === "git_repository" ? dirname(directory) : directory;
+          const containment = checkVaultContainment({
+            resolvedVaultPath: vault,
+            resolvedBindingDirectories: [root, physicalPath],
+          });
+          if (!containment.ok) return containment;
+        }
         db.exec("BEGIN IMMEDIATE");
         try {
           const previous = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as
@@ -367,7 +380,6 @@ export function createSqliteProjectRepository(
               appError("PROJECT_NOT_FOUND", "the source binding no longer matches the recorded path", { bindingId }),
             );
           }
-          const physicalPath = fs.realpath(replacement.physicalPath);
           const others = db
             .prepare("SELECT * FROM project_bindings WHERE installation_id = ? AND id != ?")
             .all(options.installationId, bindingId) as BindingRow[];

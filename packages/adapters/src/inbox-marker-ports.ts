@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { type InboxMarkerPorts, appError, err } from "@sorage/core";
+import type { InboxMarkerPorts } from "@sorage/core";
 import { createNodeHandoffReadPorts, type NodeHandoffCommandPortsOptions } from "./handoff-command-ports";
 import { createConfigStore } from "./config-store";
-import { acquireLock, createNodeLockProbePorts } from "./lockfile";
+import { createNodeLockProbePorts } from "./lockfile";
 import { createHomePaths } from "./home";
+import { withInboxMarkerLock } from "./inbox-marker-lock";
 
 /**
  * The Node wiring of the derived inbox marker (HND-026): the flag comes from the
@@ -26,36 +27,7 @@ export function createNodeInboxMarkerPorts(options: NodeHandoffCommandPortsOptio
     marker: {
       enabled,
       withLock(body) {
-        const deadline = Date.now() + 5_000;
-        const waitCell = new Int32Array(new SharedArrayBuffer(4));
-        for (;;) {
-          let acquired: ReturnType<typeof acquireLock>;
-          try {
-            acquired = acquireLock({
-              path: home.lockFile("inbox-marker"),
-              lock: "inbox-marker",
-              ports: createNodeLockProbePorts(),
-            });
-          } catch (error) {
-            return err(
-              appError(
-                "INTERNAL_ERROR",
-                `the inbox marker lock could not be acquired: ${error instanceof Error ? error.message : String(error)}`,
-              ),
-            );
-          }
-          if (acquired.ok) {
-            try {
-              return body();
-            } finally {
-              acquired.release();
-            }
-          }
-          if (Date.now() >= deadline) {
-            return err(appError("INTERNAL_ERROR", "the inbox marker is busy; retry the marker refresh"));
-          }
-          Atomics.wait(waitCell, 0, 0, 10);
-        }
+        return withInboxMarkerLock(home, body);
       },
       writes: {
         writeInboxMarker(bindingDirectory: string, content: string) {

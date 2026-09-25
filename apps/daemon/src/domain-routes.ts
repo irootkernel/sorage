@@ -16,6 +16,7 @@ import {
   createNodeTerminalPorts as createTerminalPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
+import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
 import { createNodeProjectPorts as createProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -44,6 +45,7 @@ import {
   type ReadActorInput,
   readHandoffTimeline,
   readReviewNote,
+  refreshProjectInboxMarker,
   rejectDeletion,
   removeReviewNote,
   renameProject,
@@ -103,6 +105,10 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   const createNodeRevisionPorts = () => createRevisionPorts(databaseOptions);
   const createNodeTerminalPorts = () => createTerminalPorts(databaseOptions);
   const createNodeRetentionPorts = () => createRetentionPorts(databaseOptions);
+  const refreshBoundMarker = (projectId: string) => {
+    const refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(databaseOptions), projectId);
+    if (!refreshed.ok) process.emitWarning(refreshed.error.message, "SORAGE_INBOX_MARKER");
+  };
   const uploadReplayLimit = () => {
     const current = createNodeConfigCommandPorts().store.read();
     // Multipart field names, headers, and boundaries receive a fixed framing
@@ -154,6 +160,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         userHome,
         actor: actor.value,
       });
+      if (result.ok) refreshBoundMarker(result.value.project.id);
       return void respond(response, context, result, 201);
     },
   });
@@ -213,6 +220,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         userHome,
         actor: actor.value,
       });
+      if (result.ok) refreshBoundMarker(result.value.projectId);
       return void respond(response, context, result, 201);
     },
   });

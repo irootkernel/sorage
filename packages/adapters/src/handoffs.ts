@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { type AppError, appError, err, type FanoutCommit, type HandoffWritePort, ok, type Result } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
@@ -10,6 +11,10 @@ export interface IdempotencyLookupOptions {
 function removeExpiredIdempotency(db: SorageSqlite, options: IdempotencyLookupOptions): void {
   const now = (options.now ?? (() => new Date()))().toISOString();
   db.prepare("DELETE FROM idempotency_keys WHERE expires_at <= ?").run(now);
+}
+
+function atOrBelow(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
 }
 
 /**
@@ -173,6 +178,43 @@ export function createSqliteHandoffWriteStore(
               ),
             );
           }
+          if (commit.unregisteredSenderPath !== undefined) {
+            const { directory, gitCommonDirectory, allowUnregistered } = commit.unregisteredSenderPath;
+            const rows = db
+              .prepare(
+                "SELECT b.directory, b.binding_kind, p.slug, p.status FROM project_bindings b JOIN projects p ON p.id = b.project_id",
+              )
+              .all() as Array<{ directory: string; binding_kind: string; slug: string; status: string }>;
+            const gitOwner = rows.find(
+              (row) => row.binding_kind === "git_repository" && row.directory === gitCommonDirectory,
+            );
+            const directoryOwner = rows
+              .filter(
+                (row) =>
+                  row.binding_kind === "directory" &&
+                  (directory === row.directory || directory.startsWith(`${row.directory}/`)),
+              )
+              .sort((a, b) => b.directory.length - a.directory.length)[0];
+            const owner = gitOwner ?? directoryOwner;
+            const unresolvedRoot = rows.find((row) => {
+              const root = row.binding_kind === "directory" ? row.directory : dirname(row.directory);
+              return atOrBelow(root, directory) || atOrBelow(directory, root);
+            });
+            if (owner !== undefined || (!allowUnregistered && unresolvedRoot !== undefined)) {
+              db.exec("ROLLBACK");
+              return err(
+                owner?.status === "archived"
+                  ? appError("PROJECT_ARCHIVED", "the sender Project was archived while the Handoff was prepared", {
+                      slug: owner.slug,
+                    })
+                  : appError(
+                      "SENDER_IDENTITY_DOWNGRADE",
+                      "the sender Workspace overlapped a registered Project while the Handoff was prepared; retry the send",
+                      { slug: (owner ?? unresolvedRoot)?.slug },
+                    ),
+              );
+            }
+          }
           const projectStatus = db.prepare("SELECT slug, status FROM projects WHERE id = ?");
           const participants = new Set<string>();
           for (const handoff of commit.handoffs) {
@@ -314,6 +356,27 @@ export function createSqliteHandoffWriteStore(
         return ok(row ? { requestHash: row.request_hash, responseJson: row.response_json } : null);
       } catch (error) {
         return err(appError("INTERNAL_ERROR", `Reading the idempotency key failed: ${messageOf(error)}`));
+      }
+    },
+    senderOfHandoff(id) {
+      try {
+        const row = db
+          .prepare("SELECT sender_kind, sender_project_id, sender_workspace_key FROM handoffs WHERE id = ?")
+          .get(id) as
+          | {
+              sender_kind: "registered_project" | "unregistered_workspace" | "user";
+              sender_project_id: string | null;
+              sender_workspace_key: string | null;
+            }
+          | null
+          | undefined;
+        return ok(
+          row
+            ? { kind: row.sender_kind, projectId: row.sender_project_id, workspaceKey: row.sender_workspace_key }
+            : null,
+        );
+      } catch (error) {
+        return err(appError("INTERNAL_ERROR", `Reading the original Handoff sender failed: ${messageOf(error)}`));
       }
     },
   };

@@ -113,7 +113,14 @@ export function reconcileReboundInboxMarker(
     if (!refreshed.ok || oldDirectory === newDirectory) return refreshed;
     const currentBindings = ports.projectPorts.projects.listBindings();
     if (!currentBindings.ok) return currentBindings;
-    if (currentBindings.value.some((binding) => binding.directory === oldDirectory)) return refreshed;
+    const newOwner = currentBindings.value.find((binding) => binding.directory === oldDirectory);
+    if (newOwner !== undefined) {
+      if (newOwner.projectId !== recipientProjectId) {
+        const ownerRefresh = refreshProjectInboxMarkerUnlocked(ports, newOwner.projectId);
+        if (!ownerRefresh.ok) return ownerRefresh;
+      }
+      return refreshed;
+    }
     const removed = ports.marker.writes.removeInboxMarker(oldDirectory);
     if (!removed.ok) return removed;
     return refreshed;

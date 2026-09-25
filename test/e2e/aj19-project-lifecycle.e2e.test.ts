@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -7,6 +8,47 @@ import { envelopeOf, errorEnvelopeOf, git, makeTempDir, runCleanups, sorage, two
 afterAll(runCleanups);
 
 describe("AJ-19 Project archive and binding replacement", () => {
+  it("keeps exact replay for an archived sender but rejects a different archived sender", () => {
+    const fixture = twoProjectFixture("aj19-sender-replay");
+    const key = "78340280-1421-444a-8e18-a781cf411c71";
+    const args = [
+      "send",
+      "--to",
+      "beta",
+      "--title",
+      "Sender identity",
+      "--body",
+      "# Same",
+      "--idempotency-key",
+      key,
+      "--json",
+    ];
+    const first = sorage(args, { home: fixture.home, cwd: fixture.workA });
+    expect(first.status).toBe(0);
+    // Simulate a still-live key written by the previous release, before sender
+    // identity was added to the request hash.
+    const legacyRequest = JSON.stringify({
+      kind: "body",
+      title: "Sender identity",
+      to: ["beta"],
+      content: createHash("sha256").update("# Same").digest("hex"),
+      supersedes: null,
+    });
+    const legacyHash = createHash("sha256").update(legacyRequest).digest("hex");
+    const db = new DatabaseSync(join(fixture.home, "state", "sorage.sqlite3"));
+    db.prepare("UPDATE idempotency_keys SET request_hash = ? WHERE key = ? AND scope = 'send'").run(legacyHash, key);
+    db.close();
+    const activeWrongSender = sorage(args, { home: fixture.home, cwd: fixture.workB });
+    expect(activeWrongSender.status).toBe(75);
+    expect(errorEnvelopeOf(activeWrongSender).error.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(sorage(["project", "archive", "beta"], { home: fixture.home }).status).toBe(0);
+    const replay = sorage(args, { home: fixture.home, cwd: fixture.workA });
+    expect(replay.status).toBe(0);
+    expect((envelopeOf(replay) as { data: { replayed: boolean } }).data.replayed).toBe(true);
+    const wrongSender = sorage(args, { home: fixture.home, cwd: fixture.workB });
+    expect(wrongSender.status).toBe(65);
+    expect(errorEnvelopeOf(wrongSender).error.code).toBe("PROJECT_ARCHIVED");
+  });
   it("preserves the Handoff history while replacing one binding through the packaged CLI", () => {
     const fixture = twoProjectFixture("aj19");
     const id = fixture.sendTo("a", "b", "Before archive");

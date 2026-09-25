@@ -431,6 +431,40 @@ describe("the handoff lifecycle", () => {
 });
 
 describe("the Idempotency-Key replay (API-012)", () => {
+  it("does not replay a different HTTP sender under the same key", async () => {
+    const alphaDir = join(home, "sender-alpha");
+    const gammaDir = join(home, "sender-gamma");
+    mkdirSync(alphaDir, { recursive: true });
+    mkdirSync(gammaDir, { recursive: true });
+    for (const [name, dir] of [
+      ["Replay Alpha", alphaDir],
+      ["Replay Gamma", gammaDir],
+    ]) {
+      const created = await call("/api/v1/projects", {
+        method: "POST",
+        bearer: apiToken,
+        body: { name, dir, asUser: true },
+      });
+      expect(created.status).toBe(201);
+    }
+    const key = "bda34afb-23fa-48b5-9069-4aa6719cff84";
+    const request = {
+      method: "POST",
+      bearer: apiToken,
+      extra: { "idempotency-key": key },
+      body: { to: ["web-app"], title: "Sender", body: "Same" },
+    };
+    const first = await call("/api/v1/handoffs/import-path?as=replay-alpha", request);
+    expect(first.status).toBe(201);
+    const archived = await call("/api/v1/projects/replay-alpha/archive", { method: "POST", bearer: apiToken });
+    expect(archived.status).toBe(200);
+    const replay = await call("/api/v1/handoffs/import-path?as=replay-alpha", request);
+    expect(replay.status).toBe(201);
+    expect(json(replay).data.handoffs[0].handoffId).toBe(json(first).data.handoffs[0].handoffId);
+    const different = await call("/api/v1/handoffs/import-path?as=replay-gamma", request);
+    expect(different.status).toBe(409);
+    expect(json(different)).toMatchObject({ error: { code: "IDEMPOTENCY_CONFLICT" } });
+  });
   it("replays the stored response before any Row Version precondition", async () => {
     const secret2 = createNodeWebSecretStore({
       stateDir: join(home, "state"),
