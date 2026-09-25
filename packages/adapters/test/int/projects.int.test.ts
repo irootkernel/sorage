@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteProjectRepository } from "../../src/projects";
+import type { SorageSqlite } from "../../src/sqlite/connection";
 
 const TEST_ACTOR = { kind: "user", id: null } as const;
 
@@ -97,6 +98,155 @@ describe("project registry migration", () => {
 });
 
 describe("project repository", () => {
+  it("returns its committed binding even when another writer rebinds before the response", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "web-app");
+    const oldDir = tempDir();
+    const firstDir = tempDir();
+    const laterDir = tempDir();
+    const other = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+    });
+    const added = other.addBinding(
+      {
+        id: "21111111-1111-4111-8111-211111111111",
+        projectId: project.id,
+        directory: oldDir,
+        bindingKind: "directory",
+        createdAt: "t",
+      },
+      TEST_ACTOR,
+    );
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    let arm = true;
+    const base = temp.db as unknown as SorageSqlite;
+    const intercepted: SorageSqlite = {
+      exec(sql) {
+        temp.db.exec(sql);
+        if (sql === "COMMIT" && arm) {
+          arm = false;
+          const later = other.replaceBinding(
+            added.value.id,
+            realpathSync(firstDir),
+            { directory: laterDir, bindingKind: "directory", physicalPath: laterDir, updatedAt: "t3" },
+            TEST_ACTOR,
+          );
+          expect(later.ok).toBe(true);
+        }
+      },
+      prepare<Row = Record<string, unknown>>(sql: string) {
+        return base.prepare<Row>(sql);
+      },
+      close: () => temp.db.close(),
+    };
+    const first = createSqliteProjectRepository(intercepted, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(intercepted),
+    }).replaceBinding(
+      added.value.id,
+      added.value.directory,
+      { directory: firstDir, bindingKind: "directory", physicalPath: firstDir, updatedAt: "t2" },
+      TEST_ACTOR,
+    );
+    expect(first.ok && first.value.directory).toBe(realpathSync(firstDir));
+    const current = other.listBindingsForProject(project.id);
+    expect(current.ok && current.value[0]?.directory).toBe(realpathSync(laterDir));
+  });
+
+  it("rolls a binding replacement back when its event cannot be appended", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "web-app");
+    const oldDir = tempDir();
+    const newDir = tempDir();
+    const ledger = createSqliteEventLedger(temp.db);
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: {
+        ...ledger,
+        appendNow(input) {
+          if (input.eventType === "PROJECT_BINDING_REBOUND") throw new Error("injected event failure");
+          ledger.appendNow(input);
+        },
+      },
+    });
+    const added = repository.addBinding(
+      {
+        id: "21111111-1111-4111-8111-211111111111",
+        projectId: project.id,
+        directory: oldDir,
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      TEST_ACTOR,
+    );
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    const changed = repository.replaceBinding(
+      added.value.id,
+      added.value.directory,
+      { directory: newDir, bindingKind: "directory", physicalPath: newDir, updatedAt: "2026-01-02T00:00:00.000Z" },
+      TEST_ACTOR,
+    );
+    expect(changed.ok).toBe(false);
+    const stored = repository.listBindingsForProject(project.id);
+    expect(stored.ok && stored.value[0]?.directory).toBe(realpathSync(oldDir));
+  });
+
+  it("rechecks a newly bound outer Git repository inside the replacement transaction", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "web-app");
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+    });
+    const oldDir = tempDir();
+    const outer = tempDir();
+    const common = join(outer, ".git");
+    const nested = join(outer, "nested");
+    mkdirSync(common);
+    mkdirSync(nested);
+    const old = repository.addBinding(
+      {
+        id: "21111111-1111-4111-8111-211111111111",
+        projectId: project.id,
+        directory: oldDir,
+        bindingKind: "directory",
+        createdAt: "t",
+      },
+      TEST_ACTOR,
+    );
+    expect(old.ok).toBe(true);
+    if (!old.ok) return;
+    // This registration occurs after an application preflight but before replacement.
+    expect(
+      repository.addBinding(
+        {
+          id: "31111111-1111-4111-8111-311111111111",
+          projectId: project.id,
+          directory: common,
+          bindingKind: "git_repository",
+          createdAt: "t",
+        },
+        TEST_ACTOR,
+      ).ok,
+    ).toBe(true);
+    const changed = repository.replaceBinding(
+      old.value.id,
+      old.value.directory,
+      { directory: nested, bindingKind: "directory", physicalPath: nested, updatedAt: "t2" },
+      TEST_ACTOR,
+    );
+    expect(changed.ok).toBe(false);
+    if (!changed.ok) expect(changed.error.code).toBe("BINDING_DUPLICATE");
+    const stored = repository.listBindingsForProject(project.id);
+    expect(
+      stored.ok &&
+        stored.value.some((binding) => binding.id === old.value.id && binding.directory === realpathSync(oldDir)),
+    ).toBe(true);
+  });
+
   it("inserts two bindings of one Project on two directories", () => {
     const temp = migratedDb();
     const project = seedProject(temp, "web-app");

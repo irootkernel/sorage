@@ -72,6 +72,8 @@ import {
   readHandoffTimeline,
   readReviewNote,
   refreshInboxMarker,
+  reconcileReboundInboxMarker,
+  rebindProject,
   rejectDeletion,
   removeReviewNote,
   renameProject,
@@ -692,10 +694,52 @@ export function buildProgram(
       }
     });
 
+  project
+    .command("rebind")
+    .description("replace one recorded Project binding with an existing directory")
+    .argument("<project>", "Project slug")
+    .requiredOption("--from <path>", "recorded binding path to replace")
+    .requiredOption("--to <path>", "existing directory to bind")
+    .action((slug, options, command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      const result = rebindProject(createNodeProjectPorts(), {
+        slug,
+        from: options.from,
+        to: options.to,
+        userHome: homedir(),
+        actor: USER_ACTOR,
+      });
+      if (!result.ok) {
+        reportExitCode(renderAppError(result.error, ports, json));
+        return;
+      }
+      if (result.value.changed) {
+        const markerPorts = createNodeInboxMarkerPorts();
+        if (markerPorts.marker.enabled) {
+          const refreshed = reconcileReboundInboxMarker(
+            markerPorts,
+            result.value.binding.projectId,
+            result.value.previousBinding.directory,
+            result.value.binding.directory,
+          );
+          if (!refreshed.ok) {
+            ports.err(`warning: ${refreshed.error.message}\n`);
+          }
+        }
+      }
+      if (json) {
+        ports.out(`${JSON.stringify(successEnvelope(result.value.binding, requestId()), null, 2)}\n`);
+      } else {
+        ports.out(`Rebound ${result.value.previousBinding.directory} to ${result.value.binding.directory}\n`);
+      }
+    });
+
   for (const [name, description, run] of [
     [
       "archive",
-      "archive a Project: its existing inbox keeps working, new incoming Handoffs are refused",
+      "archive a Project: existing Handoffs remain available, new sends and receipts are refused",
       archiveProject,
     ],
     ["unarchive", "return an archived Project to active", unarchiveProject],
@@ -708,20 +752,7 @@ export function buildProgram(
         const globals = command.optsWithGlobals();
         const json = globals.json === true;
         if (!requireInitialized(ports, json, reportExitCode)) return;
-        if (globals.asUser !== true) {
-          reportExitCode(
-            renderAppError(
-              {
-                code: "USER_CONTEXT_REQUIRED",
-                message: `Project ${name} is a User administration operation.`,
-              },
-              ports,
-              json,
-            ),
-          );
-          return;
-        }
-        const result = run(createNodeProjectPorts(), { slug, actor: USER_ACTOR });
+        const result = run(createNodeProjectPorts(), { slug });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
           return;

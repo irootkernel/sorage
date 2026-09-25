@@ -115,6 +115,8 @@ That is the only uniqueness constraint on bindings. A Project MAY have many bind
 
 A `project bind` whose directory is already bound, or whose directory lies inside an already-bound git repository, returns `BINDING_DUPLICATE`; binding an individual worktree path is that error, because worktrees already resolve through the common directory. A binding that would place the Vault inside a Project directory, or a Project directory inside the Vault, returns `VAULT_CONTAINMENT` (VLT-017).
 
+`project rebind` updates one binding row by id under one write transaction and appends `PROJECT_BINDING_REBOUND`. It keeps Project and binding ids and never rewrites historical path snapshots or events. A same-binding normalized target produces no update or event. Derived marker changes happen after commit and remain advisory.
+
 ### 3.3 Handoff
 
 ```text
@@ -397,7 +399,8 @@ Installation-scoped operations are not Handoff mutations, so the Sender and Reci
 | Token rotation, `token rotate` | User, `--as-user` | Invalidates browser sessions (SEC-020) |
 | Uninstall, `uninstall` | User, `--as-user --confirm` | Never deletes the Vault (INIT-016) |
 | Project add, bind, unbind, rename, list, show, and resolve | Any actor | Unbinding a Project that leaves open Handoffs requires `--confirm` (PRJ-022) |
-| Project archive and unarchive | User, `--as-user` | PRJ-021 keeps an archived Project's existing inbox operable |
+| Project rebind | User, implicit | Atomically replaces one binding; historical paths remain unchanged (PRJ-024) |
+| Project archive and unarchive | User, implicit | Existing Handoffs remain operable; new Project sends and receipts fail (PRJ-023) |
 
 A User-admin operation invoked without `--as-user` returns `USER_CONTEXT_REQUIRED` (CLI-019). The honesty clause above applies to this block unchanged: `--as-user` expresses workflow intent, not an operating-system boundary.
 
@@ -687,7 +690,8 @@ Sorage home:
     ├── config.lock
     ├── backup.lock
     ├── migration.lock
-    └── vault-move.lock
+    ├── vault-move.lock
+    └── inbox-marker.lock
 ```
 
 Vault:
@@ -789,7 +793,7 @@ UPDATE handoffs SET rowVersion = rowVersion + 1 WHERE id = ? AND rowVersion = ?;
 
 The application checks `changes === 1`. Any other value means another writer moved the row first, and the operation fails with `ROW_VERSION_CONFLICT` without retrying. Domain column assignments join the same statement, so the check and the write cannot separate.
 
-Operations that span more than one transaction, or that touch files outside the intent log, take an exclusive lockfile under `~/.sorage/run/` created with `O_EXCL`:
+Operations that span more than one transaction, or that touch files outside the intent log, take an exclusive lockfile under `~/.sorage/run/`. The complete record is written to a unique temporary file with `O_EXCL` and atomically published at the lock path with a hard link:
 
 | Lockfile | Protects |
 |---|---|
@@ -798,8 +802,9 @@ Operations that span more than one transaction, or that touch files outside the 
 | `backup.lock` | Backup runs, scheduled or manual |
 | `daemon.lock` | Single daemon instance |
 | `migration.lock` | Schema migration at process start |
+| `inbox-marker.lock` | Derived inbox marker refresh and retired binding cleanup |
 
-Each lockfile contains `{pid, startedAt, hostname}`. A lock is stale when its `pid` is not alive; `config.lock` is additionally stale when older than 30 seconds, while `daemon.lock`, `backup.lock`, `vault-move.lock`, and `migration.lock` have no age limit because their operations may legitimately run long. A stale lock may be broken by the next process; a live lock produces a conflict rather than a wait loop.
+Each lockfile contains `{pid, startedAt, hostname}`. A lock is stale when its `pid` is not alive; `config.lock` is additionally stale when older than 30 seconds, while `daemon.lock`, `backup.lock`, `vault-move.lock`, `migration.lock`, and `inbox-marker.lock` have no age limit because their operations may legitimately run long. A stale lock may be broken by the next process; a live lock produces a conflict, except that advisory marker work retries for up to five seconds and then warns without failing its domain command.
 
 Schema migration runs at process start under `migration.lock`, which is stale only when the recorded pid is dead; the runner holds one SQLite write transaction per step and records the applied version in `schema_migrations`, so a process that waited on the lock re-checks `schema_migrations` after acquiring it and finds the version already applied (NFR-009).
 
@@ -879,7 +884,7 @@ A read of a Handoff whose current Artifact has `materialized = 0` returns `ARTIF
 
 ## 21. Configuration atomicity
 
-1. Acquire `~/.sorage/run/config.lock` with `O_EXCL`; a lock whose `pid` is dead or whose `startedAt` is older than 30 seconds is stale and may be broken.
+1. Acquire `~/.sorage/run/config.lock` by atomically publishing a complete lock record; a lock whose `pid` is dead or whose `startedAt` is older than 30 seconds is stale and may be broken.
 2. Read the current configuration and compute its ETag as a hash of the file content, not from `configRevision`, because a manual edit does not bump the counter (CFG-019).
 3. Compare the supplied `If-Match` or expected ETag; a mismatch returns `CONFIG_CONFLICT`.
 4. Validate the complete proposed configuration against the schema, with declared defaults applied (CFG-020).

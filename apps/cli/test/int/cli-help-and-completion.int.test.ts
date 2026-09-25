@@ -53,6 +53,7 @@ const commandPaths = [
   ["project", "rename"],
   ["project", "bind"],
   ["project", "unbind"],
+  ["project", "rebind"],
   ["project", "archive"],
   ["project", "unarchive"],
   ["project", "resolve"],

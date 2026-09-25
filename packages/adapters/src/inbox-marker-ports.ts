@@ -1,10 +1,10 @@
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { InboxMarkerPorts } from "@sorage/core";
+import { type InboxMarkerPorts, appError, err } from "@sorage/core";
 import { createNodeHandoffReadPorts, type NodeHandoffCommandPortsOptions } from "./handoff-command-ports";
 import { createConfigStore } from "./config-store";
-import { createNodeLockProbePorts } from "./lockfile";
+import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { createHomePaths } from "./home";
 
 /**
@@ -25,6 +25,38 @@ export function createNodeInboxMarkerPorts(options: NodeHandoffCommandPortsOptio
     ...read,
     marker: {
       enabled,
+      withLock(body) {
+        const deadline = Date.now() + 5_000;
+        const waitCell = new Int32Array(new SharedArrayBuffer(4));
+        for (;;) {
+          let acquired: ReturnType<typeof acquireLock>;
+          try {
+            acquired = acquireLock({
+              path: home.lockFile("inbox-marker"),
+              lock: "inbox-marker",
+              ports: createNodeLockProbePorts(),
+            });
+          } catch (error) {
+            return err(
+              appError(
+                "INTERNAL_ERROR",
+                `the inbox marker lock could not be acquired: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            );
+          }
+          if (acquired.ok) {
+            try {
+              return body();
+            } finally {
+              acquired.release();
+            }
+          }
+          if (Date.now() >= deadline) {
+            return err(appError("INTERNAL_ERROR", "the inbox marker is busy; retry the marker refresh"));
+          }
+          Atomics.wait(waitCell, 0, 0, 10);
+        }
+      },
       writes: {
         writeInboxMarker(bindingDirectory: string, content: string) {
           const directory = resolve(bindingDirectory, ".sorage");
@@ -47,6 +79,29 @@ export function createNodeInboxMarkerPorts(options: NodeHandoffCommandPortsOptio
                 message: `the inbox marker under ${bindingDirectory} could not be written: ${
                   error instanceof Error ? error.message : String(error)
                 }`,
+              },
+            };
+          }
+        },
+        removeInboxMarker(bindingDirectory: string) {
+          const marker = join(resolve(bindingDirectory, ".sorage"), "INBOX.md");
+          try {
+            if (!existsSync(marker)) return { ok: true as const, value: undefined };
+            const content = readFileSync(marker, "utf8");
+            if (!content.startsWith("# Inbox\n\nDerived by Sorage from this Project's current inbox;")) {
+              return {
+                ok: false as const,
+                error: { code: "INTERNAL_ERROR" as const, message: "the old inbox marker is not Sorage-generated" },
+              };
+            }
+            rmSync(marker);
+            return { ok: true as const, value: undefined };
+          } catch (error) {
+            return {
+              ok: false as const,
+              error: {
+                code: "INTERNAL_ERROR" as const,
+                message: `the old inbox marker could not be removed: ${error instanceof Error ? error.message : String(error)}`,
               },
             };
           }

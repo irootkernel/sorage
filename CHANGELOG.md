@@ -7,6 +7,11 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Let the local User create a Handoff from the Web compose form by supplying a Markdown body instead of a file.
+- Add `sorage project rebind` to replace a Project directory binding in one command.
+
+### Changed
+
+- Let Project archive and unarchive run without `--as-user`, and prevent archived Projects from starting new outgoing Handoffs.
 
 ## v0.1.1 - 2026-09-09
 

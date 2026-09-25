@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -194,22 +194,139 @@ describe("sorage project bind and unbind", () => {
   });
 });
 
+describe("sorage project rebind", () => {
+  it("replaces one binding in place and leaves a normalized no-op event-free", () => {
+    const home = initializedHome();
+    const oldDir = tempDir();
+    const newDir = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", oldDir], capture().ports)).toBe(0);
+    const before = capture();
+    expect(runCli(["project", "show", "web-app", "--json"], before.ports)).toBe(0);
+    const old = JSON.parse(before.outText()).data as {
+      project: { id: string };
+      bindings: Array<{ id: string; directory: string }>;
+    };
+    const moved = capture();
+    expect(runCli(["project", "rebind", "web-app", "--from", oldDir, "--to", newDir, "--json"], moved.ports)).toBe(0);
+    const binding = JSON.parse(moved.outText()).data as { id: string; projectId: string; directory: string };
+    expect(binding).toMatchObject({
+      id: old.bindings[0]?.id,
+      projectId: old.project.id,
+      directory: realpathSync(newDir),
+    });
+    expect(runCli(["project", "rebind", "web-app", "--from", newDir, "--to", newDir], capture().ports)).toBe(0);
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const events = db
+      .prepare("SELECT actor_kind, metadata_json FROM events WHERE event_type = 'PROJECT_BINDING_REBOUND'")
+      .all() as Array<{ actor_kind: string; metadata_json: string }>;
+    expect(events).toHaveLength(1);
+    expect(events[0]?.actor_kind).toBe("user");
+    expect(JSON.parse(events[0]?.metadata_json ?? "{}")).toMatchObject({
+      bindingId: old.bindings[0]?.id,
+      oldDirectory: realpathSync(oldDir),
+      newDirectory: realpathSync(newDir),
+    });
+    db.close();
+  });
+
+  it("keeps the old binding when the target is invalid or already bound, and accepts a vanished source", () => {
+    initializedHome();
+    const oldDir = tempDir();
+    const occupied = tempDir();
+    const replacement = tempDir();
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", oldDir], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Other", "--dir", occupied], capture().ports)).toBe(0);
+    expect(runCli(["project", "rebind", "web-app", "--from", oldDir, "--to", occupied], capture().ports)).toBe(65);
+    expect(
+      runCli(
+        ["project", "rebind", "web-app", "--from", oldDir, "--to", join(process.env.SORAGE_HOME as string, "vault")],
+        capture().ports,
+      ),
+    ).toBe(64);
+    expect(runCli(["project", "bind", "web-app", "--dir", process.env.SORAGE_HOME as string], capture().ports)).toBe(
+      64,
+    );
+    expect(
+      runCli(
+        ["project", "add", "--name", "Vault", "--dir", join(process.env.SORAGE_HOME as string, "vault")],
+        capture().ports,
+      ),
+    ).toBe(64);
+    expect(
+      runCli(["project", "rebind", "web-app", "--from", oldDir, "--to", join(oldDir, "missing")], capture().ports),
+    ).toBe(78);
+    rmSync(oldDir, { recursive: true, force: true });
+    expect(runCli(["project", "rebind", "web-app", "--from", oldDir, "--to", replacement], capture().ports)).toBe(0);
+    const shown = capture();
+    expect(runCli(["project", "show", "web-app", "--json"], shown.ports)).toBe(0);
+    expect(JSON.parse(shown.outText()).data.bindings).toMatchObject([{ directory: realpathSync(replacement) }]);
+  });
+
+  it("folds a new Git working tree to its common directory", () => {
+    initializedHome();
+    const oldDir = tempDir();
+    const repository = tempDir();
+    expect(spawnSync("git", ["init", repository], { encoding: "utf8" }).status).toBe(0);
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", oldDir], capture().ports)).toBe(0);
+    const moved = capture();
+    expect(runCli(["project", "rebind", "web-app", "--from", oldDir, "--to", repository, "--json"], moved.ports)).toBe(
+      0,
+    );
+    expect(JSON.parse(moved.outText()).data).toMatchObject({
+      bindingKind: "git_repository",
+      directory: realpathSync(join(repository, ".git")),
+    });
+  });
+
+  it("refuses a nested independent Git repository inside an already-bound repository", () => {
+    initializedHome();
+    const oldDir = tempDir();
+    const outer = tempDir();
+    const nested = join(outer, "nested");
+    mkdirSync(nested);
+    expect(spawnSync("git", ["init", outer], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["init", nested], { encoding: "utf8" }).status).toBe(0);
+    expect(runCli(["project", "add", "--name", "Outer", "--dir", outer], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Web App", "--dir", oldDir], capture().ports)).toBe(0);
+    expect(runCli(["project", "bind", "web-app", "--dir", nested], capture().ports)).toBe(65);
+    expect(runCli(["project", "rebind", "web-app", "--from", oldDir, "--to", nested], capture().ports)).toBe(65);
+    const shown = capture();
+    expect(runCli(["project", "show", "web-app", "--json"], shown.ports)).toBe(0);
+    expect(JSON.parse(shown.outText()).data.bindings).toMatchObject([{ directory: realpathSync(oldDir) }]);
+  });
+
+  it("keeps an existing nested Git binding as a no-op after the outer repository is bound", () => {
+    initializedHome();
+    const outer = tempDir();
+    const nested = join(outer, "nested");
+    mkdirSync(nested);
+    expect(spawnSync("git", ["init", outer], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["init", nested], { encoding: "utf8" }).status).toBe(0);
+    expect(runCli(["project", "add", "--name", "Inner", "--dir", nested], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Outer", "--dir", outer], capture().ports)).toBe(0);
+    expect(runCli(["project", "rebind", "inner", "--from", nested, "--to", nested], capture().ports)).toBe(0);
+  });
+});
+
 describe("sorage project archive and unarchive", () => {
-  it("requires --as-user with exit 77 and archives with it", () => {
+  it("uses User provenance without a flag and accepts the old explicit form", () => {
     initializedHome();
     const dir = tempDir();
     expect(runCli(["project", "add", "--name", "Web App", "--dir", dir], capture().ports)).toBe(0);
-    const refused = capture();
-    expect(runCli(["project", "archive", "web-app", "--json"], refused.ports)).toBe(77);
-    const envelope = JSON.parse(refused.errText()) as { error: { code: string } };
-    expect(envelope.error.code).toBe("USER_CONTEXT_REQUIRED");
     const archived = capture();
-    expect(runCli(["project", "archive", "web-app", "--as-user", "--json"], archived.ports)).toBe(0);
+    expect(runCli(["project", "archive", "web-app", "--json"], archived.ports)).toBe(0);
     const payload = JSON.parse(archived.outText()) as { data: { status: string } };
     expect(payload.data.status).toBe("archived");
     const unarchived = capture();
-    expect(runCli(["project", "unarchive", "web-app", "--as-user", "--json"], unarchived.ports)).toBe(0);
-    expect(runCli(["project", "unarchive", "web-app", "--json"], capture().ports)).toBe(77);
+    expect(runCli(["project", "unarchive", "web-app", "--json"], unarchived.ports)).toBe(0);
+    expect(runCli(["project", "archive", "web-app", "--as-user"], capture().ports)).toBe(0);
+    const home = process.env.SORAGE_HOME as string;
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const actors = db
+      .prepare("SELECT actor_kind FROM events WHERE event_type IN ('PROJECT_STATUS_ARCHIVED', 'PROJECT_STATUS_ACTIVE')")
+      .all() as Array<{ actor_kind: string }>;
+    expect(actors.map((row) => row.actor_kind)).toEqual(["user", "user", "user"]);
+    db.close();
   });
 });
 

@@ -173,6 +173,23 @@ export function createSqliteHandoffWriteStore(
               ),
             );
           }
+          const projectStatus = db.prepare("SELECT slug, status FROM projects WHERE id = ?");
+          const participants = new Set<string>();
+          for (const handoff of commit.handoffs) {
+            if (handoff.senderProjectId !== null) participants.add(handoff.senderProjectId);
+            participants.add(handoff.recipientProjectId);
+          }
+          for (const projectId of participants) {
+            const project = projectStatus.get(projectId) as { slug: string; status: string } | null | undefined;
+            if (project?.status === "archived") {
+              db.exec("ROLLBACK");
+              return err(
+                appError("PROJECT_ARCHIVED", "an archived Project cannot start a new Handoff", {
+                  slug: project.slug,
+                }),
+              );
+            }
+          }
           const insertHandoff = db.prepare(
             "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'awaiting_recipient', 0, 0, ?, ?)",
           );

@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024 and milestone `M5` under ADR-0025.
+This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024, milestone `M5` under ADR-0025, and milestone `M6` under ADR-0026.
 
 It sits below [../specs/required-specification.md](../specs/required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), [../architecture/README.md](../architecture/README.md), and [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md) in the authority order of [../governance/README.md](../governance/README.md); where this roadmap disagrees with any of them, they win and this file is corrected.
 
@@ -23,9 +23,9 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-012`
 - **Active Task:** None
-- **In Review Task:** None
+- **In Review Task:** `TASK-086`
 - **Next eligible Task:** None
 
 ## 3. Identifier policy
@@ -64,8 +64,9 @@ This repository has not enrolled a Design Gate registry; every task records `Des
 | M3 MVP release | M3 | `EPIC-009` | AJ-14 to AJ-16, with every earlier journey still passing | local `M3` snapshot |
 | M4 CLI detail-read release | M4 | `EPIC-010` | AJ-17, with every earlier journey still passing | local `M4` snapshot |
 | M5 Web body-compose release | M5 | `EPIC-011` | AJ-18, with every earlier journey still passing | local `M5` snapshot |
+| M6 Project lifecycle and binding release | M6 | `EPIC-012` | AJ-19, with every earlier journey still passing | local `M6` snapshot |
 
-The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. `M5` is the next post-MVP gate (ADR-0025) and does not reopen `M1` through `M4`. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
+The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. `M5` and `M6` are later gates under ADR-0025 and ADR-0026 and do not reopen earlier milestones. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
 
 ## 7. Epic registry
 
@@ -82,6 +83,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-009` | Hardening, packaging, and first public release | M3 | Completed | `TASK-059` to `TASK-079` |
 | `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
+| `EPIC-012` | Project archival and binding replacement | M6 | In Progress | `TASK-085` to `TASK-086` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -299,6 +301,23 @@ The `review show` and `events` CLI JSON goldens are additive and classified as n
 ### TASK-084 contract record
 
 The `POST /api/v1/handoffs/upload` file-success, body-success, and input-error envelopes are additive and classified as non-breaking. An existing file-only multipart upload that omits a `body` field is unchanged. HTTP DTOs other than this upload envelope, protocol DTOs, the CLI JSON contract, the configuration schema, and the database schema are not in scope; no configuration, database, Vault, CLI, or protocol migration applies.
+
+## EPIC-012: Project archival and binding replacement
+
+- **Status:** In Progress
+- **Milestone:** M6
+- **Objective:** Let the local User archive and unarchive Projects without an actor flag, prevent archived Projects from starting new Handoffs, and replace one recorded binding through one CLI command while preserving Project identity and history.
+- **Detailed SOT:** [Project lifecycle and binding dossier](../todo/TODO-PROJECT-LIFECYCLE.md)
+- **Prerequisite:** `EPIC-011` is `Completed`. Do not append these Tasks to `EPIC-011`.
+
+The `TASK-017` acceptance gate records the original M1 requirement for `project archive --as-user` and its missing-flag error; `TASK-086` supersedes that one historical CLI expectation under ADR-0026.
+
+| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
+|---|---|---|---|---|---|---|---|
+| `TASK-085` | Completed | M6 | Chore: adopt ADR-0026, Source of Truth version `0.7.0`, the M6 requirements and AJ-19, and update the milestone validator and traceability before implementation. | `bun run check:sot` and `make test-prepare` exit 0; the material-change record states alternatives, compatibility, and migration impact. | `EPIC-011` | NFR-015 | Not required |
+| `TASK-086` | In Review | M6 | Implement implicit User Project archive and unarchive, archived-sender rejection, and atomic `project rebind` with binding event, derived marker refresh, CLI JSON and HTTP route contracts, documentation, and AJ-19. | `make test` exits 0; AJ-19 covers lifecycle provenance, archived send rejection, rebind success and rollback; the CLI and HTTP snapshot diff is classified, and a separate Reviewer confirms the Task. | `TASK-085` | PRJ-023, PRJ-024, CLI-024, CLI-025, HND-026 | Not required |
+
+The `TASK-086` contract diff adds the `project rebind` CLI JSON golden without changing existing success-envelope shapes. It also changes the existing `PROJECT_ARCHIVED` error's `recovery.suggestedCommand` value to omit `--as-user`; clients that treat this human guidance as opaque remain compatible, while clients that compare its exact text must update. The archive and unarchive CLI success envelopes and HTTP DTO shapes are unchanged, while their actor context becomes implicit User. Refusing a new outgoing Handoff from an archived Project is an intentional behavior change. No database, configuration, Vault, or protocol migration is required (ADR-0026).
 
 ## 8. Epic completion and change rules
 

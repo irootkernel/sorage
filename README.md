@@ -72,6 +72,8 @@ sorage project add --name recipient --slug recipient --dir /path/to/recipient
 
 During project setup, add `.sorage/` to each project's `.gitignore` unless an existing entry already ignores it. The directory contains derived local state; the CLI does not update project ignore files automatically.
 
+To stop a Project from sending or receiving new Handoffs, run `sorage project archive <slug>`. `sorage project unarchive <slug>` resumes new work; both commands keep existing Handoffs. If a Project directory has moved, use `sorage project rebind <slug> --from <recorded-path> --to <existing-path>` after the new directory exists. `project show <slug>` prints the recorded path, including when the old directory has vanished.
+
 The shipped `use-sorage` skill operates on explicit requests. Ask it to check an inbox or outbox when needed; a check reports results, while processing Handoffs requires a request covering that work. Sessions and ordinary coding tasks do not trigger checks.
 
 Send a document from the sender project:

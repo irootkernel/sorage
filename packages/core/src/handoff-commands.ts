@@ -273,6 +273,13 @@ function sendStaged(
           as: input.as,
         });
   if (!sender.ok) return err(sender.error);
+  if (sender.value.kind === "registered_project" && sender.value.project.status === "archived") {
+    return err(
+      appError("PROJECT_ARCHIVED", "the sender Project is archived and sends no new Handoffs", {
+        slug: sender.value.project.slug,
+      }),
+    );
+  }
 
   // One recipient Handoff per distinct recipient, in first-seen order; an ineligible
   // recipient creates nothing at all (PRJ-012).

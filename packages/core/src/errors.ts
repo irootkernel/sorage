@@ -83,7 +83,7 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
   CONFIG_CONFLICT: "Reload the configuration and retry",
   DAEMON_UNAVAILABLE: "sorage daemon start",
   PROJECT_NOT_FOUND: "sorage project list",
-  PROJECT_ARCHIVED: "sorage project unarchive <project> --as-user",
+  PROJECT_ARCHIVED: "sorage project unarchive <project>",
   PROJECT_UNBOUND: "sorage project bind <project> --dir <path>",
   PROJECT_SLUG_CONFLICT: "sorage project show <project>",
   BINDING_DUPLICATE: "sorage project resolve --path <path>",

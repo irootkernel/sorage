@@ -783,3 +783,37 @@ The HTTP change is additive: an existing file-only multipart upload keeps workin
 - Findings that block the M5 gate append to `EPIC-011`, not to `EPIC-010`.
 - CLI `send --body` and unregistered-workspace sends are unchanged.
 - `TASK-083` is the documentation-adoption Chore; `TASK-084` implements the streamed upload XOR, the compose textarea, and the upload contract fixtures.
+
+## ADR-0026: Project archival and atomic binding replacement in M6
+
+- **Status:** Accepted
+- **Date:** 2026-09-25
+- **Amends:** ADR-0025 (post-MVP milestone series) and the Project command actor rule of CLI-019
+
+### Context
+
+Project retirement currently requires the explicit User flag even though Sorage is a single-user local tool and the Project slug already identifies the administrative target. Archiving blocks new recipients but lets an archived Project create new outgoing Handoffs. Moving a registered directory requires separate bind and unbind commands, which exposes an intermediate identity and leaves derived inbox markers at the old location. M5 closed after EPIC-011, so these changes belong to a new gate.
+
+### Decision
+
+M6 adds an atomic `project rebind <project> --from <recorded-path> --to <existing-path>` command and closes after EPIC-012. Source of Truth version 0.7.0 records the amendment; product SemVer, /api/v1, configuration schema, database schema, and Vault schema remain independent. Rebind updates one Project Binding in a single SQLite transaction, preserves the binding and Project UUIDs, validates the target under the existing binding rules, and appends `PROJECT_BINDING_REBOUND` with the old and new directory and kind. It does not move files or rewrite historical snapshots or append-only events. An unchanged normalized target is a no-op. The optional derived inbox marker is written at the new binding and a recognized old marker is removed after commit only while no current binding owns its path. The marker refresh and cleanup share `inbox-marker.lock` across processes so a concurrent Handoff update cannot recreate a retired marker after cleanup; marker failures warn without rolling back the authoritative binding.
+
+`project archive` and `project unarchive` imply User context in the CLI and their HTTP routes, so no explicit `--as-user` or `asUser` is needed for these two operations; old explicit invocations remain accepted. They record `actorKind = user`. An archived registered Project cannot be a sender or recipient of a new Handoff, including under a concurrent archive. Existing Handoff processing and exact idempotency replay remain available.
+
+### Alternatives considered
+
+- Physically delete Projects and related Handoffs | rejected: Master selected archival, and PRJ-011 preserves historical identities.
+- Require `--as-user` for Project archive and unarchive | rejected: it adds no authentication in a single-user installation and obscures a simple Project lifecycle command.
+- Rebind as sequential `bind` then `unbind` | rejected: a failed second step leaves two identities and forces callers to coordinate marker updates.
+- Move the Project directory within `rebind` | rejected: Master chose registry-only path replacement; file and Git operations belong to the caller.
+- Rewrite old path snapshots and events | rejected: it would falsify historical provenance and conflict with the append-only ledger.
+
+### Compatibility and migration
+
+The new CLI command, Project event type, and implicit User context are additive to the wire surfaces; existing `--as-user` and `asUser` requests continue to work. Rejecting new outgoing Handoffs from an archived Project is an intentional behavior change. The Project Binding row is updated in place, so no database, configuration, Vault, or protocol migration is required. Current backup snapshots reflect the new binding at their next generation; old Git commits are not rewritten.
+
+### Consequences
+
+- EPIC-012 contains a Source of Truth adoption Task and one Contract implementation Task, then closes the M6 gate after AJ-19.
+- The Project archive and unarchive HTTP routes use User provenance regardless of request-body actor fields; other routes retain their existing actor contracts.
+- `project rebind` is a CLI command over a shared application use case; it does not introduce an HTTP path-change route or a Web control.

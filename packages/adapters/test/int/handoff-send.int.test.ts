@@ -56,6 +56,7 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
   };
   const projectPorts: ProjectCommandPorts = {
     installationId: INSTALLATION,
+    vaultPath: vault.vaultPath,
     projects: repository,
     clock,
     ids: { next: nextId },
@@ -167,6 +168,38 @@ function baseInput(fixture: Fixture, overrides: Partial<Parameters<typeof sendHa
 }
 
 describe("sorage send", () => {
+  it("refuses an archived registered sender and keeps an exact replay available", () => {
+    const fixture = makeFixture();
+    seedProject(fixture, "p-1", "alpha");
+    seedProject(fixture, "p-2", "beta");
+    const input = baseInput(fixture, { as: "alpha", to: ["beta"], idempotencyKey: "archive-replay" });
+    const first = sendHandoffs(fixture.ports, input);
+    expect(first.ok).toBe(true);
+    fixture.db.prepare("UPDATE projects SET status = 'archived' WHERE id = 'p-1'").run();
+    const replay = sendHandoffs(fixture.ports, input);
+    expect(replay.ok && replay.value.replayed).toBe(true);
+    const refused = sendHandoffs(fixture.ports, baseInput(fixture, { as: "alpha", to: ["beta"] }));
+    expect(!refused.ok && refused.error.code).toBe("PROJECT_ARCHIVED");
+    expect(handoffRows(fixture)).toHaveLength(1);
+  });
+
+  it("rechecks archive state inside the create transaction", () => {
+    const fixture = makeFixture();
+    seedProject(fixture, "p-1", "alpha");
+    seedProject(fixture, "p-2", "beta");
+    const write = fixture.ports.handoffs;
+    fixture.ports.handoffs = {
+      ...write,
+      createFanout(commit) {
+        fixture.db.prepare("UPDATE projects SET status = 'archived' WHERE id = 'p-1'").run();
+        return write.createFanout(commit);
+      },
+    };
+    const refused = sendHandoffs(fixture.ports, baseInput(fixture, { as: "alpha", to: ["beta"] }));
+    expect(!refused.ok && refused.error.code).toBe("PROJECT_ARCHIVED");
+    expect(handoffRows(fixture)).toHaveLength(0);
+  });
+
   it("fans one source out to independent Handoffs sharing one dispatch group", () => {
     const fixture = makeFixture();
     seedProject(fixture, "p-1", "alpha");

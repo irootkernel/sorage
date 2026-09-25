@@ -1,7 +1,19 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
+import { reconcileReboundInboxMarker } from "@sorage/core";
 import { runCli } from "../../src/main";
 
 /**
@@ -114,6 +126,54 @@ describe("the derived inbox marker behind handoff.inboxMarker", () => {
     expect(run(["pin", id, "--as-user"]).exit).toBe(0);
     expect(existsSync(markerOf(workB1))).toBe(true);
     expect(readFileSync(markerOf(workB1), "utf8")).toContain(id);
+  });
+
+  it("moves the derived marker when a recipient binding is rebound", () => {
+    const { home, workB1, workB2 } = fixture();
+    const workB3 = join(home, "work-b3");
+    mkdirSync(workB3);
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const id = send("Rebound marker");
+    expect(existsSync(markerOf(workB1))).toBe(true);
+    const moved = run(["project", "rebind", "beta", "--from", workB1, "--to", workB3]);
+    expect(moved.exit).toBe(0);
+    expect(existsSync(markerOf(workB1))).toBe(false);
+    expect(readFileSync(markerOf(workB3), "utf8")).toContain(id);
+    expect(readFileSync(markerOf(workB2), "utf8")).toContain(id);
+    expect(existsSync(join(home, "run", "inbox-marker.lock"))).toBe(false);
+  });
+
+  it("preserves the current owner's marker when retired-path cleanup is delayed", () => {
+    const { home, workB1 } = fixture();
+    const workB3 = join(home, "work-b3");
+    mkdirSync(workB3);
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    send("Beta before move");
+    const markerPorts = createNodeInboxMarkerPorts();
+    const beta = markerPorts.projectPorts.projects.findProjectBySlug("beta");
+    expect(beta.ok && beta.value !== null).toBe(true);
+    if (!beta.ok || beta.value === null) return;
+    expect(run(["project", "rebind", "beta", "--from", workB1, "--to", workB3]).exit).toBe(0);
+    expect(run(["project", "add", "--name", "Gamma", "--dir", workB1]).exit).toBe(0);
+    expect(run(["send", "--as", "alpha", "--to", "gamma", "--title", "Gamma inbox", "--body", "# Gamma"]).exit).toBe(0);
+    const gammaMarker = readFileSync(markerOf(workB1), "utf8");
+    expect(gammaMarker).toContain("Gamma inbox");
+    const delayed = reconcileReboundInboxMarker(markerPorts, beta.value.id, realpathSync(workB1), realpathSync(workB3));
+    expect(delayed.ok).toBe(true);
+    expect(readFileSync(markerOf(workB1), "utf8")).toBe(gammaMarker);
+  });
+
+  it("keeps the marker when a binding changes kind at the same stored directory", () => {
+    const { workB1 } = fixture();
+    expect(spawnSync("git", ["init", workB1], { encoding: "utf8" }).status).toBe(0);
+    expect(run(["project", "rebind", "beta", "--from", workB1, "--to", workB1]).exit).toBe(0);
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    const id = send("Same path marker");
+    const common = join(workB1, ".git");
+    expect(readFileSync(markerOf(common), "utf8")).toContain(id);
+    rmSync(join(common, "HEAD"));
+    expect(run(["project", "rebind", "beta", "--from", common, "--to", common]).exit).toBe(0);
+    expect(readFileSync(markerOf(common), "utf8")).toContain(id);
   });
 
   it("never becomes authority: a corrupted marker changes no command result", () => {

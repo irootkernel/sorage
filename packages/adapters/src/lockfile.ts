@@ -1,9 +1,10 @@
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 
 /** The normative lockfile set under `<home>/run` (domain-and-architecture section 19). */
-export type LockName = "config" | "daemon" | "backup" | "vault-move" | "migration";
+export type LockName = "config" | "daemon" | "backup" | "vault-move" | "migration" | "inbox-marker";
 
 /** The record every lockfile carries. */
 export interface LockRecord {
@@ -124,7 +125,8 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
- * Acquires one exclusive lockfile with `O_EXCL`. A stale lock is broken and taken
+ * Acquires one exclusive lockfile by atomically publishing its complete record.
+ * A stale lock is broken and taken
  * over, but only while its body is still the exact bytes that were judged stale,
  * so a lock another process freshly acquired in between is a conflict rather
  * than something this process may destroy; a live lock produces a conflict
@@ -216,20 +218,33 @@ function recordsEqual(a: LockRecord, b: LockRecord): boolean {
 }
 
 function writeExclusive(path: string, record: LockRecord): boolean {
-  let handle: number;
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let handle: number | undefined;
   try {
-    // "wx" is Node's O_EXCL: the create fails when any file already exists.
-    handle = openSync(path, "wx");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    return false;
-  }
-  try {
-    writeSync(handle, `${JSON.stringify(record)}\n`);
+    // Publish a fully written record with one atomic hard link. An O_EXCL lock
+    // file opened before its body is written can be mistaken for a stale lock.
+    handle = openSync(temporary, "wx", 0o600);
+    try {
+      writeFileSync(handle, `${JSON.stringify(record)}\n`);
+    } finally {
+      closeSync(handle);
+    }
+    try {
+      linkSync(temporary, path);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return false;
+    }
   } finally {
-    closeSync(handle);
+    if (handle !== undefined) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // The published lock remains authoritative if temporary cleanup fails.
+      }
+    }
   }
-  return true;
 }
 
 function readBody(path: string): string {

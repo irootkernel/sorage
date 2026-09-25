@@ -91,6 +91,17 @@ function fakeRegistry(existing: Project[] = [], bindings: ProjectBinding[] = [])
       const [removed] = rows.splice(index, 1);
       return ok(removed as ProjectBinding);
     },
+    replaceBinding(bindingId, expectedDirectory, replacement) {
+      const row = rows.find((candidate) => candidate.id === bindingId && candidate.directory === expectedDirectory);
+      if (row === undefined) return err(appError("PROJECT_NOT_FOUND", "the binding changed"));
+      if (rows.some((candidate) => candidate.id !== bindingId && candidate.directory === replacement.directory)) {
+        return err(appError("BINDING_DUPLICATE", "the target directory is already bound"));
+      }
+      row.directory = replacement.directory;
+      row.bindingKind = replacement.bindingKind;
+      row.updatedAt = replacement.updatedAt;
+      return ok({ ...row });
+    },
     listBindings() {
       return ok([...rows]);
     },
@@ -127,6 +138,7 @@ function ports(
   let counter = 0;
   return {
     installationId: "i1",
+    vaultPath: "/vault",
     projects: fakeRegistry(existing, bindings),
     bindings: passthroughFs,
     handoffs: {
@@ -483,14 +495,13 @@ describe("archive, unarchive, and recipient eligibility", () => {
   });
 
   it("archives and unarchives without ever deleting the row", () => {
-    const archived = archiveProject(ports([project()], [binding()]), { slug: "web-app", actor: TEST_ACTOR });
+    const archived = archiveProject(ports([project()], [binding()]), { slug: "web-app" });
     expect(archived.ok && archived.value.status).toBe("archived");
     const unarchived = unarchiveProject(ports([{ ...project(), status: "archived" }], [binding()]), {
       slug: "web-app",
-      actor: TEST_ACTOR,
     });
     expect(unarchived.ok && unarchived.value.status).toBe("active");
-    const missing = archiveProject(ports(), { slug: "nope", actor: TEST_ACTOR }) as { ok: boolean; error?: AppError };
+    const missing = archiveProject(ports(), { slug: "nope" }) as { ok: boolean; error?: AppError };
     expect(missing.error?.code).toBe("PROJECT_NOT_FOUND");
   });
 

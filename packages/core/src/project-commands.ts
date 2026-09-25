@@ -1,6 +1,7 @@
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type ActorRef, projectActor, USER_ACTOR, workspaceActor } from "./events";
 import type { Clock, IdGenerator } from "./ids";
+import { checkVaultContainment } from "./import-policy";
 import type { BindingKind, Project, ProjectBinding, ProjectRepositoryPort } from "./projects";
 import { workspaceKey } from "./workspace-identity";
 
@@ -48,6 +49,7 @@ export interface ProjectHandoffStatsPort {
 export interface ProjectCommandPorts {
   /** The Installation identity every unregistered Workspace key derives from (PRJ-014). */
   installationId: string;
+  vaultPath: string;
   projects: ProjectRepositoryPort;
   bindings: ProjectBindingFsPort;
   handoffs: ProjectHandoffStatsPort;
@@ -131,7 +133,7 @@ export function addProject(ports: ProjectCommandPorts, input: AddProjectInput): 
   if (slug === "") {
     return err(appError("CONFIG_INVALID", "the display name derives an empty slug; pass an explicit --slug", { name }));
   }
-  const directory = ports.bindings.resolveDirectory(input.dir, input.userHome);
+  const directory = checkedBindingTarget(ports, input.dir, input.userHome);
   if (!directory.ok) return directory;
   const now = ports.clock.now().toISOString();
   const projectId = ports.ids.next();
@@ -206,6 +208,45 @@ function isAtOrBelow(candidate: string, directory: string): boolean {
   return candidate === directory || candidate.startsWith(`${directory}/`);
 }
 
+function checkedBindingTarget(
+  ports: ProjectCommandPorts,
+  path: string,
+  userHome: string,
+  excludeBindingId?: string,
+): Result<{ directory: string; bindingKind: BindingKind; physicalPath: string }, AppError> {
+  const target = ports.bindings.resolveDirectory(path, userHome);
+  if (!target.ok) return target;
+  const physicalPath = ports.bindings.realPath(path, userHome);
+  if (!physicalPath.ok) return physicalPath;
+  const vault = ports.bindings.realPath(ports.vaultPath, userHome);
+  if (!vault.ok) return vault;
+  const workspaceRoot = bindingWorkspaceRoot(target.value.directory, target.value.bindingKind);
+  const containment = checkVaultContainment({
+    resolvedVaultPath: vault.value,
+    resolvedBindingDirectories: [workspaceRoot, physicalPath.value],
+  });
+  if (!containment.ok) return containment;
+  const bindings = ports.projects.listBindings();
+  if (!bindings.ok) return bindings;
+  for (const binding of bindings.value) {
+    if (binding.id === excludeBindingId) continue;
+    if (binding.directory === target.value.directory) {
+      return err(
+        appError("BINDING_DUPLICATE", "the target directory is already bound", { directory: target.value.directory }),
+      );
+    }
+    if (binding.bindingKind === "git_repository" && isAtOrBelow(physicalPath.value, workspaceRootOf(binding))) {
+      return err(
+        appError("BINDING_DUPLICATE", "the target lies inside an already-bound Git repository", {
+          directory: physicalPath.value,
+          existing: binding.directory,
+        }),
+      );
+    }
+  }
+  return ok({ ...target.value, physicalPath: physicalPath.value });
+}
+
 export interface BindProjectInput {
   slug: string;
   dir: string;
@@ -216,29 +257,8 @@ export interface BindProjectInput {
 export function bindProject(ports: ProjectCommandPorts, input: BindProjectInput): Result<ProjectBinding, AppError> {
   const project = projectBySlug(ports.projects, input.slug);
   if (!project.ok) return project;
-  const directory = ports.bindings.resolveDirectory(input.dir, input.userHome);
+  const directory = checkedBindingTarget(ports, input.dir, input.userHome);
   if (!directory.ok) return directory;
-  // A directory inside a repository already bound as git_repository would create a
-  // second identity for that repository, so it is a duplicate even though the stored
-  // directories differ (PRJ-016).
-  const bindings = ports.projects.listBindings();
-  if (!bindings.ok) return bindings;
-  if (directory.value.bindingKind === "directory") {
-    for (const binding of bindings.value) {
-      if (binding.bindingKind === "git_repository" && isAtOrBelow(directory.value.directory, binding.directory)) {
-        return err(
-          appError(
-            "BINDING_DUPLICATE",
-            `the directory '${directory.value.directory}' lies inside the repository already bound at '${binding.directory}'`,
-            {
-              directory: directory.value.directory,
-              existing: binding.directory,
-            },
-          ),
-        );
-      }
-    }
-  }
   return ports.projects.addBinding(
     {
       id: ports.ids.next(),
@@ -303,24 +323,80 @@ export function unbindProject(ports: ProjectCommandPorts, input: UnbindProjectIn
   return ports.projects.removeBinding(binding.id, input.actor);
 }
 
-export function archiveProject(
+export interface RebindProjectInput {
+  slug: string;
+  from: string;
+  to: string;
+  userHome: string;
+  actor: ActorRef;
+}
+
+export interface RebindProjectOutcome {
+  binding: ProjectBinding;
+  previousBinding: ProjectBinding;
+  changed: boolean;
+}
+
+export function rebindProject(
   ports: ProjectCommandPorts,
-  input: { slug: string; actor: ActorRef },
-): Result<Project, AppError> {
+  input: RebindProjectInput,
+): Result<RebindProjectOutcome, AppError> {
+  const project = projectBySlug(ports.projects, input.slug);
+  if (!project.ok) return project;
+  const bindings = ports.projects.listBindingsForProject(project.value.id);
+  if (!bindings.ok) return bindings;
+  const from = ports.bindings.absentRealPath(input.from, input.userHome);
+  if (!from.ok) return from;
+  let previous = bindings.value.find((row) => row.directory === from.value);
+  if (previous === undefined) {
+    const folded = ports.bindings.resolveDirectory(input.from, input.userHome);
+    if (folded.ok) previous = bindings.value.find((row) => row.directory === folded.value.directory);
+  }
+  if (previous === undefined) {
+    return err(
+      appError("PROJECT_NOT_FOUND", "the Project has no binding at the recorded source path", {
+        slug: input.slug,
+        directory: from.value,
+      }),
+    );
+  }
+  const normalizedTarget = ports.bindings.resolveDirectory(input.to, input.userHome);
+  if (!normalizedTarget.ok) return normalizedTarget;
+  if (
+    previous.directory === normalizedTarget.value.directory &&
+    previous.bindingKind === normalizedTarget.value.bindingKind
+  ) {
+    return ok({ binding: previous, previousBinding: previous, changed: false });
+  }
+  const target = checkedBindingTarget(ports, input.to, input.userHome, previous.id);
+  if (!target.ok) return target;
+  const updated = ports.projects.replaceBinding(
+    previous.id,
+    previous.directory,
+    {
+      directory: target.value.directory,
+      bindingKind: target.value.bindingKind,
+      physicalPath: target.value.physicalPath,
+      updatedAt: ports.clock.now().toISOString(),
+    },
+    input.actor,
+  );
+  if (!updated.ok) return updated;
+  return ok({ binding: updated.value, previousBinding: previous, changed: true });
+}
+
+export function archiveProject(ports: ProjectCommandPorts, input: { slug: string }): Result<Project, AppError> {
   const project = projectBySlug(ports.projects, input.slug);
   if (!project.ok) return project;
   if (project.value.status === "archived") return ok(project.value);
-  return ports.projects.updateProjectStatus(project.value.id, "archived", ports.clock.now().toISOString(), input.actor);
+  return ports.projects.updateProjectStatus(project.value.id, "archived", ports.clock.now().toISOString(), USER_ACTOR);
 }
 
-export function unarchiveProject(
-  ports: ProjectCommandPorts,
-  input: { slug: string; actor: ActorRef },
-): Result<Project, AppError> {
+export function unarchiveProject(ports: ProjectCommandPorts, input: { slug: string }): Result<Project, AppError> {
   const project = projectBySlug(ports.projects, input.slug);
   if (!project.ok) return project;
   if (project.value.status === "active") return ok(project.value);
-  return ports.projects.updateProjectStatus(project.value.id, "active", ports.clock.now().toISOString(), input.actor);
+  return ports.projects.updateProjectStatus(project.value.id, "active", ports.clock.now().toISOString(), USER_ACTOR);
 }
 
 /**
@@ -349,11 +425,15 @@ export function checkRecipientEligibility(ports: ProjectCommandPorts, slug: stri
 }
 
 /** The workspace root a binding claims on disk: the stored directory, or the main working tree for a repository binding. */
-export function workspaceRootOf(binding: ProjectBinding): string {
-  if (binding.bindingKind === "directory") return binding.directory;
+function bindingWorkspaceRoot(directory: string, kind: BindingKind): string {
+  if (kind === "directory") return directory;
   // The stored directory is the git common directory; the main working tree is its parent.
-  const parent = binding.directory.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
+  const parent = directory.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
   return parent === "" ? "/" : parent;
+}
+
+export function workspaceRootOf(binding: ProjectBinding): string {
+  return bindingWorkspaceRoot(binding.directory, binding.bindingKind);
 }
 
 export type ResolvedActor =

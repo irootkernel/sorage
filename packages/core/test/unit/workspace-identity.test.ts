@@ -50,6 +50,9 @@ const repository: ProjectRepositoryPort = {
   removeBinding: () => {
     throw new Error("unused");
   },
+  replaceBinding: () => {
+    throw new Error("unused");
+  },
   listBindings: () => ok(bindings),
   listBindingsForProject: (projectId) => ok(bindings.filter((binding) => binding.projectId === projectId)),
 };
@@ -68,6 +71,7 @@ function ports(git: Record<string, string>): ProjectCommandPorts {
   };
   return {
     installationId: "i1",
+    vaultPath: "/vault",
     projects: repository,
     bindings: fs,
     handoffs: { openHandoffCount: () => ok(0) },

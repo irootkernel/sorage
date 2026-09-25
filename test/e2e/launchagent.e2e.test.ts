@@ -141,7 +141,9 @@ describe("the LaunchAgent journey", () => {
     const configBefore = readFileSync(`${home}/config.yaml`, "utf8");
     const markerBefore = readFileSync(`${home}/vault/.sorage-vault.json`, "utf8");
 
-    const project = sorage(["project", "add", "--name", "Preserved", "--slug", "preserved", "--dir", userHome], {
+    const projectDir = `${parent}/preserved-project`;
+    mkdirSync(projectDir);
+    const project = sorage(["project", "add", "--name", "Preserved", "--slug", "preserved", "--dir", projectDir], {
       home,
       env: cliEnv,
     });

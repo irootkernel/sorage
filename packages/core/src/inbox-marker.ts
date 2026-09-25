@@ -13,6 +13,7 @@ import type { HandoffReadPorts, HandoffView, ListingScope } from "./handoff-read
 /** Writes one derived marker atomically under `<binding-directory>/.sorage/INBOX.md`. */
 export interface InboxMarkerWritePort {
   writeInboxMarker(bindingDirectory: string, content: string): Result<void, AppError>;
+  removeInboxMarker(bindingDirectory: string): Result<void, AppError>;
 }
 
 export interface InboxMarkerPorts extends HandoffReadPorts {
@@ -20,6 +21,8 @@ export interface InboxMarkerPorts extends HandoffReadPorts {
     /** The effective `handoff.inboxMarker` flag of the current configuration. */
     enabled: boolean;
     writes: InboxMarkerWritePort;
+    /** Serializes binding reads, marker writes, and retired-path cleanup across processes. */
+    withLock<T>(body: () => Result<T, AppError>): Result<T, AppError>;
   };
 }
 
@@ -83,6 +86,44 @@ export function refreshInboxMarker(
     return ok({ written: [], skipped: true });
   }
   const recipientProjectId = found.value.recipientProjectId;
+  return refreshProjectInboxMarker(ports, recipientProjectId);
+}
+
+/** Refreshes every current binding after a Project binding changes. */
+export function refreshProjectInboxMarker(
+  ports: InboxMarkerPorts,
+  recipientProjectId: string,
+): Result<{ written: string[]; skipped: boolean }, AppError> {
+  if (!ports.marker.enabled) {
+    return ok({ written: [], skipped: true });
+  }
+  return ports.marker.withLock(() => refreshProjectInboxMarkerUnlocked(ports, recipientProjectId));
+}
+
+/** Reconciles a binding move under the same lock used by Handoff marker refreshes. */
+export function reconcileReboundInboxMarker(
+  ports: InboxMarkerPorts,
+  recipientProjectId: string,
+  oldDirectory: string,
+  newDirectory: string,
+): Result<{ written: string[]; skipped: boolean }, AppError> {
+  if (!ports.marker.enabled) return ok({ written: [], skipped: true });
+  return ports.marker.withLock(() => {
+    const refreshed = refreshProjectInboxMarkerUnlocked(ports, recipientProjectId);
+    if (!refreshed.ok || oldDirectory === newDirectory) return refreshed;
+    const currentBindings = ports.projectPorts.projects.listBindings();
+    if (!currentBindings.ok) return currentBindings;
+    if (currentBindings.value.some((binding) => binding.directory === oldDirectory)) return refreshed;
+    const removed = ports.marker.writes.removeInboxMarker(oldDirectory);
+    if (!removed.ok) return removed;
+    return refreshed;
+  });
+}
+
+function refreshProjectInboxMarkerUnlocked(
+  ports: InboxMarkerPorts,
+  recipientProjectId: string,
+): Result<{ written: string[]; skipped: boolean }, AppError> {
   const bindings = ports.projectPorts.projects.listBindingsForProject(recipientProjectId);
   if (!bindings.ok) return bindings;
   if (bindings.value.length === 0) {

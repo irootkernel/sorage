@@ -124,7 +124,7 @@
     "exitCode": 65,
     "httpStatus": 409,
     "recovery": {
-      "suggestedCommand": "sorage project unarchive <project> --as-user"
+      "suggestedCommand": "sorage project unarchive <project>"
     },
     "renderedExitCode": 65,
     "json": {
@@ -134,14 +134,14 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "sorage project unarchive <project> --as-user"
+          "suggestedCommand": "sorage project unarchive <project>"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "PROJECT_ARCHIVED: rendering probe\nRecovery: sorage project unarchive <project> --as-user\n"
+    "human": "PROJECT_ARCHIVED: rendering probe\nRecovery: sorage project unarchive <project>\n"
   },
   {
     "code": "PROJECT_UNBOUND",

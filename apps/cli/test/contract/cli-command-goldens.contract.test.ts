@@ -229,8 +229,8 @@ const steps: Step[] = [
   { name: "45-vault-verify", args: ["vault", "verify", "--json"] },
   { name: "46-vault-move", args: ["vault", "move", "--to", join(home, "moved-vault"), "--as-user", "--json"] },
   { name: "47-vault-status-moved", args: ["vault", "status", "--json"] },
-  { name: "48-project-archive", args: ["project", "archive", "alpha", "--as-user", "--json"] },
-  { name: "49-project-unarchive", args: ["project", "unarchive", "alpha", "--as-user", "--json"] },
+  { name: "48-project-archive", args: ["project", "archive", "alpha", "--json"] },
+  { name: "49-project-unarchive", args: ["project", "unarchive", "alpha", "--json"] },
   {
     name: "50-backup-verify-no-git",
     args: ["backup", "verify", "--json"],
@@ -266,6 +266,7 @@ const steps: Step[] = [
   },
   { name: "59-backup-disable-push", args: ["backup", "disable-push", "--as-user", "--json"] },
   { name: "60-backup-disable", args: ["backup", "disable", "--as-user", "--json"] },
+  { name: "61-project-rebind", args: ["project", "rebind", "alpha", "--from", workA, "--to", workA2, "--json"] },
 ];
 
 describe("the golden tour of every catalog command", () => {

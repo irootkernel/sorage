@@ -157,6 +157,7 @@ function makeWorld(): World {
       return {
         projectPorts: {
           installationId: INSTALLATION,
+          vaultPath: vault.vaultPath,
           projects: repository,
           clock,
           ids: { next: nextId },

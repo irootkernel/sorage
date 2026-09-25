@@ -47,10 +47,11 @@ Home layout:
     ├── config.lock
     ├── backup.lock
     ├── vault-move.lock
-    └── migration.lock
+    ├── migration.lock
+    └── inbox-marker.lock
 ```
 
-Lockfiles are created with `O_EXCL` and contain `{pid, startedAt, hostname}`; `config.lock` is stale after 30 seconds or a dead pid, and `daemon.lock`, `backup.lock`, `vault-move.lock`, and `migration.lock` are stale only when the recorded pid is dead.
+Each lock record is written to a unique temporary file with `O_EXCL` and atomically published at the lock path with a hard link. Lockfiles contain `{pid, startedAt, hostname}`; `config.lock` is stale after 30 seconds or a dead pid, and `daemon.lock`, `backup.lock`, `vault-move.lock`, `migration.lock`, and `inbox-marker.lock` are stale only when the recorded pid is dead. Marker refresh retries a live marker-lock conflict for up to five seconds, then warns without failing the domain command.
 
 `migration.lock` guards the schema migration that every process runs at start, so a CLI invocation and a daemon start racing on a fresh upgrade cannot both migrate.
 
@@ -403,8 +404,9 @@ sorage project show dolgorae
 sorage project rename dolgorae --name "Dolgorae Writer"
 sorage project bind dolgorae --dir "$HOME/projects/dolgorae-docs"
 sorage project unbind dolgorae --dir "$HOME/projects/dolgorae-docs" [--confirm]
-sorage project archive dolgorae --as-user
-sorage project unarchive dolgorae --as-user
+sorage project rebind dolgorae --from "$HOME/projects/dolgorae-docs" --to "$HOME/projects/dolgorae-notes"
+sorage project archive dolgorae
+sorage project unarchive dolgorae
 sorage project resolve [--path "/some/path"]
 ```
 
@@ -429,6 +431,8 @@ A Project may hold many bindings, and a Project with zero bindings is flagged as
 An archived Project keeps `fetch`, `review set`, `review withdraw`, `accept`, and `decline` on the Handoffs already in its inbox and rejects new incoming Handoffs with `PROJECT_ARCHIVED` (PRJ-021).
 
 A Project referenced by Handoffs is never physically deleted (PRJ-011); `archive` plus `unbind` is the complete retirement path.
+
+`project rebind` replaces one recorded binding in a transaction and preserves its id; `--from` may be the stored path shown by `project show` even after it vanishes, while `--to` must exist and passes the `project bind` checks. It records `PROJECT_BINDING_REBOUND` with the old and new stored paths and kinds. A target resolving to the same binding is a no-op. Historical sender paths and prior events do not change. When inbox markers are enabled, Sorage refreshes the new derived marker under `inbox-marker.lock` and removes only a recognized generated marker at the old location after checking that no current binding owns it; Handoff marker refresh uses the same lock. A marker failure emits a warning after the binding commit.
 
 ## 9. Actor resolution and Unregistered Workspaces
 
@@ -470,19 +474,19 @@ When a Workspace directory is later bound to a Project, that Project inherits se
 
 ### 9.2 User-admin context
 
-`--as-user` is the only way to enter User-admin context, and these operations fail with `USER_CONTEXT_REQUIRED` when it is absent:
+`--as-user` explicitly enters User-admin context for the following operations, which fail with `USER_CONTEXT_REQUIRED` when it is absent:
 
 ```text
 review remove       pin              unpin
 archive             unarchive        delete approve
-delete reject       project archive  project unarchive
+delete reject
 config set          config edit      vault move
 backup enable       backup disable   backup enable-push
 backup disable-push backup restore   token rotate
 uninstall
 ```
 
-Every other command accepts any resolved actor, including `project add`, `project bind`, `project unbind`, `project rename`, `project list`, `project show`, `project resolve`, `backup run`, `backup status`, `backup verify`, `daemon start|stop|restart|status`, `web`, `doctor`, `vault status`, `vault verify`, `config show`, and `config validate`.
+`Project archive` and `project unarchive` implicitly use the User actor and need no `--as-user` in CLI or `asUser` in their HTTP routes. Other commands accept any resolved actor, including `project add`, `project bind`, `project unbind`, `project rename`, `project list`, `project show`, `project resolve`, `backup run`, `backup status`, `backup verify`, `daemon start|stop|restart|status`, `web`, `doctor`, `vault status`, `vault verify`, `config show`, and `config validate`.
 
 > User-admin rows express workflow intent; any process that can read the API token or run the CLI as this OS user can assert User context (see `SEC-013` in [required-specification.md](required-specification.md)).
 
@@ -610,8 +614,9 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 | `sorage project rename <project> --name <name>` | M1 | Slug is not renamed |
 | `sorage project bind <project> --dir <path>` | M1 | Adds a binding (PRJ-016) |
 | `sorage project unbind <project> --dir <path> [--confirm]` | M1 | `--confirm` required when it would leave open Handoffs unbound (PRJ-022) |
-| `sorage project archive <project> --as-user` | M1 | Blocks new incoming Handoffs (PRJ-009) |
-| `sorage project unarchive <project> --as-user` | M1 | Returns the Project to `active` |
+| `sorage project rebind <project> --from <recorded-path> --to <existing-path>` | M6 | Atomically replaces one binding and preserves its id (PRJ-024) |
+| `sorage project archive <project>` | M1, M6 | Blocks new incoming and outgoing Handoffs (PRJ-023); User actor is implicit |
+| `sorage project unarchive <project>` | M1, M6 | Returns the Project to `active`; User actor is implicit |
 | `sorage project resolve [--path <path>]` | M1 | Prints what the actor resolver would decide |
 
 ### 13.5 Handoff creation and discovery
@@ -761,7 +766,7 @@ The mapping from symbolic code to HTTP status is published here and verified by 
 | `CONFIG_CONFLICT` | 409 | Stale configuration revision or changed ETag | Reload the configuration and retry |
 | `DAEMON_UNAVAILABLE` | 503 | Daemon unreachable for a `web` or `daemon` command | `sorage daemon start` |
 | `PROJECT_NOT_FOUND` | 404 | Unknown Project slug or id | `sorage project list` |
-| `PROJECT_ARCHIVED` | 409 | Recipient Project is archived | `sorage project unarchive <project> --as-user` or choose another recipient |
+| `PROJECT_ARCHIVED` | 409 | Sender or recipient Project is archived | `sorage project unarchive <project>` or choose another Project |
 | `PROJECT_UNBOUND` | 409 | Project has no binding on this Installation | `sorage project bind <project> --dir <path>` |
 | `PROJECT_SLUG_CONFLICT` | 409 | The slug is already taken under case-insensitive comparison (PRJ-005) | Choose another slug, or `sorage project show <project>` to reuse the existing one |
 | `BINDING_DUPLICATE` | 409 | The directory is already bound, or lies inside a repository that is already bound (PRJ-016, PRJ-017) | `sorage project resolve --path <path>` to see which Project already owns it |
@@ -924,7 +929,7 @@ POST /api/v1/vault/move
 
 `POST /api/v1/vault/move` exists for parity with the CLI; no MVP Web screen calls it, because Web relocation is deferred (WEB-016).
 
-Every domain route names its acting context explicitly, because an HTTP request has no working directory to resolve: `as=<project-slug>` for a Project, or `asUser=true` for the User, as a query parameter or a body field; a request that names neither is `FORBIDDEN_ACTOR`. Path-based imports additionally carry the CLI caller's working directory as `senderPath`, which defaults to the imported file's directory, and are refused for a browser session token (API-004). The `Idempotency-Key` header on create, revise, and deletion approval replays the stored response before any Row Version precondition is evaluated (API-012).
+Domain routes that resolve an actor from the request name it explicitly, because an HTTP request has no working directory to resolve: `as=<project-slug>` for a Project, or `asUser=true` for the User, as a query parameter or a body field; a request that names neither is `FORBIDDEN_ACTOR`. `POST /api/v1/projects/{projectId}/archive` and `/unarchive` are exceptions: they always use the implicit User actor and require neither field (CLI-024). Path-based imports additionally carry the CLI caller's working directory as `senderPath`, which defaults to the imported file's directory, and are refused for a browser session token (API-004). The `Idempotency-Key` header on create, revise, and deletion approval replays the stored response before any Row Version precondition is evaluated (API-012).
 
 ### 18.3 Projects
 

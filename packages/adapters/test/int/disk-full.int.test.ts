@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { defaultConfiguration } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNodeArtifactStore } from "../../src/artifact-store";
-import { createConfigStore } from "../../src/config-store";
+import { createConfigStore, realConfigStoreFs } from "../../src/config-store";
 import { createHomePaths } from "../../src/home";
-import { createNodeLockProbePorts } from "../../src/lockfile";
+import { acquireLock, createNodeLockProbePorts } from "../../src/lockfile";
 import { FakeClock } from "../../src/testkit/fakes";
 import { createVaultInitializer } from "../../src/vault";
 
@@ -89,10 +89,21 @@ describe("disk full during the configuration write", () => {
     mkdirSync(join(home, "run"), { recursive: true });
     mkdirSync(vault, { recursive: true });
     const paths = createHomePaths({ SORAGE_HOME: home }, "/Users/tester");
+    let configCopyCount = 0;
     const store = createConfigStore({
       home: paths,
       lockPorts: createNodeLockProbePorts(new FakeClock()),
       userHome: "/Users/tester",
+      fs: {
+        ...realConfigStoreFs,
+        copyFile(from, to) {
+          configCopyCount += 1;
+          // Fill the real volume after the third write has acquired its lock
+          // and written its temporary config, just before replacing .bak.
+          if (configCopyCount === 2) fillTo(2048);
+          realConfigStoreFs.copyFile(from, to);
+        },
+      },
     });
     const first = store.write(defaultConfiguration("11111111-1111-4111-8111-111111111111"));
     expect(first.ok).toBe(true);
@@ -105,19 +116,10 @@ describe("disk full during the configuration write", () => {
     const before = readFileSync(join(home, "config.yaml"), "utf8");
     const backupBefore = readFileSync(`${join(home, "config.yaml")}.bak`, "utf8");
 
-    // The volume allocates in 4096-byte blocks, so the fill targets the window
-    // where the lock record's one block still fits while the temporary sibling
-    // plus the atomic .bak swap cannot: the failure lands inside the swap, not
-    // in lock acquisition.
-    fillTo(8192);
-    // df reports block multiples, so the landing is 8192 or 4096; both leave the
-    // lock its block while the three-block swap (lock, temp, .bak) cannot fit.
-    expect(freeBytes()).toBeGreaterThanOrEqual(4096);
-    expect(freeBytes()).toBeLessThanOrEqual(8192);
-
     const next = defaultConfiguration("11111111-1111-4111-8111-111111111111");
     next.server.port = 46900;
     const third = store.write(next);
+    expect(configCopyCount).toBe(2);
     expect(third.ok).toBe(false);
     if (!third.ok) {
       expect(third.error.message).not.toContain("lock could not be acquired");
@@ -134,6 +136,23 @@ describe("disk full during the configuration write", () => {
     if (read.ok && read.value !== null) {
       expect(read.value.config.server.port).toBe(46400);
     }
+  });
+});
+
+describe("disk full during lock acquisition", () => {
+  it("leaves no unpublished lock record after ENOSPC", { timeout: 30_000 }, () => {
+    const home = join(mountPoint, "home");
+    const runDir = join(home, "run");
+    mkdirSync(runDir, { recursive: true });
+    fillTo(2048);
+    expect(() =>
+      acquireLock({
+        path: join(runDir, "config.lock"),
+        lock: "config",
+        ports: createNodeLockProbePorts(new FakeClock()),
+      }),
+    ).toThrow();
+    expect(readdirSync(runDir)).toEqual([]);
   });
 });
 

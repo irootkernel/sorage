@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
-import { type AppError, appError, err, ok, UuidGenerator } from "@sorage/core";
+import { type AppError, appError, err, ok, UuidGenerator, workspaceRootOf } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import type { SorageSqlite } from "./sqlite/connection";
 
@@ -63,6 +63,7 @@ export function createSqliteProjectRepository(
       | "PROJECT_REGISTERED"
       | "PROJECT_BINDING_ADDED"
       | "PROJECT_BINDING_REMOVED"
+      | "PROJECT_BINDING_REBOUND"
       | "PROJECT_STATUS_ARCHIVED"
       | "PROJECT_STATUS_ACTIVE"
       | "PROJECT_RENAMED",
@@ -348,6 +349,90 @@ export function createSqliteProjectRepository(
         }
         return ok(toBinding(row));
       } catch (error) {
+        return err(internal(error));
+      }
+    },
+    replaceBinding(bindingId, expectedDirectory, replacement, actor) {
+      try {
+        const directory = fs.realpath(replacement.directory);
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          const previous = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as
+            | BindingRow
+            | null
+            | undefined;
+          if (previous === null || previous === undefined || previous.directory !== expectedDirectory) {
+            db.exec("ROLLBACK");
+            return err(
+              appError("PROJECT_NOT_FOUND", "the source binding no longer matches the recorded path", { bindingId }),
+            );
+          }
+          const physicalPath = fs.realpath(replacement.physicalPath);
+          const others = db
+            .prepare("SELECT * FROM project_bindings WHERE installation_id = ? AND id != ?")
+            .all(options.installationId, bindingId) as BindingRow[];
+          for (const other of others) {
+            if (other.directory === directory) {
+              db.exec("ROLLBACK");
+              return err(appError("BINDING_DUPLICATE", "the target directory is already bound", { directory }));
+            }
+            if (other.binding_kind === "git_repository") {
+              const root = workspaceRootOf(toBinding(other));
+              if (physicalPath === root || physicalPath.startsWith(`${root}/`)) {
+                db.exec("ROLLBACK");
+                return err(
+                  appError("BINDING_DUPLICATE", "the target lies inside an already-bound Git repository", {
+                    directory: physicalPath,
+                    existing: other.directory,
+                  }),
+                );
+              }
+            }
+          }
+          db.prepare("UPDATE project_bindings SET directory = ?, binding_kind = ?, updated_at = ? WHERE id = ?").run(
+            directory,
+            replacement.bindingKind,
+            replacement.updatedAt,
+            bindingId,
+          );
+          emit(
+            "PROJECT_BINDING_REBOUND",
+            actor,
+            {
+              projectId: previous.project_id,
+              bindingId,
+              oldDirectory: previous.directory,
+              newDirectory: directory,
+              oldBindingKind: previous.binding_kind,
+              newBindingKind: replacement.bindingKind,
+            },
+            replacement.updatedAt,
+          );
+          const rebound = toBinding({
+            ...previous,
+            directory,
+            binding_kind: replacement.bindingKind,
+            updated_at: replacement.updatedAt,
+          });
+          db.exec("COMMIT");
+          return ok(rebound);
+        } catch (transactionError) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction may already be closed.
+          }
+          throw transactionError;
+        }
+      } catch (error) {
+        const conflict = uniqueViolation(error);
+        if (conflict === "project_bindings.installation_id, project_bindings.directory") {
+          return err(
+            appError("BINDING_DUPLICATE", "the target directory is already bound on this installation", {
+              directory: replacement.directory,
+            }),
+          );
+        }
         return err(internal(error));
       }
     },

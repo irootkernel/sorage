@@ -76,8 +76,6 @@ describe("the User-admin gate without --as-user", () => {
     const commands: Array<[string, string[]]> = [
       ["config set", ["config", "set", "ui.defaultPageSize", "25", "--json"]],
       ["config edit", ["config", "edit", "--json"]],
-      ["project archive", ["project", "archive", "alpha", "--json"]],
-      ["project unarchive", ["project", "unarchive", "alpha", "--json"]],
       ["review remove", ["review", "remove", handoffId, "--confirm", "--json"]],
       ["pin", ["pin", handoffId, "--json"]],
       ["unpin", ["unpin", handoffId, "--json"]],

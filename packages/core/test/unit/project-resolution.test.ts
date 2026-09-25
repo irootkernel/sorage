@@ -36,6 +36,9 @@ function fakeRegistry(projects: Project[], bindings: ProjectBinding[]): ProjectR
     removeBinding: () => {
       throw new Error("not used by resolution");
     },
+    replaceBinding: () => {
+      throw new Error("not used by resolution");
+    },
     listBindings() {
       return ok(bindings);
     },
@@ -76,6 +79,7 @@ function ports(
   };
   return {
     installationId: "i1",
+    vaultPath: "/vault",
     projects: fakeRegistry(projects, bindings),
     bindings: fs,
     handoffs: { openHandoffCount: () => ok(0) },

@@ -88,6 +88,13 @@ export interface ProjectRepositoryPort {
   ): Result<Project, AppError>;
   /** Removes one binding; a Project with zero bindings remains, derived unbound (PRJ-010, PRJ-022). */
   removeBinding(bindingId: string, actor: ActorRef): Result<ProjectBinding, AppError>;
+  /** Replaces one binding in place, preserving its id and Project identity. */
+  replaceBinding(
+    bindingId: string,
+    expectedDirectory: string,
+    replacement: { directory: string; bindingKind: BindingKind; physicalPath: string; updatedAt: string },
+    actor: ActorRef,
+  ): Result<ProjectBinding, AppError>;
   listBindings(): Result<ProjectBinding[], AppError>;
   listBindingsForProject(projectId: string): Result<ProjectBinding[], AppError>;
 }

@@ -97,7 +97,7 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, and AJ-18 for M5.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, and AJ-19 for M6.
 
 `Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
 
@@ -377,6 +377,19 @@ Expected: the sender cannot learn the Note body from `inbox`, `outbox`, or `get`
 
 Expected: step 2 creates exactly one Handoff in `awaiting_recipient` with User sender and a materialized Markdown Artifact; step 5 never reaches the server; step 6 keeps the M2 file-upload path; the form never offers a Project-sender picker, unregistered-workspace identity, or an allow-unregistered control. Body fan-out, UI-bypassed XOR and empty-body rejections, `artifact.maxBytes` abort with spool cleanup, and idempotency replay are proven by `apps/daemon/test/int/upload.int.test.ts` and the upload contract fixtures of `TASK-084`, not by this journey. AJ-01 to AJ-17 still pass.
 
+### AJ-19: Project archive and binding replacement
+
+- **Owner:** `EPIC-012` · **Milestone:** M6
+- **Requirements:** PRJ-023, PRJ-024, CLI-024, CLI-025
+
+1. Register two Projects, create a Handoff between them, and archive one with `sorage project archive <project>` from outside its directory and without `--as-user`.
+2. Confirm the lifecycle event records the User actor, a new send from or to the archived Project fails with `PROJECT_ARCHIVED`, and existing Handoff processing remains available.
+3. Unarchive it without `--as-user`; confirm new sends can resume.
+4. Rebind one of its paths with `project rebind --from <recorded-path> --to <existing-path> --json`, then inspect `project show`, resolution from both locations, Project and binding ids, the binding event, and the current inbox marker when enabled.
+5. Attempt a duplicate or invalid target and verify the original binding remains; repeat with a vanished old path and with a Git repository path.
+
+Expected: archive and unarchive need no explicit User flag and record User provenance; new Handoffs cannot involve an archived registered Project; the replacement is one authoritative database mutation with unchanged identities and historical paths; a normalized no-op emits no event. AJ-01 to AJ-18 still pass.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -411,6 +424,7 @@ The remaining journeys carry the v0.4.0 decisions that have no v0.3.0 criterion,
 | AJ-08 | The intent-log protocol survives all seven crash points, and retries are idempotent (ADR-0013) |
 | AJ-17 | A sender AI session reads the Review Note through `sorage review show` before revising, and a box-only outbox check does not open it (ADR-0024) |
 | AJ-18 | The User creates a Handoff from Web compose body text without a file, as User, with the M2 file-upload path unchanged (ADR-0025) |
+| AJ-19 | Project lifecycle commands imply User context and one binding changes atomically without rewriting history (ADR-0026) |
 | AJ-09 | Vault relocation is atomic in effect and pauses the service instead of racing it |
 | AJ-10 | Deletion stays two-phase, requires a terminal review state, and never overstates what it removed |
 | AJ-11 | Daemon discovery, port conflict, and graceful drain |
@@ -536,6 +550,13 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 - A replay with the same `Idempotency-Key` and the same body returns the original result; a different body under that key fails with `IDEMPOTENCY_CONFLICT`.
 - The existing file-only upload path is unchanged when it omits `body`.
 - Contract fixtures pin file-success, body-success, and input-error request/response envelopes; the snapshot diff is classified additive non-breaking under section 9.4, with no configuration, database, Vault, CLI, or protocol migration.
+- No open P0 or P1 defect.
+
+### 9.7 Gate M6, Project lifecycle and binding release, end of `EPIC-012`
+
+- AJ-19 passes against the compiled binary, and AJ-01 to AJ-18 still pass unchanged.
+- Every requirement listed under milestone M6 in section 17 of [required-specification.md](required-specification.md) is satisfied.
+- The CLI and HTTP contract changes are classified, including the intentional archived-sender behavior change.
 - No open P0 or P1 defect.
 
 ## 10. Defect severity

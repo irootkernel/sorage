@@ -169,6 +169,13 @@ describe("the project surface", () => {
     });
     expect(resolved.status).toBe(200);
     expect(json(resolved).data.kind).toBe("registered_project");
+
+    const archived = await call("/api/v1/projects/web-app/archive", { method: "POST", bearer: apiToken });
+    expect(archived.status).toBe(200);
+    expect(json(archived).data.status).toBe("archived");
+    const unarchived = await call("/api/v1/projects/web-app/unarchive", { method: "POST", bearer: apiToken });
+    expect(unarchived.status).toBe(200);
+    expect(json(unarchived).data.status).toBe("active");
   });
 });
 

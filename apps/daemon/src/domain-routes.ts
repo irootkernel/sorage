@@ -183,13 +183,9 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   add({
     method: "POST",
     pattern: "/api/v1/projects/{id}/archive",
-    handler: async (request, response, context) => {
-      const body = await readJsonBody(request);
-      const actor = await resolveActor(body);
-      if (!actor.ok) return void respond(response, context, actor);
+    handler: async (_request, response, context) => {
       const result = archiveProject(createNodeProjectPorts(), {
         slug: (context.params?.id ?? "") as string,
-        actor: actor.value,
       });
       return void respond(response, context, result);
     },
@@ -197,13 +193,9 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   add({
     method: "POST",
     pattern: "/api/v1/projects/{id}/unarchive",
-    handler: async (request, response, context) => {
-      const body = await readJsonBody(request);
-      const actor = await resolveActor(body);
-      if (!actor.ok) return void respond(response, context, actor);
+    handler: async (_request, response, context) => {
       const result = unarchiveProject(createNodeProjectPorts(), {
         slug: (context.params?.id ?? "") as string,
-        actor: actor.value,
       });
       return void respond(response, context, result);
     },

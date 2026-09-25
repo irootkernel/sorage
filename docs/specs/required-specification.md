@@ -8,7 +8,7 @@ Sorage is developed, tested, and released from the standalone repository `irootk
 
 The MVP is delivered in three milestones: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, and `M3` Git backup, scheduling, and packaging. Those three gates are closed. Post-MVP work uses milestone identifiers `M4` and above (ADR-0024).
 
-Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, `M5`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
+Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
 
 A requirement whose clauses span gates carries the earliest of them and phrases the later clause conditionally, as in "once the daemon exists".
 
@@ -128,6 +128,8 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | PRJ-020 | M1 | When a Workspace directory is later bound to a Project, that Project MUST inherit sender authority over Handoffs previously sent from the Workspace while `senderKind` and `senderPathSnapshot` remain unchanged. |
 | PRJ-021 | M1 | An archived Project MUST retain `fetch`, `review set`, `review withdraw`, `accept`, and `decline` on Handoffs already in its inbox, and MUST reject new incoming Handoffs with `PROJECT_ARCHIVED`. |
 | PRJ-022 | M1 | A Project with zero bindings MUST be flagged as unbound by `sorage project list` and `sorage doctor` and MUST fail as a recipient with `PROJECT_UNBOUND`, and a `sorage project unbind` that would leave a Project with open Handoffs — those in `awaiting_recipient` or `changes_requested` that are not deleted — unbound MUST require `--confirm` and MUST otherwise fail with `CONFIRMATION_REQUIRED`. |
+| PRJ-023 | M6 | An archived Project MUST NOT be the registered sender or recipient of a new Handoff and MUST fail creation with `PROJECT_ARCHIVED`; existing Handoff processing and exact idempotency replay MUST remain available. |
+| PRJ-024 | M6 | `sorage project rebind <project> --from <recorded-path> --to <existing-path>` MUST replace exactly one binding atomically, preserving Project and binding identities and historical path snapshots, applying the same path, Git, duplicate, and Vault containment rules as `project bind`, and appending a binding-change event in the same transaction. A `--to` resolving to the same stored binding MUST succeed without a mutation or event. |
 
 ## 7. Vault and Artifact
 
@@ -256,11 +258,13 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | CLI-016 | M1 | Help text MUST show the next valid command after common errors. |
 | CLI-017 | M1 | Commands MUST resolve the acting identity from the current working directory as provenance rather than authorization, unless `--as <project-slug>` or `--as-user` is supplied. |
 | CLI-018 | M1 | The CLI MUST perform every mutation through the shared application layer and MUST NOT execute raw SQL or write managed Vault paths directly. |
-| CLI-019 | M1 | The explicit `--as-user` flag MUST be required by `review remove`, `pin`, `unpin`, `archive`, `unarchive`, `delete approve`, `delete reject`, `project archive`, `project unarchive`, `config set`, `config edit`, `vault move`, `backup enable`, `backup disable`, `backup enable-push`, `backup disable-push`, `backup restore`, `token rotate`, and `uninstall`, MUST record `actorKind = user`, and MUST fail with `USER_CONTEXT_REQUIRED` when it is absent, while every other command MUST remain executable in any resolved actor context. |
+| CLI-019 | M1 | The explicit `--as-user` flag MUST be required by `review remove`, `pin`, `unpin`, `archive`, `unarchive`, `delete approve`, `delete reject`, `config set`, `config edit`, `vault move`, `backup enable`, `backup disable`, `backup enable-push`, `backup disable-push`, `backup restore`, `token rotate`, and `uninstall`, MUST record `actorKind = user`, and MUST fail with `USER_CONTEXT_REQUIRED` when it is absent, while every other actor-resolving command MUST remain executable in any resolved actor context. |
 | CLI-020 | M1 | The CLI MUST support `--as <project-slug>` on every actor-resolving command, an optional `--expected-row-version <n>` on every mutating command, and `inbox --wait`, which MUST poll SQLite every `--interval` seconds defaulting to 2 until a new inbox item for the resolved actor appears or `--timeout` seconds defaulting to 300 elapse, then exit 0 with an empty list and `meta.timedOut: true`. |
 | CLI-021 | M1 | `send` and `revise` MUST accept `--idempotency-key <uuid>`, MUST return the original result for a replay with the same key and request hash, and MUST fail with `IDEMPOTENCY_CONFLICT` for a different request under the same key. |
 | CLI-022 | M4 | `sorage review show <handoff-id>` MUST return the current Review Note, including body, target Revision, and author kind, or JSON `null` when none exists. It MUST use the same participant gate as `sorage get`, MUST record nothing, MUST NOT set `firstFetchedAt` or increment Row Version, MUST return `HANDOFF_NOT_FOUND` for a non-participant, MUST return `null` rather than `HANDOFF_DELETED` on a tombstone that has no Note, and MUST support `--json`. |
 | CLI-023 | M4 | `sorage events <handoff-id>` MUST return the bounded recent metadata timeline for that Handoff, newest first, including on a tombstone, with each event's type, actor kind, and Row Version, and MUST NOT carry Artifact bytes or imply that historical content is retrievable. It MUST use the same participant gate as `sorage get`, MUST record nothing, MUST NOT set `firstFetchedAt` or increment Row Version, MUST return `HANDOFF_NOT_FOUND` for a non-participant, MUST bound the list at 50 events matching the HTTP detail timeline, and MUST support `--json`. |
+| CLI-024 | M6 | `project archive` and `project unarchive` MUST accept a Project slug without `--as-user` or a resolvable working directory, MUST record the User actor, and MUST continue to accept the global `--as-user` option for existing callers. The matching HTTP Project lifecycle routes MUST also use the User actor without an explicit `asUser` body field. |
+| CLI-025 | M6 | `project rebind` MUST accept `--from` and `--to`, return the updated Project Binding in the existing success envelope under `--json`, and report a failed validation without changing the old binding. |
 
 ## 12. Local HTTP API
 
@@ -392,8 +396,9 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | M3 | INIT-004, INIT-007..010, INIT-016; RUN-007, RUN-011; CLI-006; BKP-001..026; NFR-004 | M3 MVP release |
 | M4 | GEN-015; CLI-022, CLI-023 | M4 CLI detail-read release |
 | M5 | API-013; WEB-019 | M5 Web body-compose release |
+| M6 | PRJ-023, PRJ-024; CLI-024, CLI-025 | M6 Project lifecycle and binding release |
 | Deferred | WEB-016 | None; revisited after the MVP |
 
-Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, EPIC-010 for M4, and EPIC-011 for M5, as recorded in `../roadmap/README.md`.
+Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, EPIC-010 for M4, EPIC-011 for M5, and EPIC-012 for M6, as recorded in `../roadmap/README.md`.
 
-The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4 and M5 do not reopen those gates.
+The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4, M5, and M6 do not reopen those gates.

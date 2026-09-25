@@ -23,7 +23,7 @@ The honesty clause is normative and appears in the permission matrix of [../arch
 | Fail closed with `USER_CONTEXT_REQUIRED` when a User-admin command is invoked without it (CLI-019) | Gate reading; every actor that can reach the installation can read it |
 | Pair with `--confirm`, and with the distinct `--confirm-pinned <id>` argument for a pinned deletion (LIFE-012) | Replace operating-system permissions, keychain storage, or per-agent sandboxing |
 
-The commands that require `--as-user` are `review remove`, `pin`, `unpin`, `archive`, `unarchive`, `delete approve`, `delete reject`, `project archive`, `project unarchive`, `config set`, `config edit`, `vault move`, `backup enable`, `backup disable`, `backup enable-push`, `backup disable-push`, `backup restore`, `token rotate`, and `uninstall` (CLI-019); every other command runs in whatever actor context resolution produced.
+The commands that require `--as-user` are `review remove`, `pin`, `unpin`, `archive`, `unarchive`, `delete approve`, `delete reject`, `config set`, `config edit`, `vault move`, `backup enable`, `backup disable`, `backup enable-push`, `backup disable-push`, `backup restore`, `token rotate`, and `uninstall` (CLI-019). `project archive` and `project unarchive` imply User context without a flag and record `actorKind = user` (CLI-024).
 
 ## 2. Local network boundary, milestone M2
 
@@ -187,7 +187,7 @@ UPDATE handoffs SET rowVersion = rowVersion + 1 WHERE id = ? AND rowVersion = ?;
 
 Anything other than one changed row means another writer moved first, and the operation fails with `ROW_VERSION_CONFLICT` without retrying; an expected Row Version is the value the client currently holds, and reads, `fetch`, preview, and their events never increment it (HND-014, HND-025).
 
-Operations that cannot be one transaction take an exclusive lockfile created with `O_EXCL` under `~/.sorage/run/`, each containing `{pid, startedAt, hostname}`; the lock set is normative in section 19 of [../architecture/README.md](../architecture/README.md) and is restated here because the reliability claims of this document depend on it:
+Operations that cannot be one transaction take an exclusive lockfile under `~/.sorage/run/`; each complete `{pid, startedAt, hostname}` record is written to a unique temporary file with `O_EXCL` and atomically published at the lock path with a hard link. The lock set is normative in section 19 of [../architecture/README.md](../architecture/README.md) and is restated here because the reliability claims of this document depend on it:
 
 | Lockfile | Protects | Stale when | Milestone |
 |---|---|---|---|
@@ -196,8 +196,9 @@ Operations that cannot be one transaction take an exclusive lockfile created wit
 | `vault-move.lock` | Vault relocation and, once restore exists, `backup restore` | The recorded pid is dead | M1 |
 | `daemon.lock` | Single daemon instance | The recorded pid is dead | M2 |
 | `backup.lock` | Scheduled and manual backup runs; a run that finds it held by a live process fails with `BACKUP_IN_PROGRESS` | The recorded pid is dead | M3 |
+| `inbox-marker.lock` | Derived marker refresh and retired binding cleanup; contention retries for up to five seconds and then warns | The recorded pid is dead | M6 |
 
-A stale lock may be broken by the next process; a live lock produces a conflict rather than a wait loop, and a lock whose pid belongs to a different program is treated as live and reported rather than broken.
+A stale lock may be broken by the next process; a live lock produces a conflict rather than a wait loop, except for the bounded retry of advisory marker work. A lock whose pid belongs to a different program is treated as live and reported rather than broken.
 
 While `vault-move.lock` is held by a Vault move or, once restore exists, by `backup restore`, every other process attempting a domain mutation fails with `SERVICE_PAUSED` and recovery guidance, and the daemon returns the same code to API callers (RUN-014).
 
@@ -277,6 +278,7 @@ The table below is the normative event catalog for Sorage; other documents cite 
 | `PROJECT_REGISTERED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
 | `PROJECT_BINDING_ADDED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
 | `PROJECT_BINDING_REMOVED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
+| `PROJECT_BINDING_REBOUND` | `user` | M6 |
 | `PROJECT_STATUS_ARCHIVED` | `user` | M1 |
 | `PROJECT_STATUS_ACTIVE` | `user` | M1 |
 | `PROJECT_RENAMED` | `registered_project`, `unregistered_workspace`, `user` | M1 |
