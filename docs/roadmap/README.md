@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-012`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -83,7 +83,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-009` | Hardening, packaging, and first public release | M3 | Completed | `TASK-059` to `TASK-079` |
 | `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
-| `EPIC-012` | Project archival and binding replacement | M6 | In Progress | `TASK-085` to `TASK-086` |
+| `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -304,10 +304,10 @@ The `POST /api/v1/handoffs/upload` file-success, body-success, and input-error e
 
 ## EPIC-012: Project archival and binding replacement
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M6
 - **Objective:** Let the local User archive and unarchive Projects without an actor flag, prevent archived Projects from starting new Handoffs, and replace one recorded binding through one CLI command while preserving Project identity and history.
-- **Detailed SOT:** [Project lifecycle and binding dossier](../todo/TODO-PROJECT-LIFECYCLE.md)
+- **Canonical Outcomes:** [ADR-0026](../architecture-decision-records/README.md), [Required specification](../specs/required-specification.md), [Interfaces and operations](../specs/interfaces-and-operations.md), [Testing and acceptance](../specs/testing-and-acceptance.md), [Architecture](../architecture/README.md)
 - **Prerequisite:** `EPIC-011` is `Completed`. Do not append these Tasks to `EPIC-011`.
 
 The `TASK-017` acceptance gate records the original M1 requirement for `project archive --as-user` and its missing-flag error; `TASK-086` supersedes that one historical CLI expectation under ADR-0026.

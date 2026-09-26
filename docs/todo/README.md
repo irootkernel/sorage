@@ -4,7 +4,6 @@ This directory stores future epic-sized candidates and temporary dossiers for ad
 
 ## Adopted dossiers
 
-- [Project lifecycle and binding replacement](TODO-PROJECT-LIFECYCLE.md) is the temporary execution dossier for `EPIC-012`.
 
 ## Future candidates
 
