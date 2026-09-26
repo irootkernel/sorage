@@ -81,6 +81,9 @@ export interface FanoutCommit {
   handoffs: NewHandoffRecord[];
   /** Filesystem identity captured before staging; SQLite rechecks binding ownership at commit. */
   unregisteredSenderPath?: { directory: string; gitCommonDirectory: string | null; allowUnregistered: boolean };
+  registeredSender?:
+    | { projectId: string; asOverride: true }
+    | { projectId: string; asOverride: false; bindingId: string; directory: string; gitCommonDirectory: string | null };
   artifacts: NewArtifactRecord[];
   intents: NewPendingFsOp[];
   events: NewDomainEvent[];
@@ -546,8 +549,25 @@ function sendStaged(
     dispatchGroupId,
     replayed: false,
   };
+  let registeredSender: FanoutCommit["registeredSender"];
+  if (sender.value.kind === "registered_project") {
+    if (input.as !== undefined) {
+      registeredSender = { projectId: sender.value.project.id, asOverride: true };
+    } else {
+      const path = ports.projectPorts.bindings.realPath(input.path, input.userHome);
+      if (!path.ok) return err(path.error);
+      registeredSender = {
+        projectId: sender.value.project.id,
+        asOverride: false,
+        bindingId: sender.value.binding.id,
+        directory: path.value,
+        gitCommonDirectory: ports.projectPorts.bindings.gitCommonDirectory(path.value),
+      };
+    }
+  }
   const committed = ports.handoffs.createFanout({
     handoffs: handoffRecords,
+    ...(registeredSender === undefined ? {} : { registeredSender }),
     ...(sender.value.kind === "unregistered_workspace"
       ? {
           unregisteredSenderPath: {

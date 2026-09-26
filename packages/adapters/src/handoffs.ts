@@ -178,17 +178,73 @@ export function createSqliteHandoffWriteStore(
               ),
             );
           }
+          const bindingRows =
+            commit.unregisteredSenderPath !== undefined || commit.registeredSender !== undefined
+              ? (db
+                  .prepare(
+                    "SELECT b.id, b.project_id, b.directory, b.binding_kind, p.slug, p.status FROM project_bindings b JOIN projects p ON p.id = b.project_id",
+                  )
+                  .all() as Array<{
+                  id: string;
+                  project_id: string;
+                  directory: string;
+                  binding_kind: string;
+                  slug: string;
+                  status: string;
+                }>)
+              : [];
+          if (commit.registeredSender !== undefined) {
+            const sender = commit.registeredSender;
+            if (sender.asOverride) {
+              if (!bindingRows.some((row) => row.project_id === sender.projectId)) {
+                db.exec("ROLLBACK");
+                return err(
+                  appError(
+                    "PROJECT_UNBOUND",
+                    "the sender Project lost its last binding while the Handoff was prepared",
+                  ),
+                );
+              }
+            } else {
+              const gitOwner = bindingRows.find(
+                (row) => row.binding_kind === "git_repository" && row.directory === sender.gitCommonDirectory,
+              );
+              const directoryOwner = bindingRows
+                .filter(
+                  (row) =>
+                    row.binding_kind === "directory" &&
+                    (sender.directory === row.directory || sender.directory.startsWith(`${row.directory}/`)),
+                )
+                .sort((a, b) => b.directory.length - a.directory.length)[0];
+              const owner = gitOwner ?? directoryOwner;
+              if (owner?.id !== sender.bindingId || owner.project_id !== sender.projectId) {
+                db.exec("ROLLBACK");
+                return err(
+                  owner?.status === "archived"
+                    ? appError(
+                        "PROJECT_ARCHIVED",
+                        "the sender path changed to an archived Project while the Handoff was prepared",
+                        {
+                          slug: owner.slug,
+                        },
+                      )
+                    : appError(
+                        "SENDER_IDENTITY_DOWNGRADE",
+                        "the sender path changed Project identity while the Handoff was prepared; retry the send",
+                        {
+                          slug: owner?.slug,
+                        },
+                      ),
+                );
+              }
+            }
+          }
           if (commit.unregisteredSenderPath !== undefined) {
             const { directory, gitCommonDirectory, allowUnregistered } = commit.unregisteredSenderPath;
-            const rows = db
-              .prepare(
-                "SELECT b.directory, b.binding_kind, p.slug, p.status FROM project_bindings b JOIN projects p ON p.id = b.project_id",
-              )
-              .all() as Array<{ directory: string; binding_kind: string; slug: string; status: string }>;
-            const gitOwner = rows.find(
+            const gitOwner = bindingRows.find(
               (row) => row.binding_kind === "git_repository" && row.directory === gitCommonDirectory,
             );
-            const directoryOwner = rows
+            const directoryOwner = bindingRows
               .filter(
                 (row) =>
                   row.binding_kind === "directory" &&
@@ -196,7 +252,7 @@ export function createSqliteHandoffWriteStore(
               )
               .sort((a, b) => b.directory.length - a.directory.length)[0];
             const owner = gitOwner ?? directoryOwner;
-            const unresolvedRoot = rows.find((row) => {
+            const unresolvedRoot = bindingRows.find((row) => {
               const root = row.binding_kind === "directory" ? row.directory : dirname(row.directory);
               return atOrBelow(root, directory) || atOrBelow(directory, root);
             });
@@ -228,6 +284,15 @@ export function createSqliteHandoffWriteStore(
               return err(
                 appError("PROJECT_ARCHIVED", "an archived Project cannot start a new Handoff", {
                   slug: project.slug,
+                }),
+              );
+            }
+            const binding = db.prepare("SELECT 1 FROM project_bindings WHERE project_id = ? LIMIT 1").get(projectId);
+            if (binding === null || binding === undefined) {
+              db.exec("ROLLBACK");
+              return err(
+                appError("PROJECT_UNBOUND", "a Project lost its last binding while the Handoff was prepared", {
+                  slug: project?.slug,
                 }),
               );
             }

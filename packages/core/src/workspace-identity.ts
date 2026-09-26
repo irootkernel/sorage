@@ -20,7 +20,7 @@ export function workspaceKey(installationId: string, normalizedPath: string): st
 }
 
 export type SenderIdentity =
-  | { kind: "registered_project"; project: import("./projects").Project }
+  | { kind: "registered_project"; project: import("./projects").Project; binding: import("./projects").ProjectBinding }
   | { kind: "unregistered_workspace"; workspaceKey: string; pathSnapshot: string };
 
 export interface SenderIdentityInput {
@@ -47,7 +47,7 @@ export function resolveSenderIdentity(
   const actor = resolveWorkspaceActor(ports, { path: input.path, userHome: input.userHome, as: input.as });
   if (!actor.ok) return actor;
   if (actor.value.kind === "registered_project") {
-    return ok({ kind: "registered_project", project: actor.value.project });
+    return ok({ kind: "registered_project", project: actor.value.project, binding: actor.value.binding });
   }
   const directory = actor.value.directory;
   if (!input.allowUnregistered) {

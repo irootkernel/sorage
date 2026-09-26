@@ -1,7 +1,15 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addProject, archiveProject, initializeInstallation, sendHandoffs, USER_ACTOR } from "@sorage/core";
+import {
+  addProject,
+  archiveProject,
+  initializeInstallation,
+  rebindProject,
+  sendHandoffs,
+  unbindProject,
+  USER_ACTOR,
+} from "@sorage/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNodeSendPorts } from "../../src/handoff-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
@@ -76,6 +84,100 @@ describe("send sender registration race", () => {
       db.close();
     },
   );
+});
+
+describe("send binding changes during staging", () => {
+  it("rejects a registered sender after its path is rebound to another Project", () => {
+    const root = mkdtempSync(join(tmpdir(), "sorage-send-rebind-race-"));
+    roots.push(root);
+    const home = join(root, "home");
+    const sender = join(root, "sender");
+    const replacement = join(root, "replacement");
+    const recipient = join(root, "recipient");
+    const userHome = join(root, "user");
+    for (const directory of [home, sender, replacement, recipient, userHome]) mkdirSync(directory);
+    const env = { SORAGE_HOME: home };
+    expect(initializeInstallation(createNodeInitPorts({ env, userHome }), { vaultPath: join(home, "vault") }).ok).toBe(
+      true,
+    );
+    const projects = createNodeProjectPorts({ env, userHome });
+    expect(addProject(projects, { name: "Alpha", dir: sender, userHome, actor: USER_ACTOR }).ok).toBe(true);
+    expect(addProject(projects, { name: "Beta", dir: recipient, userHome, actor: USER_ACTOR }).ok).toBe(true);
+    const ports = createNodeSendPorts({ env, userHome });
+    const stage = ports.artifactStore.stage.bind(ports.artifactStore);
+    let injected = false;
+    ports.artifactStore.stage = (input) => {
+      const staged = stage(input);
+      if (staged.ok && !injected) {
+        injected = true;
+        expect(
+          rebindProject(projects, { slug: "alpha", from: sender, to: replacement, userHome, actor: USER_ACTOR }).ok,
+        ).toBe(true);
+        expect(addProject(projects, { name: "Gamma", dir: sender, userHome, actor: USER_ACTOR }).ok).toBe(true);
+      }
+      return staged;
+    };
+    const result = sendHandoffs(ports, {
+      to: ["beta"],
+      title: "Stale sender",
+      body: "# Old path",
+      allowExternalSource: false,
+      allowUnregistered: false,
+      path: sender,
+      userHome,
+    });
+    expect(injected).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(0);
+    db.close();
+  });
+
+  it("rejects a recipient whose final binding was removed before creation commits", () => {
+    const root = mkdtempSync(join(tmpdir(), "sorage-send-unbind-race-"));
+    roots.push(root);
+    const home = join(root, "home");
+    const sender = join(root, "sender");
+    const recipient = join(root, "recipient");
+    const userHome = join(root, "user");
+    for (const directory of [home, sender, recipient, userHome]) mkdirSync(directory);
+    const env = { SORAGE_HOME: home };
+    expect(initializeInstallation(createNodeInitPorts({ env, userHome }), { vaultPath: join(home, "vault") }).ok).toBe(
+      true,
+    );
+    const projects = createNodeProjectPorts({ env, userHome });
+    expect(addProject(projects, { name: "Alpha", dir: sender, userHome, actor: USER_ACTOR }).ok).toBe(true);
+    expect(addProject(projects, { name: "Beta", dir: recipient, userHome, actor: USER_ACTOR }).ok).toBe(true);
+    const ports = createNodeSendPorts({ env, userHome });
+    const stage = ports.artifactStore.stage.bind(ports.artifactStore);
+    let injected = false;
+    ports.artifactStore.stage = (input) => {
+      const staged = stage(input);
+      if (staged.ok && !injected) {
+        injected = true;
+        expect(
+          unbindProject(projects, { slug: "beta", dir: recipient, userHome, actor: USER_ACTOR, confirm: false }).ok,
+        ).toBe(true);
+      }
+      return staged;
+    };
+    const result = sendHandoffs(ports, {
+      to: ["beta"],
+      title: "Unbound recipient",
+      body: "# Pending",
+      allowExternalSource: false,
+      allowUnregistered: false,
+      path: sender,
+      userHome,
+    });
+    expect(injected).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.code).toBe("PROJECT_UNBOUND");
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(0);
+    db.close();
+  });
 });
 
 describe("send idempotency race", () => {
