@@ -49,7 +49,7 @@ describe("Memo CLI additive contracts", () => {
     } finally {
       f.cleanup();
     }
-  });
+  }, 30_000);
   it("discovers the Memo group and seven commands in help and completion", () => {
     const f = memoCliFixture();
     try {

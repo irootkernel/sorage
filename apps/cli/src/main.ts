@@ -2795,5 +2795,6 @@ export type { Envelope };
 if (import.meta.main) {
   const code = main();
   // A negative code means an internal probe owns the process and exits itself.
-  if (code >= 0) process.exit(code);
+  // Let pending stdout/stderr writes drain, including full Memo bodies piped to a slow reader.
+  if (code >= 0) process.exitCode = code;
 }

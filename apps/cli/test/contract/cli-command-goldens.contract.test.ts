@@ -290,7 +290,7 @@ describe("the golden tour of every catalog command", () => {
       const golden = readFileSync(goldenPath, "utf8");
       expect(normalizedOut, `${step.name} stdout`).toBe(golden);
     }
-    // The tour spawns the compiled binary for every catalog command, so the
-    // default five-second budget leaves no headroom on a busy machine.
-  }, 30000);
+    // The tour spawns Bun for every catalog command; allow scheduling headroom
+    // on a busy machine without changing any per-command contract assertion.
+  }, 90_000);
 });

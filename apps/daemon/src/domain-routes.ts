@@ -73,6 +73,8 @@ import type { DaemonConfigService } from "./index";
 import type { RouteEntryInternal } from "./route-kit";
 import type { DaemonRequestContext } from "./server";
 import { consumeMultipartUpload } from "./upload";
+import { createMemoRoutes } from "./memo-routes";
+import type { Clock } from "@sorage/core";
 
 /**
  * The `/api/v1` domain surface of TASK-046 (API-002, API-004, API-005, API-007 to
@@ -91,6 +93,8 @@ export interface DomainRouteDeps {
   config: DaemonConfigService | undefined;
   /** One daemon-lifetime connection; all request port factories share it. */
   database?: NodeDaemonDatabase | undefined;
+  /** Test Clock for receipt boundary checks; production uses the system Clock. */
+  memoClock?: Clock;
 }
 
 export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] {
@@ -976,7 +980,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     return { ok: true, value: { path: "", userHome, as: context.as, asUser: context.asUser } };
   }
 
-  return routes;
+  return [...routes, ...createMemoRoutes({ ...databaseOptions, ...(deps.memoClock ? { clock: deps.memoClock } : {}) })];
 }
 
 /** Rejects a missing or non-numeric expectation honestly instead of letting NaN silently fail every comparison. */

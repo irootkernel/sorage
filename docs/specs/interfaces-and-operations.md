@@ -1041,7 +1041,19 @@ Restore has no HTTP endpoint: `sorage backup restore` is a bootstrap command tha
 
 ### 18.8 Project Memos, milestone M7
 
-The [Memo HTTP contract](project-memos.md#9-http-and-error-contract) owns `GET/POST /api/v1/memos`, `GET/PATCH /api/v1/memos/{id}`, and the three explicit done/dismiss/reopen POST actions. Authentication, Host validation, response security, and existing mutation fences apply before Memo lookup. Memo handlers collect bounded raw bytes and perform fatal UTF-8 decoding before JSON parsing and field/Unicode validation, then forward the key to the common normalized application/DB receipt path without entering the legacy transport replay cache. Malformed encoding or JSON returns MEMO_INVALID_INPUT/422 before hashing or receipt lookup, without domain/receipt writes; valid U+FFFD remains accepted. The legacy replacement decoder and empty-object parse fallback do not apply to Memo requests. On mutation routes, Idempotency-Mode: replay-only requires the original valid Idempotency-Key and request; omission selects execute. Reject invalid/duplicate mode values and mode on reads, and never let replay-only become execute on unavailable receipt or restore/expiry. The new route/error catalog is required M7 behavior, not a claim that the current binary implements it. No Artifact upload or existing Handoff endpoint, decoding, or replay behavior changes meaning.
+The [Memo HTTP contract](project-memos.md#9-http-and-error-contract) owns `GET/POST /api/v1/memos`, `GET/PATCH /api/v1/memos/{id}`, and the three explicit done/dismiss/reopen POST actions. Authentication, Host validation, response security, and existing mutation fences apply before Memo lookup. Memo handlers collect bounded raw bytes and perform fatal UTF-8 decoding before JSON parsing and field/Unicode validation, then forward the key to the common normalized application/DB receipt path without entering the legacy transport replay cache. Malformed encoding or JSON returns MEMO_INVALID_INPUT/422 before hashing or receipt lookup, without domain/receipt writes; valid U+FFFD remains accepted. The legacy replacement decoder and empty-object parse fallback do not apply to Memo requests. On mutation routes, Idempotency-Mode: replay-only requires the original valid Idempotency-Key and request; omission selects execute. Reject invalid/duplicate mode values and mode on reads, and never let replay-only become execute on unavailable receipt or restore/expiry. No Artifact upload or existing Handoff endpoint, decoding, or replay behavior changes meaning.
+
+```text
+GET   /api/v1/memos
+POST  /api/v1/memos
+GET   /api/v1/memos/{id}
+PATCH /api/v1/memos/{id}
+POST  /api/v1/memos/{id}/done
+POST  /api/v1/memos/{id}/dismiss
+POST  /api/v1/memos/{id}/reopen
+```
+
+The [Memo HTTP contract](project-memos.md#9-http-and-error-contract) defines closed inputs, User provenance, optional scope assertions, bounded fatal UTF-8 JSON decoding, and execution mode. All successes use status 200 and fresh envelopes. These authenticated routes use the shared application's durable receipt and never the legacy raw-body replay wrapper. Query fields are unique and apply only to reads; mutations carry their scope and expectations in JSON.
 
 ## 19. Pagination
 
