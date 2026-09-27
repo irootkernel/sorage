@@ -23,12 +23,12 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-013`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
 
-EPIC-012 has completed M6 acceptance, so the EPIC-013 prerequisite is satisfied. TASK-087 has completed the pure Memo contracts and TASK-088 has completed durable Memo storage and versioned backup/restore with their acceptance checks; TASK-089 has completed the shared application and replay-only recovery checks; TASK-090 has completed the native CLI and its acceptance checks; TASK-091 has completed the authenticated HTTP API and its acceptance checks. TASK-092 has completed the browser Memo workflow and its acceptance checks. TASK-093 has completed the shipped skill and operational guidance with its functional walkthrough. TASK-094 has completed the combined acceptance qualification; separate Epic validation remains. This work allocates no product version or publication.
+EPIC-013 and TASK-087 through TASK-094 have completed M7 acceptance, including the separate whole-Epic audit and review. No Task is currently eligible. This work allocates no product version or publication.
 
 ## 3. Identifier policy
 
@@ -87,7 +87,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
 | `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
-| `EPIC-013` | Project Memos | M7 | In Progress | `TASK-087` to `TASK-094` |
+| `EPIC-013` | Project Memos | M7 | Completed | `TASK-087` to `TASK-094` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -325,14 +325,15 @@ The `TASK-086` CLI JSON snapshot diff is classified as breaking for clients that
 
 ## EPIC-013: Project Memos
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M7
 - **Objective:** Store explicit project-scoped reminders separately from directional Handoffs, with open/done/dismissed lifecycle, safe local CLI/API/Web use, restart durability, and complete backup/restore support.
-- **Detailed SOT:** [Project Memo execution dossier](../todo/project-memos.md)
+- **Canonical Outcomes:** [Memo contract](../specs/project-memos.md), [requirement and verification map](../implementation-tips/memo-qualification.md), [acceptance journeys](../specs/testing-and-acceptance.md#aj-20-memo-cli-lifecycle-and-restart), and [upgrade and recovery operations](../ops/README.md#memo-storage-upgrade-and-rollback).
 - **Required contract:** [MEM-001 to MEM-024](../specs/required-specification.md#18-project-memos), [Project Memo contract](../specs/project-memos.md), and [ADR-0027](../architecture-decision-records/README.md#adr-0027-project-memos-as-a-separate-domain-in-m7).
 - **Prerequisite:** EPIC-012 is Completed with M6 acceptance; this dependency is satisfied. Preserve that accepted outcome and keep Memo work in EPIC-013 without reopening or repeating EPIC-012.
 - **Execution policy:** Complete TASK-087 through TASK-094 sequentially, one normal completion commit per Task under governing authorization. No implementation overlap is needed for this Epic. Pure-layer Tasks must finish their own checks without starting a later adapter Task; they do not advertise unavailable public operations.
 - **Non-goals:** Hooks, automatic execution/discovery, workflow journals, roadmap or Podway mutation, Handoff conversion, attachments, hard deletion, named-user management, and multi-machine synchronization.
+- **Acceptance outcome:** AJ-20 through AJ-23, including the independently observed AJ-21-S skill walkthrough and real-browser AJ-21-B, and applicable earlier journeys passed. The full `make test` gate, a separate requirement-to-implementation audit, and independent whole-Epic review support M7 acceptance with no unresolved findings. The [qualification limits](../implementation-tips/memo-qualification.md#compatibility-and-assurance-limits) remain explicit; physical platform and old-binary installation checks are not claimed. The execution dossier has no remaining consumer, and its durable guidance is retained in the canonical outcomes above. No tag, installation, or publication is part of this closeout.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
