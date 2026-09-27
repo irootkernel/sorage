@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
-import { canonicalJson, type SnapshotEvent } from "./backup-snapshot";
+import {
+  canonicalJson,
+  canonicalJsonLine,
+  snapshotFiles,
+  snapshotManifest,
+  type SnapshotData,
+  type SnapshotFile,
+  type SnapshotEvent,
+} from "./backup-snapshot";
 import { appError, err, ok, type Result } from "./errors";
 import { isActorKind, isEventType, isMemoEventType, type MemoEventType } from "./events";
 import { memoObject, parseMemoDetail } from "./memo-protocol";
 import { type Memo, isMemoUuid, isMemoRowVersion, isMemoTimestamp } from "./memos";
 
-/** Pure migration-facing contracts; the existing writer remains format 1 until storage ships. */
+/** Format 2 extends the legacy snapshot families with independently validated Memo shards. */
 export interface MemoSnapshotManifest {
   formatVersion: 2;
   counts: { projects: number; handoffs: number; events: number; artifacts: number; memos: number };
@@ -30,7 +38,7 @@ function corrupt(message: string): Result<never> {
 }
 
 /** JSON.parse validates grammar first; this scan then checks decoded keys at every nesting level. */
-function parseUniqueJson(text: string): Result<unknown> {
+export function parseUniqueSnapshotJson(text: string): Result<unknown> {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -77,7 +85,7 @@ export function memoIdFromSnapshotPath(path: string): Result<string> {
 }
 
 export function parseVersionedSnapshotManifest(text: string): Result<VersionedSnapshotManifest> {
-  const parsed = parseUniqueJson(text);
+  const parsed = parseUniqueSnapshotJson(text);
   if (!parsed.ok) return parsed;
   const value = parsed.value;
   if (!memoObject(value, ["formatVersion"], ["counts", "memoDigests"])) return corrupt("Snapshot manifest is invalid");
@@ -127,7 +135,7 @@ export function parseMemoSnapshot(path: string, bytes: Uint8Array, digest: strin
   } catch {
     return corrupt("Memo snapshot is not valid UTF-8");
   }
-  const parsed = parseUniqueJson(text);
+  const parsed = parseUniqueSnapshotJson(text);
   if (!parsed.ok) return parsed;
   const memo = parseMemoDetail(parsed.value);
   if (!memo.ok || memo.value.id !== id.value)
@@ -216,4 +224,100 @@ function validMemoEventMetadata(value: unknown, eventType: MemoEventType): boole
     case "MEMO_REOPENED":
       return (value.fromState === "done" || value.fromState === "dismissed") && value.toState === "open";
   }
+}
+
+/** Publish each Memo's digest from the exact bytes that become its file content. */
+export function snapshotFilesV2(data: SnapshotData): Result<{ files: SnapshotFile[]; manifest: MemoSnapshotManifest }> {
+  const files = snapshotFiles({ projects: data.projects, handoffs: data.handoffs, events: [] }).filter(
+    (file) => file.path !== "manifest.json" && file.path !== "events.jsonl",
+  );
+  const memoDigests: Record<string, string> = {};
+  for (const memo of [...(data.memos ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
+    const shard = serializeMemoSnapshot(memo);
+    if (!shard.ok) return shard;
+    if (Object.hasOwn(memoDigests, shard.value.path)) return corrupt("Duplicate Memo snapshot ID");
+    memoDigests[shard.value.path] = shard.value.digest;
+    files.push({ path: shard.value.path, content: Buffer.from(shard.value.bytes).toString("utf8") });
+  }
+  const events = data.events.map((event) => ({ ...event, memoId: event.memoId ?? null }));
+  const manifest: MemoSnapshotManifest = {
+    formatVersion: 2,
+    counts: { ...snapshotManifest(data).counts, memos: data.memos?.length ?? 0 },
+    memoDigests,
+  };
+  const valid = validateMemoInventory({ ...data, events }, manifest);
+  if (!valid.ok) return valid;
+  files.push({
+    path: "events.jsonl",
+    content: events
+      .sort((a, b) =>
+        a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+      )
+      .map(canonicalJsonLine)
+      .join(""),
+  });
+  files.push({ path: "manifest.json", content: canonicalJson(manifest) });
+  return ok({ files, manifest });
+}
+
+/** Reconcile the whole Memo inventory and version-ordered history before any import. */
+export function validateMemoInventory(data: SnapshotData, manifest: VersionedSnapshotManifest): Result<void> {
+  const memos = data.memos ?? [];
+  if (manifest.formatVersion === 1 && memos.length !== 0) return corrupt("Format 1 cannot contain Memos");
+  if (manifest.formatVersion === 2 && memos.length !== manifest.counts.memos)
+    return corrupt("Memo count does not match inventory");
+  const projects = new Set(data.projects.map((project) => project.id));
+  const owners = new Map<string, Memo>();
+  for (const memo of memos) {
+    if (!parseMemoDetail(memo).ok || owners.has(memo.id) || !projects.has(memo.projectId))
+      return corrupt("Memo identity, fields or owning Project are invalid");
+    owners.set(memo.id, memo);
+  }
+  if (manifest.formatVersion === 2) {
+    const paths = memos.map((memo) => `memos/${memo.id.slice(0, 2)}/${memo.id}.json`);
+    if (
+      Object.keys(manifest.memoDigests).length !== paths.length ||
+      paths.some((path) => !Object.hasOwn(manifest.memoDigests, path))
+    )
+      return corrupt("Memo digest inventory does not match its records");
+  }
+  const histories = new Map<string, MemoSnapshotEvent[]>();
+  const ids = new Set<string>();
+  for (const event of data.events) {
+    if (ids.has(event.id)) return corrupt("Duplicate snapshot event ID");
+    ids.add(event.id);
+    if (!isMemoEventType(event.eventType)) {
+      // Legacy event value validation is unchanged; only the new association is versioned.
+      if (manifest.formatVersion === 1 ? Object.hasOwn(event, "memoId") : event.memoId !== null)
+        return corrupt("Non-Memo event association is invalid for this format");
+      continue;
+    }
+    const parsed = parseMemoEventAssociation(event, manifest.formatVersion, owners);
+    if (!parsed.ok) return parsed;
+    const id = parsed.value.memoId as string;
+    const history = histories.get(id) ?? [];
+    history.push(parsed.value);
+    histories.set(id, history);
+  }
+  for (const memo of memos) {
+    const events = (histories.get(memo.id) ?? []).sort((a, b) => (a.rowVersion as number) - (b.rowVersion as number));
+    if (events.length !== memo.rowVersion) return corrupt("Memo history is incomplete");
+    let state = "open";
+    for (const [index, event] of events.entries()) {
+      if (event.rowVersion !== index + 1) return corrupt("Memo history versions are not contiguous");
+      if (index === 0) {
+        if (event.eventType !== "MEMO_CREATED" || event.createdAt !== memo.createdAt)
+          return corrupt("Memo creation event disagrees with its row");
+      } else if (event.eventType === "MEMO_CREATED") return corrupt("Memo history repeats creation");
+      else if (event.eventType === "MEMO_UPDATED") {
+        if (state !== "open") return corrupt("Memo history edits closed content");
+      } else {
+        if (event.metadata.fromState !== state) return corrupt("Memo history transition is inconsistent");
+        state = String(event.metadata.toState);
+      }
+    }
+    if (state !== memo.state || events.at(-1)?.createdAt !== memo.updatedAt)
+      return corrupt("Memo history does not describe its current row");
+  }
+  return ok(undefined);
 }

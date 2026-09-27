@@ -5,9 +5,10 @@ import {
   type SnapshotData,
   type SnapshotFile,
   type SnapshotManifest,
-  snapshotFiles,
   snapshotManifest,
 } from "./backup-snapshot";
+import { snapshotFilesV2, validateMemoInventory, parseVersionedSnapshotManifest } from "./memo-snapshot";
+import { canonicalJson } from "./backup-snapshot";
 import { type Configuration, isValidTimezone, SCHEDULE_AT_PATTERN } from "./config";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import {
@@ -51,11 +52,12 @@ export function exportSnapshot(ports: BackupExportPorts): Result<BackupExportRep
   const read = ports.readSnapshotData();
   if (!read.ok) return err(read.error);
   const data = ports.redactWorkspacePaths ? redactSnapshotData(read.value) : read.value;
-  const files = snapshotFiles(data);
-  const written = ports.writeSnapshotTree(files);
+  const built = snapshotFilesV2(data);
+  if (!built.ok) return built;
+  const written = ports.writeSnapshotTree(built.value.files);
   if (!written.ok) return err(written.error);
   return ok({
-    files: files.length,
+    files: built.value.files.length,
     counts: snapshotManifest(data).counts,
     redactedWorkspacePaths: ports.redactWorkspacePaths,
   });
@@ -132,9 +134,17 @@ function snapshotProblem(message: string): Result<never, AppError> {
 export function validateSnapshot(
   data: SnapshotData,
   manifest: {
-    counts: { projects: number; handoffs: number; events: number; artifacts: number };
+    formatVersion?: number;
+    counts: SnapshotManifest["counts"];
+    memoDigests?: Record<string, string>;
   },
 ): Result<{ reviewNotes: number }, AppError> {
+  const versioned = parseVersionedSnapshotManifest(
+    canonicalJson({ ...manifest, formatVersion: manifest.formatVersion ?? 1 }),
+  );
+  if (!versioned.ok) return versioned;
+  const memoInventory = validateMemoInventory(data, versioned.value);
+  if (!memoInventory.ok) return memoInventory;
   const projectIds = new Set(data.projects.map((project) => project.id));
   for (const handoff of data.handoffs) {
     if (!isValidStorageKeySegment(handoff.id)) {
@@ -371,6 +381,7 @@ export interface BackupCensus {
   handoffs: number;
   events: number;
   artifacts: number;
+  memos?: number;
   /** Live Handoffs whose current Artifact has `materialized = 0`. */
   materializing: number;
   /** Tombstoned Handoffs that still hold an active Artifact row. */
@@ -515,6 +526,11 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
     if (manifest.value.counts.artifacts !== census.value.artifacts) {
       findings.push(
         `The manifest counts ${manifest.value.counts.artifacts} artifact(s) against the database's ${census.value.artifacts}.`,
+      );
+    }
+    if ((manifest.value.counts.memos ?? 0) !== (census.value.memos ?? 0)) {
+      findings.push(
+        `The manifest counts ${manifest.value.counts.memos ?? 0} Memo(s) against the database's ${census.value.memos ?? 0}.`,
       );
     }
   }

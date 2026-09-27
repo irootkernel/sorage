@@ -35,7 +35,11 @@ import {
   type GitClient,
   nextDueAt,
   ok,
-  parseSnapshotManifest,
+  parseVersionedSnapshotManifest,
+  parseMemoSnapshot,
+  parseUniqueSnapshotJson,
+  validateSnapshot,
+  type Memo,
   parseVaultMarker,
   type Result,
   type SnapshotArtifact,
@@ -54,6 +58,8 @@ import {
 import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
+import { memoFromRow, insertMemoRow } from "./memos";
+import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
@@ -192,7 +198,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         const reviewNotes = db.prepare("SELECT * FROM review_notes ORDER BY handoff_id").all() as unknown as Row[];
         const deletionRequests = db.prepare("SELECT * FROM deletion_requests ORDER BY id").all() as unknown as Row[];
         const events = db.prepare("SELECT * FROM events ORDER BY created_at, id").all() as unknown as Row[];
-        data = ok(mapSnapshotData({ projects, bindings, handoffs, artifacts, reviewNotes, deletionRequests, events }));
+        const memos = db.prepare("SELECT * FROM project_memos ORDER BY id").all().map(memoFromRow);
+        data = ok({
+          ...mapSnapshotData({ projects, bindings, handoffs, artifacts, reviewNotes, deletionRequests, events }),
+          memos,
+        });
       } catch (error) {
         db.exec("ROLLBACK");
         return err(
@@ -319,7 +329,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
 
   function readSourceFile(sourcePath: string, relativePath: string): Result<string, AppError> {
     try {
-      return ok(readFileSync(join(sourcePath, relativePath), "utf8"));
+      // The existing Vault marker keeps its format-1 reader and diagnostic contract.
+      if (relativePath === ".sorage-vault.json") return ok(readFileSync(join(sourcePath, relativePath), "utf8"));
+      const read = readSnapshotBytes(sourcePath, relativePath);
+      if (!read.ok) return read;
+      return ok(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(read.value));
     } catch (error) {
       return err(
         appError("VAULT_INTEGRITY_ERROR", `The backup copy does not contain ${relativePath}: ${messageOf(error)}.`, {
@@ -332,6 +346,16 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
 
   function readSourceSnapshot(sourcePath: string) {
     return (): Result<SnapshotData, AppError> => {
+      const manifest = readSourceManifest(sourcePath)();
+      if (!manifest.ok) return manifest;
+      const memoFiles = readMemoSnapshotFiles(sourcePath, manifest.value);
+      if (!memoFiles.ok) return memoFiles;
+      const memos: Memo[] = [];
+      for (const file of memoFiles.value) {
+        const parsed = parseMemoSnapshot(file.path, file.bytes, file.digest);
+        if (!parsed.ok) return parsed;
+        memos.push(parsed.value);
+      }
       const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
       if (!projectsRaw.ok) return err(projectsRaw.error);
       const projects = parseJsonArray(projectsRaw.value, "snapshots/projects.json");
@@ -340,7 +364,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const shardFiles: string[] = [];
       const shardsRoot = join(sourcePath, "snapshots/handoffs");
       try {
-        for (const shard of readdirSync(shardsRoot)) {
+        for (const shard of existsSync(shardsRoot) ? readdirSync(shardsRoot) : []) {
           const shardPath = join(shardsRoot, shard);
           if (!statSync(shardPath).isDirectory()) continue;
           for (const name of readdirSync(shardPath)) {
@@ -380,15 +404,15 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const events: SnapshotEvent[] = [];
       for (const [index, line] of eventsRaw.value.split("\n").entries()) {
         if (line === "") continue;
+        const unique = parseUniqueSnapshotJson(line);
+        if (!unique.ok) return unique;
         const parsed = parseJsonObject(line, `snapshots/events.jsonl line ${index + 1}`);
         if (!parsed.ok) return err(parsed.error);
         events.push(parsed.value as unknown as SnapshotEvent);
       }
-      return ok({
-        projects: projects.value as unknown as SnapshotProject[],
-        handoffs,
-        events,
-      });
+      const data = { projects: projects.value as unknown as SnapshotProject[], handoffs, events, memos };
+      const valid = validateSnapshot(data, manifest.value);
+      return valid.ok ? ok(data) : valid;
     };
   }
 
@@ -397,13 +421,21 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const raw = readSourceFile(sourcePath, "snapshots/manifest.json");
       if (!raw.ok) return err(raw.error);
       // A newer snapshot format classifies as VAULT_SCHEMA_UNSUPPORTED (core parser).
-      return parseSnapshotManifest(raw.value);
+      return parseVersionedSnapshotManifest(raw.value);
     };
   }
 
   function targetIsEmpty(): Result<boolean, AppError> {
     return withDatabase((db) => {
-      const tables = ["projects", "handoffs", "artifacts", "review_notes", "deletion_requests", "events"];
+      const tables = [
+        "projects",
+        "handoffs",
+        "artifacts",
+        "review_notes",
+        "deletion_requests",
+        "events",
+        "project_memos",
+      ];
       for (const table of tables) {
         const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as Record<string, unknown> | undefined;
         if (Number(row?.count ?? 0) > 0) return ok(false);
@@ -422,6 +454,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             (SELECT COUNT(*) FROM handoffs) AS handoffs,
             (SELECT COUNT(*) FROM events) AS events,
             (SELECT COUNT(*) FROM artifacts) AS artifacts,
+            (SELECT COUNT(*) FROM project_memos) AS memos,
             (SELECT COUNT(*) FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id
               WHERE h.deleted_at IS NULL AND a.materialized = 0) AS materializing,
             (SELECT COUNT(*) FROM handoffs h WHERE h.deleted_at IS NOT NULL
@@ -434,6 +467,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         handoffs: Number(row?.handoffs ?? 0),
         events: Number(row?.events ?? 0),
         artifacts: Number(row?.artifacts ?? 0),
+        memos: Number(row?.memos ?? 0),
         materializing: Number(row?.materializing ?? 0),
         deletedWithArtifact: Number(row?.deleted_with_artifact ?? 0),
       });
@@ -677,12 +711,16 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             );
           }
         }
+        for (const memo of data.memos ?? []) insertMemoRow(db, memo);
+        // Operational receipts are deliberately neither read nor reconstructed from snapshots.
+        db.prepare("DELETE FROM idempotency_keys").run();
         for (const event of [...data.events].sort(byEventOrder)) {
           db.prepare(
-            "INSERT INTO events (id, handoff_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO events (id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           ).run(
             event.id,
             event.handoffId,
+            event.memoId ?? null,
             event.eventType,
             event.actorKind,
             event.actorId,
@@ -805,14 +843,18 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         census: () => readCensus(),
         readManifest: () => {
           const raw = readSourceFile(vaultPath, "snapshots/manifest.json");
-          if (!raw.ok) return ok(null);
-          return parseSnapshotManifest(raw.value);
+          if (!raw.ok) return existsSync(join(vaultPath, "snapshots/manifest.json")) ? raw : ok(null);
+          const manifest = parseVersionedSnapshotManifest(raw.value);
+          if (!manifest.ok) return manifest;
+          const snapshot = readSourceSnapshot(vaultPath)();
+          if (!snapshot.ok) return snapshot;
+          return manifest;
         },
         countShards: () => {
           const shardsRoot = join(vaultPath, "snapshots/handoffs");
           let count = 0;
           try {
-            for (const shard of readdirSync(shardsRoot)) {
+            for (const shard of existsSync(shardsRoot) ? readdirSync(shardsRoot) : []) {
               const shardPath = join(shardsRoot, shard);
               if (!statSync(shardPath).isDirectory()) continue;
               count += readdirSync(shardPath).filter((name) => name.endsWith(".json")).length;
@@ -1141,6 +1183,7 @@ function mapSnapshotData(rows: {
     events: rows.events.map((row) => ({
       id: str(row.id),
       handoffId: nullableStr(row.handoff_id),
+      memoId: nullableStr(row.memo_id),
       eventType: str(row.event_type),
       actorKind: str(row.actor_kind),
       actorId: nullableStr(row.actor_id),

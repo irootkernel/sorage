@@ -1,5 +1,6 @@
 import type { AppError } from "./errors";
 import { appError, err, ok, type Result } from "./errors";
+import type { Memo } from "./memos";
 
 /**
  * The deterministic snapshot model of sections 26 and 27 of
@@ -14,7 +15,7 @@ import { appError, err, ok, type Result } from "./errors";
  * exported instead of reconstructing values it no longer has.
  */
 
-/** The snapshot format version this build writes and reads. */
+/** Legacy generation retained for historical fixtures and rollback readers. */
 export const SNAPSHOT_FORMAT_VERSION = 1;
 
 /** One Project Binding as the snapshot records it; `directory` never appears while redaction is on. */
@@ -111,6 +112,7 @@ export interface SnapshotDeletionRequest {
 
 export interface SnapshotEvent {
   id: string;
+  memoId?: string | null;
   handoffId: string | null;
   eventType: string;
   actorKind: string;
@@ -125,11 +127,13 @@ export interface SnapshotData {
   projects: SnapshotProject[];
   handoffs: SnapshotHandoff[];
   events: SnapshotEvent[];
+  memos?: Memo[];
 }
 
 export interface SnapshotManifest {
   formatVersion: number;
-  counts: { projects: number; handoffs: number; events: number; artifacts: number };
+  counts: { projects: number; handoffs: number; events: number; artifacts: number; memos?: number };
+  memoDigests?: Record<string, string>;
 }
 
 /** One snapshot file with its exact destination-relative path and final bytes. */
@@ -189,6 +193,7 @@ function sortKeys(value: unknown): unknown {
  */
 export function redactSnapshotData(data: SnapshotData): SnapshotData {
   return {
+    ...(data.memos === undefined ? {} : { memos: data.memos }),
     projects: data.projects.map((project) => ({
       ...project,
       bindings: project.bindings.map(({ directory: _directory, ...binding }) => binding),

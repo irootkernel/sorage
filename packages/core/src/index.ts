@@ -21,6 +21,7 @@ export * from "./init";
 export * from "./intent-log";
 export * from "./launchagent";
 export * from "./memos";
+export * from "./memo-repository";
 export * from "./memo-protocol";
 export * from "./memo-snapshot";
 export * from "./project-commands";

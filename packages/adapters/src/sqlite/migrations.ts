@@ -254,6 +254,44 @@ CREATE INDEX idx_backup_runs_started_at ON backup_runs(started_at);
 `,
 };
 
+export const PROJECT_MEMOS_MIGRATION: Migration = {
+  version: 7,
+  name: "project-memos-v1",
+  sql: `
+CREATE TABLE project_memos (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  body TEXT NOT NULL CHECK (length(CAST(body AS BLOB)) <= 65536),
+  state TEXT NOT NULL CHECK (state IN ('open', 'done', 'dismissed')),
+  row_version INTEGER NOT NULL CHECK (row_version BETWEEN 1 AND 9007199254740991),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  closed_at TEXT,
+  closed_by TEXT,
+  CHECK ((state = 'open' AND closed_at IS NULL AND closed_by IS NULL)
+    OR (state != 'open' AND row_version >= 2 AND closed_at IS NOT NULL AND closed_at = updated_at AND closed_by IS NOT NULL))
+);
+CREATE INDEX idx_project_memos_project_state ON project_memos(project_id, state, created_at DESC, id DESC);
+CREATE INDEX idx_project_memos_created ON project_memos(created_at DESC, id DESC);
+ALTER TABLE events ADD COLUMN memo_id TEXT REFERENCES project_memos(id);
+CREATE INDEX idx_events_memo ON events(memo_id, created_at);
+CREATE UNIQUE INDEX idx_events_memo_version ON events(memo_id, row_version) WHERE memo_id IS NOT NULL;
+CREATE TRIGGER events_memo_association
+  BEFORE INSERT ON events
+  WHEN (NEW.event_type IN ('MEMO_CREATED', 'MEMO_UPDATED', 'MEMO_MARKED_DONE', 'MEMO_DISMISSED', 'MEMO_REOPENED')
+    AND (NEW.memo_id IS NULL OR NEW.handoff_id IS NOT NULL OR NEW.actor_kind != 'user'
+      OR NEW.actor_id IS NOT NULL OR NEW.row_version IS NULL))
+    OR (NEW.event_type NOT IN ('MEMO_CREATED', 'MEMO_UPDATED', 'MEMO_MARKED_DONE', 'MEMO_DISMISSED', 'MEMO_REOPENED')
+      AND NEW.memo_id IS NOT NULL)
+  BEGIN
+    SELECT RAISE(ABORT, 'invalid Memo event association');
+  END;
+`,
+};
+
 export const MIGRATIONS: Migration[] = [
   FIRST_RELEASED_SCHEMA,
   PROJECT_REGISTRY_MIGRATION,
@@ -261,4 +299,5 @@ export const MIGRATIONS: Migration[] = [
   HANDOFF_DOMAIN_MIGRATION,
   VAULT_MOVE_FENCE_MIGRATION,
   BACKUP_RUNS_MIGRATION,
+  PROJECT_MEMOS_MIGRATION,
 ];
