@@ -877,3 +877,13 @@ Add the normative Memo contract, MEM requirement group, M7 gate, AJ-20 through A
 ### Consequences
 
 Memo is an intentional scope extension of Sorage, but not a project manager. All current work remains in the Sorage repository and uses the existing process, database, and trust model. Release acceptance includes real CLI/API/browser restart, concurrency, migration, and restore evidence. The temporary dossier must be removed only after accepted Epic closeout promotes remaining durable guidance and repairs its inbound links.
+
+### CLI error-contract clarification, 2026-09-28
+
+Problem: TASK-090 review found that the Memo file-open requirement names filesystem exit 73, but the existing closed catalogue only supplies Vault-integrity and Artifact-corruption codes for that category. Neither describes a User-selected text file that cannot be read. The same review found inherited parser and recovery output that bypasses Memo validation or recommends Handoff-only actions.
+
+Decision: add `MEMO_FILE_READ_FAILED` for actual Memo body-file resolution/open/read failures, with CLI exit 73 and catalogue HTTP status 500 (no HTTP file-import route). Invalid UTF-8, unsafe file types, and source conflicts remain `MEMO_INVALID_INPUT`; size overflow remains `MEMO_TOO_LARGE`. Validate supplied Memo numeric values as Memo input while retaining exit 2 for missing option arguments and other parser syntax errors. Memo-context recovery names the Memo or explicit `--project` selector; unchanged Handoff callers retain their exact prior guidance.
+
+Alternatives considered: reusing `VAULT_INTEGRITY_ERROR` or `ARTIFACT_CORRUPTED` was rejected because a selected Memo source is neither managed Vault state nor an Artifact; using `INTERNAL_ERROR`/1 or `MEMO_INVALID_INPUT`/64 for operating-system read failures was rejected because it loses the required filesystem category; changing every command's parser or recovery was rejected because the Memo extension must preserve Handoff contracts.
+
+Compatibility is additive and non-breaking: one new error code and Memo-only parsing/recovery behavior, with no envelope field or existing Handoff output change. No data migration is needed. The required edits are the Memo and shared error catalogues, contextual recovery implementation, and CLI contract snapshots. TASK-090 owns this clarification and its review/regression checks; no Task identity, dependency, milestone, or remaining review budget changes.

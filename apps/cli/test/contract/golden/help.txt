@@ -28,6 +28,8 @@ Commands:
                                   configuration
   doctor                          run the milestone-scoped installation checks
                                   and report the catalog
+  memo                            record and manage Project reminders separately
+                                  from Handoffs
   project                         register and inspect Projects and their
                                   bindings
   send [options]                  hand one current document to one or more

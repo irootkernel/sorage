@@ -66,6 +66,7 @@ import {
   listInbox,
   listOutbox,
   listProjects,
+  memoError,
   moveVault,
   ok,
   pinHandoff,
@@ -109,6 +110,7 @@ import {
 import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError } from "commander";
 import { buildCompletionScript } from "./completion";
+import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
 import * as webBindings from "./web";
@@ -486,6 +488,14 @@ export function buildProgram(
       }
       reportExitCode(hasBlockingCheck(report) ? 1 : 0);
     });
+
+  registerMemoCommands(program, {
+    out: ports.out,
+    requestId,
+    fail: (error, json) => {
+      reportExitCode(renderAppError(memoError(error), ports, json));
+    },
+  });
 
   const project = program.command("project").description("register and inspect Projects and their bindings");
 
@@ -2113,6 +2123,15 @@ export function runCli(
     program.parse(argv, { from: "user" });
   } catch (error) {
     const commanderError = error as { code?: string; exitCode?: number; message?: string };
+    if (commanderError.code === "commander.invalidArgument") {
+      const memoContext = memoNumericErrorContext(program, argv);
+      if (memoContext)
+        return renderAppError(
+          appError("MEMO_INVALID_INPUT", "Memo numeric values must be safe non-negative integers"),
+          ports,
+          memoContext.json,
+        );
+    }
     const informational = new Set([
       "help",
       "commandHelp",
@@ -2548,7 +2567,7 @@ export function renderAppError(error: AppError, ports: OutputPorts, json: boolea
     ports.err(`${JSON.stringify(errorEnvelope(error, id), null, 2)}\n`);
   } else {
     ports.err(`${error.code}: ${error.message}\n`);
-    const recovery = recoveryOverride ?? spec.recovery?.suggestedCommand;
+    const recovery = recoveryOverride ?? error.recovery?.suggestedCommand ?? spec.recovery?.suggestedCommand;
     if (recovery !== undefined) ports.err(`Recovery: ${recovery}\n`);
   }
   return spec.exitCode;

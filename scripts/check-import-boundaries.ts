@@ -34,6 +34,8 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
     "src/project-command-ports",
     "src/vault-command-ports",
     "src/import-source",
+    "src/memo-command-ports",
+    "src/memo-body-file",
     "src/sleep",
   ],
   "@sorage/daemon": [

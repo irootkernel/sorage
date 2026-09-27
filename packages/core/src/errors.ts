@@ -54,6 +54,7 @@ export const ERROR_CODES = [
   "GIT_BACKUP_CONFLICT",
   "GIT_AUTH_REQUIRED",
   "RESTORE_TARGET_NOT_EMPTY",
+  "MEMO_FILE_READ_FAILED",
   "MEMO_NOT_FOUND",
   "MEMO_INVALID_INPUT",
   "MEMO_TOO_LARGE",
@@ -69,6 +70,8 @@ export interface AppError {
   message: string;
   details?: Record<string, unknown>;
   cause?: unknown;
+  /** Context-specific guidance; omitted callers retain the catalogue default. */
+  recovery?: { suggestedCommand: string };
 }
 
 export interface ErrorSpec {
@@ -83,6 +86,7 @@ export const EXIT_USAGE = 2;
 export const EXIT_INTERNAL = 1;
 
 const RECOVERY: Partial<Record<ErrorCode, string>> = {
+  MEMO_FILE_READ_FAILED: "Check the selected Memo body file path and read permissions",
   NOT_INITIALIZED: "sorage init",
   CONFIG_INVALID: "sorage config validate",
   CONFIG_CONFLICT: "Reload the configuration and retry",
@@ -142,6 +146,7 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
 };
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
+  MEMO_FILE_READ_FAILED: 500,
   NOT_INITIALIZED: 503,
   CONFIG_INVALID: 422,
   CONFIG_CONFLICT: 409,
@@ -201,6 +206,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
 };
 
 const EXIT_CODE: Record<ErrorCode, number> = {
+  MEMO_FILE_READ_FAILED: 73,
   MEMO_NOT_FOUND: 66,
   MEMO_INVALID_INPUT: 64,
   MEMO_TOO_LARGE: 65,

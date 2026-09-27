@@ -143,13 +143,14 @@ The required order is Host validation, authentication, route/method validation, 
 
 | New code | HTTP | CLI exit | Meaning |
 |---|---|---|---|
+| `MEMO_FILE_READ_FAILED` | 500 | 73 | The selected body file could not be resolved, opened, or read; no Memo is written. |
 | `MEMO_NOT_FOUND` | 404 | 66 | Unknown Memo or failed optional Project assertion. |
 | `MEMO_INVALID_INPUT` | 422 | 64 | Malformed UTF-8 or JSON, invalid fields/Unicode, missing expectation, unsupported Memo option combination, or unsafe row version. |
 | `MEMO_TOO_LARGE` | 413 | 65 | Encoded request, decoded body, or bounded file input exceeds its limit. |
 | `MEMO_NOT_OPEN` | 409 | 65 | Editing a closed Memo or choosing the other closed state without reopen. |
 | `MEMO_REPLAY_UNAVAILABLE` | 409 | 75 | Replay-only found no unexpired receipt; original outcome remains unknown. No automatic execution or new-key recovery is permitted. |
 
-Reuse `PROJECT_NOT_FOUND`, `PROJECT_ARCHIVED`, `AMBIGUOUS_PROJECT`, `ROW_VERSION_CONFLICT`, `CURSOR_INVALID`, `IDEMPOTENCY_CONFLICT`, `SERVICE_PAUSED`, authentication, and storage errors. Extend the shared row-version error description to include Memos without changing existing Handoff error output. A missing flag caught by CLI parsing retains usage exit 2; application-level invalid input uses the table above. File-open failures use the existing filesystem error category and never fall through to empty content. Contract tests pin every new mapping and verify existing Handoff goldens remain unchanged.
+Reuse `PROJECT_NOT_FOUND`, `PROJECT_ARCHIVED`, `AMBIGUOUS_PROJECT`, `ROW_VERSION_CONFLICT`, `CURSOR_INVALID`, `IDEMPOTENCY_CONFLICT`, `SERVICE_PAUSED`, authentication, and storage errors. Extend the shared row-version error description to include Memos without changing existing Handoff error output. A supplied unsafe or malformed Memo numeric value is `MEMO_INVALID_INPUT`; a missing option argument or other CLI syntax failure retains usage exit 2; application-level invalid input uses the table above. File resolution/open/read failures use `MEMO_FILE_READ_FAILED` in the existing filesystem error category (exit 73; catalogue HTTP 500, with no HTTP file-import route) and never fall through to empty content. Contract tests pin every new mapping and verify existing Handoff goldens remain unchanged.
 
 ## 10. Web behavior
 

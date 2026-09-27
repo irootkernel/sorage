@@ -821,6 +821,7 @@ The mapping from symbolic code to HTTP status is published here and verified by 
 | `GIT_BACKUP_CONFLICT` | 409 | Unsafe Git state or a non-fast-forward push | Resolve the repository state manually |
 | `GIT_AUTH_REQUIRED` | 409 | Git or SSH credentials are missing in batch mode | Configure the credential helper or SSH key, then retry |
 | `RESTORE_TARGET_NOT_EMPTY` | 409 | `backup restore` was run against a populated installation | Restore into a fresh installation |
+| `MEMO_FILE_READ_FAILED` | 500 | The selected Memo body file cannot be resolved, opened, or read (CLI only) | Check the selected Memo body file path and read permissions |
 | `MEMO_NOT_FOUND` | 404 | Unknown Memo or failed Project assertion | Check the Memo UUID and optional Project assertion |
 | `MEMO_INVALID_INPUT` | 422 | Invalid Memo fields, Unicode, scope, or expectation | Check Memo fields, Unicode, scope, and expected Row Version |
 | `MEMO_TOO_LARGE` | 413 | Memo body or encoded request exceeds its bound | Reduce the Memo body or encoded request size |
@@ -829,6 +830,8 @@ The mapping from symbolic code to HTTP status is published here and verified by 
 | `INTERNAL_ERROR` | 500 | Unexpected failure | Inspect `meta.requestId` in `~/.sorage/logs/sorage.log` |
 
 Event type names and error codes never share a token, so `HANDOFF_ACCEPTED` is only ever an event and `HANDOFF_TERMINAL` is only ever an error; the Project events are named `PROJECT_BINDING_ADDED`, `PROJECT_BINDING_REMOVED`, `PROJECT_STATUS_ARCHIVED`, and `PROJECT_STATUS_ACTIVE` precisely so that they cannot collide with the error codes `PROJECT_UNBOUND` and `PROJECT_ARCHIVED`.
+
+Memo-context recovery for `ROW_VERSION_CONFLICT` names the Memo and its observed Row Version; `AMBIGUOUS_PROJECT` names `--project` rather than the Handoff-only `--as` flag. The catalogue defaults and existing Handoff renderings remain unchanged.
 
 ## 16. Exit codes
 
@@ -841,7 +844,7 @@ Event type names and error codes never share a token, so `HANDOFF_ACCEPTED` is o
 | 65 | Domain validation failure | `PROJECT_ARCHIVED`, `PROJECT_UNBOUND`, `PROJECT_SLUG_CONFLICT`, `BINDING_DUPLICATE`, `UNREGISTERED_RECIPIENT`, `SENDER_IDENTITY_DOWNGRADE`, `NO_REVIEW_NOTE`, `NO_CONTENT_CHANGE`, `NO_CHANGE_LIMIT`, `HANDOFF_TERMINAL`, `HANDOFF_NOT_TERMINAL`, `HANDOFF_DELETED`, `HANDOFF_ALREADY_FETCHED`, `HANDOFF_ARCHIVE_INVALID`, `HANDOFF_NOT_ARCHIVED`, `ARTIFACT_TOO_LARGE`, `MEMO_TOO_LARGE`, `MEMO_NOT_OPEN` |
 | 66 | Entity not found | `PROJECT_NOT_FOUND`, `HANDOFF_NOT_FOUND`, `MEMO_NOT_FOUND` |
 | 69 | Daemon unavailable | `DAEMON_UNAVAILABLE` |
-| 73 | Filesystem or storage failure | `VAULT_INTEGRITY_ERROR`, `ARTIFACT_CORRUPTED` |
+| 73 | Filesystem or storage failure | `VAULT_INTEGRITY_ERROR`, `ARTIFACT_CORRUPTED`, `MEMO_FILE_READ_FAILED` |
 | 75 | Temporary conflict | `CONFIG_CONFLICT`, `ROW_VERSION_CONFLICT`, `REVISION_CONFLICT`, `REVIEW_NOTE_PRESENT`, `IDEMPOTENCY_CONFLICT`, `DELETION_ALREADY_REQUESTED`, `ARTIFACT_MATERIALIZING`, `SERVICE_PAUSED`, `PORT_IN_USE`, `GIT_BACKUP_CONFLICT`, `BACKUP_IN_PROGRESS`, `RESTORE_TARGET_NOT_EMPTY`, `MEMO_REPLAY_UNAVAILABLE` |
 | 77 | Permission or actor authorization failure | `FORBIDDEN_ACTOR`, `USER_CONTEXT_REQUIRED`, `HOST_NOT_ALLOWED`, `UNAUTHENTICATED`, `TOKEN_INVALID`, `SOURCE_OUTSIDE_WORKSPACE`, `GIT_AUTH_REQUIRED` |
 | 78 | Not initialized or invalid configuration | `NOT_INITIALIZED`, `CONFIG_INVALID`, `VAULT_SCHEMA_UNSUPPORTED` |

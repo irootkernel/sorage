@@ -1,0 +1,331 @@
+{
+  "add": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "memo": {
+          "id": "<uuid>",
+          "projectId": "<uuid>",
+          "title": "Reminder",
+          "body": "한글\r\nBody",
+          "state": "open",
+          "rowVersion": 1,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "createdBy": {
+            "kind": "user",
+            "id": null
+          },
+          "updatedBy": {
+            "kind": "user",
+            "id": null
+          },
+          "closedAt": null,
+          "closedBy": null
+        },
+        "changed": true,
+        "replayed": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "list": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "id": "<uuid>",
+            "projectId": "<uuid>",
+            "title": "Reminder",
+            "state": "open",
+            "rowVersion": 1,
+            "createdAt": "<ts>",
+            "updatedAt": "<ts>",
+            "closedAt": null,
+            "projectSlug": "memo",
+            "projectDisplayName": "Memo Project",
+            "projectStatus": "active",
+            "bodyPreview": "한글\r\nBody",
+            "bodyPreviewTruncated": false
+          }
+        ],
+        "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "show": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "id": "<uuid>",
+        "projectId": "<uuid>",
+        "title": "Reminder",
+        "body": "한글\r\nBody",
+        "state": "open",
+        "rowVersion": 1,
+        "createdAt": "<ts>",
+        "updatedAt": "<ts>",
+        "createdBy": {
+          "id": null,
+          "kind": "user"
+        },
+        "updatedBy": {
+          "id": null,
+          "kind": "user"
+        },
+        "closedAt": null,
+        "closedBy": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "no-op": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "memo": {
+          "id": "<uuid>",
+          "projectId": "<uuid>",
+          "title": "Reminder",
+          "body": "한글\r\nBody",
+          "state": "open",
+          "rowVersion": 1,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "createdBy": {
+            "id": null,
+            "kind": "user"
+          },
+          "updatedBy": {
+            "id": null,
+            "kind": "user"
+          },
+          "closedAt": null,
+          "closedBy": null
+        },
+        "changed": false,
+        "replayed": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "done": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "memo": {
+          "id": "<uuid>",
+          "projectId": "<uuid>",
+          "title": "Reminder",
+          "body": "한글\r\nBody",
+          "state": "done",
+          "rowVersion": 2,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "createdBy": {
+            "id": null,
+            "kind": "user"
+          },
+          "updatedBy": {
+            "kind": "user",
+            "id": null
+          },
+          "closedAt": "<ts>",
+          "closedBy": {
+            "kind": "user",
+            "id": null
+          }
+        },
+        "changed": true,
+        "replayed": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "historical-replay": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "memo": {
+          "id": "<uuid>",
+          "projectId": "<uuid>",
+          "title": "Reminder",
+          "body": "한글\r\nBody",
+          "state": "open",
+          "rowVersion": 1,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "createdBy": {
+            "kind": "user",
+            "id": null
+          },
+          "updatedBy": {
+            "kind": "user",
+            "id": null
+          },
+          "closedAt": null,
+          "closedBy": null
+        },
+        "changed": true,
+        "replayed": true
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "stale-version": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "ROW_VERSION_CONFLICT",
+        "message": "Memo changed since the observed Row Version",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-read the Memo and choose a new action with its observed Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "closed-content": {
+    "status": 65,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_NOT_OPEN",
+        "message": "Reopen the Memo before editing it",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reopen the Memo explicitly before editing or changing its closing decision"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "missing-key": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_INVALID_INPUT",
+        "message": "Memo replay-only requires the original idempotency key",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check Memo fields, Unicode, scope, and expected Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "unavailable": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_REPLAY_UNAVAILABLE",
+        "message": "No retained Memo receipt; the original outcome is unknown",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "The original outcome is unknown; do not automatically execute or replace the key"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "unsafe-version": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_INVALID_INPUT",
+        "message": "Memo numeric values must be safe non-negative integers",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check Memo fields, Unicode, scope, and expected Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "file-read-failure": {
+    "status": 73,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_FILE_READ_FAILED",
+        "message": "The selected Memo body file could not be read",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the selected Memo body file path and read permissions"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "not-found": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_NOT_FOUND",
+        "message": "Memo does not exist in the selected Project",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Memo UUID and optional Project assertion"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "too-large": {
+    "status": 65,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_TOO_LARGE",
+        "message": "Memo body exceeds 65536 UTF-8 bytes",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reduce the Memo body or encoded request size"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { appError, err, ok, type Result } from "./errors";
+import { appError, err, ok, type AppError, type Result } from "./errors";
 import type { MemoEventType } from "./events";
 
 export const MEMO_STATES = ["open", "done", "dismissed"] as const;
@@ -217,4 +217,15 @@ function memoEvent(
     createdAt: memo.updatedAt,
     metadata: { projectId: memo.projectId, memoId: memo.id, rowVersion: memo.rowVersion, ...metadata },
   };
+}
+
+/** Preserve shared error codes while directing Memo callers to supported recovery actions. */
+export function memoError(error: AppError): AppError {
+  const suggestedCommand =
+    error.code === "ROW_VERSION_CONFLICT"
+      ? "Re-read the Memo and choose a new action with its observed Row Version"
+      : error.code === "AMBIGUOUS_PROJECT"
+        ? "Pass --project <project-slug>, or remove the aliased binding"
+        : undefined;
+  return suggestedCommand ? { ...error, recovery: { suggestedCommand } } : error;
 }

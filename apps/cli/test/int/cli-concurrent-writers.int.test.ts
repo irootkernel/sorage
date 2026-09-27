@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -161,16 +161,18 @@ describe("two concurrent writers on one Handoff", () => {
     // The loser names the compare-and-set conflict, not just any exit 75.
     const raceLoser = a.code === 75 ? a : b;
     expect(raceLoser.stderr).toContain("ROW_VERSION_CONFLICT");
-    // The winner's content is the only current Artifact. The loser staged its own
-    // copy before the authoritative compare-and-set rolled its transaction back,
-    // so its file is exactly the matrix row's orphan of the no-row class: visible
-    // to vault verify as a staged file with no row, and removable by the sweep.
+    // The loser may observe the conflict before staging, or lose the later CAS.
+    // Neither schedule requires a staged orphan; verify the winner's actual bytes.
+    // Deterministic orphan/sweep cases belong to the intent-log integration suite.
     const get = capture();
     expect(runCli(["get", handoffId, "--json", "--as", "alpha"], get.ports)).toBe(0);
-    const detail = JSON.parse(get.outText()) as { data: { revision: number; rowVersion: number } };
+    const detail = JSON.parse(get.outText()) as {
+      data: { revision: number; rowVersion: number; currentArtifact: { storageKey: string } };
+    };
     expect(detail.data.revision).toBe(2);
     expect(detail.data.rowVersion).toBe(2);
-    const staged = readdirSync(join(home, "vault", "staging"));
-    expect(staged.length).toBeGreaterThanOrEqual(1);
+    expect(readFileSync(join(home, "vault", detail.data.currentArtifact.storageKey), "utf8")).toBe(
+      a.code === 0 ? "# first revision\n" : "# second revision\n",
+    );
   });
 });

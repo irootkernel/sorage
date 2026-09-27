@@ -40,14 +40,14 @@ export function successEnvelope<T>(data: T, requestId: string, extraMeta?: { tim
 }
 
 export function errorEnvelope(error: AppError, requestId: string): ErrorEnvelope {
-  const spec = errorSpec(error.code);
+  const recovery = error.recovery ?? errorSpec(error.code).recovery;
   return {
     ok: false,
     error: {
       code: error.code,
       message: error.message,
       details: error.details ?? {},
-      ...(spec.recovery !== undefined ? { recovery: spec.recovery } : {}),
+      ...(recovery !== undefined ? { recovery } : {}),
     },
     meta: { requestId },
   };

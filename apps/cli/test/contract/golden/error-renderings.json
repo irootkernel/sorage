@@ -1200,6 +1200,30 @@
     "human": "RESTORE_TARGET_NOT_EMPTY: rendering probe\nRecovery: Restore into a fresh installation\n"
   },
   {
+    "code": "MEMO_FILE_READ_FAILED",
+    "exitCode": 73,
+    "httpStatus": 500,
+    "recovery": {
+      "suggestedCommand": "Check the selected Memo body file path and read permissions"
+    },
+    "renderedExitCode": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_FILE_READ_FAILED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the selected Memo body file path and read permissions"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "MEMO_FILE_READ_FAILED: rendering probe\nRecovery: Check the selected Memo body file path and read permissions\n"
+  },
+  {
     "code": "MEMO_NOT_FOUND",
     "exitCode": 66,
     "httpStatus": 404,

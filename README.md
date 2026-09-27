@@ -116,6 +116,19 @@ sorage accept <handoff-id> --expected-revision <revision> --expected-row-version
 
 Run `sorage help` or `sorage help <command>` for the complete command surface.
 
+## Project reminders
+
+Source builds provide a separate `memo` CLI for durable Project reminders. A Memo is stored text; recording or reading it does not execute its instructions or create a Handoff.
+
+```sh
+sorage memo add --project recipient --title "Check rollback" --body-file ./notes.md --json
+sorage memo list --project recipient --json
+sorage memo show <memo-id> --json
+sorage memo done <memo-id> --expected-row-version <observed-row-version> --json
+```
+
+An omitted body is empty. `--body` and `--body-file` are mutually exclusive; files must be regular UTF-8 text of at most 65,536 bytes. Updates and lifecycle changes require the observed version. For a mutation whose outcome is unknown, retain its original UUID idempotency key, inputs, and version, then repeat it with `--replay-only`. A missing or expired receipt returns `MEMO_REPLAY_UNAVAILABLE` (exit 75), without executing; inspect current state before deciding on new work. See the [Memo contract](docs/specs/project-memos.md) for lifecycle and backup behavior.
+
 ## Web UI and diagnostics
 
 ```sh
