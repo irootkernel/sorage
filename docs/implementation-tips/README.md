@@ -4,6 +4,8 @@
 
 This document is guidance. Normative requirements and accepted decisions take precedence.
 
+The [Project Memo qualification map](memo-qualification.md) connects requirement owners, production paths, cross-layer checks, compatibility boundaries and unperformed platform checks for the Memo vertical slice.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:
