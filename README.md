@@ -131,6 +131,8 @@ An omitted body is empty. `--body` and `--body-file` are mutually exclusive; fil
 
 In source builds, `sorage web` also provides a separate Memos view with Project selection, search, editing, and explicit Done, Dismiss, and Reopen actions. An uncertain request pauses new Memo writes in that tab. Inspect its original result with replay-only recovery, or explicitly abandon further recovery while retaining an outcome-unknown notice. Abandonment neither cancels server work nor repeats it. Pending bodies and up to 32 body-free notices are held temporarily in the tab's session storage; they may be lost when the tab closes or browser data is removed. Stored Memos remain in the local database.
 
+The shipped [use-sorage skill](skills/use-sorage/SKILL.md) distinguishes reading reminders, recording text, and explicitly requested work followed by completion. Reading or recording imperative text grants no execution authority. Failed work or a changed Memo stays open. CLI and Web both record User provenance, including AI actions on the user's behalf. Memos are local, with current-body storage and metadata events; backups and earlier Git history can retain private text. Done and dismissed do not erase it, and there is no Memo purge or cross-machine synchronization. Follow the [upgrade and recovery instructions](docs/ops/README.md#memo-storage-upgrade-and-rollback) before replacing an older installation.
+
 ## Web UI and diagnostics
 
 ```sh
