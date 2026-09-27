@@ -13,6 +13,7 @@ export * from "./init-ports";
 export * from "./intent-log";
 export * from "./lockfile";
 export * from "./logging";
+export * from "./memo-command-ports";
 export * from "./memos";
 export * from "./project-command-ports";
 export * from "./projects";

@@ -4,6 +4,7 @@ import {
   err,
   ok,
   parseMemoDetail,
+  parseMemoReceipt,
   summarizeMemo,
   parseMemoEventAssociation,
   type Memo,
@@ -72,6 +73,31 @@ export function createSqliteMemoRepository(db: SorageSqlite): MemoRepository {
     });
   const transaction: MemoTransaction = {
     get,
+    receipt: (key, scope, now) =>
+      databaseResult(() => {
+        const row = db
+          .prepare(
+            "SELECT request_hash, response_json FROM idempotency_keys WHERE key=? AND scope=? AND expires_at > ?",
+          )
+          .get(key, scope, now) as { request_hash: string; response_json: string } | undefined;
+        if (!row) return ok(null);
+        const parsed = parseMemoReceipt(JSON.parse(row.response_json));
+        if (!parsed.ok || parsed.value.replayed) throw new Error("Invalid stored Memo receipt");
+        return ok({ requestHash: row.request_hash, receipt: parsed.value });
+      }),
+    storeReceipt: (key, scope, hash, receipt, createdAt, expiresAt) =>
+      databaseResult(() => {
+        // Reuse only this expired Memo key; no global cleanup or Handoff receipt mutation.
+        db.prepare("DELETE FROM idempotency_keys WHERE key=? AND scope=? AND expires_at <= ?").run(
+          key,
+          scope,
+          createdAt,
+        );
+        db.prepare(
+          "INSERT INTO idempotency_keys (key,scope,request_hash,response_json,created_at,expires_at) VALUES (?,?,?,?,?,?)",
+        ).run(key, scope, hash, JSON.stringify(receipt), createdAt, expiresAt);
+        return ok(undefined);
+      }),
     projectStatus: (id) =>
       databaseResult(() => {
         const row = db.prepare("SELECT status FROM projects WHERE id = ?").get(id) as
@@ -145,6 +171,23 @@ export function createSqliteMemoRepository(db: SorageSqlite): MemoRepository {
         return ok(undefined);
       }),
   };
+  function inTransaction<T>(begin: string, work: () => Result<T>): Result<T> {
+    return databaseResult(() => {
+      db.exec(begin);
+      try {
+        if (liveFencePaused(db)) {
+          db.exec("ROLLBACK");
+          return err(appError("SERVICE_PAUSED", "A Vault move or restore is in progress"));
+        }
+        const result = work();
+        db.exec(result.ok ? "COMMIT" : "ROLLBACK");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    });
+  }
   return {
     get,
     list: (filter, after) =>
@@ -191,21 +234,10 @@ export function createSqliteMemoRepository(db: SorageSqlite): MemoRepository {
         }
         return ok(items);
       }),
-    run: (work) =>
-      databaseResult(() => {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          if (liveFencePaused(db)) {
-            db.exec("ROLLBACK");
-            return err(appError("SERVICE_PAUSED", "A Vault move or restore is in progress"));
-          }
-          const result = work(transaction);
-          db.exec(result.ok ? "COMMIT" : "ROLLBACK");
-          return result;
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
-      }),
+    run: (work) => inTransaction("BEGIN IMMEDIATE", () => work(transaction)),
+    inspect: (work) =>
+      inTransaction("BEGIN", () =>
+        work({ get, projectStatus: transaction.projectStatus, receipt: transaction.receipt }),
+      ),
   };
 }
