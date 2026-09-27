@@ -21,15 +21,18 @@ When requirements conflict, use this order:
 3. [../architecture/README.md](../architecture/README.md)
 4. [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md)
 5. [../specs/security-reliability.md](../specs/security-reliability.md)
-6. [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md)
-7. [../specs/traceability.md](../specs/traceability.md)
-8. [../roadmap/README.md](../roadmap/README.md)
-9. [../implementation-tips/README.md](../implementation-tips/README.md)
-10. Examples, schemas, and comments
+6. [../specs/project-memos.md](../specs/project-memos.md), for the detailed Memo domain and its explicit M7 extensions
+7. [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md)
+8. [../specs/traceability.md](../specs/traceability.md)
+9. [../roadmap/README.md](../roadmap/README.md)
+10. [../implementation-tips/README.md](../implementation-tips/README.md)
+11. Examples, schemas, and comments
 
 [../product/README.md](../product/README.md) and [../todo/future-work.md](../todo/future-work.md) are non-normative context rather than levels of this order: they record intent and deliberate exclusions, they may be cited as rationale, and they never override a normative document or settle a conflict.
 
 Where two normative documents describe the same surface, the higher level owns it and the lower level points at it; the `doctor` check catalog, for example, is normative only in [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md).
+
+The Memo contract owns detailed Memo lifecycle, CLI/HTTP data, pending-attempt handling, and format-2 Memo shard/digest rules. Shared authentication, security, envelopes, and transaction guarantees remain with their higher-ranked owners. Those owners explicitly scope the unchanged Handoff replay rules and format-1 backup representation; Memo specificity alone is not permission to override them. Keep this order synchronized with the documentation index and root agent guidance.
 
 A conflict MUST stop the active Task, and the team MUST update the Source of Truth or record an architecture decision before continuing.
 
@@ -112,7 +115,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
 - Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
-- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, or `M6`.
+- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, or `M7`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
 - Confirm the `Design Gate impact` cell, which is `Not required` for every Task in this repository because no Design Gate registry is enrolled, and record that reason rather than leaving the cell empty.
@@ -176,7 +179,7 @@ A review MUST verify:
 
 ## 12. Release change freeze
 
-Each milestone has its own release gate, and the freeze applies from the moment a milestone enters its release candidate until that gate passes. `M1` through `M5` are closed; post-MVP freezes apply per later milestone, beginning with `M4`, and `M6` is the current post-MVP gate (ADR-0026).
+Each milestone has its own release gate, and the freeze applies from the moment a milestone enters its release candidate until that gate passes. `M1` through `M5` are closed; post-MVP freezes apply per later milestone, beginning with `M4`. `M6` is governed by ADR-0026, and ADR-0027 adds the separate successor `M7` gate. Current delivery and eligibility remain solely in the roadmap; registering M7 does not close M6.
 
 - Schema changes require an accepted architecture decision.
 - CLI or API breaking changes require an accepted architecture decision.

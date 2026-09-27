@@ -6,6 +6,10 @@ It sits below [required-specification.md](required-specification.md), the accept
 
 Every surface is tagged with the milestone at which it must exist: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, `M3` Git backup, scheduling, and packaging, `M4` CLI Handoff detail reads, and `M5` Web User body compose.
 
+## Project Memo extension boundary
+
+M7 adds the independent [Project Memo contract](project-memos.md), including its complete command/endpoint catalog, DTOs, error mappings, field bounds, scope, concurrency, Web flow, and snapshot migration. Those are required design outcomes whose implementation status belongs only to the roadmap. Existing Handoff routes and outputs below remain unchanged. Memo-specific implicit User provenance, required mutation expectations, created-time pagination, and snapshot-format-2 additions are explicit extensions rather than reinterpretations of the legacy Handoff workflow.
+
 ## 1. Canonical product and runtime identity
 
 | Item | Canonical value |
@@ -292,6 +296,8 @@ The daemon applies reloadable fields after its successful write; `POST /api/v1/r
 `POST /api/v1/runtime/reload` re-reads and re-validates the file, applies every reloadable field, and returns the list of fields that still require a restart; `POST /api/v1/runtime/restart` performs the controlled restart.
 
 ## 6. Vault marker, layout, and verification
+
+The snapshot subtree illustrated in this section is the format-1 layout. M7's format-2 writer additionally places Memo shards under `snapshots/memos/`; section 26 distinguishes the inventories, and the Memo contract owns their exact serialization, paths, and digests. Live Memo content remains in SQLite, not the Artifact subtree.
 
 Marker `.sorage-vault.json`:
 
@@ -706,7 +712,7 @@ A tombstone rejects `fetch`, `revise`, `review set`, `review withdraw`, `review 
 | `--supersedes <handoff-id>` | M1 | Link a new Handoff to the one it replaces; see below |
 | `--wait [--timeout <s>] [--interval <s>]` | M1 | `inbox` only; see below |
 
-`--expected-row-version` is mandatory only on `accept` and `decline`; it is accepted on every other mutating command and is enforced whenever it is supplied (HND-014). Commands that create a Handoff, or that mutate configuration or Projects, accept the flag for uniformity but carry no expectation, because there is no previously read Handoff row to compare against.
+For the legacy Handoff commands, `--expected-row-version` is mandatory only on `accept` and `decline`; it is accepted on every other mutating command and is enforced whenever it is supplied (HND-014). Commands that create a Handoff, or that mutate configuration or Projects, accept the flag for uniformity but carry no expectation, because there is no previously read Handoff row to compare against.
 
 The value passed is the Row Version the client currently holds, never the value it expects afterwards, and reads, `fetch`, preview, and their events never move it (HND-025).
 
@@ -715,6 +721,10 @@ A `--supersedes` target MUST exist and MUST be in a terminal state, otherwise th
 The target need not share the recipient, a tombstone may be superseded because the link is metadata rather than content, and every Handoff of one fan-out may reference the same target.
 
 `inbox --wait` in milestone M1 polls SQLite every `--interval` seconds, default `2`, until a new inbox item for the resolved actor appears or `--timeout` seconds, default `300`, elapse; on timeout it exits 0 with an empty list and `meta.timedOut: true` (CLI-020). The wait returns only the items that appeared after it began, so a Handoff the waiter already saw does not wake it even when it changes state, and the timeout result is the empty list rather than the items the waiter started from; because a wait lists only new items, `--wait` cannot combine with `--cursor`, and an `--interval` below one second is a usage error rather than an unthrottled poll.
+
+### 13.10 Project Memos, milestone M7
+
+The [Memo CLI contract](project-memos.md#8-cli-contract) owns `memo add`, `memo list`, `memo show`, `memo update`, `memo done`, `memo dismiss`, and `memo reopen`. It defines explicit Project selection rather than a sender, Open by default, optional all-project discovery, bounded body-file text import, version expectations, and idempotency. Existing-Memo mutations require their observed row version; they are not covered by the legacy command expectation exceptions above. No existing Handoff command is aliased or relabeled. The existing JSON envelope is reused with separate checked Memo data types and additive errors. All five mutation commands accept --replay-only with the original key/input/version for non-executing recovery. A missing or expired receipt returns MEMO_REPLAY_UNAVAILABLE (exit 75); it never falls through to execute. Omission of that mode is ordinary execution, not safe recovery of an unknown result.
 
 ## 14. CLI envelopes
 
@@ -864,6 +874,8 @@ Host validation runs first on purpose: a DNS-rebinding page must be turned away 
 The allowlist deliberately keeps the name `localhost` for the browser's `Host` header while the `server.host` bind enum does not, because a bind name can resolve off-loopback and a `Host` header cannot change where the socket already listens.
 
 ### 17.3 Idempotency
+
+The transport replay behavior below applies to the existing Handoff/backup routes. M7 Memo mutations instead use the [shared Memo application receipt contract](project-memos.md#8-cli-contract) as their only replay authority: their authenticated routes bypass the raw-body memory cache while retaining Host/authentication checks, bounded parsing, and validation. The existing `idempotent` route flag selects that legacy cache and is therefore unset or false for Memo routes; the ordinary handler still receives the original Idempotency-Key. Memo replay returns historical `memo` and `changed` with `replayed=true` in a fresh request envelope, rather than replaying original HTTP bytes. Memo Idempotency-Mode selects execute or replay-only without changing the normalized request hash; unknown-response recovery must use replay-only with its original key/input. A server-side receipt miss, including expiry or same-Installation restore, returns MEMO_REPLAY_UNAVAILABLE/409 with no execution, row/event/receipt write, reservation, or expiry cleanup. Client time and Installation identity are not receipt-continuity proofs. No existing Handoff replay route or response changes.
 
 `Idempotency-Key: <uuid>` is optional, is accepted on exactly six operations — create, fan-out, upload completion, revise, deletion approval, and a manual backup run — and when it is present the replay rules below MUST be honoured (API-005).
 
@@ -1019,9 +1031,13 @@ POST /api/v1/backup/verify
 
 Restore has no HTTP endpoint: `sorage backup restore` is a bootstrap command that requires the daemon to be stopped and an empty installation (BKP-021), so the Web backup page links to the CLI instructions instead of offering a restore action.
 
+### 18.8 Project Memos, milestone M7
+
+The [Memo HTTP contract](project-memos.md#9-http-and-error-contract) owns `GET/POST /api/v1/memos`, `GET/PATCH /api/v1/memos/{id}`, and the three explicit done/dismiss/reopen POST actions. Authentication, Host validation, response security, and existing mutation fences apply before Memo lookup. Memo handlers collect bounded raw bytes and perform fatal UTF-8 decoding before JSON parsing and field/Unicode validation, then forward the key to the common normalized application/DB receipt path without entering the legacy transport replay cache. Malformed encoding or JSON returns MEMO_INVALID_INPUT/422 before hashing or receipt lookup, without domain/receipt writes; valid U+FFFD remains accepted. The legacy replacement decoder and empty-object parse fallback do not apply to Memo requests. On mutation routes, Idempotency-Mode: replay-only requires the original valid Idempotency-Key and request; omission selects execute. Reject invalid/duplicate mode values and mode on reads, and never let replay-only become execute on unavailable receipt or restore/expiry. The new route/error catalog is required M7 behavior, not a claim that the current binary implements it. No Artifact upload or existing Handoff endpoint, decoding, or replay behavior changes meaning.
+
 ## 19. Pagination
 
-Cursor pagination is required for every list surface (CLI-009, NFR-006).
+Cursor pagination is required for every list surface (CLI-009, NFR-006). This section's updated-time key and Handoff filters apply to the legacy Handoff list. M7 Memos use the [Memo read contract](project-memos.md#7-read-model-and-paging): created-time keysets with their own scope/filter namespace and no cross-page snapshot claim.
 
 Sort order:
 
@@ -1150,6 +1166,10 @@ The Web UI provides no YAML editor; the YAML view is read-only precisely so that
 
 Vault relocation is not offered in the Web UI within the MVP (WEB-016).
 
+### 24.1 Separate Project Memo view, milestone M7
+
+The [Memo Web contract](project-memos.md#10-web-behavior) adds a separate Project/all-project Memo view with state/search filters, safe full detail, bounded input, and explicit lifecycle actions in the currently shipped `apps/daemon/src/web-app.ts` assets. It does not implement the `apps/web` stub or migrate the frontend. One active unknown attempt gates all new Memo writes across navigation/reload and is recovered only through replay-only. Reads and drafts remain available; a later error, expiry, or restore-absent receipt does not prove original non-execution. Evidence may settle the attempt, or the User may explicitly abandon further recovery after a warning. Abandonment preserves a bounded passive unknown notice and retires the active record locally before unlocking, without server cancellation, deletion, or replacement submit. Storage failure cannot unlock and late responses cannot affect a newer pending request. The exact notice-retention and recovery contract remains in the Memo Web owner. It does not add Memos to Handoff Inbox/Outbox, change Handoff counters, or reuse Accepted as Done. The existing authenticated browser/daemon model is unchanged.
+
 ## 25. Git backup purpose
 
 Git protects the current Vault content and the current exported metadata; it is not the operational database and not native Handoff versioning.
@@ -1164,6 +1184,8 @@ The Web UI states plainly when protection is local-only (BKP-018).
 
 ## 26. Backup content
 
+M7 extends the legacy format described here through [Memo backup and restore](project-memos.md#11-backup-restore-upgrade-and-rollback). Snapshot format 2 adds deterministic Memo shards, counts, digests, and nullable Memo event associations; format-1 input remains readable as zero Memos. The new contract also governs Memo-aware verify/dry-run, exact import, free-text disclosure, and no-downgrade guidance. It does not rewrite historical snapshots or infer Memos from old Handoffs.
+
 Included, and exactly these pathspecs:
 
 ```text
@@ -1174,7 +1196,9 @@ artifacts
 snapshots
 ```
 
-`snapshots` contains `projects.json`, the sharded `handoffs/<xx>/<handoff-id>.json` files, `events.jsonl`, and `manifest.json` (BKP-005, BKP-023).
+In snapshot format 1, `snapshots` contains `projects.json`, the sharded `handoffs/<xx>/<handoff-id>.json` files, `events.jsonl`, and `manifest.json` (BKP-005, BKP-023). Its manifest has only `formatVersion: 1` and the projects/handoffs/events/artifacts counts; it has no Memo fields.
+
+Format 2 preserves those snapshot families and adds `memos/<xx>/<memo-id>.json`. Its manifest has exactly `formatVersion: 2`, the existing `counts` plus mandatory `counts.memos`, and mandatory `memoDigests`; event rows add nullable `memoId`. The map uses `snapshots/`-relative keys and exact canonical-file SHA-256 values under [the Memo byte/path contract](project-memos.md#111-canonical-bytes-digest-and-path-identity). Zero Memos means `counts.memos=0` and `memoDigests={}`, not omitted fields. These additions remain under the existing `snapshots` Git pathspec; old backups are not rewritten.
 
 Excluded, always:
 
@@ -1198,10 +1222,10 @@ The exported ledger is the audit record minus those local paths, and `backup res
 ```mermaid
 flowchart TD
     A[Acquire backup.lock] --> B[Begin consistent SQLite read transaction]
-    B --> C[Export Projects, Handoffs, and events]
+    B --> C[Export all families required by the snapshot format]
     C --> D[Write snapshot temporary files]
     D --> E[Atomic snapshot replacement]
-    E --> F[Verify current Artifact checksums]
+    E --> F[Verify Artifact checksums and format-specific snapshot integrity]
     F --> G[End read transaction]
     G --> H[Validate Git state]
     H --> I[git add the managed pathspecs]
@@ -1221,7 +1245,8 @@ Snapshot export is deterministic, so an unchanged Vault produces byte-identical 
 - `events.jsonl` is one compact JSON object per line, ordered by `createdAt` then `id`, LF-terminated.
 - Timestamps are UTC in fixed precision, so the same instant always serializes to the same string.
 - No file records an export timestamp, a hostname, a username, a process id, or a tool version.
-- `manifest.json` carries only the snapshot format version and the derived counts of projects, handoffs, events, and artifacts; it records no wall-clock time, no hostname, and no run duration, so it is stable whenever the data is stable.
+- For format 1, `manifest.json` carries only `formatVersion` and derived counts of projects, handoffs, events, and artifacts. Format 2 additionally requires the Memo count and `memoDigests` map defined in section 26; it is not limited to the format-1 field set.
+- Neither generation's manifest records an export-time clock value, hostname, or run duration. Format-2 shard hashes are SHA-256 of the actual canonical UTF-8 bytes including the final LF, expressed as lowercase hexadecimal; verify raw bytes, path identity, exact inventory, and canonical representation as specified in [the Memo contract](project-memos.md#111-canonical-bytes-digest-and-path-identity). The same logical snapshot and stored values produce identical bytes and hashes.
 
 The change test is exactly:
 
@@ -1322,10 +1347,12 @@ Restore is a bootstrap command, not a merge (BKP-021):
 - `--dry-run` performs every validation and every checksum verification and reports what would be created, without writing anything; `--confirm` is required for the writing form and is not required with `--dry-run`, because a dry run cannot destroy anything.
 - The Installation adopts the `installationId` from the Vault marker, which is the audited exception of VLT-019 and emits `VAULT_ADOPTED`, followed by `RESTORE_COMPLETED` when the rebuild finishes.
 - Adopting the identifier is what makes `workspaceKey` reproducible, so an unregistered sender's outbox still resolves after a restore.
-- Projects, Handoffs, Review Notes, lifecycle state, and the event ledger are rebuilt from `snapshots/projects.json`, `snapshots/handoffs/`, and `snapshots/events.jsonl`, preserving UUIDs, Revision, and Row Version.
+- Both supported snapshot generations rebuild Projects, Handoffs, Review Notes, lifecycle state, and the event ledger from `snapshots/projects.json`, `snapshots/handoffs/`, and `snapshots/events.jsonl`, preserving UUIDs, Revision, and Row Version.
+- Format 1 contains no Memos. Format 2 additionally validates the manifest's complete Memo inventory and exact byte digests, then restores `snapshots/memos/` and Memo event associations under [the Memo recovery contract](project-memos.md#112-versioned-verification-and-recovery), preserving original Memo identities, versions, content, and closing metadata. Dry-run and verification perform these checks too; neither a missing Memo nor a digest mismatch may be skipped.
 - Every Artifact checksum is verified against the recorded value before the rebuild is committed (SEC-014).
 - Managed Artifact files are re-set to `0444`, because Git checks files out as `0644` and does not preserve the read-only bit.
 - Only the API token is regenerated; nothing else about the Installation identity changes.
+- Operational idempotency receipts and browser recovery material are not snapshot families and are not restored or reconstructed. This differs from in-place database upgrade, which preserves valid receipts. An unknown Memo operation recovered after reauthentication must use replay-only; a missing receipt stays unknown and cannot create a second Memo even when the Installation ID matches and 24 hours have not elapsed.
 - Project directory bindings are machine-local and are never restored; the User re-binds each Project with `sorage project bind <project> --dir <path>`, and `doctor` reports every unbound Project until they do.
 
 A restore whose Vault marker `schemaVersion` is newer than the running build stops with `VAULT_SCHEMA_UNSUPPORTED` before touching the target.

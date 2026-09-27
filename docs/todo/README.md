@@ -4,6 +4,7 @@ This directory stores future epic-sized candidates and temporary dossiers for ad
 
 ## Adopted dossiers
 
+- [Project Memos](project-memos.md) is the temporary execution dossier for `EPIC-013`; it provides sequential Task checklists and links to the permanent Memo contract.
 
 ## Future candidates
 

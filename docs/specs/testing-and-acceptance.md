@@ -390,6 +390,85 @@ Expected: step 2 creates exactly one Handoff in `awaiting_recipient` with User s
 
 Expected: archive and unarchive need no explicit User flag and record User provenance; new Handoffs cannot involve an archived registered Project; the replacement is one authoritative database mutation with unchanged identities and historical paths; a normalized no-op emits no event. AJ-01 to AJ-18 still pass.
 
+### AJ-20: Memo CLI lifecycle and restart
+
+M7 acceptance for MEM-001, MEM-002, MEM-004 to MEM-006, MEM-011, MEM-012, MEM-016, MEM-021, and MEM-022. Use the compiled binary and a temporary SORAGE_HOME, with two Projects and an existing User-to-Project Handoff. A process restart is required; a real machine reboot or power-loss campaign is not implied by that check.
+
+- [ ] Add a title-only Memo and a multiline Korean/Unicode body Memo through explicit Project selection, then verify neither appears in Handoff inbox/outbox or changes Handoff counters/markers.
+- [ ] End the process, restart without a daemon or AI session, and retrieve only the selected Project's open Memos with exact stored body bytes and stable IDs.
+- [ ] Exercise title/body update, explicit empty body, done, dismiss, and reopen with observed versions; prove no-op operations emit no event or timestamp/version change, stale versions conflict even on a requested matching state, and editing closed content requires reopen.
+- [ ] Verify literal title/body search, bounded UTF-8 preview, state filters, same-timestamp ID tie-breaking, explicit all-project scope, cursor/filter mismatch, and no implicit all-project discovery.
+- [ ] Rebind and rename a Project and query its existing Memo; remove the local binding and query by explicit Project; confirm no new identity is created and ambiguous/unregistered current-directory inference fails with guidance.
+- [ ] Exercise input boundaries, body-file XOR, unsafe file types, invalid UTF-8, empty file, unexpected fields, unknown IDs, and the typed errors without false success or partial rows.
+- [ ] Confirm reading or storing imperative Memo text does not execute it or alter any external workflow.
+- [ ] Exercise --replay-only with the original key/inputs on all mutation commands: retained receipt returns replayed=true, missing/expired/restored receipt returns MEMO_REPLAY_UNAVAILABLE at exit 75 without effects, and a mismatched normalized request conflicts. Reject replay-only without a key or on reads; no error may trigger an execute retry.
+
+### AJ-21: Separate Memo browser workflow
+
+M7 acceptance for MEM-007, MEM-013 to MEM-015, MEM-020, MEM-021, and MEM-023. This journey has two separately owned parts. TASK-092 closes only AJ-21-B, TASK-093 closes AJ-21-S, and TASK-094 verifies both against the final candidate before reporting all of AJ-21 passed. A browser Task must not depend on a later skill Task or count an unperformed walkthrough as passed.
+
+#### AJ-21-B: Browser acceptance
+
+Owner: TASK-092. Use the real authenticated daemon serving apps/daemon/src/web-app.ts and a real browser, not the apps/web stub, a separate demo, or only fake HTTP/component tests. These checks require no new skill implementation.
+
+- [ ] Open the selected Project's Memos view, observe the Open default, create and edit a Memo, navigate away, reload/restart the browser and daemon, and retrieve the committed content.
+- [ ] Exercise Done, Dismissed, and All filters, search and pagination, explicit all-project selection, full detail, and reopened editing without any Handoff sender/recipient or Accepted control.
+- [ ] Preserve an unsaved draft when another client changes the Memo; show the conflicting current version without automatically retrying or overwriting it. Retrying requires a fresh explicit user action.
+- [ ] Lose Memo A's mutation response after commit, then try every kind of Memo B write and switch Projects. The tab sends none of B's writes and preserves A's exact key, input, expected version, Installation, and first-attempt time; reads, search, draft editing, and Handoff navigation still work.
+- [ ] Reload that same tab and restore its write gate before enabling mutations. Explicitly inspect A's unchanged request using Idempotency-Mode: replay-only, receive replayed=true while the receipt is valid, remove only A's active record, refresh current state, and then allow a new user-selected write. Duplicate clicks, concurrent retries, or stale callbacks must not create another Memo or clear a different attempt.
+- [ ] Test session-storage write/read/removal errors, invalid pending data, and a changed Installation. Failed persistence prevents first dispatch, and failed removal cannot unlock writes. Document that durable Memo recovery after browser restart does not imply pending-attempt recovery after tab closure or session-storage loss.
+- [ ] A definitive non-mutating rejection of the first and only dispatch may clear its pending slot while preserving the draft. In separate fixtures, response loss followed by a later retry error, timeout/abort, malformed response, or receipt expiry keeps the warning and active gate by default. No automatic new key or execute fallback is permitted. Another tab and CLI remain usable.
+- [ ] Lose A's creation response, back up and restore its Memo under the same Installation ID without receipts, reauthenticate the same tab, and explicitly inspect A in replay-only mode. Require MEMO_REPLAY_UNAVAILABLE, outcome unknown, and no second Memo/event/receipt. Also test persistence-before-first-dispatch crash and client-time-before/server-lookup-after expiry; neither permits recovery via execute.
+- [ ] Cancel the Abandon retry and continue confirmation and preserve the active request unchanged. Confirm it and atomically save A's bounded passive unknown notice while retiring only A's active record before unlocking. No request, cancellation, deletion, or replacement create is sent by abandonment. A's result stays unknown and its retry disposition becomes abandoned.
+- [ ] Reload after abandonment, inspect/copy A's nonblocking notice, and explicitly submit unrelated B. Deliver a late A response and prove it neither clears B's pending record nor reactivates/replays A or paints A's result as B's. Test saving failures and the 32-notice limit with explicit older-notice removal rather than silent eviction; failed persistence must not unlock.
+- [ ] Verify sanitized Markdown, plain-text title/preview, unsafe schemes/raw HTML rejection, no automatic remote-image request, accessible labels/focus, responsive layout, Korean IME, and exact newlines.
+- [ ] Exercise empty, loading, validation failure, disconnected, archived-Project, and permission-error states without presenting stale or optimistic state as confirmed completion.
+#### AJ-21-S: Skill acceptance
+
+Owner: TASK-093, after TASK-092. Use the implemented native Memo commands with isolated fixtures and a real authorized skill walkthrough. These are not prerequisites for TASK-092 or evidence obtainable from static prose matching.
+
+- [ ] Observe read-only and record-only requests: Memo checks only report, writing imperative reminder text only stores it, and no unrequested inbox/outbox discovery or body execution occurs.
+- [ ] Observe explicitly requested work-plus-close under the work's own authority; incomplete or blocked work and concurrently changed Memos remain open. Untrusted body text cannot authorize commands, commits, or other effects.
+- [ ] Observe an uncertain mutation response with retained, expired, and restore-absent receipts. The skill uses the original input/key and --replay-only, reports unavailable as unknown, and never executes the old request or work again, invents a key, or claims done. New execution requires a separate user intention, not a recovery miss or browser abandonment.
+- [ ] Record actual walkthrough evidence and its target, or leave the corresponding criterion unverified. TASK-094 confirms both browser and skill evidence is applicable to its final candidate; browser-only success cannot close the full journey.
+
+### AJ-22: Memo concurrency, provenance, and transport boundaries
+
+M7 acceptance for MEM-002 to MEM-004, MEM-006 to MEM-010, MEM-013, MEM-015, and MEM-022. Use real SQLite and concurrent CLI/HTTP clients in an isolated installation.
+
+- [ ] Make two clients read the same version, then race update against done and update against update; exactly one state-changing compare-and-set wins and the other gets ROW_VERSION_CONFLICT without losing the winning content.
+- [ ] Race Project archive against new Memo/reopen. The transaction order decides the result; no creation or reopen may commit after observing archived state. Existing open-note cleanup remains available, and archive changes no Memo state by itself.
+- [ ] Replay an exact creation/mutation key after a later state change or Project archive; return the historical receipt with replay indication and no new side effects. Another normalized request with that key conflicts.
+- [ ] Inject failure between row, metadata event, and receipt operations; all roll back together. Verify actual changes emit one event and reads/no-ops emit none.
+- [ ] Cross-read and mutate the same Memo through CLI and HTTP, preserving User provenance and expected versions. Optional wrong-Project assertions return MEMO_NOT_FOUND; no caller-supplied actor fields are accepted.
+- [ ] Exercise real Memo HTTP routing with one key and semantically identical JSON having reordered keys, different whitespace, and equivalent string escapes. Require the original memo/changed values with replayed=true and a fresh request envelope, with exactly one row/event; changing accepted body bytes or line endings under that key must conflict.
+- [ ] Create or mutate through CLI, replay the same normalized operation/key through HTTP, and test the reverse direction, including body-file versus inline body. Drop the response after commit, restart the daemon, and inspect again in replay-only mode without a duplicate effect. Verify no process-local HTTP cache determines Memo equality or rewrites the historical outcome.
+- [ ] Keep existing Handoff raw-body replay and response goldens unchanged. A known Memo key must not bypass authentication, fatal decoding, encoded/decoded limits, or input validation in either mode. Validate the exact mode header and CLI flag contract, invalid/duplicate values, missing replay-only keys, and rejection of mode on reads; mode must not change semantic request identity.
+- [ ] Use the server fake Clock just before, exactly at, and after expiresAt, including first dispatch before the boundary and lookup after it. Replay-only returns the original receipt only while expiresAt > now; otherwise it returns MEMO_REPLAY_UNAVAILABLE with no Memo/event/receipt writes, cleanup, expiry extension, or fallback. Storage errors remain errors, not execution permission.
+- [ ] Through the real CLI and HTTP path, create/commit then lose the response, export and restore a format-2 backup with the same Installation ID and Memo but no receipt, reauthenticate, and inspect the original request in replay-only mode. Require unavailable/409 or CLI 75 and unchanged restored Memo/event counts; replay-only recovery of that original operation from another client must likewise not duplicate it. This does not prohibit a separately intended new creation with its own key.
+- [ ] Test a replay-only miss when the original never arrived and when it is still in flight and commits later. Both misses mean unknown, not original failure or cancellation; later exact receipt inspection may succeed. Never reserve or create a receipt on a miss. A separately intended new execute operation still works under its own key and current expectations.
+- [ ] Apply Host/authentication checks before Memo lookup and exercise method, encoded-request, decoded-body, Unicode, cursor, and scope errors without mutation.
+- [ ] Send byte-oriented requests through the real Memo HTTP route with malformed UTF-8 in title and body: FF, invalid continuation, truncated end-of-input, overlong forms, and encoded surrogate code points. Require MEMO_INVALID_INPUT/422 before normalization or receipt lookup, with no row/event/receipt writes and no replacement-text fallback; use both fresh and already committed keys. Reject malformed JSON rather than treating it as an empty object. Oversized input retains MEMO_TOO_LARGE/413.
+- [ ] Send valid U+FFFD as EF BF BD and as an equivalent JSON escape with the same normalized request/key; require one creation and a replay. A malformed FF request using that key must be rejected, not returned as a replay, and must leave the retained receipt unchanged. After a rejected malformed fresh-key request, a valid request using that key must still create normally.
+- [ ] Split valid Korean and emoji UTF-8 sequences across request chunks and preserve the accepted text. Separately reject ASCII JSON containing escaped unpaired high/low surrogates after parsing, without rejecting properly paired emoji escapes or legitimate U+FFFD. Keep legacy Handoff decoding/replay fixtures unchanged.
+- [ ] Compare all existing Handoff contract goldens, review transitions, event queries, backup behavior, and existing Handoff skill activation against the pre-Memo baseline. New Memo skill acceptance belongs to AJ-21-S/TASK-093, not to TASK-091's transport gate.
+
+### AJ-23: Memo migration, backup, and restore
+
+M7 acceptance for MEM-007, MEM-009, MEM-010, MEM-016 to MEM-019, MEM-022, MEM-023, and MEM-024. All databases, Vaults, remotes, and processes must be test-only. TASK-088 owns the real persistence/restore checks and supplies fixtures without waiting for later public adapters. TASK-089 owns the common replay-only behavior on those fixtures; TASK-091 and TASK-094 verify the public cross-layer recovery. A lower-layer pass is not a claim that the entire journey already passed.
+
+- [ ] Upgrade a populated pre-Memo database fixture without changing Project/binding/Handoff/Note/Artifact/receipt identities or existing semantics; repeat and race migration, and inject failure to verify rollback.
+- [ ] Populate open, done, dismissed, edited, and reopened Memos, including an archived and an unbound Project, then export two unchanged snapshots and compare deterministic bytes and Memo digests. Independently compute SHA-256 over each actual published UTF-8 shard including its final LF and verify lowercase hexadecimal values under snapshots-relative keys; expected golden bytes/hashes must not all be derived by the production serializer.
+- [ ] Verify complete Memo inventory and counts with backup verify and restore dry-run; read an unchanged legacy format-1 snapshot without Memo fields as zero Memos, a format-2 snapshot with exact current data, and an empty format-2 snapshot with counts.memos=0 and memoDigests={}. Do not require format-2 fields from format 1 or silently accept a Memo-bearing snapshot mislabeled as format 1.
+- [ ] Restore into an empty installation and compare every Memo UUID, Project reference, Unicode body, row version, timestamp, closing field, and event association through the real repository in TASK-088. Confirm the Installation ID is adopted but operational receipts are neither exported nor reconstructed, unlike the in-place upgrade fixture that preserves valid receipts. TASK-091/TASK-094 additionally restart and query through public CLI/API.
+- [ ] In the application and public-adapter owning Tasks, recover a pending creation against a restored snapshot containing the Memo and against one taken before it existed. Replay-only must return unknown/unavailable without creating a Memo, event, or receipt, even within 24 hours and after reauthentication. Contrast normal daemon restart with retained receipt, which returns historical success. TASK-094 combines this with the Web abandonment and expiry-boundary scenarios.
+- [ ] Reject altered body bytes, missing/unexpected/duplicate Memo files or manifest keys/IDs, wrong digests/counts, invalid state/closing metadata, orphaned Project or Memo event references, and unknown newer formats before successful import.
+- [ ] Reject missing final LF, added BOM, or changed formatting against the original raw-byte digest; reject a noncanonical file even when its supplied digest is recalculated. Preserve stored body CRLF and Unicode exactly, rather than repairing a failed hash by parsing and reserializing.
+- [ ] Reject absolute, parent, dot, backslash, leading-snapshots, wrong-shard, and UUID-mismatched digest-map paths, symlinks, special files, and missing/extra map entries. Exercise these failures through verify, dry-run, and restore; no operation may read outside the snapshot root or turn partial input into successful import.
+- [ ] Inject partial backup output, write errors, and restore interruption; preserve existing valid backup publication and rollback behavior, never report partial restore as success, and preserve RESTORE_TARGET_NOT_EMPTY.
+- [ ] Verify upgrade guidance stops old writers and makes a pre-upgrade backup; demonstrate rollback only in a fresh separate home. Do not claim the old binary rejects the live upgraded database or that the older backup contains newly created Memos.
+- [ ] Verify free-text backup and retained Git-history disclosures, and absence of body text in logs/metadata events; closing a Memo is not deletion or remote synchronization.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -558,6 +637,16 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 - Every requirement listed under milestone M6 in section 17 of [required-specification.md](required-specification.md) is satisfied.
 - The CLI and HTTP contract changes are classified, including the intentional archived-sender behavior change.
 - No open P0 or P1 defect.
+
+### 9.8 Gate M7, Project Memo release, end of EPIC-013
+
+- [ ] Preserve EPIC-012's already recorded M6 acceptance and canonical outcomes; M7 qualification does not reopen or repeat that prerequisite.
+- [ ] Every MEM-001 to MEM-024 outcome and its implementing layers have current evidence; AJ-20 to AJ-23 pass with real compiled CLI, daemon, browser, storage, restart, upgrade, and restore paths.
+- [ ] All applicable prior AJ-01 to AJ-19 regressions and `make test` pass on the exact candidate, with existing Handoff outputs preserved and snapshot-format changes explicitly classified.
+- [ ] The separate skill walkthrough and any platform-only checks are evidenced or explicitly unverified; an unavailable mandatory check blocks that acceptance claim rather than being silently waived.
+- [ ] Upgrade, rollback, retention, local-only behavior, and no automatic execution are documented and tested at their appropriate layer.
+- [ ] Required independent review and explicit Epic acceptance precede the final M7 completion claim; no check depends circularly on its own Task already being Completed.
+- [ ] Product version, installation, Git tag, push, and release publication remain separately authorized operations.
 
 ## 10. Defect severity
 

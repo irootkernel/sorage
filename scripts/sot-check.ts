@@ -85,8 +85,9 @@ const MILESTONE_ORDER = new Map([
   ["M4", 4],
   ["M5", 5],
   ["M6", 6],
+  ["M7", 7],
 ]);
-const MILESTONE_ALT = "M[1-6]|Deferred";
+const MILESTONE_ALT = "M[1-7]|Deferred";
 
 /** Expands range notation like `CFG-001 to CFG-009` into the full inclusive id set. */
 function expandRanges(cell: string): string[] {
@@ -178,7 +179,7 @@ function checkIdentifiers(): void {
     if (!MILESTONE_ORDER.has(task.milestone)) {
       fail(
         `docs/roadmap/README.md:${task.line}`,
-        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected M1, M2, M3, M4, M5, or M6`,
+        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected M1, M2, M3, M4, M5, M6, or M7`,
       );
     }
     for (const dependency of task.dependencies) {

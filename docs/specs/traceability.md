@@ -31,10 +31,11 @@ Milestone values come from the specification and name the release gate at whose 
 | BKP-001 to BKP-026 | M3 | `TASK-052` to `TASK-058`, `TASK-061`, `TASK-065` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify` |
 | SEC-001 to SEC-021 | M1, M2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063`, `TASK-068`, `TASK-070` to `TASK-071` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int` |
 | NFR-001 to NFR-017 | M1, M3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065`, `TASK-073`, `TASK-080`, `TASK-083` to `TASK-084` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
+| MEM-001 to MEM-024 | M7 | `TASK-087` to `TASK-094` | AJ-20 to AJ-23; pure domain/contract, real SQLite migration and restore, compiled CLI, authenticated daemon, browser, and separately observed skill behavior |
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
 
-Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, and AJ-18 closes the M5 Web body-compose gate, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
+Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, AJ-18 closes the M5 Web body-compose gate, AJ-19 closes the M6 Project lifecycle gate, and AJ-20 to AJ-23 close the M7 Project Memo gate, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
 
 ## 3. Reverse index
 
@@ -342,6 +343,30 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `NFR-015` | M1 | `TASK-008`, `TASK-065`, `TASK-076`, `TASK-080`, `TASK-083`, `TASK-085` |
 | `NFR-016` | M1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074`, `TASK-076`, `TASK-078` |
 | `NFR-017` | M1 | `TASK-001`, `TASK-064` |
+| `MEM-001` | M7 | `TASK-087`, `TASK-094` |
+| `MEM-002` | M7 | `TASK-089`, `TASK-090`, `TASK-094` |
+| `MEM-003` | M7 | `TASK-089`, `TASK-091`, `TASK-093`, `TASK-094` |
+| `MEM-004` | M7 | `TASK-087`, `TASK-090`, `TASK-091`, `TASK-094` |
+| `MEM-005` | M7 | `TASK-087`, `TASK-089`, `TASK-092`, `TASK-094` |
+| `MEM-006` | M7 | `TASK-089`, `TASK-090`, `TASK-091`, `TASK-092`, `TASK-094` |
+| `MEM-007` | M7 | `TASK-087`, `TASK-089`, `TASK-090`, `TASK-091`, `TASK-092`, `TASK-094` |
+| `MEM-008` | M7 | `TASK-089`, `TASK-094` |
+| `MEM-009` | M7 | `TASK-088`, `TASK-089`, `TASK-094` |
+| `MEM-010` | M7 | `TASK-088`, `TASK-089`, `TASK-094` |
+| `MEM-011` | M7 | `TASK-089`, `TASK-090`, `TASK-092`, `TASK-094` |
+| `MEM-012` | M7 | `TASK-090`, `TASK-094` |
+| `MEM-013` | M7 | `TASK-091`, `TASK-094` |
+| `MEM-014` | M7 | `TASK-092`, `TASK-094` |
+| `MEM-015` | M7 | `TASK-087`, `TASK-089`, `TASK-091`, `TASK-092`, `TASK-094` |
+| `MEM-016` | M7 | `TASK-088`, `TASK-089`, `TASK-090`, `TASK-094` |
+| `MEM-017` | M7 | `TASK-088`, `TASK-094` |
+| `MEM-018` | M7 | `TASK-088`, `TASK-094` |
+| `MEM-019` | M7 | `TASK-088`, `TASK-094` |
+| `MEM-020` | M7 | `TASK-093`, `TASK-094` |
+| `MEM-021` | M7 | `TASK-089`, `TASK-093`, `TASK-094` |
+| `MEM-022` | M7 | `TASK-087`, `TASK-089`, `TASK-090`, `TASK-091`, `TASK-094` |
+| `MEM-023` | M7 | `TASK-088`, `TASK-092`, `TASK-093`, `TASK-094` |
+| `MEM-024` | M7 | `TASK-094` |
 
 ## 4. Task review requirement
 

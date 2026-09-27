@@ -817,3 +817,63 @@ The new CLI command, Project event type, and implicit User context are additive 
 - EPIC-012 contains a Source of Truth adoption Task and one Contract implementation Task, then closes the M6 gate after AJ-19.
 - The Project archive and unarchive HTTP routes use User provenance regardless of request-body actor fields; other routes retain their existing actor contracts.
 - `project rebind` is a CLI command over a shared application use case; it does not introduce an HTTP path-change route or a Web control.
+
+## ADR-0027: Project Memos as a separate domain in M7
+
+- **Status:** Accepted
+- **Date:** 2026-09-26
+- **Amends:** The post-MVP milestone series and the Handoff-only domain scope. Earlier Handoff lifecycle decisions and accepted historical records remain unchanged.
+
+### Problem
+
+The User needs to leave a project-scoped reminder before a restart or absence, find only those reminders later, and close a handled or obsolete item. A User-to-Project Handoff can carry the same text but implies directional delivery, recipient review, exact Revision acceptance, and a next actor. A Codex hook journal would instead duplicate runtime history planned in Dolgorae/Gul and would still not establish that an Epic validator actually completed.
+
+### Decision
+
+Adopt Project Memo as a separate domain under M7, with Source of Truth version 0.8.0. [MEM-001 to MEM-024](../specs/required-specification.md#18-project-memos) and [Project Memo contract](../specs/project-memos.md) define its behavior. A Memo belongs to a stable Project UUID; all native Memo mutations record existing User provenance, including explicitly authorized AI actions on the User's behalf. There is no sender/recipient relationship or new account system.
+
+Use open, done, and dismissed with explicit reopen. Done records caller-declared handling, not external execution verification. Require observed row versions on existing-object mutations, preserve no-op semantics, and support exact operation-scoped idempotency. Closed content requires reopening before editing. Archived Projects allow reading and cleanup but forbid new or reopened reminders. Reads and note creation never authorize executing note text.
+
+Implement CLI, local HTTP, Web, and the existing Sorage skill over one application layer. Store current content in a dedicated SQLite table with metadata-only events. Add backup format 2, including Memo inventory and digests, and retain format-1 reading as zero-Memo legacy input. No Memo mutation adapter ships before backup/restore support is complete. The [architecture](../architecture/README.md#25-project-memo-extension) records component boundaries; the [roadmap](../roadmap/README.md#epic-013-project-memos) allocates sequential implementation and qualification.
+
+The shared normalized application request and DB receipt are the sole Memo replay authority. The existing HTTP idempotent wrapper hashes raw bodies and returns cached envelopes; Memo routes use the ordinary authenticated handler with its legacy idempotent flag unset or false, forwarding the key after strict bounded input validation. Execute and replay-only are separate application modes over the same request identity. CLI --replay-only and HTTP Idempotency-Mode: replay-only recover uncertain outcomes without executing on an absent/expired receipt, returning MEMO_REPLAY_UNAVAILABLE instead. Valid exact receipts return historical outcome data with replayed=true in a fresh envelope. The server Clock decides expiry; client time, unchanged Installation identity, and reauthentication do not prove receipt continuity after restore. Do not change Handoff routes, export all receipts, or add another cache/service.
+
+Extend the browser assets actually served from apps/daemon/src/web-app.ts and reuse its safe renderer; apps/web remains a stub and no frontend migration is included. One active pending record is stored before first dispatch and gates Memo writes across same-tab navigation/reload. Unknown attempts recover through replay-only. Evidence may settle the attempt, or an explicit Abandon retry and continue confirmation may retire it while preserving a bounded passive outcome-unknown notice. Persist that local transition before unlocking; no cancellation, deletion, replacement submission, or outcome claim is implied. Expiry never silently clears the record, storage failure cannot unlock, and a late original response cannot affect a newer active attempt. Passive notices are not a submission queue or server ledger and have explicit local retention controls. Reads and other clients remain available.
+
+Put the Memo contract explicitly in the authority order after shared security and before testing/traceability. Shared documents retain common protections and explicitly distinguish unchanged format-1/Handoff rules from Memo extensions. Format 2 fixes the closed Memo field set, canonical UTF-8 file bytes including the final LF, raw-file SHA-256 as lowercase hexadecimal, and memoDigests keys relative to snapshots/. Verify exact inventory and canonical UUID-derived paths before import, not merely parsed values; the Memo contract owns the detailed byte and path rules.
+
+### Alternatives considered
+
+- Continue using User-to-Project Handoffs exclusively | rejected for reminders: exact document acceptance, review, and next-actor semantics are unnecessary and obscure a simple done outcome. Existing Handoffs remain supported and are not converted.
+- Add a Memo subtype or done state to Handoff | rejected: it combines incompatible lifecycle, actor, retention, and Revision rules and risks old clients.
+- Add a Codex Stop-hook journal or infer state from Dolgorae/Podway | rejected: this feature records explicit User intent, not automatic progress; no ecosystem dependency or execution-status authority is needed.
+- Use untracked project-local Markdown files as the authoritative store | rejected: it duplicates Project selection and loses transactional conflicts, central retrieval, and native backup coverage.
+- Give each Memo an Artifact | rejected for M7: bounded text in SQLite needs no file import/materialization lifecycle. Attachments remain outside scope.
+- Keep only open/done | rejected: dismissing an obsolete reminder must not imply the work was performed. In-progress, blocked, assignment, and scheduling states remain excluded.
+- Add named authors or cross-project access control | rejected for M7: User provenance is sufficient under the existing single-OS-user trust model and does not invent a human/AI authentication boundary.
+- Add hard deletion, body revision history, or multi-machine sync now | rejected: these require distinct retention or distribution decisions and are not needed for the restart/reminder scenario.
+- Stack the legacy HTTP cache above Memo receipts | rejected: raw JSON equality differs from normalized request equality, cached responses can retain replayed=false, and two authorities disagree across daemon restart or CLI/HTTP replay.
+- Move the shipped frontend into apps/web during Memo work | rejected: the current production asset owner is web-app.ts in apps/daemon; a package migration adds unrelated delivery risk.
+- Leave digest encoding, hash bytes, or relative-path roots to implementations | rejected: independent exporter/verifier implementations need one byte-level contract and deterministic fixtures.
+- Replace the tab's unresolved attempt on another submit, or add a pending queue | rejected: replacement loses the original key and a queue adds coordination. Explicit abandonment preserves an unknown-outcome notice before unlocking; notices are passive, not retryable submissions.
+- Trust the original 24-hour timer and Installation ID across restore | rejected: restore keeps the ID and Memo data but not operational receipts; a recovery write could create a duplicate. Replay-only never executes on a miss, including the server-side expiry boundary.
+- Export all receipts or change Installation identity to repair retry semantics | rejected for M7: these broaden backup/identity contracts without eliminating every missing-record case. Explicit non-executing recovery handles absence without reconstructing an outcome.
+- Keep a tab write-locked forever after receipt loss | rejected: outcome uncertainty must remain visible but need not prevent unrelated new work after informed abandonment. A local notice preserves that distinction without modifying Memo lifecycle.
+
+### Compatibility impact
+
+New Memo CLI commands, API routes, types, event kinds, and Web views are additive. Before publication, the Memo contract also fixes replay-only CLI/header inputs and MEMO_REPLAY_UNAVAILABLE, and separates local recovery abandonment from server state. Existing Handoff state values, commands, outputs, markers, processing, and legacy HTTP replay stay unchanged. Memo-only cache bypass does not weaken authentication or request limits, and the Web extension keeps the current asset delivery path. Memo-specific required expectations and created-time pagination do not redefine Handoff behavior. M7 remains within local /api/v1; the intentionally new backup representation uses snapshot format 2. Product SemVer, configuration schema, database migration version, Vault marker version, and Source of Truth version are independent. No product release number is allocated by this decision.
+
+### Migration impact
+
+Append the next unused database migration after the inspected version 6; preserve existing identities, Handoff rows, and receipts. Extend backup/verify/restore before exposing Memo writes. Format-1 restore produces no Memos and nullable Memo event associations; format-2 restore validates exact Memo inventory, digests, references, and state before importing. Unknown newer snapshots fail closed. Existing Handoffs are never automatically converted or inferred as historical Memos. Operational receipts are preserved during an in-place upgrade but are outside both snapshot generations. Restore adopts the same Installation identity without rebuilding those receipts. Pending requests after restore must use replay-only and remain unknown on absence rather than executing again, whether the snapshot contains the original Memo or predates it.
+
+Do not claim safe in-place downgrade: the existing migration runner does not establish that an old executable refuses the new database. Stop old processes and scheduled writers before upgrading, verify a pre-upgrade backup, and document rollback through a separate empty home/Vault. Post-upgrade Memos are absent from that older backup and must be separately preserved before rollback. User-requested backup contains free text; path redaction cannot remove secrets embedded in a Memo body, and Git history can retain earlier content.
+
+### Required Source of Truth edits and roadmap impact
+
+Add the normative Memo contract, MEM requirement group, M7 gate, AJ-20 through AJ-23, architecture/operations/security links, traceability, and the execution dossier. Keep its explicit authority position aligned in docs/README.md, governance, and AGENTS.md. Scope legacy snapshot lists and manifest-only-count statements to format 1, and bind the four integration seams and their regression checks to the existing TASK-087/TASK-088/TASK-089/TASK-091/TASK-092 owners rather than inventing new work IDs. Extend the SOT checker's explicit M7 vocabulary and behavioral fixtures as documentation-enabling infrastructure, not Memo product implementation. EPIC-013 retains its EPIC-012 dependency and contains TASK-087 through TASK-094. Preserve EPIC-012's recorded M6 acceptance and align only the roadmap's next-eligible pointer with that satisfied prerequisite; no implementation Task is started by this correction. AJ-21-B belongs to TASK-092, AJ-21-S to TASK-093, and full-journey verification to TASK-094, with no backward completion dependency. No prior accepted ADR, release result, user data, or completed work is rewritten. Every implementation Task remains controlled by the canonical roadmap.
+
+### Consequences
+
+Memo is an intentional scope extension of Sorage, but not a project manager. All current work remains in the Sorage repository and uses the existing process, database, and trust model. Release acceptance includes real CLI/API/browser restart, concurrency, migration, and restore evidence. The temporary dossier must be removed only after accepted Epic closeout promotes remaining durable guidance and repairs its inbound links.

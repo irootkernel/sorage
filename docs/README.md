@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.7.0`
+- **Source of Truth version:** `0.8.0`
 
 ## Role ownership
 
@@ -25,6 +25,10 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 
 [governance/README.md](governance/README.md) defines SOT change control and Task completion. [product/README.md](product/README.md) provides non-normative product context. The changelog is a public release-notes document. It is not a Source of Truth role and does not record roadmap status.
 
+## Project Memo design entrypoints
+
+The M7 [Project Memo contract](specs/project-memos.md) defines the independent reminder domain. Its required outcomes are [MEM-001 to MEM-024](specs/required-specification.md#18-project-memos), its material decision is [ADR-0027](architecture-decision-records/README.md#adr-0027-project-memos-as-a-separate-domain-in-m7), and its ordered execution plan is [EPIC-013](roadmap/README.md#epic-013-project-memos). These documents specify required behavior; the roadmap alone determines implementation readiness. M7 and this Source of Truth version do not allocate a product release or complete any existing work.
+
 ## Source of Truth precedence
 
 When documents conflict, apply this order:
@@ -34,13 +38,16 @@ When documents conflict, apply this order:
 3. [architecture/README.md](architecture/README.md)
 4. [specs/interfaces-and-operations.md](specs/interfaces-and-operations.md)
 5. [specs/security-reliability.md](specs/security-reliability.md)
-6. [specs/testing-and-acceptance.md](specs/testing-and-acceptance.md)
-7. [specs/traceability.md](specs/traceability.md)
-8. [roadmap/README.md](roadmap/README.md)
-9. [implementation-tips/README.md](implementation-tips/README.md)
-10. Examples and schemas under [specs/examples/](specs/examples/) and [specs/schemas/](specs/schemas/)
+6. [specs/project-memos.md](specs/project-memos.md), for the detailed Memo domain and its explicit M7 extensions
+7. [specs/testing-and-acceptance.md](specs/testing-and-acceptance.md)
+8. [specs/traceability.md](specs/traceability.md)
+9. [roadmap/README.md](roadmap/README.md)
+10. [implementation-tips/README.md](implementation-tips/README.md)
+11. Examples and schemas under [specs/examples/](specs/examples/) and [specs/schemas/](specs/schemas/)
 
 The product charter and future-work catalog provide context but cannot settle a conflict. An implementation cannot silently override a higher-authority document.
+
+The Memo contract owns its detailed lifecycle, CLI/HTTP data, Web pending-attempt gate, and format-2 Memo shard/digest rules. Higher-ranked documents retain common authentication, security, envelopes, and transaction safety and explicitly distinguish Memo extensions from legacy Handoff and format-1 behavior. A Memo-specific document does not implicitly weaken a shared rule. Keep this order aligned with governance and root agent guidance.
 
 ## Roadmap identity and dossier lifecycle
 

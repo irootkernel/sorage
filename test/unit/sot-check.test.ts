@@ -79,6 +79,47 @@ describe("sot-check", () => {
     expect(result.status).toBe(0);
   });
 
+  it("accepts M7 requirements, Tasks, and their matching reverse index", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "roadmap/README.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M7 |"));
+        }
+      }),
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects an M6 requirement covered only by M7 Tasks", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M6 |"));
+        }
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(roadmap, readTheFile(roadmap).replaceAll("| M1 |", "| M7 |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement GEN-001 (milestone M6) is cited only by later-milestone Tasks");
+  });
+
+  it("rejects an unadopted milestone beyond M7", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(
+          path,
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M8 |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('invalid milestone "M8"');
+  });
+
   it("fails on hard-wrapped prose with the offending line", () => {
     const result = runCheck(
       docFixture((root) => {
@@ -184,7 +225,7 @@ describe("sot-check", () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, or M6');
+    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, or M7');
   });
 
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {
