@@ -129,6 +129,8 @@ sorage memo done <memo-id> --expected-row-version <observed-row-version> --json
 
 An omitted body is empty. `--body` and `--body-file` are mutually exclusive; files must be regular UTF-8 text of at most 65,536 bytes. Updates and lifecycle changes require the observed version. For a mutation whose outcome is unknown, retain its original UUID idempotency key, inputs, and version, then repeat it with `--replay-only`. A missing or expired receipt returns `MEMO_REPLAY_UNAVAILABLE` (exit 75), without executing; inspect current state before deciding on new work. See the [Memo contract](docs/specs/project-memos.md) for lifecycle and backup behavior.
 
+In source builds, `sorage web` also provides a separate Memos view with Project selection, search, editing, and explicit Done, Dismiss, and Reopen actions. An uncertain request pauses new Memo writes in that tab. Inspect its original result with replay-only recovery, or explicitly abandon further recovery while retaining an outcome-unknown notice. Abandonment neither cancels server work nor repeats it. Pending bodies and up to 32 body-free notices are held temporarily in the tab's session storage; they may be lost when the tab closes or browser data is removed. Stored Memos remain in the local database.
+
 ## Web UI and diagnostics
 
 ```sh

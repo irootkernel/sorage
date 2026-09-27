@@ -251,6 +251,10 @@ The Memo command group is composed in `apps/cli/src/memo-commands.ts` through th
 
 ## 13. Web
 
+Project Memo screens are composed into the existing daemon-served `web-app.ts` asset through `web-memos.ts`; there is no second build pipeline or `apps/web` migration. They reuse the API helper and safe Markdown renderer. The tab's versioned `sorage-memo-recovery-v1` session-storage value contains one active original request and at most 32 passive abandoned notices. A verified replacement write precedes dispatch, settlement, and abandonment; failed or malformed storage blocks writes. Recovery uses the original material in replay-only mode, and callbacks check active key and Installation before changing state. Notices omit bodies and retry payloads and are removed only explicitly. Neither a same-Installation restore nor browser elapsed time establishes receipt continuity.
+
+AJ-21-B drives the compiled daemon's actual assets with Chromium, including native CLI conflicts, exact CRLF preservation, browser composition events, slow/lost/malformed responses, local-storage failures, same-tab authentication after daemon restart, real restore with and without the original Memo, receipt expiry, explicit abandonment, notice capacity, and late-response isolation. Browser input automation exercises Korean text and composition guards; it is not a physical OS input-method qualification. Session storage can survive a same-tab reload but is not durable Memo storage and may disappear on tab closure, browser data removal, or browser restart. The separate AJ-21-S skill walkthrough belongs to its own delivery owner.
+
 - Shared protocol DTOs, never database types.
 - No cookies anywhere: the SPA reads the one-time secret from the URL fragment, exchanges it at `POST /api/v1/session`, keeps the session token in `sessionStorage`, and sends it in `Authorization: Bearer` (SEC-019).
 - Honor the daemon's Content Security Policy: no inline event handlers, no remote origins, and no `eval`.

@@ -7,6 +7,8 @@
  * TASK-079 restyles the same screens over a light-and-dark token system without
  * changing any endpoint, DTO, or query parameter the shell talks to.
  */
+import { WEB_MEMOS_JS } from "./web-memos";
+
 export const WEB_INDEX_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -21,6 +23,7 @@ export const WEB_INDEX_HTML = `<!doctype html>
 <nav>
 <a href="#/dashboard" data-nav>Dashboard</a>
 <a href="#/projects" data-nav>Projects</a>
+<a href="#/memos" data-nav>Memos</a>
 <a href="#/compose" data-nav>Compose</a>
 <a href="#/inbox" data-nav>Inbox</a>
 <a href="#/outbox" data-nav>Outbox</a>
@@ -31,6 +34,7 @@ export const WEB_INDEX_HTML = `<!doctype html>
 </nav>
 <p id="session-note" role="status">This is the Sorage control plane. Run <code>sorage web</code> to open it with a one-time session secret.</p>
 </header>
+<aside id="memo-recovery" aria-label="Memo request recovery"></aside>
 <main id="view"></main>
 <script src="/assets/app.js"></script>
 </body>
@@ -184,6 +188,12 @@ button.danger:hover { background: var(--danger-surface); }
 .danger-zone { border: 1px solid var(--danger-border); background: var(--danger-surface); border-radius: var(--radius-sm); padding: 0.75rem 0.9rem; margin-top: 0.75rem; }
 .danger-zone h4 { color: var(--danger); }
 .field { margin: 0 0 0.75rem; }
+#memo-recovery:empty { display: none; }
+#memo-recovery { margin: 1rem auto; padding: 1rem; max-width: 1100px; border: 1px solid var(--border); border-radius: 0.6rem; overflow-wrap: anywhere; }
+#memo-recovery textarea, form[aria-label$="Memo"] textarea, form[aria-label$="Memo"] input { width: 100%; max-width: 100%; box-sizing: border-box; }
+form[aria-label$="Memo"] label { display: block; }
+form[aria-label$="Memo"] textarea, form[aria-label$="Memo"] input { display: block; margin-top: 0.35rem; }
+.memo-row { overflow-wrap: anywhere; }
 `;
 
 export const WEB_APP_JS = `(function () {
@@ -288,6 +298,8 @@ export const WEB_APP_JS = `(function () {
     });
     return container;
   }
+
+  ${WEB_MEMOS_JS}
 
   // -- Views -------------------------------------------------------------------
   function dashboard() {
@@ -691,6 +703,7 @@ export const WEB_APP_JS = `(function () {
               .then(function () { projects(); });
           });
           var rowActions = el("div", { class: "actions-row" });
+          rowActions.appendChild(el("a", { href: "#/memos?projectId=" + project.id, text: "Memos" }));
           rowActions.appendChild(renameButton);
           rowActions.appendChild(action("Bind", "/api/v1/projects/" + project.slug + "/bindings", function () {
             return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dir: bindDir.value, asUser: true }) };
@@ -992,6 +1005,9 @@ export const WEB_APP_JS = `(function () {
   }
 
   function route() {
+    memoRenderTicket += 1;
+    memoVisible = null;
+    memoRenderRecovery();
     if (store.token === null) {
       view().replaceChildren(el("p", { text: "Run sorage web to open this page with a one-time session secret." }));
       return;
@@ -1001,6 +1017,8 @@ export const WEB_APP_JS = `(function () {
     var path = hash.split("?")[0];
     if (path === "/" || path === "/dashboard") dashboard();
     else if (path === "/projects") projects();
+    else if (path === "/memos") memoList();
+    else if (path.indexOf("/memo/") === 0) memoDetail(path.slice("/memo/".length));
     else if (path === "/compose") compose();
     else if (path === "/inbox") listing("inbox");
     else if (path === "/outbox") listing("outbox");
@@ -1018,8 +1036,11 @@ export const WEB_APP_JS = `(function () {
     });
   }
 
-  var fragment = location.hash.match(/[#&]s=([^&]+)/);
-  if (fragment !== null) {
+  function enterSessionOrRoute() {
+    var fragment = location.hash.match(/[#&]s=([^&]+)/);
+    if (fragment === null) { route(); return; }
+    // A fresh fragment can reauthenticate this same tab after a daemon restart
+    // without throwing away its Memo recovery record or unsaved drafts.
     history.replaceState(null, "", location.pathname);
     fetch("/api/v1/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ secret: fragment[1] }) })
       .then(function (response) { return response.ok ? response.json() : null; })
@@ -1029,10 +1050,9 @@ export const WEB_APP_JS = `(function () {
           try { sessionStorage.setItem("sorage-session", store.token); } catch (error) { /* optional */ }
         }
         route();
-      });
-  } else {
-    route();
+      }).catch(function () { note("Disconnected: session exchange failed. Run sorage web again."); });
   }
-  window.addEventListener("hashchange", route);
+  enterSessionOrRoute();
+  window.addEventListener("hashchange", enterSessionOrRoute);
 })();
 `;
