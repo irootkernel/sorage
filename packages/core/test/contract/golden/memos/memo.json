@@ -1,0 +1,20 @@
+{
+  "body": "Line one\r\n한글 é\n",
+  "closedAt": null,
+  "closedBy": null,
+  "createdAt": "2026-09-27T00:00:00.000Z",
+  "createdBy": {
+    "id": null,
+    "kind": "user"
+  },
+  "id": "ab000000-0000-4000-8000-000000000001",
+  "projectId": "cd000000-0000-4000-8000-000000000001",
+  "rowVersion": 1,
+  "state": "open",
+  "title": "Review 😀",
+  "updatedAt": "2026-09-27T00:00:00.000Z",
+  "updatedBy": {
+    "id": null,
+    "kind": "user"
+  }
+}

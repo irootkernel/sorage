@@ -10,7 +10,25 @@ import { appError, err, ok, type Result } from "./errors";
  * while the errors say PROJECT_ARCHIVED.
  */
 
-export type ActorKind = "registered_project" | "unregistered_workspace" | "user" | "system";
+export const ACTOR_KINDS = ["registered_project", "unregistered_workspace", "user", "system"] as const;
+export type ActorKind = (typeof ACTOR_KINDS)[number];
+
+export function isActorKind(value: string): value is ActorKind {
+  return (ACTOR_KINDS as readonly string[]).includes(value);
+}
+
+export const MEMO_EVENT_TYPES = [
+  "MEMO_CREATED",
+  "MEMO_UPDATED",
+  "MEMO_MARKED_DONE",
+  "MEMO_DISMISSED",
+  "MEMO_REOPENED",
+] as const;
+export type MemoEventType = (typeof MEMO_EVENT_TYPES)[number];
+
+export function isMemoEventType(value: string): value is MemoEventType {
+  return (MEMO_EVENT_TYPES as readonly string[]).includes(value);
+}
 
 /**
  * The actor recorded on an event: provenance, not authorization. `id` is the Project id
@@ -68,6 +86,7 @@ export const EVENT_TYPES = [
   "VAULT_MOVED",
   "VAULT_ADOPTED",
   "RESTORE_COMPLETED",
+  ...MEMO_EVENT_TYPES,
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

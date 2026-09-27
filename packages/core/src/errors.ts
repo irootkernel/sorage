@@ -54,6 +54,11 @@ export const ERROR_CODES = [
   "GIT_BACKUP_CONFLICT",
   "GIT_AUTH_REQUIRED",
   "RESTORE_TARGET_NOT_EMPTY",
+  "MEMO_NOT_FOUND",
+  "MEMO_INVALID_INPUT",
+  "MEMO_TOO_LARGE",
+  "MEMO_NOT_OPEN",
+  "MEMO_REPLAY_UNAVAILABLE",
   "INTERNAL_ERROR",
 ] as const;
 
@@ -128,6 +133,11 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
   GIT_BACKUP_CONFLICT: "Resolve the repository state manually",
   GIT_AUTH_REQUIRED: "Configure the credential helper or SSH key, then retry",
   RESTORE_TARGET_NOT_EMPTY: "Restore into a fresh installation",
+  MEMO_NOT_FOUND: "Check the Memo UUID and optional Project assertion",
+  MEMO_INVALID_INPUT: "Check Memo fields, Unicode, scope, and expected Row Version",
+  MEMO_TOO_LARGE: "Reduce the Memo body or encoded request size",
+  MEMO_NOT_OPEN: "Reopen the Memo explicitly before editing or changing its closing decision",
+  MEMO_REPLAY_UNAVAILABLE: "The original outcome is unknown; do not automatically execute or replace the key",
   INTERNAL_ERROR: "Inspect meta.requestId in ~/.sorage/logs/sorage.log",
 };
 
@@ -182,10 +192,20 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   GIT_BACKUP_CONFLICT: 409,
   GIT_AUTH_REQUIRED: 409,
   RESTORE_TARGET_NOT_EMPTY: 409,
+  MEMO_NOT_FOUND: 404,
+  MEMO_INVALID_INPUT: 422,
+  MEMO_TOO_LARGE: 413,
+  MEMO_NOT_OPEN: 409,
+  MEMO_REPLAY_UNAVAILABLE: 409,
   INTERNAL_ERROR: 500,
 };
 
 const EXIT_CODE: Record<ErrorCode, number> = {
+  MEMO_NOT_FOUND: 66,
+  MEMO_INVALID_INPUT: 64,
+  MEMO_TOO_LARGE: 65,
+  MEMO_NOT_OPEN: 65,
+  MEMO_REPLAY_UNAVAILABLE: 75,
   INTERNAL_ERROR: 1,
   AMBIGUOUS_PROJECT: 64,
   VAULT_CONTAINMENT: 64,

@@ -1200,6 +1200,126 @@
     "human": "RESTORE_TARGET_NOT_EMPTY: rendering probe\nRecovery: Restore into a fresh installation\n"
   },
   {
+    "code": "MEMO_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Check the Memo UUID and optional Project assertion"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Memo UUID and optional Project assertion"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "MEMO_NOT_FOUND: rendering probe\nRecovery: Check the Memo UUID and optional Project assertion\n"
+  },
+  {
+    "code": "MEMO_INVALID_INPUT",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Check Memo fields, Unicode, scope, and expected Row Version"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_INVALID_INPUT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check Memo fields, Unicode, scope, and expected Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "MEMO_INVALID_INPUT: rendering probe\nRecovery: Check Memo fields, Unicode, scope, and expected Row Version\n"
+  },
+  {
+    "code": "MEMO_TOO_LARGE",
+    "exitCode": 65,
+    "httpStatus": 413,
+    "recovery": {
+      "suggestedCommand": "Reduce the Memo body or encoded request size"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_TOO_LARGE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reduce the Memo body or encoded request size"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "MEMO_TOO_LARGE: rendering probe\nRecovery: Reduce the Memo body or encoded request size\n"
+  },
+  {
+    "code": "MEMO_NOT_OPEN",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Reopen the Memo explicitly before editing or changing its closing decision"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_NOT_OPEN",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reopen the Memo explicitly before editing or changing its closing decision"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "MEMO_NOT_OPEN: rendering probe\nRecovery: Reopen the Memo explicitly before editing or changing its closing decision\n"
+  },
+  {
+    "code": "MEMO_REPLAY_UNAVAILABLE",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "The original outcome is unknown; do not automatically execute or replace the key"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "MEMO_REPLAY_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "The original outcome is unknown; do not automatically execute or replace the key"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "MEMO_REPLAY_UNAVAILABLE: rendering probe\nRecovery: The original outcome is unknown; do not automatically execute or replace the key\n"
+  },
+  {
     "code": "INTERNAL_ERROR",
     "exitCode": 1,
     "httpStatus": 500,

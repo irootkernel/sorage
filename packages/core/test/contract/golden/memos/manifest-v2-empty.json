@@ -1,0 +1,11 @@
+{
+  "counts": {
+    "artifacts": 0,
+    "events": 0,
+    "handoffs": 0,
+    "memos": 0,
+    "projects": 0
+  },
+  "formatVersion": 2,
+  "memoDigests": {}
+}

@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "bodyPreview": "Line one\r\n한글 é\n",
+      "bodyPreviewTruncated": false,
+      "closedAt": null,
+      "createdAt": "2026-09-27T00:00:00.000Z",
+      "id": "ab000000-0000-4000-8000-000000000001",
+      "projectDisplayName": "Sorage",
+      "projectId": "cd000000-0000-4000-8000-000000000001",
+      "projectSlug": "sorage",
+      "projectStatus": "active",
+      "rowVersion": 1,
+      "state": "open",
+      "title": "Review 😀",
+      "updatedAt": "2026-09-27T00:00:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}

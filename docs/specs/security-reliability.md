@@ -301,6 +301,11 @@ The table below is the normative event catalog for Sorage; other documents cite 
 | `VAULT_ADOPTED` | `user` | M3 |
 | `BACKUP_RUN` | `registered_project`, `unregistered_workspace`, `user`, `system` | M3 |
 | `RESTORE_COMPLETED` | `user` | M3 |
+| `MEMO_CREATED` | `user` | M7 |
+| `MEMO_UPDATED` | `user` | M7 |
+| `MEMO_MARKED_DONE` | `user` | M7 |
+| `MEMO_DISMISSED` | `user` | M7 |
+| `MEMO_REOPENED` | `user` | M7 |
 | `TOKEN_ROTATED` | `user` | M2 |
 
 `REVIEW_NOTE_RESOLVED` is appended in the same transaction as `HANDOFF_REVISED` or `HANDOFF_NO_CHANGE_RESOLVED` whenever that sender operation removed a Review Note; `REVIEW_NOTE_WITHDRAWN` means the recipient withdrew the current Note, and `REVIEW_NOTE_REMOVED` means the User removed it administratively.

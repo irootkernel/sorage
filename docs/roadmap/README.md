@@ -23,12 +23,12 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-013`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** `TASK-087`
+- **Next eligible Task:** `TASK-088`
 
-EPIC-012 has completed M6 acceptance, so the EPIC-013 prerequisite is satisfied. TASK-087 is eligible to start under the normal execution authorization; neither it nor EPIC-013 has started. M7 registration and this pointer correction allocate no product version, publication, or implementation completion.
+EPIC-012 has completed M6 acceptance, so the EPIC-013 prerequisite is satisfied. TASK-087 has completed the pure Memo contracts and their acceptance checks; TASK-088 is eligible to start. This work allocates no product version or publication.
 
 ## 3. Identifier policy
 
@@ -87,7 +87,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-010` | CLI Handoff detail reads for agent sessions | M4 | Completed | `TASK-080` to `TASK-082` |
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
 | `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
-| `EPIC-013` | Project Memos | M7 | Planned | `TASK-087` to `TASK-094` |
+| `EPIC-013` | Project Memos | M7 | In Progress | `TASK-087` to `TASK-094` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -325,7 +325,7 @@ The `TASK-086` CLI JSON snapshot diff is classified as breaking for clients that
 
 ## EPIC-013: Project Memos
 
-- **Status:** Planned
+- **Status:** In Progress
 - **Milestone:** M7
 - **Objective:** Store explicit project-scoped reminders separately from directional Handoffs, with open/done/dismissed lifecycle, safe local CLI/API/Web use, restart durability, and complete backup/restore support.
 - **Detailed SOT:** [Project Memo execution dossier](../todo/project-memos.md)
@@ -336,7 +336,7 @@ The `TASK-086` CLI JSON snapshot diff is classified as breaking for clients that
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
-| `TASK-087` | Planned | M7 | Contract: implement independent Memo values, Unicode bounds, lifecycle validation, checked DTOs including execute/replay-only mode and unavailable-receipt errors, event catalog additions, and frozen format-1/format-2 byte/hash/path fixtures, without exposing runnable adapters. | Focused core and contract tests plus `make test` and `git diff --check` exit 0; pure input/transition and canonical shard/digest fixtures are covered; reviewed snapshot changes preserve old Handoff outputs; public Memo commands remain unadvertised. | `EPIC-012` | MEM-001, MEM-004, MEM-005, MEM-007, MEM-015, MEM-022 | Not required |
+| `TASK-087` | Completed | M7 | Contract: implement independent Memo values, Unicode bounds, lifecycle validation, checked DTOs including execute/replay-only mode and unavailable-receipt errors, event catalog additions, and frozen format-1/format-2 byte/hash/path fixtures, without exposing runnable adapters. | Focused core and contract tests plus `make test` and `git diff --check` exit 0; pure input/transition and canonical shard/digest fixtures are covered; reviewed snapshot changes preserve old Handoff outputs; public Memo commands remain unadvertised. | `EPIC-012` | MEM-001, MEM-004, MEM-005, MEM-007, MEM-015, MEM-022 | Not required |
 | `TASK-088` | Planned | M7 | Contract: add real Memo persistence and event association through an append-only migration together with format-2 backup/verify/dry-run/restore, exact published-byte SHA-256 and snapshots-relative inventory validation, legacy format-1 reading, and rollback guidance before any public Memo mutation. | Real SQLite/backup integration tests plus `make test` exit 0; legacy data and receipts survive in-place upgrade; restore preserves Installation/Memo identity but restores no operational receipts; exact Memo state and zero-Memo format 2 round-trip; wrong hashes, noncanonical bytes, duplicate/missing/extra records, escaping/symlinked paths, and orphan references fail before import; restart and rollback preserve committed data. | `TASK-087` | MEM-009, MEM-010, MEM-016, MEM-017, MEM-018, MEM-019, MEM-023 | Not required |
 | `TASK-089` | Planned | M7 | Standard: implement shared Memo reads/mutations, Project/User separation, transactional archive checks, required compare-and-set, the sole normalized application/DB receipt authority with execute and non-executing replay-only modes, literal search, scoped keyset pagination, and no Handoff side effects. | Real application/adapter race and failure tests plus `make test` exit 0; concurrent writes are fenced; equivalent inputs replay historical memo/changed with replayed=true and no expiry extension; restored/absent/expired receipts in replay-only return MEMO_REPLAY_UNAVAILABLE without writes, including exact expiry and late-original races; no-op/read emit no events; moved/unbound Projects preserve identity. | `TASK-088` | MEM-002, MEM-003, MEM-005, MEM-006, MEM-007, MEM-008, MEM-009, MEM-010, MEM-011, MEM-015, MEM-016, MEM-021, MEM-022 | Not required |
 | `TASK-090` | Planned | M7 | Contract: expose memo add/list/show/update/done/dismiss/reopen through CLI with JSON, help/completion, bounded body-file import, explicit scope, expectations, --replay-only with a required original key, and stable errors. | AJ-20 and CLI unit/int/contract tests plus `make test` exit 0 against the compiled binary in a temporary home; restart retrieval works without daemon/AI; replay-only returns retained results or unavailable/75 without fallback after restore/expiry; malformed text/file/scope/mode is rejected; existing Handoff goldens stay unchanged. | `TASK-089` | MEM-002, MEM-004, MEM-006, MEM-007, MEM-011, MEM-012, MEM-016, MEM-022 | Not required |
@@ -345,7 +345,7 @@ The `TASK-086` CLI JSON snapshot diff is classified as breaking for clients that
 | `TASK-093` | Planned | M7 | Standard: update only the shipped use-sorage skill and relevant public/operations documentation for explicit Memo requests, read-versus-execute boundaries, User provenance, upgrade/rollback, local persistence, and retention disclosures. | `bun run check:sot` and `make test` exit 0; AJ-21-S independently observed skill walkthrough covers read-only, record-only, work-plus-close, failed work, changed Memo, untrusted text, and replay-only outcome-unknown recovery without re-execution; document explicit browser abandonment; unperformed walkthroughs are not passed. | `TASK-092` | MEM-003, MEM-020, MEM-021, MEM-023 | Not required |
 | `TASK-094` | Planned | M7 | Standard: qualify the complete Memo vertical slice, Handoff regressions, normalized cross-transport replay-only recovery after restart/restore/expiry, explicit abandonment and late-response isolation, both snapshot generations and exact-byte/path restore checks; combine owning-Task evidence and prepare canonical outcomes for separate Epic acceptance. | AJ-20 to AJ-23, including both AJ-21-B and AJ-21-S from their completed owners, and applicable AJ-01 to AJ-19 plus `make test` and `git diff --check` exit 0; separate review accepts the exact candidate; missing manual checks remain explicit; neither this Task nor publication is assumed complete to run the checks. | `TASK-093` | MEM-001 to MEM-024 | Not required |
 
-The source-design registration adds the M7 documentation vocabulary and checker coverage only. Every implementation Task remains Planned. Database and snapshot format changes must be reviewed under the Contract gate; product SemVer, installation, and publication are not authorized by this plan. EPIC-012's recorded closeout is preserved, not reopened; only the next eligible Task pointer is aligned with the satisfied prerequisite.
+The source-design registration added the M7 documentation vocabulary and checker coverage only; current implementation status is recorded in the Task rows and active pointer. Database and snapshot format changes must be reviewed under the Contract gate; product SemVer, installation, and publication are not authorized by this plan. EPIC-012's recorded closeout is preserved, not reopened; the next eligible Task pointer follows the satisfied prerequisites.
 
 ## 8. Epic completion and change rules
 

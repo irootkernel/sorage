@@ -1,0 +1,13 @@
+{
+  "counts": {
+    "artifacts": 0,
+    "events": 1,
+    "handoffs": 0,
+    "memos": 1,
+    "projects": 1
+  },
+  "formatVersion": 2,
+  "memoDigests": {
+    "memos/ab/ab000000-0000-4000-8000-000000000001.json": "544d0b376ff57a2b478e52d42c92e62c66707d385f222167b1ad89f27efb4473"
+  }
+}

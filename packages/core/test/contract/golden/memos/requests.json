@@ -1,0 +1,14 @@
+{
+  "close": {
+    "expectedRowVersion": 1
+  },
+  "create": {
+    "body": "Line one\r\n한글 é\n",
+    "projectId": "cd000000-0000-4000-8000-000000000001",
+    "title": "Review 😀"
+  },
+  "update": {
+    "body": "",
+    "expectedRowVersion": 1
+  }
+}

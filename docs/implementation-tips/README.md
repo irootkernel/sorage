@@ -65,6 +65,12 @@ Avoid:
 - SQL in HTTP handlers
 - Filesystem operations in domain functions
 
+Memo values and pure lifecycle calculations live in `packages/core/src/memos.ts`; checked request, detail, receipt, and list contracts live in `memo-protocol.ts`. Parse and normalize input before receipt lookup; pass execution mode separately from business request identity. After an execute-mode receipt miss, use `changeMemo` against the transaction's current row and retain its expectation-before-no-op ordering. Assign an event ID through the existing ID port only when the returned transition has an event. Project archival checks and compare-and-set remain transactional application/adapter responsibilities; pure transitions cannot establish persistence or external work completion.
+
+`memo-snapshot.ts` defines migration-facing format-2 validation independently of the active format-1 writer. Its shard parser checks the exact bytes and canonical UUID-derived path; a filesystem adapter must first perform bounded regular-file reads, reject symlinks, and reconcile the whole inventory and references before import. The Memo fixtures under `packages/core/test/contract/golden/memos/` were serialized separately with Python JSON sorting and UTF-8 encoding; their SHA-256 was calculated with Python `hashlib`, independently of the production serializer. Existing format-1 bytes and Handoff error renderings remain compatibility fixtures.
+
+The Memo Core contract additions are non-breaking for existing CLI/HTTP clients: no Memo route or command is advertised by this pure layer, and the existing error entries remain byte-for-byte unchanged. Format 2 is a separately versioned, incompatible snapshot generation for an old reader; defining its schema alone does not change the operational database, activate the writer, or require a database migration. Storage, format-2 activation, legacy import, and rollback behavior must ship together under the [Memo migration contract](../specs/project-memos.md#11-backup-restore-upgrade-and-rollback).
+
 ## 4. Error handling
 
 Use one internal error model:
