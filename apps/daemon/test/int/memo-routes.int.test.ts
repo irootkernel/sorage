@@ -15,6 +15,28 @@ async function fixture(clock?: { now(): Date }, cli?: ReturnType<typeof memoCliF
 }
 
 describe("authenticated Memo HTTP application", () => {
+  it("accepts paired surrogate escapes and replays their normalized literal text", async () => {
+    const f = await fixture();
+    const key = randomUUID();
+    const first = await f.call("/api/v1/memos", {
+      method: "POST",
+      headers: { "idempotency-key": key },
+      raw: Buffer.from(
+        String.raw`{"projectId":"${f.projectId}","title":"\uD83D\uDE00 reminder","body":"Line \uD83D\uDE00"}`,
+      ),
+    });
+    expect(first.status).toBe(200);
+    expect(value(first).memo).toMatchObject({ title: "😀 reminder", body: "Line 😀" });
+    const before = f.inventory();
+    const replay = await f.call("/api/v1/memos", {
+      method: "POST",
+      headers: { "idempotency-key": key, "idempotency-mode": "replay-only" },
+      body: { projectId: f.projectId, title: "😀 reminder", body: "Line 😀" },
+    });
+    expect(replay.status).toBe(200);
+    expect(value(replay)).toEqual({ ...value(first), replayed: true });
+    expect(f.inventory()).toEqual(before);
+  });
   it("shares normalized historical receipts across JSON spelling and native CLI transports", async () => {
     const f = await fixture();
     const key = randomUUID();
