@@ -121,13 +121,15 @@ Run `sorage help` or `sorage help <command>` for the complete command surface.
 The `memo` CLI manages durable Project reminders. A Memo is stored text; recording or reading it does not execute its instructions or create a Handoff.
 
 ```sh
-sorage memo add --project recipient --title "Check rollback" --body-file ./notes.md --json
+memo_add_key="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+sorage memo add --project recipient --title "Check rollback" --body-file ./notes.md --idempotency-key "$memo_add_key" --json
 sorage memo list --project recipient --json
 sorage memo show <memo-id> --json
-sorage memo done <memo-id> --expected-row-version <observed-row-version> --json
+memo_done_key="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+sorage memo done <memo-id> --expected-row-version <observed-row-version> --idempotency-key "$memo_done_key" --json
 ```
 
-An omitted body is empty. `--body` and `--body-file` are mutually exclusive; files must be regular UTF-8 text of at most 65,536 bytes. Updates and lifecycle changes require the observed version. For a mutation whose outcome is unknown, retain its original UUID idempotency key, inputs, and version, then repeat it with `--replay-only`. A missing or expired receipt returns `MEMO_REPLAY_UNAVAILABLE` (exit 75), without executing; inspect current state before deciding on new work. See the [Memo contract](docs/specs/project-memos.md) for lifecycle and backup behavior.
+An omitted body is empty. `--body` and `--body-file` are mutually exclusive; files must be regular UTF-8 text of at most 65,536 bytes. Updates and lifecycle changes require the observed version. Generate a separate UUID idempotency key for each mutation and retain it with the original inputs and version before sending a request you may need to recover. If the outcome is unknown, repeat that exact request with its original key and `--replay-only`. A missing or expired receipt returns `MEMO_REPLAY_UNAVAILABLE` (exit 75), without executing; inspect current state before deciding on new work. See the [Memo contract](docs/specs/project-memos.md) for lifecycle and backup behavior.
 
 `sorage web` also provides a separate Memos view with Project selection, search, editing, and explicit Done, Dismiss, and Reopen actions. An uncertain request pauses new Memo writes in that tab. Inspect its original result with replay-only recovery, or explicitly abandon further recovery while retaining an outcome-unknown notice. Abandonment neither cancels server work nor repeats it. Pending bodies and up to 32 body-free notices are held temporarily in the tab's session storage; they may be lost when the tab closes or browser data is removed. Stored Memos remain in the local database.
 
