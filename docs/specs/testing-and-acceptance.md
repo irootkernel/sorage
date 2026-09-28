@@ -337,7 +337,7 @@ Expected: the `core.autocrlf=true` clone leaves every Artifact byte-identical, p
 - **Owner:** `EPIC-009` · **Milestone:** M3
 - **Requirements:** GEN-002, INIT-016, RUN-007, RUN-011, NFR-012, NFR-013
 
-1. On a freshly created Apple Silicon macOS user account, download the `sorage-v0.1.1-darwin-arm64` GitHub Release asset and its checksum, verify the checksum, and install only that binary.
+1. On a freshly created Apple Silicon macOS user account, download the `sorage-v0.1.2-darwin-arm64` GitHub Release asset and its checksum, verify the checksum, and install only that binary.
 2. Run `sorage version` and `sorage init` non-interactively, then `sorage doctor`.
 3. Install the LaunchAgent, log out and back in, confirm the daemon is running and reachable, and confirm its record, health response, and version response report the same product version as `sorage version`.
 4. Run every earlier journey that does not require a developer checkout.

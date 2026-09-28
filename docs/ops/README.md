@@ -15,12 +15,12 @@ Before publication, build and inspect the Apple Silicon macOS candidate from the
 ```sh
 make package
 cd dist
-shasum -a 256 -c sorage-v0.1.1-darwin-arm64.sha256
-codesign --verify --strict sorage-v0.1.1-darwin-arm64
-./sorage-v0.1.1-darwin-arm64 version
+shasum -a 256 -c sorage-v0.1.2-darwin-arm64.sha256
+codesign --verify --strict sorage-v0.1.2-darwin-arm64
+./sorage-v0.1.2-darwin-arm64 version
 ```
 
-The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.1`, target `darwin-arm64`, binary `sorage-v0.1.1-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
+The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.2`, target `darwin-arm64`, binary `sorage-v0.1.2-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
 
 ## Safe diagnosis
 

@@ -1,7 +1,7 @@
 {
   "name": "sorage",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Sorage, a local document-handoff broker for AI coding sessions.",
   "license": "MIT",
   "type": "module",
