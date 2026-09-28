@@ -118,7 +118,11 @@ describe("AJ-16 packaging on a clean account", () => {
     expect(addA.status).toBe(0);
     const document = join(account, "brief.md");
     writeFileSync(document, "# AJ-16 brief\n");
-    const send = installed(["send", "--to", "alpha", "--title", "AJ-16", "--file", document, "--json"], account);
+    // The account root is an ancestor of the registered work-a directory.
+    const send = installed(
+      ["send", "--to", "alpha", "--title", "AJ-16", "--file", document, "--allow-unregistered", "--json"],
+      account,
+    );
     expect(send.status).toBe(0);
     const handoffId = (JSON.parse(send.stdout).data.handoffs as Array<{ handoffId: string }>)[0]?.handoffId as string;
     const inbox = installed(["inbox", "--json", "--as", "alpha"], account);
