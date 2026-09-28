@@ -18,7 +18,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Fixed
 
 - Preserve multipart Web upload bodies that begin with dashes.
-- Keep Handoff sender identity and Project bindings stable when archive or rebind races with a send.
+- Keep Handoff sender identity and Project bindings stable when archive or rebind races with a send, and require an explicit override for ancestor-path sends above registered Projects.
 - Restore the Web Handoff detail Download action for authenticated sessions.
 
 ## v0.1.1 - 2026-09-09

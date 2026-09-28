@@ -265,7 +265,7 @@ function sendStaged(
           path: input.path,
           userHome: input.userHome,
           installationId: ports.projectPorts.installationId,
-          allowUnregistered: input.allowUnregistered || ports.config.allowUnregisteredSenders,
+          allowUnregistered: input.allowUnregistered,
           as: input.as,
         });
   if (!sender.ok) {
@@ -573,7 +573,7 @@ function sendStaged(
           unregisteredSenderPath: {
             directory: sender.value.pathSnapshot,
             gitCommonDirectory: ports.projectPorts.bindings.gitCommonDirectory(sender.value.pathSnapshot),
-            allowUnregistered: input.allowUnregistered || ports.config.allowUnregisteredSenders,
+            allowUnregistered: input.allowUnregistered,
           },
         }
       : {}),

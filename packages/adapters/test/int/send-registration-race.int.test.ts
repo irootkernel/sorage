@@ -28,10 +28,11 @@ describe("send sender registration race", () => {
     { archived: true, nested: false, allow: false, error: "PROJECT_ARCHIVED" },
     { archived: false, nested: true, allow: false, error: "SENDER_IDENTITY_DOWNGRADE" },
     { archived: true, nested: true, allow: false, error: "SENDER_IDENTITY_DOWNGRADE" },
+    { archived: true, nested: true, allow: false, configAllow: true, error: "SENDER_IDENTITY_DOWNGRADE" },
     { archived: false, nested: true, allow: true, error: null },
   ])(
-    "applies registration and downgrade rules to a staged Workspace send (archived=$archived, nested=$nested, allow=$allow)",
-    ({ archived, nested, allow, error }) => {
+    "applies registration and downgrade rules to a staged Workspace send (archived=$archived, nested=$nested, allow=$allow, configAllow=$configAllow)",
+    ({ archived, nested, allow, configAllow, error }) => {
       const root = mkdtempSync(join(tmpdir(), "sorage-send-registration-"));
       roots.push(root);
       const home = join(root, "home");
@@ -48,7 +49,7 @@ describe("send sender registration race", () => {
       const beta = addProject(projects, { name: "Beta", dir: recipient, userHome, actor: USER_ACTOR });
       expect(beta.ok).toBe(true);
       const ports = createNodeSendPorts({ env, userHome });
-      ports.config.allowUnregisteredSenders = false;
+      ports.config.allowUnregisteredSenders = configAllow ?? false;
       const stage = ports.artifactStore.stage.bind(ports.artifactStore);
       let injected = false;
       ports.artifactStore.stage = (input) => {
@@ -84,6 +85,44 @@ describe("send sender registration race", () => {
       db.close();
     },
   );
+
+  it("requires an explicit override when sending above an archived Project with unregistered senders enabled", () => {
+    const root = mkdtempSync(join(tmpdir(), "sorage-send-archived-ancestor-"));
+    roots.push(root);
+    const home = join(root, "home");
+    const senderParent = join(root, "sender-parent");
+    const sender = join(senderParent, "sender");
+    const recipient = join(root, "recipient");
+    const userHome = join(root, "user");
+    for (const directory of [home, sender, recipient, userHome]) mkdirSync(directory, { recursive: true });
+    const env = { SORAGE_HOME: home };
+    expect(initializeInstallation(createNodeInitPorts({ env, userHome }), { vaultPath: join(home, "vault") }).ok).toBe(
+      true,
+    );
+    const projects = createNodeProjectPorts({ env, userHome });
+    expect(addProject(projects, { name: "Sender", dir: sender, userHome, actor: USER_ACTOR }).ok).toBe(true);
+    expect(addProject(projects, { name: "Recipient", dir: recipient, userHome, actor: USER_ACTOR }).ok).toBe(true);
+    expect(archiveProject(projects, { slug: "sender" }).ok).toBe(true);
+    const ports = createNodeSendPorts({ env, userHome });
+    expect(ports.config.allowUnregisteredSenders).toBe(true);
+    const input = {
+      to: ["recipient"],
+      title: "Ancestor send",
+      body: "# Ancestor",
+      allowExternalSource: false,
+      path: senderParent,
+      userHome,
+    };
+    const refused = sendHandoffs(ports, { ...input, allowUnregistered: false });
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(0);
+    const allowed = sendHandoffs(ports, { ...input, allowUnregistered: true });
+    expect(allowed.ok).toBe(true);
+    expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(1);
+    db.close();
+  });
 });
 
 describe("send binding changes during staging", () => {
