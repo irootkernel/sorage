@@ -122,7 +122,7 @@ describe("shared Memo application", () => {
     clock.advance(1000);
     for (const input of [
       { projectId: MEMO_PROJECT, title: request.title, body: readFileSync(firstPath, "utf8") },
-      { title: " " + request.title + " ", body: readFileSync(otherPath, "utf8"), projectId: MEMO_PROJECT },
+      { title: ` ${request.title} `, body: readFileSync(otherPath, "utf8"), projectId: MEMO_PROJECT },
       JSON.parse(JSON.stringify({ body, title: request.title, projectId: MEMO_PROJECT }).replace("한", "\\uD55C")),
     ]) {
       expect(unwrap(addMemo(ports, input, inspect(policy.idempotencyKey as string)))).toEqual({

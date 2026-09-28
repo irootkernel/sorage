@@ -198,7 +198,7 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
       if (corruption === "changed bytes") writeFileSync(file, bytes.toString().replace("Corruption", "Tampered"));
       if (corruption === "missing final LF") writeFileSync(file, bytes.subarray(0, -1));
       if (corruption === "rehash noncanonical JSON") {
-        const changed = JSON.stringify(JSON.parse(bytes.toString())) + "\n";
+        const changed = `${JSON.stringify(JSON.parse(bytes.toString()))}\n`;
         writeFileSync(file, changed);
         manifest.memoDigests[path] = createHash("sha256").update(changed).digest("hex");
       }
@@ -212,7 +212,7 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
         renameSync(file, outside);
         symlinkSync(outside, file);
       }
-      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
       const target = emptyHome();
       const before = rows(target);
       const config = readFileSync(join(target, "config.yaml"));
