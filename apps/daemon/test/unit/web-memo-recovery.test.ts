@@ -118,6 +118,21 @@ describe("served Memo recovery state machine", () => {
     expect(bad.app.locked()).toBe(true);
     expect(bad.app.state().active).not.toBeNull();
   });
+  it("settles a first SERVICE_PAUSED refusal at its catalogued HTTP status", async () => {
+    const f = harness();
+    f.reply(async () => ({
+      status: 423,
+      body: {
+        ok: false,
+        error: { code: "SERVICE_PAUSED", message: "The service is paused" },
+        meta: { requestId: randomUUID() },
+      },
+    }));
+    await f.app.submit();
+    expect(f.calls).toHaveLength(1);
+    expect(f.app.state().active).toBeNull();
+    expect(f.app.locked()).toBe(false);
+  });
   it("never dispatches when the initial record cannot be written or read", async () => {
     for (const failure of ["failWrite", "failRead"] as const) {
       const f = harness();

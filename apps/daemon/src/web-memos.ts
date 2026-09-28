@@ -105,7 +105,7 @@ export const WEB_MEMOS_JS = String.raw`
     return memo.state === ({ done: "done", dismiss: "dismissed", reopen: "open" })[pending.operation];
   }
   function memoFirstRefusal(result) {
-    var statuses = { MEMO_INVALID_INPUT: 422, MEMO_TOO_LARGE: 413, MEMO_NOT_FOUND: 404, MEMO_NOT_OPEN: 409, ROW_VERSION_CONFLICT: 409, PROJECT_ARCHIVED: 409, PROJECT_NOT_FOUND: 404, IDEMPOTENCY_CONFLICT: 409, SERVICE_PAUSED: 503, UNAUTHENTICATED: 401, TOKEN_INVALID: 401 };
+    var statuses = { MEMO_INVALID_INPUT: 422, MEMO_TOO_LARGE: 413, MEMO_NOT_FOUND: 404, MEMO_NOT_OPEN: 409, ROW_VERSION_CONFLICT: 409, PROJECT_ARCHIVED: 409, PROJECT_NOT_FOUND: 404, IDEMPOTENCY_CONFLICT: 409, SERVICE_PAUSED: 423, UNAUTHENTICATED: 401, TOKEN_INVALID: 401 };
     var body = result.body;
     return memoKeys(body, ["ok", "error", "meta"]) && body.ok === false && memoObject(body.error) && typeof body.error.message === "string" && body.meta && memoUuid(body.meta.requestId) && statuses[body.error.code] === result.status;
   }

@@ -15,6 +15,46 @@ async function fixture() {
 }
 
 describe("AJ-21-B: storage and response failure boundaries", () => {
+  it("shows loading and disconnected states without stale Memo data", async () => {
+    const f = await fixture();
+    const memo = f.add("Disconnected Memo", "Stored body");
+    await f.list();
+    await browserExpect(f.page.locator(".memo-row")).toContainText("Disconnected Memo");
+
+    let sawList = false;
+    let releaseList = () => {};
+    await f.page.route(/\/api\/v1\/memos\?/, async (route) => {
+      sawList = true;
+      await new Promise<void>((resolve) => {
+        releaseList = resolve;
+      });
+      await route.abort("failed");
+    });
+    await f.page.reload();
+    await browserExpect.poll(() => sawList).toBe(true);
+    await browserExpect(f.page.locator("main")).toContainText("Loading Memos");
+    releaseList();
+    await browserExpect(f.page.locator("main")).toContainText("Disconnected: Memos could not load");
+    await browserExpect(f.page.locator(".memo-row")).toHaveCount(0);
+    await f.page.unroute(/\/api\/v1\/memos\?/);
+
+    let sawDetail = false;
+    let releaseDetail = () => {};
+    await f.page.route(`**/api/v1/memos/${memo.id}`, async (route) => {
+      sawDetail = true;
+      await new Promise<void>((resolve) => {
+        releaseDetail = resolve;
+      });
+      await route.abort("failed");
+    });
+    await f.page.goto(`${f.origin}/#/memo/${memo.id}`);
+    await browserExpect.poll(() => sawDetail).toBe(true);
+    await browserExpect(f.page.locator("main")).toContainText("Loading Memo");
+    releaseDetail();
+    await browserExpect(f.page.locator("main")).toContainText("Disconnected: Memo could not load");
+    await browserExpect(f.page.getByLabel("Full Memo body", { exact: true })).toHaveCount(0);
+    expect(f.inventory()[0]).toHaveLength(1);
+  });
   it("refuses incomplete retained inputs but permits explicit metadata-only abandonment", async () => {
     const f = await fixture();
     let sends = 0;
