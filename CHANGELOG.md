@@ -8,10 +8,17 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Let the local User create a Handoff from the Web compose form by supplying a Markdown body instead of a file.
 - Add `sorage project rebind` to replace a Project directory binding in one command.
+- Add durable Project Memos through the CLI, authenticated local HTTP API, Web UI, and shipped `use-sorage` skill with explicit actions and replay-only recovery for uncertain writes.
 
 ### Changed
 
 - Let Project archive and unarchive run without `--as-user`, and prevent archived Projects from starting new outgoing Handoffs.
+- Export Memo data in format-2 backups while retaining format-1 restore support; before upgrading, stop old writers and keep a verified format-1 backup because older binaries cannot read the new format.
+
+### Fixed
+
+- Preserve multipart Web upload bodies that begin with dashes.
+- Keep Handoff sender identity and Project bindings stable when archive or rebind races with a send.
 
 ## v0.1.1 - 2026-09-09
 
