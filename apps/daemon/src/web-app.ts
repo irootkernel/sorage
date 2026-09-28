@@ -548,7 +548,33 @@ export const WEB_APP_JS = `(function () {
           });
         });
         var actions = el("div", { class: "actions-row" });
-        actions.appendChild(el("a", { class: "btn", href: "/api/v1/handoffs/" + id + "/artifact/content?asUser=true", text: "Download" }));
+        var downloadStatus = el("span", { class: "muted", text: "" });
+        var download = el("button", { text: "Download" });
+        download.addEventListener("click", function () {
+          download.disabled = true;
+          downloadStatus.textContent = "";
+          fetch("/api/v1/handoffs/" + id + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
+            .then(function (response) {
+              if (!response.ok) {
+                downloadStatus.textContent = "Download failed (HTTP " + response.status + ").";
+                return null;
+              }
+              return response.blob();
+            })
+            .then(function (blob) {
+              if (blob === null) return;
+              var url = URL.createObjectURL(blob);
+              var link = el("a", { href: url, download: artifact.originalName || "artifact" });
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+              setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+            })
+            .catch(function () { downloadStatus.textContent = "Download failed. Try again."; })
+            .finally(function () { download.disabled = false; });
+        });
+        actions.appendChild(download);
+        actions.appendChild(downloadStatus);
         actions.appendChild(reveal);
         actions.appendChild(revealStatus);
         card.appendChild(actions);

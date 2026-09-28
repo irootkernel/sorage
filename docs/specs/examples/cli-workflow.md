@@ -48,14 +48,14 @@ sorage project resolve --path "$HOME/worktrees/dolgorae-feature"
 # dolgorae (git_repository binding, common dir $HOME/projects/dolgorae/.git)
 ```
 
-To point an existing Project at a new directory, move the directory separately, then replace the recorded binding in one command. `project show` supplies the `--from` path if the original directory no longer exists:
+In milestone M6, to point an existing Project at a new directory, move the directory separately, then replace the recorded binding in one command. `project show` supplies the `--from` path if the original directory no longer exists:
 
 ```bash
 sorage project show dolgorae
 sorage project rebind dolgorae --from "$HOME/projects/dolgorae/.git" --to "$HOME/new-projects/dolgorae"
 ```
 
-To stop new Handoffs while keeping existing ones available, archive the Project. Neither Project lifecycle command needs `--as-user`:
+In milestone M6, to stop new Handoffs while keeping existing ones available, archive the Project. Neither Project lifecycle command needs `--as-user`:
 
 ```bash
 sorage project archive dolgorae

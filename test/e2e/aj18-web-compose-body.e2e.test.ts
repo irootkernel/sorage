@@ -1,7 +1,7 @@
-import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
+import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeTempDir, sorage } from "./helpers";
@@ -107,6 +107,20 @@ describe("AJ-18 User creates a Handoff from Web compose body text", () => {
     await page.waitForSelector("dl.meta");
     await page.waitForFunction(() => document.body.textContent?.includes("from the Web form"));
     expect(await page.textContent("main")).toContain("from the Web form");
+
+    const downloaded = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download" }).click();
+    const artifactDownload = await downloaded;
+    expect(artifactDownload.suggestedFilename()).toBe("compose-body-1.md");
+    expect(readFileSync(await artifactDownload.path())).toEqual(
+      Buffer.from("# Compose body\r\n\r\nfrom the Web form.\r\n"),
+    );
+
+    const downloadUrl = `**/api/v1/handoffs/${handoffId}/artifact/content?asUser=true`;
+    await page.route(downloadUrl, (route) => route.fulfill({ status: 401, body: "" }));
+    await page.getByRole("button", { name: "Download" }).click();
+    await page.waitForFunction(() => document.body.textContent?.includes("Download failed (HTTP 401)."));
+    await page.unroute(downloadUrl);
 
     await page.goto(`http://127.0.0.1:${port}/#/dashboard`);
     await page.goto(`http://127.0.0.1:${port}/#/compose`);
