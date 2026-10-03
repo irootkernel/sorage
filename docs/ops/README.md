@@ -22,6 +22,12 @@ codesign --verify --strict sorage-v0.1.2-darwin-arm64
 
 The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.2`, target `darwin-arm64`, binary `sorage-v0.1.2-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
 
+## Replace the withdrawn v0.1.2 binary
+
+The corrected v0.1.2 distribution replaces the original dated 2026-09-29. Both report `sorage v0.1.2`; use the corrected Release's Git revision and signed SHA-256 to distinguish them. Stop active CLI writers and the daemon before replacing the installed executable, keep the Installation and Vault intact, and restart a configured service deliberately with the corrected binary after replacement. This correction requires no configuration, database, or Vault migration.
+
+Download fresh copies of the binary, checksum, and manifest into an empty directory using the [README installation commands](../../README.md#install-v012). Verify the checksum and signature, compare the manifest's revision and signed digest with the corrected GitHub Release, and install with `install -m 0755`. Check the installed executable's SHA-256 against that same digest and confirm its version. A version-only update check cannot detect this replacement. Preserve existing Memo data; installations older than v0.1.2 still follow the separate [Memo upgrade and rollback procedure](#memo-storage-upgrade-and-rollback).
+
 ## Safe diagnosis
 
 Start with read-only checks:

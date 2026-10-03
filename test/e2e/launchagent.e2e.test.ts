@@ -76,6 +76,15 @@ function agentLoaded(label: string): boolean {
   return launchctl(["print", `gui/${uid}/${label}`]).status === 0;
 }
 
+async function agentGone(label: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!agentLoaded(label)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
 function agentPid(label: string): number | null {
   const result = launchctl(["print", `gui/${uid}/${label}`]);
   if (result.status !== 0) return null;
@@ -181,7 +190,8 @@ describe("the LaunchAgent journey", () => {
     const isolatedPlist = plist.replace(`<string>${LABEL}</string>`, `<string>${TEST_LABEL}</string>`);
     expect(isolatedPlist).not.toBe(plist);
     writeFileSync(plistPath, isolatedPlist, "utf8");
-    expect(launchctl(["bootstrap", `gui/${uid}`, plistPath]).status).toBe(0);
+    const initialBootstrap = launchctl(["bootstrap", `gui/${uid}`, plistPath]);
+    expect(initialBootstrap.status, initialBootstrap.stderr).toBe(0);
     expect(agentLoaded(TEST_LABEL)).toBe(true);
     const installationId = (
       readFileSync(`${home}/config.yaml`, "utf8").match(/installationId: "?([^"\n]+)"?/)?.[1] ?? ""
@@ -203,13 +213,17 @@ describe("the LaunchAgent journey", () => {
     // Boot out stands in for logging out; the daemon drains and stops.
     expect(launchctl(["bootout", `gui/${uid}/${TEST_LABEL}`]).status).toBe(0);
     expect(await daemonGone(port, 15_000)).toBe(true);
+    // HTTP shutdown can finish before launchd removes the job from its domain.
+    expect(await agentGone(TEST_LABEL, 15_000)).toBe(true);
 
     // A re-bootstrap stands in for the next login: the daemon starts again.
-    expect(launchctl(["bootstrap", `gui/${uid}`, plistPath]).status).toBe(0);
+    const nextBootstrap = launchctl(["bootstrap", `gui/${uid}`, plistPath]);
+    expect(nextBootstrap.status, nextBootstrap.stderr).toBe(0);
     expect(await daemonReachable(port, installationId, 20_000)).toBe(true);
     expect(agentPid(LABEL)).toBe(canonicalPidBefore);
     expect(launchctl(["bootout", `gui/${uid}/${TEST_LABEL}`]).status).toBe(0);
     expect(await daemonGone(port, 15_000)).toBe(true);
+    expect(await agentGone(TEST_LABEL, 15_000)).toBe(true);
   });
 
   it("uninstall removes the agent and the installation and keeps the Vault", async () => {

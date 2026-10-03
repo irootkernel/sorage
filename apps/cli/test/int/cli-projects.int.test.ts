@@ -496,10 +496,7 @@ describe("doctor binding checks", () => {
     // duplicate spelling resolves and must not warn.
     const second = tempDir();
     expect(runCli(["project", "add", "--name", "Second", "--dir", second], capture().ports)).toBe(0);
-    // A stored uncollapsed alias spelling, exactly what an APFS firmlink leaves
-    // behind: two distinct stored directories at the same depth that stat to
-    // one inode. The spelling derives from the STORED directory (realpath of
-    // the bound dir), whose /private prefix strips back to the /var spelling.
+    // A stored alias must resolve to the same inode under any temporary root.
     const home = process.env.SORAGE_HOME as string;
     const alias = join(home, "state", "sorage.sqlite3");
     const db = new DatabaseSync(alias);
@@ -510,9 +507,10 @@ describe("doctor binding checks", () => {
         )
         .get() as { directory: string }
     ).directory;
+    mkdirSync(join(stored, "alias-prefix"));
     db.prepare(
       "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('alias-1', (SELECT id FROM projects WHERE slug = 'second'), (SELECT installation_id FROM project_bindings LIMIT 1), ?, 'directory', 't', 't')",
-    ).run(stored.startsWith("/private/") ? `/${stored.slice("/private/".length)}` : join(stored, "x", ".."));
+    ).run(`${stored}/alias-prefix/..`);
     db.close();
     const ambiguous = doctorChecks()["bindings.ambiguous"];
     expect(ambiguous?.severity).toBe("warning");

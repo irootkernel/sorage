@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -315,11 +316,11 @@ describe("moveVault intent fencing (epic audit round 2)", () => {
     expect(statusPathOf(home)).toBe(vault);
   });
 
-  it("rejects an aliased nested target a lexical comparison would miss (darwin /private)", () => {
+  it("rejects an aliased nested target a lexical comparison would miss", () => {
     const { home, vault } = initializedHome("sorage-move-alias-");
-    // /var/folders/... is served as /private/var/folders/... on darwin; the two
-    // spellings share no string prefix, so only physical resolution catches it.
-    const aliased = `/private${vault}/nested`;
+    const alias = join(home, "vault-alias");
+    symlinkSync(vault, alias, "dir");
+    const aliased = join(alias, "nested");
     const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: aliased });
     const movePorts = ports.movePorts();
     if (!movePorts.ok) throw new Error("move ports must build");

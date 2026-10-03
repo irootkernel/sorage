@@ -42,6 +42,8 @@ install -m 0755 sorage-v0.1.2-darwin-arm64 "$HOME/.local/bin/sorage"
 
 The expected version output is `sorage v0.1.2`. The adjacent manifest records the reviewed Git revision, target, binary name, signed SHA-256 digest, reproducible unsigned digest, and `ad-hoc` signature mode. This release does not claim Intel macOS, Linux, Homebrew, notarization, or Developer ID support.
 
+The corrected v0.1.2 distribution replaces the withdrawn original dated 2026-09-29. If v0.1.2 is already installed, follow the [replacement procedure](docs/ops/README.md#replace-the-withdrawn-v012-binary), download all three assets again, and run the installation commands above. Confirm that the manifest revision and signed checksum match the corrected GitHub Release; the unchanged version string alone cannot identify the corrected binary.
+
 ## Build from source
 
 ```sh

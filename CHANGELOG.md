@@ -4,7 +4,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.3 - Unreleased
 
-## v0.1.2 - 2026-09-29
+## v0.1.2 - 2026-10-03
+
+This corrected distribution replaces the withdrawn original v0.1.2 distribution dated 2026-09-29. Existing v0.1.2 installations must replace the binary and verify the new release manifest and checksum; the version string remains unchanged.
 
 ### Added
 
@@ -19,6 +21,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Allow a registered Git Project to revise a document inside its documented workspace root without an external-source override.
 - Preserve multipart Web upload bodies that begin with dashes.
 - Keep Handoff sender identity and Project bindings stable when archive or rebind races with a send, and require an explicit override for ancestor-path sends above registered Projects.
 - Restore the Web Handoff detail Download action for authenticated sessions.

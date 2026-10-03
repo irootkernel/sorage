@@ -28,7 +28,7 @@ This section is the only place in the repository where delivery status pointers 
 - **In Review Task:** None
 - **Next eligible Task:** None
 
-EPIC-013 and TASK-087 through TASK-094 have completed M7 acceptance, including the separate whole-Epic audit and review. No Task is currently eligible. This work allocates no product version or publication.
+EPIC-013 and TASK-087 through TASK-094 retain their completed M7 acceptance. TASK-095 is a separately authorized post-release correction; it does not reopen a completed Epic. Its publication boundary is the explicitly authorized replacement of v0.1.2, with the runtime version unchanged.
 
 ## 3. Identifier policy
 
@@ -348,7 +348,19 @@ The `TASK-086` CLI JSON snapshot diff is classified as breaking for clients that
 
 The source-design registration added the M7 documentation vocabulary and checker coverage only; current implementation status is recorded in the Task rows and active pointer. Database and snapshot format changes must be reviewed under the Contract gate; product SemVer, installation, and publication are not authorized by this plan. EPIC-012's recorded closeout is preserved, not reopened; the next eligible Task pointer follows the satisfied prerequisites.
 
-## 8. Epic completion and change rules
+## 8. Standalone post-release corrections
+
+### TASK-095: Registered workspace revision imports
+
+- **Canonical Outcomes:** [Workspace-root contract](../specs/interfaces-and-operations.md#9-actor-resolution-and-unregistered-workspaces), [AJ-04](../specs/testing-and-acceptance.md#aj-04-registered-handoff-loop), and [v0.1.2 replacement operations](../ops/README.md#replace-the-withdrawn-v012-binary).
+- **Packages touched:** `packages/core`, `packages/adapters` test fixtures, `apps/cli` test fixtures, and compiled CLI E2E tests.
+- **Compatibility:** Restore the existing workspace-root contract without changing public JSON, DTOs, configuration, database, or Vault formats. No migration is required.
+
+| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
+|---|---|---|---|---|---|---|---|
+| `TASK-095` | Completed | M7 | Standard: restore registered Git Project content revisions through the canonical workspace root, cover the native review loop and source-safety failure paths, make temporary-path fixtures portable, and document the explicitly authorized v0.1.2 replacement. | Original compiled CLI fails the Git regression; corrected Git and directory loops pass without an override; external and symlink escapes preserve current state; nested and explicit Project selection pass; `make test` and `git diff --check` exit 0; unchanged JSON snapshots and no migration are confirmed by a separate read-only Reviewer. Clean-commit packaging and hosted-download verification are subsequent publication gates. | `TASK-094` | PRJ-017, PRJ-019, VLT-016, HND-014, HND-015, REV-008 to REV-010, REV-013, SEC-006 | Not required |
+
+## 9. Epic completion and change rules
 
 An Epic is complete when every Task in its declared range is `Completed`, or when a `Deferred` Task in that range has an accepted architecture decision and a matching update in [../specs/traceability.md](../specs/traceability.md).
 

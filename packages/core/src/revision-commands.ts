@@ -6,7 +6,7 @@ import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { prepareArtifactImport } from "./import-policy";
 import type { NewPendingFsOp } from "./intent-log";
-import { resolveWorkspaceActor } from "./project-commands";
+import { resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
 
 /**
@@ -306,7 +306,9 @@ function reviseContent(
   });
   if (!workspace.ok) return err(workspace.error);
   const workspaceRoot =
-    workspace.value.kind === "registered_project" ? workspace.value.binding.directory : workspace.value.directory;
+    workspace.value.kind === "registered_project"
+      ? workspaceRootOf(workspace.value.binding)
+      : workspace.value.directory;
   const artifactId = `a${createHash("sha1")
     .update(`${handoff.id}:${handoff.revision + 1}:${ports.clock.now().toISOString()}`)
     .digest("hex")

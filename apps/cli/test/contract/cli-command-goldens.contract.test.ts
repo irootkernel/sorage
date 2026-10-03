@@ -55,6 +55,8 @@ function normalize(text: string): string {
     text
       .split(home)
       .join("<home>")
+      .split("/private<home>")
+      .join("<home>")
       // The tour uses an available port so an installed Sorage daemon cannot
       // affect doctor; normalize it back to the documented default in goldens.
       .split(String(tourPort))
@@ -288,7 +290,7 @@ describe("the golden tour of every catalog command", () => {
         continue;
       }
       const golden = readFileSync(goldenPath, "utf8");
-      expect(normalizedOut, `${step.name} stdout`).toBe(golden);
+      expect(normalizedOut, `${step.name} stdout`).toBe(normalize(golden));
     }
     // The tour spawns Bun for every catalog command; allow scheduling headroom
     // on a busy machine without changing any per-command contract assertion.

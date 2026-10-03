@@ -129,9 +129,9 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `PRJ-014` | M1 | `TASK-019` |
 | `PRJ-015` | M1 | `TASK-019` |
 | `PRJ-016` | M1 | `TASK-015`, `TASK-017`, `TASK-050` |
-| `PRJ-017` | M1 | `TASK-018` |
+| `PRJ-017` | M1 | `TASK-018`, `TASK-095` |
 | `PRJ-018` | M1 | `TASK-018`, `TASK-066` |
-| `PRJ-019` | M1 | `TASK-019`, `TASK-029` |
+| `PRJ-019` | M1 | `TASK-019`, `TASK-029`, `TASK-095` |
 | `PRJ-020` | M1 | `TASK-019` |
 | `PRJ-021` | M1 | `TASK-017` |
 | `PRJ-022` | M1 | `TASK-016`, `TASK-017`, `TASK-020`, `TASK-050` |
@@ -152,7 +152,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `VLT-013` | M1 | `TASK-024` |
 | `VLT-014` | M1 | `TASK-024`, `TASK-035` |
 | `VLT-015` | M1 | `TASK-023` |
-| `VLT-016` | M1 | `TASK-023` |
+| `VLT-016` | M1 | `TASK-023`, `TASK-095` |
 | `VLT-017` | M1 | `TASK-023` |
 | `VLT-018` | M1 | `TASK-023` |
 | `VLT-019` | M1 | `TASK-021`, `TASK-026`, `TASK-052`, `TASK-063` |
@@ -174,8 +174,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `HND-011` | M1 | `TASK-030` |
 | `HND-012` | M1 | `TASK-030` |
 | `HND-013` | M1 | `TASK-028` |
-| `HND-014` | M1 | `TASK-028`, `TASK-033` |
-| `HND-015` | M1 | `TASK-032` |
+| `HND-014` | M1 | `TASK-028`, `TASK-033`, `TASK-095` |
+| `HND-015` | M1 | `TASK-032`, `TASK-095` |
 | `HND-016` | M1 | `TASK-028` |
 | `HND-017` | M1 | `TASK-028`, `TASK-080`, `TASK-081` |
 | `HND-018` | M1 | `TASK-029` |
@@ -194,12 +194,12 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `REV-005` | M1 | `TASK-031` |
 | `REV-006` | M1 | `TASK-031` |
 | `REV-007` | M1 | `TASK-031` |
-| `REV-008` | M1 | `TASK-032` |
-| `REV-009` | M1 | `TASK-032` |
-| `REV-010` | M1 | `TASK-032` |
+| `REV-008` | M1 | `TASK-032`, `TASK-095` |
+| `REV-009` | M1 | `TASK-032`, `TASK-095` |
+| `REV-010` | M1 | `TASK-032`, `TASK-095` |
 | `REV-011` | M1 | `TASK-032` |
 | `REV-012` | M1 | `TASK-032` |
-| `REV-013` | M1 | `TASK-032` |
+| `REV-013` | M1 | `TASK-032`, `TASK-095` |
 | `REV-014` | M1 | `TASK-031` |
 | `REV-015` | M1 | `TASK-031`, `TASK-049` |
 | `REV-016` | M1 | `TASK-031` |
@@ -310,7 +310,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-003` | M2 | `TASK-043` |
 | `SEC-004` | M1 | `TASK-013`, `TASK-018`, `TASK-057`, `TASK-060`, `TASK-071` |
 | `SEC-005` | M1 | `TASK-013`, `TASK-018`, `TASK-057`, `TASK-060`, `TASK-071` |
-| `SEC-006` | M1 | `TASK-023`, `TASK-060` |
+| `SEC-006` | M1 | `TASK-023`, `TASK-060`, `TASK-095` |
 | `SEC-007` | M1 | `TASK-023`, `TASK-060` |
 | `SEC-008` | M1 | `TASK-006`, `TASK-028`, `TASK-061` |
 | `SEC-009` | M1 | `TASK-024`, `TASK-035`, `TASK-061` |
