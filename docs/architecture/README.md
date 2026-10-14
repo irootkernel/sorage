@@ -243,7 +243,7 @@ PendingFsOp
 - attempts: integer
 ```
 
-A row in `pending_fs_ops` is a committed Intent. Its presence means the database already believes the effect will happen, so every process is obliged to complete it before doing anything else.
+A row in `pending_fs_ops` is a committed Intent. Its presence means the database already believes the effect will happen, so operational processes are obliged to complete it before doing anything else. The M8 inspection paths explicitly do not execute it; see [section 26](#26-m8-inspection-and-send-recovery-boundaries).
 
 ### 3.9 Idempotency Key
 
@@ -553,7 +553,7 @@ Operations that cannot be expressed as one database transaction, such as a confi
 
 - Parse commands and flags, and render human or JSON output.
 - Resolve actor provenance from the working directory, `--as`, or `--as-user`.
-- Drain `pending_fs_ops` at process start, before executing the requested command (RUN-002).
+- Drain `pending_fs_ops` at operational process start, before executing the requested command (RUN-002); M8 preflight and send replay-only bypass this step under section 26.
 - Call application use cases directly, in-process, through the same ports the daemon uses.
 - Never issue raw SQL and never write managed Vault paths outside the application layer (CLI-018).
 - Contact the daemon only for `web` and `daemon` commands, where `DAEMON_UNAVAILABLE` is meaningful.
@@ -726,7 +726,7 @@ Vault:
 
 ## 18. Database
 
-SQLite requirements:
+Operational SQLite requirements (M8 inspection instead uses the separate source-copy boundary in section 26):
 
 - Explicit, immutable migrations tracked in `schema_migrations`
 - Foreign keys enabled on every connection
@@ -809,13 +809,15 @@ Each lockfile contains `{pid, startedAt, hostname}`. A lock is stale when its `p
 
 Schema migration runs at process start under `migration.lock`, which is stale only when the recorded pid is dead; the runner holds one SQLite write transaction per step and records the applied version in `schema_migrations`, so a process that waited on the lock re-checks `schema_migrations` after acquiring it and finds the version already applied (NFR-009).
 
+NFR-009 remains the operational file-lock requirement. The current native runner instead serializes with BEGIN IMMEDIATE and the internal migration_lock table; that pre-existing implementation difference is not resolved or reopened by M8 registration. M8 inspection uses the committed snapshot and actual native fence observations in section 26 and interface section 36.2. It neither creates nor removes the migration file, does not require its presence, and follows section 36.2 liveness/preservation rules when it exists. Operational migration changes are outside this inspection scope.
+
 ## 20. Filesystem and database atomicity
 
 ### 20.1 Why an intent log
 
 SQLite and the filesystem do not share a transaction, so one of the two effects always lands first. Renaming before the commit lets another connection's garbage collector delete a file whose row is not yet visible. Renaming after the commit without a record leaves an unrepairable gap when the process dies in between.
 
-Sorage closes both gaps by committing the *intention* first. A row in `pending_fs_ops` is a promise that the database has already made, and every process is obliged to keep it (VLT-021).
+Sorage closes both gaps by committing the *intention* first. A row in `pending_fs_ops` is a promise that the database has already made, and every operational process is obliged to keep it; M8 inspection paths in section 26 leave intents untouched (VLT-021).
 
 ### 20.2 Durability order
 
@@ -851,7 +853,7 @@ The review state is already terminal at this point, so no Review Note can have b
 
 ### 20.6 Recovery and garbage collection
 
-At every process start, CLI or daemon, drain `pending_fs_ops` in `createdAt` order and idempotently:
+At every operational process start, CLI or daemon, excluding M8 inspection paths in section 26, drain `pending_fs_ops` in `createdAt` order and idempotently:
 
 - `activate`, destination present and source gone: the effect already happened; mark it done.
 - `activate`, source still present: rename again, `fsync` the parent directory, mark it done.
@@ -990,3 +992,15 @@ Memo operations use implicit User provenance rather than resolving a directional
 The legacy snapshot inventory remains format 1. Format 2 adds current Memo content and metadata events, with Memo shards, `counts.memos`, and the deterministic `memoDigests` map. [The Memo byte contract](../specs/project-memos.md#111-canonical-bytes-digest-and-path-identity) fixes canonical UTF-8 serialization including the final LF, raw-file SHA-256, lowercase hexadecimal encoding, and `snapshots/`-relative canonical map keys; verify/dry-run/restore must reject inventory, path, digest, and semantic mismatches before import. Format-1 backups retain their original read contract and represent zero Memos. Backup/restore support precedes public mutation adapters. In-place database upgrade preserves valid operational receipts; backup snapshots do not carry them and restore must not reconstruct them. Restore preserves the Installation ID and Memo data, so neither that identity nor reauthentication proves receipt continuity. Replay-only recovery returns unknown/unavailable without another write when the receipt is absent, whether the snapshot contains the original Memo or predates it. Current content is retained, not every previous body; no Memo purge or synchronization protocol is introduced. The exact lifecycle, field, paging, transport, upgrade, and rollback details are owned by the Memo contract rather than duplicated here. In particular, an old executable must not be assumed to safely reject the upgraded database.
 
 CLI/API/UI layers depend on the application contract, not on one another's private persistence or human-readable output. Stale versions fail instead of being silently refreshed. One tab-wide active-attempt gate protects all Memo writes across navigation/reload, and the browser persists retry material before first dispatch. All uncertain recovery is replay-only, not an ordinary write retry. Receipt evidence or conclusive original non-execution settles the attempt. Alternatively, explicit abandonment atomically preserves a bounded passive unknown-outcome notice while retiring the active record before unlocking. The browser does not cancel server work, submit a replacement, or declare success/failure on that transition. Storage errors cannot unlock, expiry cannot silently clear identity, and late callbacks cannot affect a newer attempt. Read/navigation/draft actions and other tabs/CLI remain independent. Exact local notice fields, capacity, and explicit retention controls are owned by Memo contract section 10.1, not a new server ledger. A Memo containing an Epic ID remains untrusted text; storing it or marking it done never invokes a tool or establishes external completion.
+
+## 26. M8 inspection and send recovery boundaries
+
+[ADR-0028](../architecture-decision-records/README.md#adr-0028-non-mutating-installation-preflight-in-m8) and [ADR-0029](../architecture-decision-records/README.md#adr-0029-non-executing-send-recovery-and-agent-policy-in-m8) define the planned extension. [Interface sections 36 and 37](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8) own its public contract; the [roadmap](../roadmap/README.md) alone determines readiness. No M8 command or changed skill behavior is implemented by registering these documents.
+
+Core owns pure preflight assessment, checked report/receipt values and the non-executing send-recovery use case. Adapters own configuration/path inspection, coherent temporary DB/WAL capture, supported schema interpretation, sender/identity verification, lookup Clock and receipt read ports. CLI selects inspection before ordinary initialized-command, database, send, intent-drain and logging wiring; it renders results, errors, help and completion. No daemon, Web, consumer repository or ecosystem runtime dependency is added.
+
+The inspector reads source bytes but opens SQLite only in a private coherent copy, with committed WAL data included and source stability and inspection fences checked. The normal connection factory and migration runner are operational writer wiring and cannot be reused on the selected installation. Temporary-copy writes are separate from original storage and are cleaned up. Ordinary operational PRAGMAs, startup recovery and logging remain unchanged for every other command.
+
+Send recovery uses a dedicated inspection port, not HandoffWritePort.idempotencyLookup, which performs expiry cleanup. Its retained send receipts remain in the existing namespace and format; the mode is not in the business hash. Match verified original sender and legacy identity rules, sample the Clock in the snapshot read, filter expiresAt > now and return historical SendOutcome with replayed=true. A receipt miss cannot invoke send staging, createFanout, intent drain, activation or receipt cleanup. Existing HTTP replay wrappers and Memo receipt paths are unchanged.
+
+The shipped skill remains policy, not an authentication boundary or workflow engine. Its independently observed M8 behavior covers native destructive decisions, observed versions and original-request recovery; setup ownership and untrusted content cannot be inferred from a recovery hint. Current historical acceptance remains attached to its original candidate.

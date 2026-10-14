@@ -887,3 +887,86 @@ Decision: add `MEMO_FILE_READ_FAILED` for actual Memo body-file resolution/open/
 Alternatives considered: reusing `VAULT_INTEGRITY_ERROR` or `ARTIFACT_CORRUPTED` was rejected because a selected Memo source is neither managed Vault state nor an Artifact; using `INTERNAL_ERROR`/1 or `MEMO_INVALID_INPUT`/64 for operating-system read failures was rejected because it loses the required filesystem category; changing every command's parser or recovery was rejected because the Memo extension must preserve Handoff contracts.
 
 Compatibility is additive and non-breaking: one new error code and Memo-only parsing/recovery behavior, with no envelope field or existing Handoff output change. No data migration is needed. The required edits are the Memo and shared error catalogues, contextual recovery implementation, and CLI contract snapshots. TASK-090 owns this clarification and its review/regression checks; no Task identity, dependency, milestone, or remaining review budget changes.
+
+## ADR-0028: Non-mutating installation preflight in M8
+
+- **Status:** Accepted
+- **Date:** 2026-10-14
+- **Amends:** ADR-0001 and ADR-0013 operational startup/intent-drain obligations, the pre-initialization command allowlist, and operational logging rules for the new M8 inspection paths only. Historical M1 through M7 acceptance is preserved.
+
+### Problem
+
+Aquarium needs to assess storage before a new executable opens it with a writer. Version identifies the executable, doctor uses a connection that configures WAL, and Project reads enter migration wiring. Consumer-side SQL inspection of the Memo migration and Installation identifiers duplicates private storage and upgrade rules.
+
+### Decision
+
+Adopt shared M8 and Source of Truth version 0.9.0. Provide the CLI-only preflight contract in [section 36](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8), with PFL-001 through PFL-008, coherent temporary DB/WAL inspection, six states, stable checks and explicit recovery guidance. The operational database is never opened by the inspector; journals, locks, configuration, Vault and failure logs remain untouched. A moving or unreadable source cannot yield a compatible verdict. Compatibility is point-in-time and does not certify backup preparation, full Artifact integrity or future writer readiness.
+
+Keep actual upgrade approval, old-binary backup verification and a separate restore drill outside this command. Aquarium may replace private inspection only after verifying a released interface; Sorage does not edit that repository or activate the consumer.
+
+### Alternatives considered
+
+- Reuse doctor | rejected: its operational connection and broader health probes do not provide the required no-write boundary.
+- Keep consumer SQL and migration-name checks | rejected: they make private implementation details a cross-repository upgrade contract.
+- Inspect live SQLite in ordinary read-only mode | rejected as the default design: journal/shared-memory behavior and startup wiring require a separately proved boundary, so the chosen inspector reads a validated temporary snapshot.
+- Ignore WAL or assume immutable live storage | rejected: committed data may be present only in WAL, and a writer can invalidate that assumption.
+- Automatically prepare or migrate after a positive result | rejected: inspection does not grant upgrade or recovery authority.
+
+### Compatibility impact
+
+The optional preflight command and report are additive and leave doctor and existing envelopes unchanged. M8 inspection explicitly amends INIT-011, RUN-002, RUN-009 and NFR-009; the matching architecture and security exceptions must not weaken other commands. Product version and storage schema versions remain independent of SOT 0.9.0.
+
+### Migration impact
+
+No database, configuration, Vault, backup or receipt migration is needed for this feature. Known older storage is assessed without migration; newer schemas are unsupported. Pre-Memo backup and restore-drill obligations remain in force. Normal writers keep their existing migration path.
+
+### Required Source of Truth edits and roadmap impact
+
+Register EPIC-014 and TASK-096 through TASK-100, the shared M8 gate, PFL requirements and AJ-24; align specification, interface catalog, architecture, security, operations, traceability, governance and public planned-release guidance. TASK-096 owns M8 checker support and fixtures. This approved registration changes documents only, so the existing M1-M7 checker is expected to reject M8 until that separate Task is implemented; registration is not a passed SOT or product gate.
+
+### Consequences
+
+Inspection logic and storage-version knowledge stay inside Sorage. Every inspection outcome, including a failure, requires source no-write evidence. Intended publication is v0.1.3 with EPIC-015, separately authorized after both Epics and the shared gate are accepted.
+
+## ADR-0029: Non-executing send recovery and agent policy in M8
+
+- **Status:** Accepted
+- **Date:** 2026-10-14
+- **Amends:** ADR-0001 and ADR-0013 startup/intent-drain obligations for replay-only inspection, and ADR-0018 shipped agent policy while retaining HND-026 requested-setup guidance. ADR-0027's Handoff non-goal remains the M7 decision; this extension adds no Handoff HTTP/Web mode.
+
+### Problem
+
+An uncertain send cannot safely be retried as ordinary execution: a missing, expired or restore-lost receipt can create another Handoff even with the original key. The shipped skill also describes recovery hints as next commands without explaining their authority limit, and omits several deletion, observed-version, send-recovery and installed-resource decisions identified by Aquarium's skill review.
+
+### Decision
+
+Add CLI send --replay-only with its original key, inputs, source and sender context, using the dedicated non-executing receipt contract in [section 37](../specs/interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8). Reuse the EPIC-014 coherent snapshot boundary. Preserve existing send hashes, sender ownership and legacy/registration compatibility. A matching eligible receipt returns the historical SendOutcome with replayed=true; absent or expired receipts return HANDOFF_REPLAY_UNAVAILABLE/75 without sending, staging, draining, migrating, logging or cleaning receipts. Recovery mode is separate from request identity.
+
+The interface defines supported historical receipt layouts, explicit storage-refusal mappings and actual native move/restore fences. Derived inbox-marker refresh and its locks are excluded even on successful replay. The committed migration snapshot is assessed without assuming a native migration-file lock exists or certifying writer absence. Installation and configured Vault directory aliases may be stable canonical roots; linked managed state files are refused. Residue-only pre-initialization logs do not become installation authority.
+
+GEN-016 through GEN-020 require the skill to preserve user intent, distinct native pinned-deletion decisions, observed Note/revise versions, original-key non-executing recovery, Project identity and untrusted document boundaries. Required instructions must remain accessible from a clean installed skill directory. Actual skill edits and behavioral acceptance belong to TASK-103 and TASK-104, not this registration.
+
+### Alternatives considered
+
+- Repeat ordinary send with the same key | rejected for unknown outcomes: receipt expiry or restore can cause a new execution.
+- Limit the work to stopping on every uncertain send | rejected for this approved scope: the user selected a supported non-executing recovery interface in addition to policy changes.
+- Trust a client timer or unchanged Installation identity | rejected: neither proves the retained receipt survived restore, and a late original can still complete.
+- Extend every Handoff mutation and HTTP/Web recovery now | rejected: CLI send is the required seam; the other transports and operations have distinct contracts.
+- Export receipts in backups or reconstruct success from a title/content match | rejected: it broadens storage semantics or invents evidence of the original result.
+- Test only skill prose | rejected: packaging structure cannot establish actual authority, conflict or uncertainty decisions by an agent.
+
+### Compatibility impact
+
+Add an optional CLI send mode and four CLI-only errors: HANDOFF_REPLAY_UNAVAILABLE (409/75), STORAGE_SCHEMA_UNSUPPORTED (422/78), STORAGE_INTEGRITY_ERROR (409/73), and STORAGE_INSPECTION_UNAVAILABLE (503/75), as detailed in interface section 37.1. Existing send defaults, successful data fields, legacy key/hash behavior, actor ownership and receipt formats remain unchanged. TASK-101 promotes their HTTP-equivalent mappings into the implemented error matrix; no endpoint or header is added. M8 contextual recovery text preserves uncertainty and does not change ordinary execute error defaults. M7 Memo execute/replay-only behavior and its Web recovery gate remain untouched. Existing send retries without the flag retain their documented execute semantics and are not endorsed for uncertain recovery.
+
+### Migration impact
+
+No persistent migration or receipt rewrite is planned. Read retained historical receipt formats and legacy sender hashes without changing expiry; backup restore continues excluding receipts. A same-Installation restore can therefore leave the original send outcome unknown. Incomplete original input or unavailable inspection is a reported limitation, not permission to send again.
+
+### Required Source of Truth edits and roadmap impact
+
+Register EPIC-015 and TASK-101 through TASK-104 after EPIC-014. Adopt SND-001 through SND-006, GEN-016 through GEN-020, AJ-25 and AJ-26; update interfaces, architecture, security, operations, implementation guidance and traceability, with planned v0.1.3 public notes. Both Epics share M8. Preserve past skill walkthrough records as evidence for their original candidates; require an independent observer for the new frozen skill rather than counting those records again.
+
+### Consequences
+
+Unknown outcome remains distinct from failure and from authorization for a new operation. A later new send requires separately expressed intent. The feature does not change Handoff state, deletion semantics, Project setup authority, Memo recovery, or consumer activation. Installation, sending a response to Aquarium and publication remain separately authorized.

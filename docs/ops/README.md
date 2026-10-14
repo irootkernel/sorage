@@ -30,7 +30,7 @@ Download fresh copies of the binary, checksum, and manifest into an empty direct
 
 ## Safe diagnosis
 
-Start with read-only checks:
+After any required upgrade preparation, start with diagnostic commands:
 
 ```sh
 sorage version
@@ -97,3 +97,13 @@ In the browser, an active unknown request blocks all new Memo writes in that tab
 To stop recovery, select `Abandon retry and continue` and confirm the warning: the original may already have committed or may finish later, the action neither cancels nor deletes server work, and submitting the same intent anew can duplicate effects. Only a successfully saved local replacement retires the active request and releases its gate. It retains a body-free notice with the original identity/key, operation, version, title and times, `outcome=unknown`, and `retryDisposition=abandoned`. Notices are passive and nonblocking; inspect or copy them for investigation. At 32 notices, explicitly remove an older browser-only notice before another abandonment; there is no silent eviction. Removing a notice changes no server outcome. Any later new mutation still needs a fresh explicit action, and an existing Memo must be reread first.
 
 The active record temporarily contains the original body; passive notices omit it. Both use per-tab session storage, which supports same-tab reload but may be lost on tab closure, browser data removal, or browser restart. This temporary recovery material is excluded from backups and is distinct from durable server Memo storage. Local abandonment is not a new CLI command, a Memo state, or evidence of work completion.
+
+## Planned M8 inspection and send recovery
+
+[EPIC-014 and EPIC-015](../roadmap/README.md#epic-014-non-mutating-installation-preflight) define the intended v0.1.3 extension. Current v0.1.2 does not provide preflight or send --replay-only. This section is preparation guidance for the adopted contracts, not an instruction to run unavailable commands or reopen a real installation with a newer writer.
+
+Once released and qualified, select the intended home explicitly and use [preflight](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8) before commands that could migrate or modify storage. Fresh means initialize only when authorized; compatible permits only the independently requested next operation; upgrade_required keeps the existing old-binary preparation and separate restore drill; recovery_required and unsupported require a bounded user decision; unverifiable requires resolving the inspection obstacle without repair or initialization. Doctor is a post-preparation operational diagnostic and cannot prove non-mutating inspection. A positive assessment cannot prove the external backup/restore drill ran.
+
+For a requested send, retain its original key, Installation, working-directory/actor context, exact arguments and source bytes before execution. If the result is unknown, the planned [send replay-only path](../specs/interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8) may inspect that exact attempt. A retained result identifies the original Handoffs, not their present state. HANDOFF_REPLAY_UNAVAILABLE/75, a changed source, lost original material or another Installation preserves unknown outcome; do not remove the mode, issue another key, substitute current content or resend. A same-Installation restore lacks operational receipts, and a late original may still finish. Ordinary v0.1.2 same-key send is not a safe replacement for this recovery interface.
+
+Recoveries and hints do not grant flags or user intent. Keep deletion request, User approval and the pinned Handoff's separate decision distinct, preserve Project identity, and disclose backup/Git retention. M8 registration does not request any broker response, acceptance, real-home migration, service stop, installation or publication.

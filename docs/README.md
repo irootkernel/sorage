@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.8.0`
+- **Source of Truth version:** `0.9.0`
 
 ## Role ownership
 
@@ -27,7 +27,13 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 
 ## Project Memo design entrypoints
 
-The M7 [Project Memo contract](specs/project-memos.md) defines the independent reminder domain. Its required outcomes are [MEM-001 to MEM-024](specs/required-specification.md#18-project-memos), its material decision is [ADR-0027](architecture-decision-records/README.md#adr-0027-project-memos-as-a-separate-domain-in-m7), and its ordered execution plan is [EPIC-013](roadmap/README.md#epic-013-project-memos). These documents specify required behavior; the roadmap alone determines implementation readiness. M7 and this Source of Truth version do not allocate a product release or complete any existing work.
+The M7 [Project Memo contract](specs/project-memos.md) defines the independent reminder domain. Its required outcomes are [MEM-001 to MEM-024](specs/required-specification.md#18-project-memos), its material decision is [ADR-0027](architecture-decision-records/README.md#adr-0027-project-memos-as-a-separate-domain-in-m7), and its ordered execution plan is [EPIC-013](roadmap/README.md#epic-013-project-memos). These documents specify required behavior; the roadmap alone determines implementation readiness. The M7 design registration did not allocate a product release or complete any existing work.
+
+## M8 design entrypoints
+
+The [required specification](specs/required-specification.md#19-installation-preflight-milestone-m8) defines PFL-001 through PFL-008, SND-001 through SND-006 and GEN-016 through GEN-020. The [preflight contract](specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8) and [send recovery and agent policy contract](specs/interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8) detail their interfaces. ADR-0028 and ADR-0029 record their accepted design. [The roadmap](roadmap/README.md#epic-014-non-mutating-installation-preflight) allocates EPIC-014 and EPIC-015 to shared M8, with AJ-24 through AJ-26 and intended product release v0.1.3.
+
+This adoption changes documents only. It does not implement commands, rewrite the shipped skill, change the executable version, start a Task, or authorize installation or publication. TASK-096 owns support for M8 and scoped checker-status documentation cleanup. At this registration the M1-M7 checker rejected M8 and its new citations; until that separate work, a documentation registration cannot be reported as a passing SOT gate. Completed M7 outcomes and past skill evidence remain preserved.
 
 ## Source of Truth precedence
 

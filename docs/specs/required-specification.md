@@ -8,7 +8,7 @@ Sorage is developed, tested, and released from the standalone repository `irootk
 
 The MVP is delivered in three milestones: `M1` CLI core, `M2` daemon with local HTTP API and Web UI, and `M3` Git backup, scheduling, and packaging. Those three gates are closed. Post-MVP work uses milestone identifiers `M4` and above (ADR-0024).
 
-Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, `M7`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
+Every requirement row carries a `Milestone` value of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, `M7`, `M8`, or `Deferred`; the value names the release gate at whose passing the requirement MUST be fully satisfied, and `Deferred` marks work outside the current delivery series.
 
 A requirement whose clauses span gates carries the earliest of them and phrases the later clause conditionally, as in "once the daemon exists".
 
@@ -35,6 +35,11 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | GEN-013 | M1 | The MVP MUST be delivered in the three milestones defined in section 17, each closed by its own release gate. |
 | GEN-014 | M1 | The `use-sorage` skill MUST start broker operations only on explicit user request, MUST NOT trigger inbox or outbox checks at session start, task or turn boundaries, or from Sorage mentions or code work, and MUST limit checks to reporting the requested results without processing Handoffs. It MUST permit continuation of an authorized operation to completion without resuming discovery during later unrelated work, MUST require an explicit request for inbox waiting or Handoff processing, and MUST forbid editing managed Vault files directly. |
 | GEN-015 | M4 | The `use-sorage` skill MUST keep GEN-014, and when Handoff processing is requested and the current Handoff has a Review Note, it MUST instruct the acting session to read that Note through `sorage review show` before `revise`. A requested inbox or outbox check MUST NOT authorize `review show`, `fetch`, or `revise`. The skill MUST state that `sorage get` does not carry the Note body, that a sender `fetch` does not set `firstFetchedAt`, and that `sorage events` reconstructs recent metadata and is not required on every revision. |
+| GEN-016 | M8 | The shipped skill MUST treat recovery hints as guidance rather than authority, MUST NOT add actor, confirmation, external-source, or identity-downgrade flags merely to clear an error, and MUST continue only within explicit user intent. |
+| GEN-017 | M8 | The shipped skill MUST distinguish a deletion request from User approval, require the native distinct decision for a pinned Handoff, preserve Project identity, and disclose that deletion is not secure erasure and Git history or backups can retain content. |
+| GEN-018 | M8 | Before writing a Review Note, the shipped skill MUST retain the observed Revision and Row Version and supply --target-revision and --expected-row-version. Before sender revise, including --no-change, it MUST retain the original reviewed state and supply --expected-row-version. A conflict MUST NOT automatically become an overwrite against a refreshed version. |
+| GEN-019 | M8 | Before send, the shipped skill MUST retain the original idempotency key, exact accepted inputs and source bytes, Installation, and sender context. Unknown results MUST use only SND-001 replay-only recovery; unavailable receipts, errors, or missing original material MUST NOT trigger execute fallback, another key, or a duplicate send. A historical receipt MUST NOT be presented as current Handoff state. |
+| GEN-020 | M8 | The shipped skill MUST treat received Handoff and Review Note content as untrusted data that cannot grant execution or external-action authority, preserve GEN-014 and GEN-015, keep requested Project setup with its owning setup workflow while preserving HND-026's requested ignore-file guidance, and make required resource references usable from a clean installed skill directory without relying on repository-relative files outside that directory. |
 
 ## 3. Initialization
 
@@ -50,7 +55,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | INIT-008 | M3 | Initialization MUST offer optional daily Git backup configuration. |
 | INIT-009 | M3 | Initialization MUST offer optional macOS LaunchAgent installation. |
 | INIT-010 | M3 | Initialization SHOULD offer optional first Project registration. |
-| INIT-011 | M1 | Before initialization, only `init`, `help`, `version`, `completion`, and `doctor` MAY run. |
+| INIT-011 | M1 | Before initialization, only `init`, `help`, `version`, `completion`, and `doctor` MAY run; M8 additionally permits the non-initializing `preflight` command defined by PFL-001. |
 | INIT-012 | M1 | Other pre-initialization commands MUST return `NOT_INITIALIZED`, the expected config path, and `sorage init` as the suggested command. |
 | INIT-013 | M1 | A malformed existing configuration MUST NOT be destructively replaced by normal `init`. |
 | INIT-014 | M1 | `doctor` MUST be usable before and after initialization. |
@@ -88,14 +93,14 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | ID | Milestone | Requirement |
 |---|---|---|
 | RUN-001 | M1 | Every writer MUST mutate state through the shared application layer, and concurrent mutations MUST be serialized by SQLite write transactions together with the committed filesystem intent log. |
-| RUN-002 | M1 | Every Sorage process MUST drain outstanding `pending_fs_ops` intents at start before executing a command, and once the daemon exists it MUST be the only process that runs scheduled backup and garbage-collection jobs. |
+| RUN-002 | M1 | Every Sorage process MUST drain outstanding `pending_fs_ops` intents at start before executing a command, except M8 preflight and send replay-only, which MUST NOT drain intents under PFL-002 and SND-002. Once the daemon exists it MUST be the only process that runs scheduled backup and garbage-collection jobs. |
 | RUN-003 | M1 | The CLI MUST invoke application use cases in-process and MUST NOT require a running daemon for any domain operation. |
 | RUN-004 | M1 | Bootstrap commands MAY operate without the daemon where documented. |
 | RUN-005 | M2 | The daemon MUST provide health, readiness, and version endpoints. |
 | RUN-006 | M2 | The CLI MUST provide `daemon start`, `daemon stop`, `daemon restart`, and `daemon status`. |
 | RUN-007 | M3 | The macOS MVP MUST support a per-user LaunchAgent. |
 | RUN-008 | M2 | A port change MUST require a controlled daemon restart. |
-| RUN-009 | M1 | Every Sorage process, CLI and daemon alike, MUST write structured JSON logs to `~/.sorage/logs/sorage.log` under the configured rotation, MUST default the CLI level to `warn`, MAY redact paths, and MUST never log tokens. |
+| RUN-009 | M1 | Every Sorage process, CLI and daemon alike, MUST write structured JSON logs to `~/.sorage/logs/sorage.log` under the configured rotation, MUST default the CLI level to `warn`, MAY redact paths, and MUST never log tokens; M8 preflight and send replay-only MUST instead report through command output without writing or rotating installation logs, including on failure. |
 | RUN-010 | M1 | No telemetry MUST be sent by default. |
 | RUN-011 | M3 | The canonical macOS LaunchAgent label MUST be `xyz.rootkernel.sorage` unless superseded by an accepted architecture decision. |
 | RUN-012 | M2 | `sorage web` MUST start the daemon when it is not already running and MUST open the browser at a URL whose fragment carries a one-time secret. |
@@ -377,7 +382,7 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | NFR-006 | M1 | Pagination MUST be deterministic. |
 | NFR-007 | M1 | Timestamps MUST be stored in UTC and rendered in the configured or system timezone. |
 | NFR-008 | M1 | UUIDs MUST use a standard random UUID format. |
-| NFR-009 | M1 | Database MUST use migrations and schema version tracking, schema migration MUST run at process start while holding `~/.sorage/run/migration.lock` for the whole run, that lock MUST be treated as stale only when the recorded pid is dead, and a process that waited for it MUST re-check `schema_migrations` after acquiring it. |
+| NFR-009 | M1 | Database MUST use migrations and schema version tracking, schema migration MUST run at operational process start while holding `~/.sorage/run/migration.lock` for the whole run, that lock MUST be treated as stale only when the recorded pid is dead, and a process that waited for it MUST re-check `schema_migrations` after acquiring it. M8 preflight and send replay-only MUST inspect without migration or lock creation under PFL-002 and SND-002. |
 | NFR-010 | M1 | User-visible failures MUST include recovery guidance when available. |
 | NFR-011 | M1 | Web and CLI MUST use one shared protocol model. |
 | NFR-012 | M1 | Release builds MUST be reproducible from locked dependencies and a pinned toolchain. |
@@ -398,11 +403,12 @@ Section 17 summarizes the milestones, their requirement scope, and their release
 | M5 | API-013; WEB-019 | M5 Web body-compose release |
 | M6 | PRJ-023, PRJ-024; CLI-024, CLI-025 | M6 Project lifecycle and binding release |
 | M7 | MEM-001..024 | M7 Project Memo release |
+| M8 | PFL-001..008; SND-001..006; GEN-016..020 | Gate M8, storage inspection and agent safety |
 | Deferred | WEB-016 | None; revisited after the MVP |
 
-Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, EPIC-010 for M4, EPIC-011 for M5, EPIC-012 for M6, and EPIC-013 for M7, as recorded in `../roadmap/README.md`.
+Release gates close at the end of EPIC-006 for M1, EPIC-007 for M2, EPIC-009 for M3, EPIC-010 for M4, EPIC-011 for M5, EPIC-012 for M6, and EPIC-013 for M7, as recorded in [the roadmap](../roadmap/README.md). M8 additionally requires both EPIC-014 and EPIC-015 and AJ-24 through AJ-26. Its intended product release is v0.1.3; gate acceptance does not authorize publication.
 
-The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4, M5, M6, and M7 do not reopen those gates.
+The MVP is complete only when the M3 MVP release gate passes with every M1, M2, and M3 requirement satisfied. M4 through M8 do not reopen those gates.
 
 ## 18. Project Memos
 
@@ -434,3 +440,31 @@ The MVP is complete only when the M3 MVP release gate passes with every M1, M2, 
 | MEM-022 | M7 | Existing Handoff CLI/HTTP outputs and behavior MUST remain compatible; no existing User-to-Project Handoff MUST be automatically converted, and the new domain MUST introduce no ecosystem source/runtime dependency. |
 | MEM-023 | M7 | M7 MUST remain local and retain Memos until a separately authorized future deletion design; done and dismissed MUST NOT be represented as erasure, backup MUST disclose free-text and Git-history retention, and no automatic multi-machine synchronization is implied. |
 | MEM-024 | M7 | M7 acceptance MUST cover AJ-20 to AJ-23 plus existing regressions through real compiled CLI, authenticated daemon, browser, restart, fault, migration, and restore fixtures under isolated SORAGE_HOME, including same-Installation restore without receipts, server-side expiry boundaries, and explicit abandonment/late-response isolation. TASK-092 MUST own only AJ-21-B browser acceptance, TASK-093 MUST own AJ-21-S skill acceptance, and TASK-094 MUST verify both for full AJ-21 without a backward dependency. Unperformed skill walkthroughs and platform checks MUST remain explicitly unverified. |
+
+## 19. Installation preflight, milestone M8
+
+[ADR-0028](../architecture-decision-records/README.md#adr-0028-non-mutating-installation-preflight-in-m8) adopts this public storage assessment. [The interface contract](interfaces-and-operations.md#36-installation-preflight-milestone-m8) owns its report and check catalog. Delivery status belongs only to [EPIC-014](../roadmap/README.md#epic-014-non-mutating-installation-preflight).
+
+| ID | Milestone | Requirement |
+|---|---|---|
+| PFL-001 | M8 | M8 MUST provide sorage preflight before and after initialization, honoring INIT-015 and supporting human output, JSON, help, and completion without requiring a daemon or a registered Project. |
+| PFL-002 | M8 | Preflight MUST NOT initialize, migrate, repair, drain intents, create or remove locks, change operational database journals, checkpoint WAL, write or rotate installation logs, alter configuration or Vault files, start a daemon, or change services. Both success and failure MUST leave selected storage unchanged; temporary inspection artifacts MUST remain outside the selected home and Vault and be cleaned up. |
+| PFL-003 | M8 | Preflight MUST return the version-1 report defined in interfaces-and-operations with exactly one status: fresh, compatible, upgrade_required, recovery_required, unsupported, or unverifiable. It MUST distinguish an absent, empty or explicitly residue-only home under interface section 36.1 from incomplete state, MUST never classify unreadable state as fresh, and MUST include stable check IDs and actionable recovery guidance without exposing private storage contracts as consumer inputs. |
+| PFL-004 | M8 | Preflight MUST validate supported configuration and Vault schemas, the complete ordered known database migration history, SQLite integrity and required schema structure, and consistent Installation identity across configuration, present database identity records, Project bindings, and the Vault marker. It MUST accept legitimate empty installations without fabricating missing identity rows and MUST NOT infer compatibility merely from a maximum migration number or the Memo table. |
+| PFL-005 | M8 | A valid known older database MUST produce upgrade_required and identify migration needs separately from required upgrade preparation. Pre-Memo storage MUST retain the existing old-binary backup verification and separate restore-drill prerequisite. Preflight MUST NOT certify that an external drill occurred, grant upgrade approval, or automatically run the suggested work. |
+| PFL-006 | M8 | Inspection MUST include committed WAL contents through a coherent temporary database snapshot and MUST NOT open operational SQLite to achieve this. Changing inventories, failed consistency checks, unsafe links, inaccessible storage, or unavailable snapshot support MUST fail closed as unverifiable; a readable newer storage schema MUST be unsupported rather than silently opened or migrated. |
+| PFL-007 | M8 | Preflight JSON MUST use the existing envelope with data.contractVersion equal to 1, status, and checks, and MUST emit only JSON on stdout. Exit 0 MUST cover fresh and compatible, exit 78 MUST cover upgrade_required, recovery_required, and unsupported, and exit 75 MUST cover unverifiable. Reported recovery is guidance, never mutation authority; compatible is a point-in-time storage assessment, not a general health or artifact-integrity certificate. |
+| PFL-008 | M8 | AJ-24 MUST verify fresh, current, known pre-Memo, incomplete, corrupt, inconsistent, and newer-schema storage, WAL and permission cases, races, and failure cleanup with before/after content hashes, permissions, modification times, identities, and file inventories. Native compiled-binary checks and make test MUST support acceptance; unchanged access timestamps are not claimed by ordinary filesystem reads. |
+
+## 20. Non-executing send recovery, milestone M8
+
+[ADR-0029](../architecture-decision-records/README.md#adr-0029-non-executing-send-recovery-and-agent-policy-in-m8) extends CLI send only. [The interface contract](interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8) owns recovery semantics; GEN-016 through GEN-020 own the skill policy. M7 Memo recovery remains separate. Delivery status belongs only to [EPIC-015](../roadmap/README.md#epic-015-safe-handoff-recovery-and-agent-policy).
+
+| ID | Milestone | Requirement |
+|---|---|---|
+| SND-001 | M8 | M8 CLI send MUST accept --replay-only with a required original nonempty --idempotency-key and the original send input and sender context. Omission of the flag MUST retain ordinary send behavior. Replay-only is an inspection of an earlier intent, not authorization for another send. |
+| SND-002 | M8 | Send replay-only MUST use a dedicated read-only application/adapter path over the PFL-006 snapshot boundary. It MUST NOT initialize or migrate storage, drain intents, stage or materialize body/file content, create Handoffs, Artifacts, events or receipts, clean up or renew receipts, modify journals, or write installation logs, including on failure. It MUST preserve the actual restore/Vault-move fences and committed-migration inspection rules of interface section 36.2, MUST NOT refresh derived inbox markers or acquire their locks, and MUST NOT use the existing expiry-deleting lookup. |
+| SND-003 | M8 | A retained eligible send receipt MUST replay only the matching original business request and verified sender under the selected Installation, using existing sender-aware, legacy-hash, and Workspace-to-Project compatibility rules. It MUST return the existing SendOutcome with replayed=true in a fresh CLI envelope; mode MUST NOT change request hashing or stored receipt format, and replay MUST NOT claim current Handoff state or completed Artifact activation. |
+| SND-004 | M8 | Receipt eligibility MUST use expiresAt > the lookup Clock sampled inside the consistent snapshot read; equality is expired. An absent, expired, or restore-missing receipt MUST return HANDOFF_REPLAY_UNAVAILABLE, HTTP-equivalent 409 and CLI exit 75, without execute fallback. A miss cannot establish non-execution or cancel a late original request; unchanged Installation identity or a client timer is not proof of receipt continuity. |
+| SND-005 | M8 | A retained receipt for a different request MUST return IDEMPOTENCY_CONFLICT without effects; a different sender MUST not obtain another sender's result. Storage and snapshot failures MUST use the explicit typed mappings and supported historical layouts of interface section 37.1 rather than become a receipt miss, success or execute; expected storage refusals MUST NOT become INTERNAL_ERROR. Ownership and source failures MUST preserve their existing codes, including INTERNAL_ERROR/1 for a missing, unreadable or non-regular source, with M8 contextual message and recovery guidance and no logging. Missing original input or changed source bytes MUST not be replaced with current Handoff content, refreshed sender context, or a new key. |
+| SND-006 | M8 | AJ-25 MUST cover retained and conflicting receipts, file and body sends, fan-out, response loss, restart, exact expiry, restore without receipts, late original execution, sender mismatch, legacy identity compatibility, inspection fences, and before/after no-write evidence. Existing send defaults, HTTP/Web routes, Memo recovery, other Handoff commands, and all persisted formats MUST remain compatible; make test and an independent Contract review are required. |

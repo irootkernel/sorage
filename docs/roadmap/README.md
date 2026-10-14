@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024, milestone `M5` under ADR-0025, milestone `M6` under ADR-0026, and milestone `M7` under ADR-0027.
+This roadmap planned the Sorage MVP as three milestones with independent release gates, under the governance fixed by ADR-0019 in [../architecture-decision-records/README.md](../architecture-decision-records/README.md). Those gates are closed. Post-MVP work continues from milestone `M4` under ADR-0024, milestone `M5` under ADR-0025, milestone `M6` under ADR-0026, milestone `M7` under ADR-0027, and shared milestone `M8` under ADR-0028 and ADR-0029.
 
 It sits below [../specs/required-specification.md](../specs/required-specification.md), the accepted decisions in [../architecture-decision-records/README.md](../architecture-decision-records/README.md), [../architecture/README.md](../architecture/README.md), and [../specs/interfaces-and-operations.md](../specs/interfaces-and-operations.md) in the authority order of [../governance/README.md](../governance/README.md); where this roadmap disagrees with any of them, they win and this file is corrected.
 
@@ -26,9 +26,11 @@ This section is the only place in the repository where delivery status pointers 
 - **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-096`
 
 EPIC-013 and TASK-087 through TASK-094 retain their completed M7 acceptance. TASK-095 is a separately authorized post-release correction; it does not reopen a completed Epic. Its publication boundary is the explicitly authorized replacement of v0.1.2, with the runtime version unchanged.
+
+M8 is registered as a documentation-only design. At this documentation-only registration, the existing SOT checker recognized only M1 through M7; TASK-096 owns its extension and no SOT gate pass is claimed before that work. The new Epics and Tasks are not started by registration. Their intended product release is v0.1.3, with installation and publication separately authorized.
 
 ## 3. Identifier policy
 
@@ -68,8 +70,9 @@ This repository has not enrolled a Design Gate registry; every task records `Des
 | M5 Web body-compose release | M5 | `EPIC-011` | AJ-18, with every earlier journey still passing | local `M5` snapshot |
 | M6 Project lifecycle and binding release | M6 | `EPIC-012` | AJ-19, with every earlier journey still passing | local `M6` snapshot |
 | M7 Project Memo release | M7 | `EPIC-013` | AJ-20 to AJ-23, with every earlier journey still passing | Not allocated; publication requires separate authorization |
+| Gate M8, storage inspection and agent safety | M8 | `EPIC-014` and `EPIC-015` | AJ-24 to AJ-26 and applicable earlier regressions; both Epics must complete | Intended v0.1.3; publication requires separate authorization |
 
-The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. `M5`, `M6`, and `M7` are later gates under ADR-0025, ADR-0026, and ADR-0027 and do not reopen earlier milestones. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
+The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testing-and-acceptance.md), and the MVP is complete only when the M3 gate passes. `M4` is the first post-MVP gate (ADR-0024) and does not reopen `M1`, `M2`, or `M3`. `M5`, `M6`, `M7`, and shared `M8` are later gates under ADR-0025, ADR-0026, ADR-0027, ADR-0028 and ADR-0029 and do not reopen earlier milestones. The `M1` to `M3` tags preserve private delivery history and are not published product releases; the first public product release is the separately authorized `v0.1.0` publication in `TASK-078` (ADR-0023).
 
 ## 7. Epic registry
 
@@ -88,6 +91,8 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
 | `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
 | `EPIC-013` | Project Memos | M7 | Completed | `TASK-087` to `TASK-094` |
+| `EPIC-014` | Non-mutating installation preflight | M8 | Planned | `TASK-096` to `TASK-100` |
+| `EPIC-015` | Safe Handoff recovery and agent policy | M8 | Planned | `TASK-101` to `TASK-104` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -359,6 +364,47 @@ The source-design registration added the M7 documentation vocabulary and checker
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
 | `TASK-095` | Completed | M7 | Standard: restore registered Git Project content revisions through the canonical workspace root, cover the native review loop and source-safety failure paths, make temporary-path fixtures portable, and document the explicitly authorized v0.1.2 replacement. | Original compiled CLI fails the Git regression; corrected Git and directory loops pass without an override; external and symlink escapes preserve current state; nested and explicit Project selection pass; `make test` and `git diff --check` exit 0; unchanged JSON snapshots and no migration are confirmed by a separate read-only Reviewer. Clean-commit packaging and hosted-download verification are subsequent publication gates. | `TASK-094` | PRJ-017, PRJ-019, VLT-016, HND-014, HND-015, REV-008 to REV-010, REV-013, SEC-006 | Not required |
+
+## EPIC-014: Non-mutating installation preflight
+
+- **Status:** Planned
+- **Milestone:** M8
+- **Objective:** Provide a public storage assessment before opening an existing installation with a writer, so consumers can stop depending on private SQL, migration identifiers and identity-file layouts.
+- **Design authorities:** [PFL requirements](../specs/required-specification.md#19-installation-preflight-milestone-m8), [ADR-0028](../architecture-decision-records/README.md#adr-0028-non-mutating-installation-preflight-in-m8), [preflight contract](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8), [architecture](../architecture/README.md#26-m8-inspection-and-send-recovery-boundaries), and [AJ-24](../specs/testing-and-acceptance.md#aj-24-non-mutating-installation-preflight).
+- **Request context:** Aquarium's 2026-10-14 installation-preflight request; the contract is owned here and does not authorize editing its consumer repository.
+- **Prerequisite:** TASK-095 is Completed. TASK-096 restores checker compatibility before product implementation.
+- **Packages touched:** TASK-096 owns scripts, checker fixtures and scoped checker-status cleanup at docs/README.md M8 entrypoints, governance sections 11 (cross-reference) and 13, roadmap section 2, traceability section 2, and testing AJ-24; accepted ADR registration history stays intact; TASK-097 owns core; TASK-098 owns adapters; TASK-099 owns cli; TASK-100 owns compiled qualification and documentation. No daemon or Web feature is added.
+- **Execution policy:** Follow TASK-096 through TASK-100 sequentially. Pure contracts and adapter checks finish without starting later Tasks. Every Standard or Contract Task requires its independent Reviewer; no Design Gate registry is enrolled.
+- **Compatibility:** Add a CLI inspection contract with no database/configuration/Vault migration and no change to doctor. Preserve the existing pre-Memo preparation and restore rules. Intent-log and logging exceptions apply only to the new inspection paths.
+- **Release boundary:** Target v0.1.3 together with EPIC-015. Product version changes, packaging for publication, installation, consumer replacement and release publication are separately authorized.
+
+| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
+|---|---|---|---|---|---|---|---|
+| `TASK-096` | Planned | M8 | Chore: extend scripts/sot-check.ts and its behavioral fixtures to recognize M8, update checker capability and this registration limitation at docs/README.md M8 entrypoints, governance sections 11 (cross-reference) and 13, roadmap section 2, traceability section 2 and testing AJ-24, preserving accepted ADR history, retaining link, identifier, requirement, dependency, and reverse-index guards. | Focused checker tests, bun run check:sot, and make test exit 0; fixtures accept M8 and reject invalid milestones, missing requirement coverage, forward dependencies, and reverse-index mismatches; checker-capability descriptions reflect the completed work; no product surface changes. | `TASK-095` | NFR-015 | Not required |
+| `TASK-097` | Planned | M8 | Contract: implement the pure preflight assessment, checked version-1 report DTO, six statuses, check catalog, and exit mapping in packages/core; expose no command or filesystem adapter. | Focused unit and contract checks plus make test exit 0; every status and incomplete/unsupported precedence is pinned; a separate Reviewer classifies additive snapshots and records no storage migration; no later adapter is needed. | `TASK-096` | PFL-003, PFL-005, PFL-007 | Not required |
+| `TASK-098` | Planned | M8 | Standard: implement packages/adapters inspection over coherent temporary DB/WAL copies, configuration, migration history, schema integrity, installation identity, fences, and permissions, with isolated scratch cleanup and no operational connection. | Real filesystem/SQLite integration checks plus make test exit 0; stable committed WAL data is inspected, source changes and inaccessible or unsafe storage fail closed, fresh differs from incomplete, originals and fences remain unchanged on success/failure; separate Reviewer confirms the adapter gate. | `TASK-097` | PFL-002, PFL-004, PFL-005, PFL-006 | Not required |
+| `TASK-099` | Planned | M8 | Contract: expose sorage preflight through apps/cli before initialization, using the report, existing envelope, documented exits, contextual no-log messages and recovery, human output, help and completion; bypass migration, intent drain and failure logging. | Compiled CLI and golden checks plus make test exit 0; INIT-015 scope and all statuses/exits match section 36, failures create no home/log/journal and neither message nor recovery points to an unwritten log, legacy command output goldens remain unchanged while reviewed additive root help/completion snapshots include preflight; separate Reviewer classifies additive CLI snapshots and no configuration/database/Vault migration. | `TASK-098` | PFL-001, PFL-002, PFL-003, PFL-007 | Not required |
+| `TASK-100` | Planned | M8 | Standard: qualify AJ-24 over the complete preflight vertical slice, add and retain the public preflight example in docs/specs/examples/cli-workflow.md and canonical no-write/upgrade limits, and prepare EPIC-014 acceptance without publishing. | AJ-24, applicable prior regressions, make test and git diff --check exit 0; final compiled candidate passes the fresh/current/pre-Memo/incomplete/corrupt/newer/WAL/permission/race inventory matrix; a separate Reviewer confirms all PFL criteria and every unperformed platform check is disclosed. | `TASK-099` | PFL-001 to PFL-008 | Not required |
+
+## EPIC-015: Safe Handoff recovery and agent policy
+
+- **Status:** Planned
+- **Milestone:** M8
+- **Objective:** Inspect an uncertain send without executing again and make the shipped agent policy preserve user intent, deletion decisions, observed versions, Project identity and untrusted-content boundaries.
+- **Design authorities:** [SND requirements](../specs/required-specification.md#20-non-executing-send-recovery-milestone-m8), GEN-016 through GEN-020, [ADR-0029](../architecture-decision-records/README.md#adr-0029-non-executing-send-recovery-and-agent-policy-in-m8), [recovery contract](../specs/interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8), [AJ-25](../specs/testing-and-acceptance.md#aj-25-non-executing-send-recovery), and [AJ-26](../specs/testing-and-acceptance.md#aj-26-independent-handoff-skill-walkthrough).
+- **Request context:** Aquarium's 2026-09-25 skill-correction request. Its review labels are consumer observations, not Sorage Task identifiers; M8 acceptance rechecks current native behavior.
+- **Prerequisite:** EPIC-014 must be Completed because recovery reuses its inspection boundary. Do not reopen EPIC-013 or TASK-095.
+- **Packages touched:** TASK-101 owns core/adapters recovery contracts, storage reads and matching CLI/daemon error-catalog contract fixtures (counts and goldens only, not CLI-mode routing/rendering or HTTP recovery); TASK-102 owns cli; TASK-103 owns the shipped skill, guidance and required resource-validation fixtures; TASK-104 owns compiled/agent qualification and documentation. HTTP/Web and other Handoff recovery modes are excluded.
+- **Execution policy:** Follow TASK-101 through TASK-104 sequentially. Reviewers and the skill observer must be separate from the implementing session and have no write access to its diff. No Design Gate registry is enrolled.
+- **Compatibility:** Add one optional send mode and the four CLI-only recovery/storage-refusal errors in interface section 37.1; unchanged execute input/output, persisted receipts and formats, sender rules, legacy hash compatibility, Memo modes and HTTP caches remain covered by regression checks. No persistent migration is planned.
+- **Release boundary:** Target v0.1.3 with EPIC-014. Registration, acceptance, commit, installation, consumer activation and publication remain separate.
+
+| Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
+|---|---|---|---|---|---|---|---|
+| `TASK-101` | Planned | M8 | Contract: implement packages/core send recovery inputs/errors and packages/adapters non-executing receipt reads using the accepted preflight snapshot boundary; preserve original business hashes, sender checks and legacy identity compatibility; promote the planned errors into the implemented error tables and matching apps/cli and apps/daemon error-catalog contract fixtures, including fixed counts and goldens, without adding CLI-mode rendering or HTTP recovery; expose no CLI mode yet. | Focused core, real receipt/snapshot integration and contract checks plus make test exit 0; missing database returns STORAGE_INTEGRITY_ERROR/73; known version-4 (file fence only), version-5 and version-6/7 layouts plus retained, conflicting, absent/expired/restore-missing and wrong-sender cases cause no writes, cleanup, drain, staging or migration; independent snapshot review classifies the new errors/types as additive with no persistent-format migration. | `EPIC-014` | SND-001 to SND-005 | Not required |
+| `TASK-102` | Planned | M8 | Contract: expose apps/cli send --replay-only with the original key/input and existing SendOutcome, the explicit section 37.1 error/exit mappings and contextual message and recovery text, help and completion, routing before send startup drain and body staging. | AJ-25 compiled CLI scenarios plus make test exit 0; exact original input replays with replayed=true, absent/expired receipts never send, late originals and source/identity failures retain uncertainty; existing execute, HTTP/Web and Memo contracts stay unchanged; separate Reviewer classifies additive CLI/error snapshots and no storage migration. | `TASK-101` | SND-001 to SND-006 | Not required |
+| `TASK-103` | Planned | M8 | Standard: update the shipped skills/use-sorage/SKILL.md, its required resource-validation fixtures including test/unit/use-sorage-skill.test.ts against the copied standalone directory rather than a mandatory checkout-relative link, and relevant public/operations guidance for hint authority, deletion and pinned decisions, observed versions, original-key send recovery, untrusted documents, Project setup ownership including retained HND-026 guidance, and clean-install resource usability. | Native stale-Note/revise, pinned-delete and send-recovery checks plus make test exit 0; a separate observer follows the frozen skill in isolated Installations for AJ-26, including copying only the shipped skill directory outside the checkout, requested-versus-unrequested setup/ignore decisions, and GEN-014/GEN-015 and Memo regressions; structural prose matching alone is insufficient. | `TASK-102` | GEN-014, GEN-015, GEN-016 to GEN-020, HND-026, SND-001, SND-004, SND-005 | Not required |
+| `TASK-104` | Planned | M8 | Standard: qualify complete send recovery and agent policy, combine unchanged owning-Task evidence for AJ-25/AJ-26, verify preflight integration and prior regressions, and prepare shared M8 acceptance without installation or publication. | AJ-25 and AJ-26, applicable earlier journeys, make test and git diff --check exit 0; a separate whole-Epic Reviewer verifies all SND and GEN criteria against the exact final candidate and actual independent walkthrough; missing manual checks remain unverified; shared M8 closes only with EPIC-014 acceptance. | `TASK-103` | SND-001 to SND-006, GEN-016 to GEN-020 | Not required |
 
 ## 9. Epic completion and change rules
 

@@ -6,6 +6,10 @@ Copying a file into another repository, pasting it into chat, or passing around 
 
 > **Release status:** Sorage `v0.1.2` is the current public release on GitHub Releases. The supported release target is Apple Silicon macOS. See [CHANGELOG.md](CHANGELOG.md) for shipped outcomes.
 
+## Planned v0.1.3 scope
+
+[The M8 design](docs/README.md#m8-design-entrypoints) proposes non-mutating installation preflight, non-executing recovery of uncertain sends, and stronger shipped agent guidance. These capabilities are intended for v0.1.3 and are not available in the current v0.1.2 executable or skill. Delivery status belongs only to [the roadmap](docs/roadmap/README.md); implementation acceptance, installation and publication remain separate.
+
 ## Features
 
 - A CLI that works without a running daemon

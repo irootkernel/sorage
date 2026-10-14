@@ -9,3 +9,7 @@ This directory defines required Sorage behavior and the contracts implemented by
 - [Testing and Acceptance](testing-and-acceptance.md) defines acceptance journeys and release gates.
 - [Requirement Traceability](traceability.md) maps requirements to roadmap work and evidence.
 - [Examples](examples/) and [schemas](schemas/) support the contracts and have the lowest SOT precedence.
+
+## M8 contract entrypoints
+
+[Required Specification sections 19 and 20](required-specification.md#19-installation-preflight-milestone-m8) and GEN-016 through GEN-020 own installation preflight, non-executing send recovery and shipped agent decisions. [Interfaces sections 36 and 37](interfaces-and-operations.md#36-installation-preflight-milestone-m8) own the detailed CLI/report/error contracts, with no new document authority tier. The design is adopted for intended v0.1.3; availability and delivery status remain exclusively in [the roadmap](../roadmap/README.md). Current v0.1.2 behavior and historical M7 Memo qualification are not rewritten by this adoption.

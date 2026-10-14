@@ -115,7 +115,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
 - Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
-- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, or `M7`.
+- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, `M7`, or `M8`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
 - Confirm the `Design Gate impact` cell, which is `Not required` for every Task in this repository because no Design Gate registry is enrolled, and record that reason rather than leaving the cell empty.
@@ -174,7 +174,7 @@ A review MUST verify:
 - Every commit is created through `$aquarium:task-commit` once a roadmap file is tracked in this repository, because the Aquarium gate then classifies the whole repository as a roadmap repository and blocks direct shell commits.
 - No session commits, amends, or pushes without an explicit instruction from the user for that exact action.
 - A commit carries either one exact Task relationship with an approved lifecycle edit, or an explicit statement that it is unrelated to every active Task.
-- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change.
+- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. [Section 13](#13-m8-document-only-registration-boundary) records the bounded document-only M8 registration limitation; it grants no passing CI result or commit-gate waiver.
 - `make test` is the single verification gate for code and MUST pass before a Task moves to `In Review`.
 
 ## 12. Release change freeze
@@ -186,3 +186,9 @@ Each milestone has its own release gate, and the freeze applies from the moment 
 - Configuration changes require migration tests.
 - New features are deferred to the next milestone unless they resolve a release blocker for the milestone being frozen.
 - A change that would move a requirement between milestones is a material change under section 4.
+
+## 13. M8 document-only registration boundary
+
+ADR-0028 and ADR-0029 adopt shared M8 and SOT version 0.9.0 for EPIC-014 and EPIC-015, with intended product release v0.1.3. The [roadmap](../roadmap/README.md) alone records lifecycle and eligibility. This registration changes Markdown only; code, tests, executable version, shipped skill and local tooling are not changed. TASK-096 owns the existing checker's M8 support, behavioral fixtures and scoped checker-status documentation cleanup before product implementation.
+
+At this documentation-only registration the checker accepted M1 through M7 only. The approved document-only registration therefore leaves a known SOT gate failure for M8 Tasks and new M8 requirement citations until TASK-096 is separately executed. Inspect links, identifiers, dependency order, requirement coverage and reverse-index consistency locally; run the canonical checker and disclose its actual failure rather than reporting a pass or weakening it. This limited registration boundary does not waive make test, a passing SOT gate, independent reviews, or Contract classification for later implementation and commits. No existing accepted milestone is reopened and no new Task is completed by writing its design.

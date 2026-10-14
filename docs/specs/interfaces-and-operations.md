@@ -57,7 +57,7 @@ Home layout:
 
 Each lock record is written to a unique temporary file with `O_EXCL` and atomically published at the lock path with a hard link. Lockfiles contain `{pid, startedAt, hostname}`; `config.lock` is stale after 30 seconds or a dead pid, and `daemon.lock`, `backup.lock`, `vault-move.lock`, `migration.lock`, and `inbox-marker.lock` are stale only when the recorded pid is dead. Marker refresh retries a live marker-lock conflict for up to five seconds, then warns without failing the domain command.
 
-`migration.lock` guards the schema migration that every process runs at start, so a CLI invocation and a daemon start racing on a fresh upgrade cannot both migrate.
+`migration.lock` guards the schema migration that every operational process runs at start, so a CLI invocation and a daemon start racing on a fresh upgrade cannot both migrate.
 
 Nothing under `~/.sorage/state`, `~/.sorage/logs`, or `~/.sorage/run` is ever committed to Git.
 
@@ -118,7 +118,7 @@ Every configuration leaf except `installationId` declares a normative fixed defa
 | `ui.defaultPageSize` | integer 10–200 | `50` | Cursor page size |
 | `ui.showArchivedByDefault` | boolean | `false` | Equivalent of `--include-archived` |
 | `ui.timezone` | string or null | `null` | `null` means the system zone; timestamps are always stored in UTC (NFR-007) |
-| `logging.level` | enum `debug`, `info`, `warn`, `error` | `warn` | Applies to every process; `warn` keeps a CLI invocation quiet (RUN-009) |
+| `logging.level` | enum `debug`, `info`, `warn`, `error` | `warn` | Applies to operational processes; M8 inspection paths do not log (RUN-009) |
 | `logging.includeFullPaths` | boolean | `false` | Path redaction is optional and stable IDs are always kept (SEC-011) |
 | `logging.rotation.maxBytes` | integer ≥ 1 | `10485760` | Rotate `sorage.log` at this size |
 | `logging.rotation.maxFiles` | integer ≥ 1 | `5` | Rotated files retained |
@@ -195,7 +195,7 @@ When an invalid configuration exists (INIT-013):
 
 ## 4. Pre-initialization gate
 
-Before initialization only these commands may run (INIT-011):
+Before initialization the implemented commands below may run (INIT-011). M8 adds `sorage preflight` as the narrowly scoped inspection exception defined in [section 36](#36-installation-preflight-milestone-m8):
 
 ```text
 sorage init
@@ -207,6 +207,8 @@ sorage doctor
 ```
 
 Every other command returns `NOT_INITIALIZED` with the expected configuration path and `sorage init` as the suggested command (INIT-012).
+
+This gate also applies to planned `send --replay-only`: an absent configuration returns NOT_INITIALIZED/78 without creating the home or an installation log. That failure does not authorize initialization or ordinary send.
 
 Human form:
 
@@ -765,6 +767,8 @@ Error:
 
 The envelope is versioned and contract-tested through `make test-contract` (NFR-003, NFR-011).
 
+M8 preflight uses a completed assessment envelope with ok=true even for blocking statuses that exit 75 or 78; [section 36](#36-installation-preflight-milestone-m8) owns that explicit status-based exception. The implemented command catalog above does not yet include planned preflight or send --replay-only; sections 36 and 37 own their prospective syntax.
+
 ## 15. Symbolic error codes
 
 The mapping from symbolic code to HTTP status is published here and verified by `make test-contract` (API-011); a CLI-only code carries the status the daemon would use if the operation were reachable over HTTP.
@@ -833,6 +837,8 @@ Event type names and error codes never share a token, so `HANDOFF_ACCEPTED` is o
 
 Memo-context recovery for `ROW_VERSION_CONFLICT` names the Memo and its observed Row Version; `AMBIGUOUS_PROJECT` names `--project` rather than the Handoff-only `--as` flag. The catalogue defaults and existing Handoff renderings remain unchanged.
 
+M8 plans the CLI-only recovery and storage-refusal errors listed in section 37.1, including HANDOFF_REPLAY_UNAVAILABLE/75 for absent, expired or restore-lost receipts. Recovery preserves original material and uncertainty rather than executing again or replacing the key. The current section 15/16 tables remain the implemented error catalog; TASK-101 promotes the planned errors into those tables and their matching native contract fixtures when the core recovery contract is implemented. No Handoff HTTP recovery endpoint is added. See [section 37](#37-send-replay-only-and-agent-policy-milestone-m8).
+
 ## 16. Exit codes
 
 | Exit | Meaning | Codes |
@@ -849,7 +855,7 @@ Memo-context recovery for `ROW_VERSION_CONFLICT` names the Memo and its observed
 | 77 | Permission or actor authorization failure | `FORBIDDEN_ACTOR`, `USER_CONTEXT_REQUIRED`, `HOST_NOT_ALLOWED`, `UNAUTHENTICATED`, `TOKEN_INVALID`, `SOURCE_OUTSIDE_WORKSPACE`, `GIT_AUTH_REQUIRED` |
 | 78 | Not initialized or invalid configuration | `NOT_INITIALIZED`, `CONFIG_INVALID`, `VAULT_SCHEMA_UNSUPPORTED` |
 
-The symbolic code is the primary machine contract; the exit code is the coarse category for shell callers, and `doctor` exits 0 whenever no check is `blocking`.
+The symbolic code is the primary machine contract; the exit code is the coarse category for shell callers, and `doctor` exits 0 whenever no check is `blocking`. Planned M8 preflight completed assessments use the status-based exits and ok=true rule in [section 36.1](#361-command-and-report), including exits 75 and 78 without an error envelope.
 
 ## 17. Transport, authentication, and daemon discovery
 
@@ -1425,9 +1431,9 @@ The binary the LaunchAgent points at is produced by `make build`, which compiles
 
 ### 34.3 Logging
 
-All Sorage processes write structured JSON logs to `~/.sorage/logs/sorage.log` (RUN-009).
+All operational Sorage processes write structured JSON logs to `~/.sorage/logs/sorage.log` (RUN-009). M8 preflight and send replay-only bypass this logger and rotation on success and failure, reporting through stdout/stderr only under PFL-002 and SND-002.
 
-- The configured level applies to every process, and the default `warn` keeps a CLI invocation quiet.
+- The configured level applies to operational processes, and the default `warn` keeps a CLI invocation quiet; M8 inspection paths never create or rotate installation logs.
 - Rotation uses `logging.rotation.maxBytes` and keeps `logging.rotation.maxFiles` rotated files.
 - Path redaction follows `logging.includeFullPaths`, and stable identifiers are retained either way (SEC-011).
 - Bearer tokens, one-time secrets, and Git credentials are never logged, at any level (SEC-010).
@@ -1447,7 +1453,7 @@ sorage uninstall --as-user --confirm
 
 This section is the only normative definition of the catalog; every other document points here rather than restating it.
 
-The command exits 0 when no check is `blocking`, and it is usable before and after initialization (INIT-014).
+The command exits 0 when no check is `blocking`, and it is usable before and after initialization (INIT-014). Doctor is an operational diagnostic: its database connections configure WAL and do not satisfy the M8 non-mutating preflight contract. It must not be used as proof that opening pre-upgrade storage left it unchanged.
 
 | Check id | Milestone | Severity | Verifies | Recovery |
 |---|---|---|---|---|
@@ -1511,3 +1517,87 @@ JSON shape:
 Adding a check is a contract change: the id is stable once released, and a check that is removed is reported as `ok` with an explanatory message for one minor version rather than disappearing from the catalog.
 
 A worked end-to-end session using these surfaces is in [examples/cli-workflow.md](examples/cli-workflow.md), and the annotated configuration is in [examples/config.example.yaml](examples/config.example.yaml).
+
+## 36. Installation preflight, milestone M8
+
+This is the required M8 design under PFL-001 through PFL-008 and ADR-0028. Implementation readiness is recorded only in [EPIC-014](../roadmap/README.md#epic-014-non-mutating-installation-preflight). The current v0.1.2 executable does not provide this command. The intended release is v0.1.3 after shared M8 acceptance and separately authorized publication.
+
+### 36.1 Command and report
+
+The planned syntax is `sorage preflight [--json]`. It honors the existing SORAGE_HOME resolution and path expansion rules, including relative overrides from the command's working directory. No Project, actor override, daemon, or valid initialized configuration is needed to begin inspection. It accepts no repair, migration, initialization, confirmation, or upgrade-preparation assertion flag. Human output reports the same status and checks as JSON.
+
+JSON reuses the existing envelope and contains `data.contractVersion: 1`, `data.status`, and `data.checks`. The only status values are those in the following table. Each check contains `id`, `severity` (`ok`, `warning`, or `blocking`), `message`, and optional `recovery` with human guidance in `message` and an optional `suggestedCommand`. Neither a message nor a suggested command grants authority. SQL tables, migration numbers or names, and marker contents are not consumer inputs or predicates. A completed assessment uses `ok: true` even when its status blocks proceeding; consumers must inspect status, not only the envelope boolean. Invocation failures use the existing error envelope, without installation logging. Both message and recovery must describe the inspection obstacle or retain the emitted request ID/output for bounded diagnosis; neither may direct the user to an installation log that this path does not write. TASK-099 owns this contextual CLI rendering, and AJ-24 checks both fields.
+
+| Status | Meaning | Exit | Required response |
+|---|---|---:|---|
+| `fresh` | Selected home is absent, empty, or contains only the explicitly permitted pre-initialization residue below | 0 | Initialize only when requested; this status is not initialization authority |
+| `compatible` | A coherent observation satisfies this binary's supported storage and Installation identity contract with no migration required | 0 | Continue only with the independently authorized operation |
+| `upgrade_required` | Valid, known older storage needs migration; pre-Memo storage also requires its documented preparation | 78 | Retain old writers stopped, use the old binary for backup verification and a separate restore drill when required, then obtain upgrade authority |
+| `recovery_required` | Conclusively incomplete, corrupt, structurally invalid or identity-inconsistent storage | 78 | Diagnose and obtain a bounded recovery decision; never initialize over it |
+| `unsupported` | A readable configuration, database or Vault schema is newer than supported, or its format is conclusively unsupported | 78 | Use a compatible build or an explicitly authorized recovery path |
+| `unverifiable` | Inspection cannot establish a coherent verdict because of permissions, unsafe links, changing source state, fences, or unavailable snapshot support | 75 | Preserve the installation, resolve the inspection obstacle, and run a new inspection; do not assume fresh or compatible |
+
+Fresh requires affirmative absence, emptiness, or a fully readable residue-only inventory. The only permitted residue is real `logs`, `state`, and `run` directories: state and run must be empty, and logs may contain only regular `sorage.log` and `sorage.log.<positive-decimal-integer>` rotation files. Report residue as a home.state warning, preserve it, and do not parse log contents as installation authority. Any other entry, including configuration, database/journals, token, lock, marker or unknown file, prevents residue-only fresh; recognizable partial installation state is recovery_required and an unexplained readable inventory is recovery_required with bounded diagnosis guidance. An unreadable, broken-link or non-directory home is not fresh. A conclusive unsupported or recovery condition may be reported even when other checks cannot complete. Otherwise any unresolved mandatory check prevents compatible or upgrade_required and yields unverifiable. Upgrade_required requires a valid known migration history, not merely a low maximum version. An assessment is point-in-time; consumers must inspect again when the selected Installation, binary, storage or preparation context changes. It does not certify every Artifact checksum, all doctor checks, completion of an external restore drill, or permission to perform a write.
+
+### 36.2 Check catalog and inspection boundary
+
+This section owns the preflight catalog. Emit its fixed IDs in this order, including checks that cannot run; such checks must explain their unverified or inapplicable state rather than fabricate a pass. Consumers route on status and IDs, not message text.
+
+| ID | Assessment |
+|---|---|
+| `home.state` | Selected home absence, emptiness, completeness and readability |
+| `source.snapshot` | Safe regular source files, DB/WAL inventory, stable coherent snapshot and actual restore/Vault-move fences; committed migration state is assessed from the snapshot |
+| `config.schema` | Supported configuration schema and validated path resolution |
+| `db.schema` | Supported complete ordered migration history and required schema structure |
+| `db.integrity` | SQLite integrity and supported relational invariants in the inspected snapshot |
+| `vault.marker` | Readable supported Vault marker and its validated fields |
+| `installation.identity` | Configuration identity agrees with present database identity records, every binding and the Vault marker; a legitimate absent optional singleton row is not invented |
+| `upgrade.preparation` | Migration requirement and applicable pre-Memo backup/restore preparation, with no claim that the external work already occurred |
+
+The inspector reads original files without opening operational SQLite. Copy the relevant configuration/marker and database/WAL into a private temporary inspection directory outside both home and Vault, validate source identity, hashes and inventory before and after capture, and inspect only a coherent copy. Committed WAL contents must participate; never inspect only the main DB when WAL is present. Shared-memory reconstruction or checkpointing is permitted only in the private copy. Changes during capture, unsafe links, active inspection fences or inability to prove a coherent capture yield unverifiable rather than a best-effort compatible verdict. Bound attempts and report failure rather than looping until a writer happens to stop. Clean up owned scratch artifacts on both success and failure.
+
+Directory aliases for the selected home and configured Vault are allowed only after resolving stable canonical roots; the Vault may legitimately be outside home. Configuration, database, WAL/SHM, marker and fence files must be regular non-symlink files confined to their respective canonical managed roots. A changing root/link resolution, a linked managed file, an escaping entry or a broken link yields unverifiable. Check directory identity and canonical resolution before and after capture; do not follow an arbitrary linked state file into another installation. Source-file send validation additionally retains its existing Project/external-source rules.
+
+Restore uses the native run/vault-move.lock record. Vault move uses that file lock and, for schemas that contain it, vault_state.move_fence_pid; restore does not establish a database move fence. A live owner blocks inspection: preflight returns unverifiable and replay-only returns SERVICE_PAUSED/75. Apply the existing PID liveness rules, including EPERM as alive and malformed/dead-PID lock records as stale; leave all stale records and rows untouched. Preflight reports stale observations as source.snapshot warnings; replay-only ignores conclusively stale fences without adding fields to the existing SendOutcome. If liveness cannot be established or fence bytes/state change during capture, inspection is unavailable. Check file fences before and after capture and the copied database fence against the same bounded observation. A row in migration_lock does not establish a live owner: the current migrator serializes with BEGIN IMMEDIATE and that internal table, not by acquiring run/migration.lock. M8 does not depend on the legacy documented file lock being present; if such a file is present, honor a live owner and preserve stale evidence. Validate the committed known migration history and schema on the copy, rejecting unstable captures; a coherent committed snapshot does not certify that no uncommitted migration or later writer exists. The earlier operational file-lock prescription is not evidence that the native runner implements it, and changing the runner is outside this inspection design.
+
+No initialization, operational PRAGMA configuration, migration, intent drain, service action, lock creation/removal, configuration repair or installation log/rotation is allowed. The prohibition includes parser, configuration and database failure paths. Reads can update filesystem access timestamps; the no-write proof covers contents, permissions, modification times, identities, entries and journals, not an atime guarantee. Recovery text points to the existing authorized upgrade/restore process and never performs it.
+
+## 37. Send replay-only and agent policy, milestone M8
+
+This is the required M8 design under SND-001 through SND-006, GEN-016 through GEN-020 and ADR-0029. Implementation readiness is recorded only in [EPIC-015](../roadmap/README.md#epic-015-safe-handoff-recovery-and-agent-policy). The current v0.1.2 send command has no replay-only flag; its ordinary same-key retry can execute when the receipt is absent. M8 adds a CLI send mode only, not an HTTP header, Web flow, generic Handoff recovery service, or another mutation mode.
+
+### 37.1 Original-request recovery
+
+The planned syntax is the original `sorage send --to <project> [--to <project> ...] --title <title> (--file <path> | --body <text>) [original send options] --idempotency-key <original-key> --replay-only [--json]`. Require the original nonempty key, the same business input/source bytes, the intended Installation and the original sender context. Keep existing key compatibility rather than rejecting retained legacy keys under a new format rule. Reject a missing key as CLI usage error 2. Preserve existing input validation and actor/source guards. A different Installation or missing original material must not be substituted automatically.
+
+Mode is excluded from the business request hash. Reuse existing normalized recipient/title/content/kind/supersedes/sender hashing and the verified legacy hash and Workspace-to-Project replay rules. Read and digest a file source without importing it; digest an inline body directly without a spool. A missing or changed source is not permission to fetch some newer Handoff content or reconstruct the request. Select the replay-only path before creating ordinary send ports, operational migration, Vault startup drain, body scratch or Artifact staging.
+
+| Lookup outcome | Result | Allowed effects |
+|---|---|---|
+| Matching eligible receipt and verified sender | Existing SendOutcome in a fresh envelope, with `replayed: true`; exit 0 | Inspection only; no Handoff or activation work |
+| Retained receipt for a different request | `IDEMPOTENCY_CONFLICT`; exit 75 | None |
+| Missing, expired or restore-lost receipt | `HANDOFF_REPLAY_UNAVAILABLE`; HTTP-equivalent 409, exit 75 | None; outcome remains unknown |
+| Sender or source failure | Existing applicable error and exit category, including INTERNAL_ERROR/1 for a missing, unreadable or non-regular input file; use M8 contextual message and recovery without logging | No fallback or new execution |
+| Storage, snapshot or fence failure | Explicit mapping below; never disguise it as a receipt miss | No fallback or new execution |
+
+Use the PFL-006 coherent snapshot boundary and the actual fence and committed-migration rules in section 36.2. The lookup Clock is sampled inside the consistent snapshot read and eligibility requires `expiresAt > now`; equality is expired. Filter expired receipts without deleting or extending them. The current expiry-deleting Handoff lookup is not the recovery read port. Validate the stored result and sender before returning it; never expose another sender's receipt or treat malformed storage as a miss followed by execution.
+
+Replay-only accepts complete known migration prefixes ending at versions 4 through 7, including the pre-Memo version-6 receipt layout, only after validating the corresponding required receipt, sender, binding and identity structures. It reads them without migration; version 4 has no Vault-move database fence columns, so the file fence still applies. The independent preflight can report upgrade_required for the same older installation without preventing an eligible historical recovery read. Known versions 1 through 3 lack the required receipt domain and are unsupported for replay-only. Missing configuration is NOT_INITIALIZED/78; invalid supported configuration is CONFIG_INVALID/78; a readable newer configuration or unknown/newer database schema or a valid older layout without receipt support is STORAGE_SCHEMA_UNSUPPORTED/78. Unsupported Vault schemas retain VAULT_SCHEMA_UNSUPPORTED/78. A missing or malformed Vault marker or marker Installation mismatch retains VAULT_INTEGRITY_ERROR/73. Missing database, invalid known migration sequence or required structures, corrupt database bytes, non-marker Installation identity inconsistency or malformed retained receipts are STORAGE_INTEGRITY_ERROR/73. Permission denial, unsafe links, changing capture, unprovable coherence or unavailable snapshot support are STORAGE_INSPECTION_UNAVAILABLE/75. A conclusively live move/restore or observed legacy migration-file fence is SERVICE_PAUSED/75. All mappings bypass installation logging.
+
+The prospective CLI-only error additions are HANDOFF_REPLAY_UNAVAILABLE (HTTP-equivalent 409, exit 75), STORAGE_SCHEMA_UNSUPPORTED (422, 78), STORAGE_INTEGRITY_ERROR (409, 73), and STORAGE_INSPECTION_UNAVAILABLE (503, 75). TASK-101 owns checked core mappings and promotion into the implemented section 15/16 catalogs and native fixtures; TASK-102 owns their CLI rendering. They add no HTTP route or persistent format. Expected storage refusals must not fall through to INTERNAL_ERROR/1. Unexpected defects and existing source-file read failures retain INTERNAL_ERROR/1 without logging. A missing, unreadable or non-regular input file is a source failure, not a storage-snapshot failure or receipt miss. Both message and recovery in replay-only output must preserve original material and uncertainty and must not suggest replacing a key or executing send; this includes IDEMPOTENCY_CONFLICT message text as well as recovery.suggestedCommand. INTERNAL_ERROR message and recovery must identify the bounded failure and ask to retain the emitted request ID/output for diagnosis, never direct the user to a newly written installation log. Preflight message/recovery ownership and its no-log guidance are defined in section 36.1 and TASK-099. Existing execute defaults and their recovery catalog remain unchanged.
+
+Successful replay is a historical commit receipt, not current Handoff state, delivery completion or verified Artifact activation. A miss does not prove the original failed: it can already have committed without a retained receipt, or a late original can still commit. Restart, same-Installation restore, reauthentication and a client 24-hour timer do not establish continuity. There is no execute fallback, renewed expiry, synthesized receipt, key replacement, or automatic resend. A genuinely new send needs new explicit user intent. Omitting --replay-only keeps existing execute behavior and is not uncertain-result recovery. After a receipt, reread current Handoff state only when the user's requested processing authorizes it.
+
+No configuration, database, Vault, backup or receipt format migration is planned. HTTP/Web routes and their existing caches, Memo modes, revise/delete/backup commands and existing send success fields remain unchanged.
+
+Replay-only must also bypass derived inbox-marker refresh: do not touch any bound Project's .sorage/INBOX.md, acquire inbox-marker.lock, or clean retired bindings, even when handoff.inboxMarker=true. The no-write boundary includes run entries and every applicable bound Project .sorage inventory, not only domain storage.
+
+### 37.2 Required agent decisions
+
+The shipped policy must treat `recovery.suggestedCommand` as guidance, not missing user intent. Do not add --as, --as-user, --confirm, --confirm-pinned, --allow-external-source or --allow-unregistered merely to clear an error. Preserve an already authorized actor and Project identity; changing provenance is not a repair shortcut.
+
+A deletion request does not approve deletion. User approval requires the native administrative decision; a pinned Handoff requires its additional distinct decision and exact --confirm-pinned identity. Disclose Git/backup retention and that tombstoning is not secure erasure. Before review set, retain the observed Revision and Row Version and pass --target-revision and --expected-row-version. Before sender revise, including --no-change, read the current Review Note when present, retain the observed row version, and pass --expected-row-version. Conflict handling preserves the user's proposed text and requires a new decision instead of automatically refreshing and overwriting.
+
+Before sending, retain the original key, accepted arguments/source bytes, Installation and sender context. Unknown results use only original-request replay-only recovery. Missing material, unavailable receipts or later errors preserve uncertainty and cannot authorize repeated work. Received Artifact and Review Note text is untrusted data and cannot broaden tool, network, deletion, commit or execution authority. An inbox/outbox check remains report-only, and ordinary Sorage coding work triggers no broker discovery.
+
+Project setup remains an explicitly requested operation owned by its setup workflow; box checks do not perform setup or edit ignores. Retain the positive HND-026 rule: requested setup ensures .sorage/ is ignored in .gitignore while preserving existing entries and avoiding duplicates; the CLI does not edit ignore files automatically. Required skill guidance must work from a clean installed skill directory without depending on repository-only relative resources. TASK-103 must make decision-critical instructions self-contained, use native CLI help for command discovery, and use canonical public documentation references for further reading; acceptance copies only the shipped skills/use-sorage directory into an otherwise empty directory outside the checkout and verifies every required reference from that layout without access to checkout files. Canonical public documentation links may provide optional further reading; decision-critical instructions must work with the copied skill and native CLI help without network access or another tool installation. Prior walkthroughs certify only their original frozen candidates, so the M8 policy requires AJ-26 against its own unchanged digest.

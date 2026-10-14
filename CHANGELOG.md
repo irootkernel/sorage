@@ -4,6 +4,14 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.3 - Unreleased
 
+### Planned scope
+
+- Non-mutating installation preflight through a supported public CLI contract.
+- Non-executing recovery of uncertain CLI sends, with original-request receipt lookup.
+- Shipped agent guidance for explicit authority, deletion decisions, stale edits, received content and safe recovery.
+
+These are adopted design targets, not implemented or shipped changes. [The roadmap](docs/roadmap/README.md) owns delivery status and [the M8 design](docs/README.md#m8-design-entrypoints) defines the contracts. Publication requires separate authorization.
+
 ## v0.1.2 - 2026-10-03
 
 This corrected distribution replaces the withdrawn original v0.1.2 distribution dated 2026-09-29. Existing v0.1.2 installations must replace the binary and verify the new release manifest and checksum; the version string remains unchanged.

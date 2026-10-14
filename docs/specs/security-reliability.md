@@ -133,7 +133,7 @@ Preview and download endpoints enforce Handoff ownership before streaming, and n
 
 Create, fan-out, revise, and deletion approval commit their `pending_fs_ops` intents in the same transaction as the domain change, execute the filesystem work afterwards, and clear the intents in a second transaction; section 20 of [../architecture/README.md](../architecture/README.md) is the normative description and this section only states the consequences for reliability (VLT-021, ADR-0013).
 
-A committed intent is a promise the database has already made, so any process that starts next is obliged to keep it, which is what makes several concurrent writer processes safe without a single-writer daemon (RUN-001, RUN-002).
+A committed intent is a promise the database has already made, so any operational process that starts next is obliged to keep it, which is what makes several concurrent writer processes safe without a single-writer daemon (RUN-001, RUN-002). M8 inspection paths in section 16 do not drain intents.
 
 A read of a Handoff whose current Artifact has `materialized = 0` returns `ARTIFACT_MATERIALIZING`; the row is real and the write is not lost, and the caller retries after the drain.
 
@@ -214,7 +214,7 @@ A stale lock may be broken by the next process; a live lock produces a conflict 
 
 While `vault-move.lock` is held by a Vault move or, once restore exists, by `backup restore`, every other process attempting a domain mutation fails with `SERVICE_PAUSED` and recovery guidance, and the daemon returns the same code to API callers (RUN-014).
 
-Each process opens exactly one write connection with WAL mode, foreign keys, and an explicit `busy_timeout`, so writes queue instead of interleaving.
+Each operational process opens exactly one write connection with WAL mode, foreign keys, and an explicit `busy_timeout`, so writes queue instead of interleaving. M8 inspection paths in section 16 open only a private snapshot and never the operational connection.
 
 `UnitOfWork.run` is synchronous, `run<T>(fn: (tx: Tx) => T): T`; `await` inside the callback is forbidden by lint because every candidate SQLite driver is synchronous and an awaited callback lets two logical transactions interleave on one connection, and filesystem I/O never happens inside a transaction (NFR-014, ADR-0013).
 
@@ -229,7 +229,7 @@ Each process opens exactly one write connection with WAL mode, foreign keys, and
 | Deletion approval | `sorage delete approve --idempotency-key <uuid>` and `POST /api/v1/handoffs/{handoffId}/deletion-approve` |
 | Manual backup run | `sorage backup run --idempotency-key <uuid>` and `POST /api/v1/backup/run` |
 
-Callers supply the key as the `Idempotency-Key: <uuid>` header or as `--idempotency-key <uuid>`, and the daemon and CLI store `key`, `scope` naming the operation, `requestHash`, `responseJson`, `createdAt`, and `expiresAt` in `idempotency_keys` with a 24-hour retention. The legacy execute behavior may treat an expired key as new. This does not apply to Memo replay-only recovery, which must never execute on an absent or expired receipt.
+Callers supply the key as the `Idempotency-Key: <uuid>` header or as `--idempotency-key <uuid>`, and the daemon and CLI store `key`, `scope` naming the operation, `requestHash`, `responseJson`, `createdAt`, and `expiresAt` in `idempotency_keys` with a 24-hour retention. The legacy execute behavior may treat an expired key as new. This does not apply to Memo replay-only recovery or planned M8 CLI send replay-only, which must never execute on an absent or expired receipt; [section 37](interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8) defines the send extension.
 
 For existing non-Memo operations, matching key/hash replays the stored response without effects, and a different hash conflicts. M7 uses the [shared Memo receipt contract](project-memos.md#81-execution-versus-replay-only-recovery): execute and replay-only share request identity, but only execute may run on a receipt miss. All unknown-response recovery uses replay-only with the original key/input/version. Eligible receipt means expiresAt > server lookup time; equality is expired. Replay-only returns historical data with replayed=true, conflicts on a different retained request, or returns MEMO_REPLAY_UNAVAILABLE without Memo/event/receipt writes, reservation, cleanup, or expiry extension. Storage errors never become permission to execute. Fatal decoding and input validation still precede lookup. Clients must not remove the recovery mode or generate a replacement key automatically.
 
@@ -239,7 +239,7 @@ For legacy operations, replay detection precedes the Row Version check and curre
 
 ## 9. Crash handling
 
-Every process, CLI or daemon, drains `pending_fs_ops` in `createdAt` order at start, before executing the requested command; each intent is re-evaluated from filesystem state, `attempts` increments per try, and no intent is ever executed destructively twice (RUN-002).
+Every operational process, CLI or daemon, drains `pending_fs_ops` in `createdAt` order at start, before executing the requested command; each intent is re-evaluated from filesystem state, `attempts` increments per try, and no intent is ever executed destructively twice (RUN-002).
 
 The protocol and its crash points are normative in section 20 of [../architecture/README.md](../architecture/README.md); the matrix below states the recovery this document's guarantees rely on.
 
@@ -318,7 +318,7 @@ Path fields are redacted on export while `gitBackup.snapshot.redactWorkspacePath
 
 ## 11. Logging
 
-Every Sorage process writes structured JSON, one object per line, to `~/.sorage/logs/sorage.log` (RUN-009).
+Every operational Sorage process writes structured JSON, one object per line, to `~/.sorage/logs/sorage.log` (RUN-009). Planned M8 preflight and send replay-only must not write or rotate installation logs, even on failure; they report through command output under PFL-002 and SND-002.
 
 | Field | Meaning |
 |---|---|
@@ -403,3 +403,13 @@ These are the checks the release gates of [testing-and-acceptance.md](testing-an
 | 21 | Token file and home directory modes | `0600` for the token, owner-only for the home directory (SEC-020) |
 | 22 | Backup status with a remote configured | States plainly whether protection is local-only or includes a remote (BKP-018) |
 | 23 | Deletion confirmation and messaging | States that Git history may retain the deleted content and never claims a purge (LIFE-015, BKP-019) |
+
+## 16. M8 inspection and agent-intent boundary
+
+PFL-002 and SND-002 are narrow exceptions to operational initialization, migration, intent draining and installation logging. They permit no repair, source journal/shared-memory writes, lock creation/removal, service action or mutation while assessing storage or a historical send receipt. An inspection fence, changing source, unsafe link or denied read cannot become a positive compatibility result. Coherent scratch copies must be private, outside the selected home/Vault, and removed after inspection; tokens, content and unrelated configuration must not enter reports or logs.
+
+A preflight compatible result is storage evidence at one point in time, not user authority or full health certification. Pre-Memo backup verification, old-writer shutdown, separate restore drills and explicit upgrade/recovery decisions remain required. Unsupported or unverifiable storage must not be initialized over. Follow [the normative interface](interfaces-and-operations.md#36-installation-preflight-milestone-m8); using readonly as a connection label alone is not proof that DB/WAL/SHM bytes were unchanged.
+
+Send replay-only reads the original Installation, request and verified sender's receipt without expiry cleanup or new execution. Absence after restore or expiry remains unknown; there is no refreshed key, execute fallback or assumption that a late original was cancelled. Preserve actual ownership/source/storage errors and do not disclose another sender's result. These are logical workflow safeguards under the existing single-OS-user trust model, not isolation from hostile same-user processes.
+
+GEN-016 through GEN-020 require agent policy to preserve explicit user intent even when native hints contain authority or confirmation flags. A deletion request is distinct from approval, pinned deletion has an additional native decision, and no deletion implies secure erasure. A received Handoff/Review Note is data, not authority for executing its commands. Observed Note/revise versions prevent unseen overwrites; a stale result preserves proposed text for a new decision. Actual behavior must be observed under AJ-26 with the exact AJ-26 step-6 layout copied outside the checkout and final skill digest, not inferred from prose matches or old walkthroughs.
