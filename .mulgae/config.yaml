@@ -1,6 +1,7 @@
 version: 4
 project:
   name: "sorage"
+  kind: "ui"
 providers:
   zcode: {}
   grok: {}
@@ -14,6 +15,16 @@ roles:
   product: {enabled: true, primary_provider: "zcode"}
   documentation: {enabled: true, primary_provider: "zcode"}
   testing: {enabled: true, primary_provider: "zcode"}
+  artist:
+    enabled: true
+    primary_provider: "codex"
+    inputs:
+      task_path: "ux-ui-info.md"
+      design_spec_globs:
+        - "design-specs/**/*.png"
+        - "design-specs/**/*.jpg"
+        - "design-specs/**/*.jpeg"
+        - "design-specs/**/*.webp"
 review:
   required_roles: ["logic", "security", "maintainability", "product", "documentation", "testing"]
   request_changes_on: ["high", "critical", "blocker"]
@@ -30,7 +41,7 @@ resources:
   max_active_lanes: 1
   primary_repair_attempts: 1
   role_max_invocations: 2
-  run_max_invocations: 12
+  run_max_invocations: 14
 ci:
   fail_on_severity: ["high", "critical", "blocker"]
   degraded_review_fails: true
