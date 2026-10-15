@@ -23,14 +23,14 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-014`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** `TASK-096`
+- **Next eligible Task:** `TASK-097`
 
 EPIC-013 and TASK-087 through TASK-094 retain their completed M7 acceptance. TASK-095 is a separately authorized post-release correction; it does not reopen a completed Epic. Its publication boundary is the explicitly authorized replacement of v0.1.2, with the runtime version unchanged.
 
-M8 is registered as a documentation-only design. At this documentation-only registration, the existing SOT checker recognized only M1 through M7; TASK-096 owns its extension and no SOT gate pass is claimed before that work. The new Epics and Tasks are not started by registration. Their intended product release is v0.1.3, with installation and publication separately authorized.
+M8 is registered as a documentation-only design. The checker recognizes milestones M1 through M8, including PFL, SND, and GEN-016 through GEN-020, and still rejects invalid milestones, missing requirement coverage, forward dependencies, reverse-index mismatches, unresolved links, and bad identifiers. The new Epics and Tasks are not started by registration. Their intended product release is v0.1.3, with installation and publication separately authorized.
 
 ## 3. Identifier policy
 
@@ -91,7 +91,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
 | `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
 | `EPIC-013` | Project Memos | M7 | Completed | `TASK-087` to `TASK-094` |
-| `EPIC-014` | Non-mutating installation preflight | M8 | Planned | `TASK-096` to `TASK-100` |
+| `EPIC-014` | Non-mutating installation preflight | M8 | In Progress | `TASK-096` to `TASK-100` |
 | `EPIC-015` | Safe Handoff recovery and agent policy | M8 | Planned | `TASK-101` to `TASK-104` |
 
 ## EPIC-001: Foundation and toolchain
@@ -367,9 +367,10 @@ The source-design registration added the M7 documentation vocabulary and checker
 
 ## EPIC-014: Non-mutating installation preflight
 
-- **Status:** Planned
+- **Status:** In Progress
 - **Milestone:** M8
 - **Objective:** Provide a public storage assessment before opening an existing installation with a writer, so consumers can stop depending on private SQL, migration identifiers and identity-file layouts.
+- **Detailed SOT:** [Installation preflight execution dossier](../todo/installation-preflight.md)
 - **Design authorities:** [PFL requirements](../specs/required-specification.md#19-installation-preflight-milestone-m8), [ADR-0028](../architecture-decision-records/README.md#adr-0028-non-mutating-installation-preflight-in-m8), [preflight contract](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8), [architecture](../architecture/README.md#26-m8-inspection-and-send-recovery-boundaries), and [AJ-24](../specs/testing-and-acceptance.md#aj-24-non-mutating-installation-preflight).
 - **Request context:** Aquarium's 2026-10-14 installation-preflight request; the contract is owned here and does not authorize editing its consumer repository.
 - **Prerequisite:** TASK-095 is Completed. TASK-096 restores checker compatibility before product implementation.
@@ -380,7 +381,7 @@ The source-design registration added the M7 documentation vocabulary and checker
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
-| `TASK-096` | Planned | M8 | Chore: extend scripts/sot-check.ts and its behavioral fixtures to recognize M8, update checker capability and this registration limitation at docs/README.md M8 entrypoints, governance sections 11 (cross-reference) and 13, roadmap section 2, traceability section 2 and testing AJ-24, preserving accepted ADR history, retaining link, identifier, requirement, dependency, and reverse-index guards. | Focused checker tests, bun run check:sot, and make test exit 0; fixtures accept M8 and reject invalid milestones, missing requirement coverage, forward dependencies, and reverse-index mismatches; checker-capability descriptions reflect the completed work; no product surface changes. | `TASK-095` | NFR-015 | Not required |
+| `TASK-096` | Completed | M8 | Chore: extend scripts/sot-check.ts and its behavioral fixtures to recognize M8, update checker capability and this registration limitation at docs/README.md M8 entrypoints, governance sections 11 (cross-reference) and 13, roadmap section 2, traceability section 2 and testing AJ-24, preserving accepted ADR history, retaining link, identifier, requirement, dependency, and reverse-index guards. | Focused checker tests, bun run check:sot, and make test exit 0; fixtures accept M8 and reject invalid milestones, missing requirement coverage, forward dependencies, and reverse-index mismatches; checker-capability descriptions reflect the completed work; no product surface changes. | `TASK-095` | NFR-015 | Not required |
 | `TASK-097` | Planned | M8 | Contract: implement the pure preflight assessment, checked version-1 report DTO, six statuses, check catalog, and exit mapping in packages/core; expose no command or filesystem adapter. | Focused unit and contract checks plus make test exit 0; every status and incomplete/unsupported precedence is pinned; a separate Reviewer classifies additive snapshots and records no storage migration; no later adapter is needed. | `TASK-096` | PFL-003, PFL-005, PFL-007 | Not required |
 | `TASK-098` | Planned | M8 | Standard: implement packages/adapters inspection over coherent temporary DB/WAL copies, configuration, migration history, schema integrity, installation identity, fences, and permissions, with isolated scratch cleanup and no operational connection. | Real filesystem/SQLite integration checks plus make test exit 0; stable committed WAL data is inspected, source changes and inaccessible or unsafe storage fail closed, fresh differs from incomplete, originals and fences remain unchanged on success/failure; separate Reviewer confirms the adapter gate. | `TASK-097` | PFL-002, PFL-004, PFL-005, PFL-006 | Not required |
 | `TASK-099` | Planned | M8 | Contract: expose sorage preflight through apps/cli before initialization, using the report, existing envelope, documented exits, contextual no-log messages and recovery, human output, help and completion; bypass migration, intent drain and failure logging. | Compiled CLI and golden checks plus make test exit 0; INIT-015 scope and all statuses/exits match section 36, failures create no home/log/journal and neither message nor recovery points to an unwritten log, legacy command output goldens remain unchanged while reviewed additive root help/completion snapshots include preflight; separate Reviewer classifies additive CLI snapshots and no configuration/database/Vault migration. | `TASK-098` | PFL-001, PFL-002, PFL-003, PFL-007 | Not required |

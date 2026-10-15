@@ -40,7 +40,7 @@ Milestone values come from the specification and name the release gate at whose 
 
 Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, AJ-18 closes the M5 Web body-compose gate, AJ-19 closes the M6 Project lifecycle gate, AJ-20 to AJ-23 close the M7 Project Memo gate, and required AJ-24 to AJ-26 close the shared M8 gate only after both new Epics, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
 
-TASK-096 additionally cites NFR-015 for the M8 checker extension. M8 entries above are requirement-to-test obligations, not executed evidence; at registration, the checker could not validate the new milestone; TASK-096 owns that extension and scoped documentation cleanup.
+TASK-096 additionally cites NFR-015 for the M8 checker extension. M8 entries above are requirement-to-test obligations, not executed evidence. The checker can validate milestone M8 and those citations, and this validation is not evidence that AJ-24 or later product tasks have run.
 
 ## 3. Reverse index
 

@@ -106,18 +106,106 @@ describe("sot-check", () => {
     expect(result.stderr).toContain("requirement GEN-001 (milestone M6) is cited only by later-milestone Tasks");
   });
 
-  it("rejects an unadopted milestone beyond M7", () => {
+  it("rejects an M7 requirement covered only by M8 Tasks", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M7 |"));
+        }
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(roadmap, readTheFile(roadmap).replaceAll("| M1 |", "| M8 |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement GEN-001 (milestone M7) is cited only by later-milestone Tasks");
+  });
+
+  it("accepts M8 requirements, Tasks, and their matching reverse index", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "roadmap/README.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M8 |"));
+        }
+      }),
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects an unadopted milestone beyond M8", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "roadmap", "README.md");
         writeFileSync(
           path,
-          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M8 |"),
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M9 |"),
         );
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "M8"');
+    expect(result.stderr).toContain('invalid milestone "M9"');
+  });
+
+  it("fails when an M8 requirement has no citing Task", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(
+          spec,
+          readTheFile(spec).replace(
+            "| INIT-001 | M1 | Home directory is fixed. |\n",
+            "| INIT-001 | M1 | Home directory is fixed. |\n| PFL-001 | M8 | Inspection stays non-mutating. |\n",
+          ),
+        );
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace(
+            "| `INIT-001` | M1 | `TASK-001` |\n",
+            "| `INIT-001` | M1 | `TASK-001` |\n| `PFL-001` | M8 | None |\n",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement PFL-001 (milestone M8) has no citing Task");
+  });
+
+  it("fails when an M8 Task depends on a later Task", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "roadmap/README.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M8 |"));
+        }
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(roadmap, readTheFile(roadmap).replace("| None | GEN-001", "| `TASK-002` | GEN-001"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("depends on later or equal Task TASK-002");
+  });
+
+  it("fails when an M8 reverse-index row disagrees", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "roadmap/README.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M8 |"));
+        }
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace(
+            "| `GEN-001` | M8 | `TASK-001`, `TASK-002` |",
+            "| `GEN-001` | M7 | `TASK-001`, `TASK-002` |",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("reverse-index milestone M7 for GEN-001 disagrees with the specification's M8");
   });
 
   it("fails on hard-wrapped prose with the offending line", () => {
@@ -225,7 +313,7 @@ describe("sot-check", () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, or M7');
+    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, or M8');
   });
 
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {
