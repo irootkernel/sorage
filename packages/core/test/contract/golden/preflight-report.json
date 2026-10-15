@@ -1,0 +1,91 @@
+{
+  "contractVersion": 1,
+  "catalog": [
+    "home.state",
+    "source.snapshot",
+    "config.schema",
+    "db.schema",
+    "db.integrity",
+    "vault.marker",
+    "installation.identity",
+    "upgrade.preparation"
+  ],
+  "exits": {
+    "fresh": 0,
+    "compatible": 0,
+    "upgrade_required": 78,
+    "recovery_required": 78,
+    "unsupported": 78,
+    "unverifiable": 75
+  },
+  "report": {
+    "contractVersion": 1,
+    "status": "fresh",
+    "checks": [
+      {
+        "id": "home.state",
+        "severity": "warning",
+        "message": "The selected home contains only permitted pre-initialization residue. That residue is not installation authority.",
+        "recovery": {
+          "message": "Preserve the residue. This status does not authorize initialization."
+        }
+      },
+      {
+        "id": "source.snapshot",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      },
+      {
+        "id": "config.schema",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      },
+      {
+        "id": "db.schema",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      },
+      {
+        "id": "db.integrity",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      },
+      {
+        "id": "vault.marker",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      },
+      {
+        "id": "installation.identity",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      },
+      {
+        "id": "upgrade.preparation",
+        "severity": "warning",
+        "message": "This check does not apply to the selected home.",
+        "recovery": {
+          "message": "This unfinished check does not authorize a write, an upgrade, or initialization."
+        }
+      }
+    ]
+  }
+}
