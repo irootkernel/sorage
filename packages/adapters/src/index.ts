@@ -17,6 +17,7 @@ export * from "./memo-command-ports";
 export * from "./memos";
 export * from "./project-command-ports";
 export * from "./projects";
+export * from "./preflight";
 export * from "./review-store";
 export * from "./sqlite/connection";
 export * from "./sqlite/migrations";

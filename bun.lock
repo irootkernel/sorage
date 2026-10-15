@@ -43,6 +43,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@sorage/core": "0.1.0",
+        "yaml": "2.9.0",
       },
     },
     "packages/core": {

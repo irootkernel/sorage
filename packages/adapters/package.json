@@ -6,6 +6,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "@sorage/core": "0.1.2"
+    "@sorage/core": "0.1.2",
+    "yaml": "2.9.0"
   }
 }
