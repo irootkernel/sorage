@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -37,6 +39,23 @@ describe("cli golden snapshots", () => {
     expect(run.status).toBe(0);
     const golden = readFileSync(`${goldenDir}help.txt`, "utf8");
     expect(run.stdout).toBe(golden);
+  });
+
+  it("pins an absent-home preflight report in human and JSON form", () => {
+    const parent = mkdtempSync(join(tmpdir(), "sorage-preflight-golden-"));
+    const home = join(parent, "absent");
+    try {
+      const human = runCli(["preflight"], home);
+      expect(human.status).toBe(0);
+      expect(human.stderr).toBe("");
+      expect(human.stdout).toBe(readFileSync(`${goldenDir}preflight-fresh.txt`, "utf8"));
+      const json = runCli(["preflight", "--json"], home);
+      expect(json.status).toBe(0);
+      expect(json.stderr).toBe("");
+      expect(json.stdout).toBe(readFileSync(`${goldenDir}preflight-fresh.json`, "utf8"));
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("pins the pre-initialization NOT_INITIALIZED JSON envelope", () => {

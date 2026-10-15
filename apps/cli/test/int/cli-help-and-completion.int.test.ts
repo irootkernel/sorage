@@ -39,6 +39,7 @@ function capture() {
 
 const commandPaths = [
   ["version"],
+  ["preflight"],
   ["init"],
   ["config"],
   ["config", "show"],

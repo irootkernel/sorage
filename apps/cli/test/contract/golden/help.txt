@@ -20,6 +20,8 @@ Options:
 
 Commands:
   version                         print the product version
+  preflight                       inspect the selected installation without
+                                  initializing or opening it
   init [options]                  create the Sorage installation: home tree,
                                   configuration, database, and Vault
   uninstall                       remove the Sorage installation while keeping

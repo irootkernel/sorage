@@ -1,0 +1,33 @@
+Preflight status: fresh
+
+[ok] home.state
+The selected home is absent.
+Recovery: This status does not authorize initialization.
+
+[warning] source.snapshot
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.
+
+[warning] config.schema
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.
+
+[warning] db.schema
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.
+
+[warning] db.integrity
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.
+
+[warning] vault.marker
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.
+
+[warning] installation.identity
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.
+
+[warning] upgrade.preparation
+This check does not apply to the selected home.
+Recovery: This unfinished check does not authorize a write, an upgrade, or initialization.

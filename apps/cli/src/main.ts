@@ -110,6 +110,7 @@ import {
 import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError } from "commander";
 import { buildCompletionScript } from "./completion";
+import { runPreflightCommand } from "./preflight-command";
 import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
@@ -200,6 +201,21 @@ export function buildProgram(
       } else {
         ports.out(`${CLI_NAME} v${CLI_VERSION}\n`);
       }
+    });
+
+  program
+    .command("preflight")
+    .description("inspect the selected installation without initializing or opening it")
+    .action((_options, command) => {
+      const globals = command.optsWithGlobals();
+      reportExitCode(
+        runPreflightCommand({
+          ports,
+          json: globals.json === true,
+          confirm: globals.confirm === true,
+          requestId: requestId(),
+        }),
+      );
     });
 
   program
