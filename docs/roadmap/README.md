@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-014`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-101`
 
 EPIC-013 and TASK-087 through TASK-094 retain their completed M7 acceptance. TASK-095 is a separately authorized post-release correction; it does not reopen a completed Epic. Its publication boundary is the explicitly authorized replacement of v0.1.2, with the runtime version unchanged.
 
@@ -91,7 +91,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-011` | Web User body compose for Handoff creation | M5 | Completed | `TASK-083` to `TASK-084` |
 | `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
 | `EPIC-013` | Project Memos | M7 | Completed | `TASK-087` to `TASK-094` |
-| `EPIC-014` | Non-mutating installation preflight | M8 | In Progress | `TASK-096` to `TASK-100` |
+| `EPIC-014` | Non-mutating installation preflight | M8 | Completed | `TASK-096` to `TASK-100` |
 | `EPIC-015` | Safe Handoff recovery and agent policy | M8 | Planned | `TASK-101` to `TASK-104` |
 
 ## EPIC-001: Foundation and toolchain
@@ -367,10 +367,10 @@ The source-design registration added the M7 documentation vocabulary and checker
 
 ## EPIC-014: Non-mutating installation preflight
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M8
 - **Objective:** Provide a public storage assessment before opening an existing installation with a writer, so consumers can stop depending on private SQL, migration identifiers and identity-file layouts.
-- **Detailed SOT:** [Installation preflight execution dossier](../todo/installation-preflight.md)
+- **Canonical Outcomes:** [Preflight contract](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8), [public before-init example](../specs/examples/cli-workflow.md#preflight), [qualification map](../implementation-tips/preflight-qualification.md), and [AJ-24](../specs/testing-and-acceptance.md#aj-24-non-mutating-installation-preflight).
 - **Design authorities:** [PFL requirements](../specs/required-specification.md#19-installation-preflight-milestone-m8), [ADR-0028](../architecture-decision-records/README.md#adr-0028-non-mutating-installation-preflight-in-m8), [preflight contract](../specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8), [architecture](../architecture/README.md#26-m8-inspection-and-send-recovery-boundaries), and [AJ-24](../specs/testing-and-acceptance.md#aj-24-non-mutating-installation-preflight).
 - **Request context:** Aquarium's 2026-10-14 installation-preflight request; the contract is owned here and does not authorize editing its consumer repository.
 - **Prerequisite:** TASK-095 is Completed. TASK-096 restores checker compatibility before product implementation.
