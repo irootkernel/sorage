@@ -95,10 +95,11 @@ export function inspectPreflight(homePath: string, ports: PreflightInspectPorts 
   if (homeBinding === undefined || homeBinding !== rootBinding(listing.canonical)) return uncertain("installed");
   listing.homeBinding = homeBinding;
   const configPath = join(listing.canonical, "config.yaml");
+  const readFile = ports.readFile ?? ((path: string) => readFileSync(path));
   try {
-    listing.observedConfig = readFileSync(configPath, "utf8");
+    listing.observedConfig = readFile(configPath).toString("utf8");
   } catch {
-    // An unreadable configuration has no snapshot. A later successful read is a changed observation.
+    return uncertain("installed");
   }
   if (listing.observedConfig !== undefined) {
     const earlyConfig = classifyConfig(listing.observedConfig, userHome, listing.canonical);
@@ -137,8 +138,11 @@ export function inspectPreflight(homePath: string, ports: PreflightInspectPorts 
     if (!configuredVaultAlias(listing)) return uncertain("installed");
   }
   const roots = [listing.canonical];
-  const observedVaultPath = listing.observedVault?.includes("\n") ? listing.observedVault.split("\n")[0] : undefined;
-  if (observedVaultPath !== undefined && observedVaultPath !== "") roots.push(observedVaultPath);
+  const observedVaultPath =
+    listing.observedVault === undefined || listing.observedVault === "absent"
+      ? undefined
+      : bindingPath(listing.observedVault);
+  if (observedVaultPath !== undefined) roots.push(observedVaultPath);
   const preferred = ports.scratchParent;
   if (!observationHolds(listing, userHome)) return uncertain("installed");
   const parent = scratchParent(roots, preferred);
@@ -184,8 +188,8 @@ function capture(
     const before = fingerprint(listing);
     if (before === undefined) continue;
     const copyRoot = join(scratch, `attempt-${attempt}`);
-    mkdirSync(copyRoot);
     try {
+      mkdirSync(copyRoot);
       const staged = stageCopies(listing, copyRoot, copyFile, readFile, userHome);
       if (listing.linkMoved) return { ok: false };
       if (staged === undefined) continue;
@@ -281,7 +285,7 @@ function stageCopies(
   let markerPath: string | undefined;
   let vaultAbsent = listing.observedVault === "absent";
   if (!vaultAbsent) {
-    const vaultCanonical = vaultRootBefore?.split("\n")[0];
+    const vaultCanonical = vaultRootBefore === undefined ? undefined : bindingPath(vaultRootBefore);
     if (vaultCanonical === undefined || (!contained(listing.canonical, vaultDir) && !stableDirectory(vaultDir))) {
       return undefined;
     }
@@ -410,7 +414,8 @@ function observeCopy(
       identity,
       staleFence: staged.staleFence || moveFence === "stale",
     };
-  } catch {
+  } catch (error) {
+    if (!conclusivePrivateCorruption(error)) return undefined;
     return {
       config: { kind: "supported" },
       database: { kind: "corrupt" },
@@ -929,7 +934,7 @@ function managedShape(listing: InstalledHome): string | undefined {
     if (listing.vaultPath === undefined || pathLook(listing.vaultPath).kind !== "missing") return undefined;
     rows.push("vault absent");
   } else if (listing.observedVault !== undefined) {
-    const vaultPath = listing.observedVault.split("\n")[0];
+    const vaultPath = bindingPath(listing.observedVault);
     if (vaultPath === undefined || vaultPath === "" || rootBinding(vaultPath) !== listing.observedVault) {
       return undefined;
     }
@@ -957,7 +962,8 @@ function configuredVaultAlias(listing: InstalledHome): string | undefined {
   if (!look.stat.isSymbolicLink()) return "direct";
   const binding = rootBinding(homeVault);
   if (binding === undefined) return undefined;
-  const target = binding.split("\n")[0] ?? "";
+  const target = bindingPath(binding);
+  if (target === undefined) return undefined;
   if (contained(listing.canonical, target)) return `inside ${binding}`;
   if (binding !== listing.observedVault) return undefined;
   return `alias ${binding}`;
@@ -1041,6 +1047,21 @@ function rootBinding(path: string): string | undefined {
   if (resolved === undefined) return undefined;
   const identity = canonicalIdentity(resolved);
   return identity === undefined ? undefined : `${resolved}\n${identity}`;
+}
+
+const CONCLUSIVE_PRIVATE_CORRUPTION = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);
+
+function conclusivePrivateCorruption(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && CONCLUSIVE_PRIVATE_CORRUPTION.has(code);
+}
+
+/** Identity is the final `dev:ino` line. The canonical path itself may contain newlines. */
+function bindingPath(binding: string): string | undefined {
+  const splitAt = binding.lastIndexOf("\n");
+  if (splitAt <= 0) return undefined;
+  return binding.slice(0, splitAt);
 }
 
 function observationHolds(listing: InstalledHome, userHome: string): boolean {

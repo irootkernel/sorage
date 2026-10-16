@@ -19,12 +19,46 @@ import { dirname, join, relative, sep } from "node:path";
 import { isMap, parseDocument } from "yaml";
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { preflightExitCode } from "@sorage/core";
 import { CAPTURE_ATTEMPTS, inspectPreflight } from "../../src/preflight";
 import { MIGRATIONS } from "../../src/sqlite/migrations";
 import type { SorageSqlite } from "../../src/sqlite/connection";
 import { migrate } from "../../src/sqlite/migrator";
 import { makeTempHome } from "../../src/testkit/temp-home";
+
+const fsControl = vi.hoisted(() => ({
+  denyConfigReads: false,
+  failAttemptMkdir: false,
+  configReadAttempts: 0,
+  attemptMkdirs: 0,
+  mkdtempCalls: 0,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: ((path: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]) => {
+      if (fsControl.denyConfigReads && String(path).endsWith("config.yaml")) {
+        fsControl.configReadAttempts += 1;
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return actual.readFileSync(path, ...(rest as never[]));
+    }) as typeof actual.readFileSync,
+    mkdirSync: ((path: Parameters<typeof actual.mkdirSync>[0], ...rest: unknown[]) => {
+      if (fsControl.failAttemptMkdir && String(path).includes("/attempt-")) {
+        fsControl.attemptMkdirs += 1;
+        throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      }
+      return actual.mkdirSync(path, ...(rest as never[]));
+    }) as typeof actual.mkdirSync,
+    mkdtempSync: ((prefix: Parameters<typeof actual.mkdtempSync>[0], ...rest: unknown[]) => {
+      fsControl.mkdtempCalls += 1;
+      return actual.mkdtempSync(prefix, ...(rest as never[]));
+    }) as typeof actual.mkdtempSync,
+  };
+});
 
 const INSTALLATION = "9d57384c-030e-4ff7-90ca-c615d8043db2";
 const OTHER = "1f0ac9a0-0000-4000-8000-00000000000b";
@@ -32,6 +66,11 @@ const example = readFileSync(new URL("../../../../docs/specs/examples/config.exa
 const homes: string[] = [];
 
 afterEach(() => {
+  fsControl.denyConfigReads = false;
+  fsControl.failAttemptMkdir = false;
+  fsControl.configReadAttempts = 0;
+  fsControl.attemptMkdirs = 0;
+  fsControl.mkdtempCalls = 0;
   while (homes.length > 0) {
     const home = homes.pop();
     if (home !== undefined) rmSync(home, { recursive: true, force: true });
@@ -439,12 +478,16 @@ describe("installation preflight inspection", () => {
     });
     expect(readdirSync(parent)).toEqual([]);
 
+    let reads = 0;
     inspectPreflight(home, {
       scratchParent: parent,
-      readFile() {
-        throw new Error("read failed");
+      readFile(path) {
+        reads += 1;
+        if (reads > 1) throw new Error("read failed");
+        return readFileSync(path);
       },
     });
+    expect(reads).toBeGreaterThan(1);
     expect(readdirSync(parent)).toEqual([]);
 
     writeFileSync(join(home, "vault", ".sorage-vault.json"), "{");
@@ -452,13 +495,192 @@ describe("installation preflight inspection", () => {
     expect(readdirSync(parent)).toEqual([]);
 
     writeFileSync(join(home, "vault", ".sorage-vault.json"), marker());
-    inspectPreflight(home, {
+    const beforeSqlite = inventory(home);
+    let opened = 0;
+    const sqliteReport = inspectPreflight(home, {
       scratchParent: parent,
       openPrivateDatabase() {
+        opened += 1;
         throw new Error("sqlite failed");
       },
     });
+    expect(sqliteReport.status).toBe("unverifiable");
+    expect(preflightExitCode(sqliteReport.status)).toBe(75);
+    expect(sqliteReport.checks.find((check) => check.id === "source.snapshot")?.message).toBe(
+      "A coherent snapshot was not available.",
+    );
+    expect(opened).toBe(CAPTURE_ATTEMPTS);
+    expectUntouched(home, beforeSqlite);
     expect(readdirSync(parent)).toEqual([]);
+  });
+
+  it("returns unverifiable before any scratch allocation when the native configuration read stays denied", () => {
+    const owner = tempHome();
+    const vaultRoot = join(owner, "external-vault");
+    const scratchInside = join(vaultRoot, "scratch-parent");
+    mkdirSync(scratchInside, { recursive: true });
+    writeFileSync(join(vaultRoot, ".sorage-vault.json"), marker());
+    const home = tempHome();
+    writeCurrent(home);
+    rmSync(join(home, "vault"), { recursive: true, force: true });
+    const configPath = join(home, "config.yaml");
+    writeFileSync(configPath, configText().replace('path: "~/.sorage/vault"', `path: ${JSON.stringify(vaultRoot)}`));
+    const homeBefore = inventory(home);
+    const vaultBefore = inventory(vaultRoot);
+    const scratchBefore = inventory(scratchInside);
+    const scratchMtime = lstatSync(scratchInside).mtimeMs;
+    const scratchIno = lstatSync(scratchInside).ino;
+    fsControl.denyConfigReads = true;
+    expect(() => readFileSync(configPath, "utf8")).toThrow(/EACCES/);
+    fsControl.configReadAttempts = 0;
+    fsControl.mkdtempCalls = 0;
+    const report = inspectPreflight(home, { scratchParent: scratchInside });
+    expect(fsControl.configReadAttempts).toBe(1);
+    expect(() => readFileSync(configPath, "utf8")).toThrow(/EACCES/);
+    expect(fsControl.mkdtempCalls).toBe(0);
+    fsControl.denyConfigReads = false;
+    expect(report.status).toBe("unverifiable");
+    expect(preflightExitCode(report.status)).toBe(75);
+    expect(report.checks.find((check) => check.id === "source.snapshot")?.message).toBe(
+      "A coherent snapshot was not available.",
+    );
+    expect(readFileSync(configPath, "utf8")).toContain(vaultRoot);
+    expectUntouched(home, homeBefore);
+    expect(inventory(vaultRoot)).toEqual(vaultBefore);
+    expect(inventory(scratchInside)).toEqual(scratchBefore);
+    expect(lstatSync(scratchInside).mtimeMs).toBe(scratchMtime);
+    expect(lstatSync(scratchInside).ino).toBe(scratchIno);
+  });
+
+  it("returns unverifiable when a private attempt directory cannot be created", () => {
+    const parent = mkdtempSync(join(tmpdir(), "sorage-preflight-attempt-"));
+    homes.push(parent);
+    const home = tempHome();
+    writeCurrent(home);
+    const before = inventory(home);
+    fsControl.failAttemptMkdir = true;
+    fsControl.attemptMkdirs = 0;
+    const report = inspectPreflight(home, { scratchParent: parent });
+    fsControl.failAttemptMkdir = false;
+    expect(report.status).toBe("unverifiable");
+    expect(preflightExitCode(report.status)).toBe(75);
+    expect(report.checks.find((check) => check.id === "source.snapshot")?.message).toBe(
+      "A coherent snapshot was not available.",
+    );
+    expect(fsControl.attemptMkdirs).toBe(CAPTURE_ATTEMPTS);
+    expectUntouched(home, before);
+    expect(readdirSync(parent)).toEqual([]);
+  });
+
+  it("keeps conclusive private SQLite corruption and fails closed on environmental private SQLite errors", () => {
+    const parent = mkdtempSync(join(tmpdir(), "sorage-preflight-sqlite-"));
+    homes.push(parent);
+    const bunSqlite = (code: "SQLITE_CANTOPEN" | "SQLITE_CORRUPT" | "SQLITE_NOTADB", errno: number): Error =>
+      Object.assign(new Error(code), { code, errno });
+
+    const cantOpen = tempHome();
+    writeCurrent(cantOpen);
+    const cantOpenBefore = inventory(cantOpen);
+    let cantOpenAttempts = 0;
+    const cantOpenReport = inspectPreflight(cantOpen, {
+      scratchParent: parent,
+      openPrivateDatabase() {
+        cantOpenAttempts += 1;
+        throw bunSqlite("SQLITE_CANTOPEN", 14);
+      },
+    });
+    expect(cantOpenReport.status).toBe("unverifiable");
+    expect(preflightExitCode(cantOpenReport.status)).toBe(75);
+    expect(cantOpenReport.checks.find((check) => check.id === "source.snapshot")?.message).toBe(
+      "A coherent snapshot was not available.",
+    );
+    expect(cantOpenReport.checks.find((check) => check.id === "db.schema")?.message).not.toContain("corrupt");
+    expect(cantOpenAttempts).toBe(CAPTURE_ATTEMPTS);
+    expectUntouched(cantOpen, cantOpenBefore);
+    expect(readdirSync(parent)).toEqual([]);
+
+    const postOpen = tempHome();
+    writeCurrent(postOpen);
+    const postOpenBefore = inventory(postOpen);
+    let postOpenAttempts = 0;
+    const postOpenReport = inspectPreflight(postOpen, {
+      scratchParent: parent,
+      openPrivateDatabase(path) {
+        postOpenAttempts += 1;
+        const db = new DatabaseSync(path);
+        return {
+          exec(sql: string) {
+            if (sql.includes("wal_checkpoint")) throw new Error("checkpoint unavailable");
+            db.exec(sql);
+          },
+          prepare(sql: string) {
+            return db.prepare(sql);
+          },
+          close() {
+            db.close();
+          },
+        } as never;
+      },
+    });
+    expect(postOpenReport.status).toBe("unverifiable");
+    expect(preflightExitCode(postOpenReport.status)).toBe(75);
+    expect(postOpenReport.checks.find((check) => check.id === "source.snapshot")?.message).toBe(
+      "A coherent snapshot was not available.",
+    );
+    expect(postOpenAttempts).toBe(CAPTURE_ATTEMPTS);
+    expectUntouched(postOpen, postOpenBefore);
+    expect(readdirSync(parent)).toEqual([]);
+
+    for (const failure of [bunSqlite("SQLITE_CORRUPT", 11), bunSqlite("SQLITE_NOTADB", 26)] as const) {
+      const home = tempHome();
+      writeCurrent(home);
+      const before = inventory(home);
+      let attempts = 0;
+      const report = inspectPreflight(home, {
+        scratchParent: parent,
+        openPrivateDatabase() {
+          attempts += 1;
+          throw failure;
+        },
+      });
+      expect(report.status).toBe("recovery_required");
+      expect(preflightExitCode(report.status)).toBe(78);
+      expect(report.checks.find((check) => check.id === "source.snapshot")?.message).toBe(
+        "The observed source snapshot is coherent.",
+      );
+      expect(report.checks.find((check) => check.id === "db.schema")?.message).toContain("corrupt");
+      expect(attempts).toBe(1);
+      expectUntouched(home, before);
+      expect(readdirSync(parent)).toEqual([]);
+    }
+  });
+
+  it("selects scratch outside an external Vault path that contains a newline", () => {
+    const owner = tempHome();
+    const vaultRoot = join(owner, "vault\nactual");
+    const scratchInside = join(vaultRoot, "scratch-parent");
+    mkdirSync(scratchInside, { recursive: true });
+    writeFileSync(join(vaultRoot, ".sorage-vault.json"), marker());
+    const home = tempHome();
+    writeCurrent(home);
+    rmSync(join(home, "vault"), { recursive: true, force: true });
+    writeFileSync(
+      join(home, "config.yaml"),
+      configText().replace('path: "~/.sorage/vault"', `path: ${JSON.stringify(vaultRoot)}`),
+    );
+    const homeBefore = inventory(home);
+    const vaultBefore = inventory(vaultRoot);
+    const scratchBefore = inventory(scratchInside);
+    const vaultMtime = lstatSync(vaultRoot).mtimeMs;
+    const scratchMtime = lstatSync(scratchInside).mtimeMs;
+    const report = inspectPreflight(home, { scratchParent: scratchInside });
+    expect(report.status).toBe("compatible");
+    expect(preflightExitCode(report.status)).toBe(0);
+    expectUntouched(home, homeBefore);
+    expect(inventory(vaultRoot)).toEqual(vaultBefore);
+    expect(inventory(scratchInside)).toEqual(scratchBefore);
+    expect(lstatSync(vaultRoot).mtimeMs).toBe(vaultMtime);
+    expect(lstatSync(scratchInside).mtimeMs).toBe(scratchMtime);
   });
 
   it("classifies schemaVersion from the parsed top-level YAML field", () => {
