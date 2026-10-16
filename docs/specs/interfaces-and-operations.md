@@ -1520,7 +1520,7 @@ A worked end-to-end session using these surfaces is in [examples/cli-workflow.md
 
 ## 36. Installation preflight, milestone M8
 
-This is the required M8 design under PFL-001 through PFL-008 and ADR-0028. Implementation readiness is recorded only in [EPIC-014](../roadmap/README.md#epic-014-non-mutating-installation-preflight). The current v0.1.2 executable does not provide this command. The intended release is v0.1.3 after shared M8 acceptance and separately authorized publication.
+This is the required M8 design under PFL-001 through PFL-008 and ADR-0028. Implementation readiness is recorded only in [EPIC-014](../roadmap/README.md#epic-014-non-mutating-installation-preflight). The published v0.1.2 release does not provide this command. A local candidate built from this repository can still report version 0.1.2; that string does not make the candidate the published release or the intended v0.1.3 release. The intended release remains unreleased v0.1.3 after shared M8 acceptance and separately authorized publication.
 
 ### 36.1 Command and report
 

@@ -4,6 +4,32 @@ This walkthrough uses the v0.5.0 command surface defined in [../interfaces-and-o
 
 Row Version values are shown explicitly because `--expected-row-version` is always the value the client currently holds, never the value it expects afterwards (HND-025).
 
+## Preflight
+
+Milestone M8, intended for unreleased v0.1.3. The published v0.1.2 release does not include this command. A local candidate built from this repository can still report version 0.1.2; that version string is not the published release and is not v0.1.3.
+
+Inspect the selected home before initialization or any later command that could migrate or modify storage. The command does not initialize, migrate, repair, or certify a backup.
+
+```bash
+sorage preflight
+sorage preflight --json
+```
+
+A completed assessment is a success envelope with `ok: true`, including a blocking status. JSON stdout carries `data.contractVersion` 1, `data.status`, and `data.checks` with the fixed public check IDs `home.state`, `source.snapshot`, `config.schema`, `db.schema`, `db.integrity`, `vault.marker`, `installation.identity`, and `upgrade.preparation`. Human output reports the same status and check IDs. Consumers branch only on the envelope, `contractVersion`, `status`, and those check IDs. SQL, migration numbers or names, and marker contents are not consumer inputs.
+
+| Status | Exit | What the result does not grant |
+| --- | --- | --- |
+| `fresh` | 0 | Initialization. An absent, empty, or permitted-residue home is not authority to initialize. |
+| `compatible` | 0 | A write, or an artifact health certificate. This is a point-in-time storage assessment. |
+| `upgrade_required` | 78 | Upgrade approval. Preparation is old-binary backup verification plus a separate restore drill. This command does not perform or certify that drill. |
+| `recovery_required` | 78 | Repair or initialization. The inventory needs a bounded recovery decision. |
+| `unsupported` | 78 | Migration of a readable newer schema. |
+| `unverifiable` | 75 | A guess that the home is fresh, and any repair. Resolve the inspection obstacle and inspect again. |
+
+An invocation that fails before a report uses the existing error envelope. Its message and recovery keep the request ID and this output for diagnosis, and they do not point at an installation log this command does not write.
+
+The normative report is [section 36](../interfaces-and-operations.md#36-installation-preflight-milestone-m8).
+
 ## Initialize
 
 Milestone M1, non-interactive:

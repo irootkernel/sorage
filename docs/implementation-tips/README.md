@@ -6,6 +6,8 @@ This document is guidance. Normative requirements and accepted decisions take pr
 
 The [Project Memo qualification map](memo-qualification.md) connects requirement owners, production paths, cross-layer checks, compatibility boundaries and unperformed platform checks for the Memo vertical slice.
 
+The [preflight qualification map](preflight-qualification.md) connects PFL-001 through PFL-008 and AJ-24 to production paths, owning tests, the compiled native matrix, and unperformed platform checks.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:
