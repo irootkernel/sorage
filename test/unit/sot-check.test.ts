@@ -133,18 +133,45 @@ describe("sot-check", () => {
     expect(result.status).toBe(0);
   });
 
-  it("rejects an unadopted milestone beyond M8", () => {
+  it("rejects an M8 requirement covered only by M9 Tasks", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M8 |"));
+        }
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(roadmap, readTheFile(roadmap).replaceAll("| M1 |", "| M9 |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement GEN-001 (milestone M8) is cited only by later-milestone Tasks");
+  });
+
+  it("accepts M9 requirements, Tasks, and their matching reverse index", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "roadmap/README.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M9 |"));
+        }
+      }),
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects an unadopted milestone beyond M9", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "roadmap", "README.md");
         writeFileSync(
           path,
-          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M9 |"),
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M10 |"),
         );
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "M9"');
+    expect(result.stderr).toContain('invalid milestone "M10"');
   });
 
   it("fails when an M8 requirement has no citing Task", () => {
@@ -313,7 +340,7 @@ describe("sot-check", () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, or M8');
+    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, M8, or M9');
   });
 
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {

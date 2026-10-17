@@ -970,3 +970,55 @@ Register EPIC-015 and TASK-101 through TASK-104 after EPIC-014. Adopt SND-001 th
 ### Consequences
 
 Unknown outcome remains distinct from failure and from authorization for a new operation. A later new send requires separately expressed intent. The feature does not change Handoff state, deletion semantics, Project setup authority, Memo recovery, or consumer activation. Installation, sending a response to Aquarium and publication remain separately authorized.
+
+## ADR-0030: Agent communication channels and shared content storage in M9
+
+- **Status:** Proposed
+- **Date:** 2026-10-17
+- **Design owner:** TASK-105 under [EPIC-016](../roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage).
+
+### Problem
+
+Master observed a separate test pilot submit Worker/Judge messages through an Orchestrator's prompt input, allowing agent reports to be interpreted as user instructions. The proposed Aquarium integration is not yet a published release, and this observation does not establish a reproduced defect in current Aquarium or Sorage. An attributed upstream channel would let main receive reports, questions and peer-relay requests as data while retaining assignment and decision ownership.
+
+Long agent reports also motivate a common body storage interface. Current Handoff bodies are Vault-backed Artifacts, while Memo bodies are inline SQLite text capped at 65,536 UTF-8 bytes. The requested direction gives Handoffs, Memos and Channel messages the same small-text/large-content routing policy without storing both an inline body and authoritative Vault content for one body.
+
+### Proposed decision
+
+Add one Sorage communication channel per orchestration invocation, with one main and multiple registered Worker/Judge participants. Lower participants submit upstream messages through Sorage. Main reads them through a tool-result interface and decides whether to issue instructions, request clarification or relay a request. Received text and Judge verdicts grant no new execution or user authority. Main-to-agent dispatch remains consumer-owned. Keep SEC-013's same-OS-user trust limit; channel attribution is not process isolation.
+
+Retain the channel through the invocation's Podway sessions and resumption. Store supplied public session/node/attempt and assignment context with the originating message, without introducing a Podway dependency or automatic inspection. Durable read and handling outcomes remain distinct, and neither can certify an external instruction was executed exactly once. First delivery supplies CLI operations and main-side polling/waiting; wake-up adapters and new Channel HTTP/Web screens are later work.
+
+Introduce a common content interface backed by the existing SQLite database and managed Vault. The initial policy places text of at most 65,536 UTF-8 bytes inline, larger accepted text in the Vault, and binary content in the Vault. Metadata remains in SQLite. Exactly one of inline content or a valid Vault-relative storage key is present; empty inline text counts as present where permitted. Preserve exact accepted bytes, byte size and checksum. Reuse transactional coordination and generalize existing file durability/intent recovery rather than creating an independent queue or journal service.
+
+The [execution dossier](../todo/agent-communication-channels.md) records the approved planning direction and Task boundaries. TASK-105 must settle bounded inputs, participant/lifecycle and processing rules, public contracts, reference retention, fetch/search behavior and migration/backup policy before accepting this decision and starting product implementation. This Proposed decision does not override current authorities.
+
+### Alternatives considered
+
+- Continue submitting lower-agent reports into main's prompt input | rejected for the proposed integration: it loses the intended distinction between a user instruction and attributed agent data.
+- Reuse Project Memo as the channel | rejected: Memos have no sender/recipient delivery model and use User provenance; introducing agent routing there would change the reminder domain's meaning.
+- Reuse cross-project Handoffs for every intra-project message | rejected: their per-recipient Artifact/review/acceptance lifecycle does not express channel participation, questions or processing decisions.
+- Store every body only in SQLite | not selected for this scope: Master requested managed Vault storage for long bodies and a common storage policy across all three domains.
+- Store every body in a separate file | not selected: small text should retain direct transactional SQLite storage under the approved direction.
+- Keep complete authoritative bodies in both SQLite and the Vault | rejected: dual authority complicates integrity and violates the required exactly-one representation.
+- Make Sorage inspect Podway or dispatch through Herdr | rejected: consumers own workflow state and agent execution; Sorage must remain standalone and expose public broker interfaces.
+
+### Compatibility impact
+
+Channel CLI behavior is additive, but existing Handoff storage/fetch and Memo size/search/replay contracts require explicit review. Preserve Handoff Artifact identity, Revision and acceptance semantics, Memo lifecycle and User provenance, and all existing sender, authentication and uncertainty boundaries. Existing Handoff/Memo HTTP/Web consumers must continue to work against the accepted migrated contract. Unchanged public behavior must not be labeled breaking solely because physical storage changes; actual wire or operational changes require explicit classification in TASK-105 and each owning Contract Task.
+
+The common store must not silently duplicate a Vault body into SQLite receipt payloads or discard historical response content. Inline fetch materialization must preserve the readable-file contract without creating a second authoritative body. Detailed choices belong to TASK-105's reviewed design, not an implicit implementation shortcut.
+
+### Migration impact
+
+Expect a reviewed database/shared-content and snapshot migration. Preserve existing file-backed Handoffs and inline Memos without automatic threshold-driven repacking of historical bodies. Define supported prior schemas/snapshot generations, pending-intent and receipt handling, content ownership, restore checks, retained-response references and rollback refusal. Missing or corrupt content must remain a reported integrity condition. Channel retention and backup inclusion require an explicit contract; completion is not permission to erase history. This registration changes no stored installation or format.
+
+### Required Source of Truth edits and roadmap impact
+
+Register EPIC-016 and TASK-105 through TASK-110 in M9 after EPIC-015, with the execution dossier linked from the roadmap and documentation indexes. Minimal checker support recognizes M9 while retaining dependency, requirement-coverage and reverse-index guards. Initial Requirements cells are None because M9 normative requirements are not yet adopted. TASK-105 must adopt those requirements, all six Task citations, reverse-index rows and acceptance journeys together before implementation.
+
+Before accepting this proposal, reconcile the required specification, accepted ADRs, architecture, interfaces/operations, Memo contract, security/reliability, testing/acceptance and traceability under their existing authority order. In particular, explicitly amend Vault-only Artifact and inline-only Memo obligations rather than allowing this lower-authority proposal to override them. Keep roadmap status solely in the roadmap. Do not change current SOT/product versions or add this work to the intended v0.1.3 release merely by registering it.
+
+### Consequences
+
+Sorage gains a third broker domain and a shared body storage boundary, with additional file-reference, migration and recovery obligations. Existing SQLite transactions and Vault durability remain the implementation foundation. Reports retain source attribution but remain untrusted data; orchestration judgment and external effect reconciliation remain consumer-owned. Product implementation, independent review, consumer activation, installation, commits and publication retain their respective authorization and acceptance boundaries.

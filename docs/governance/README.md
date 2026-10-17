@@ -115,7 +115,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
 - Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
-- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, `M7`, or `M8`.
+- Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, `M7`, `M8`, or `M9`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
 - Confirm the `Design Gate impact` cell, which is `Not required` for every Task in this repository because no Design Gate registry is enrolled, and record that reason rather than leaving the cell empty.
@@ -174,7 +174,7 @@ A review MUST verify:
 - Every commit is created through `$aquarium:task-commit` once a roadmap file is tracked in this repository, because the Aquarium gate then classifies the whole repository as a roadmap repository and blocks direct shell commits.
 - No session commits, amends, or pushes without an explicit instruction from the user for that exact action.
 - A commit carries either one exact Task relationship with an approved lifecycle edit, or an explicit statement that it is unrelated to every active Task.
-- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. Section 13 records the M8 registration boundary. Checker support for M8 does not waive make test, a passing Source of Truth result, independent review, or Contract classification for later implementation.
+- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. Sections 13 and 14 record the M8 and M9 registration boundaries. Checker support for those milestones does not waive make test, a passing Source of Truth result, independent review, or Contract classification for later implementation.
 - `make test` is the single verification gate for code and MUST pass before a Task moves to `In Review`.
 
 ## 12. Release change freeze
@@ -189,6 +189,12 @@ Each milestone has its own release gate, and the freeze applies from the moment 
 
 ## 13. M8 document-only registration boundary
 
-ADR-0028 and ADR-0029 adopt shared M8 and SOT version 0.9.0 for EPIC-014 and EPIC-015, with intended product release v0.1.3. The [roadmap](../roadmap/README.md) alone records lifecycle and eligibility. This registration adopted documents and did not implement preflight, change the executable, rewrite the shipped skill, or authorize publication. TASK-096 adds M8 checker support, behavioral fixtures, and this status cleanup before product implementation. The checker recognizes milestones M1 through M8 and still rejects invalid milestones, missing requirement coverage, forward dependencies, reverse-index mismatches, unresolved links, and bad identifiers.
+ADR-0028 and ADR-0029 adopt shared M8 and SOT version 0.9.0 for EPIC-014 and EPIC-015, with intended product release v0.1.3. The [roadmap](../roadmap/README.md) alone records lifecycle and eligibility. This registration adopted documents and did not implement preflight, change the executable, rewrite the shipped skill, or authorize publication. TASK-096 adds M8 checker support, behavioral fixtures, and this status cleanup before product implementation. The checker now recognizes milestones M1 through M9 and still rejects invalid milestones, missing requirement coverage, forward dependencies, reverse-index mismatches, unresolved links, and bad identifiers.
 
 This boundary waives neither make test nor later Contract review. No existing accepted milestone is reopened and no new Task is completed by writing its design.
+
+## 14. M9 planning registration boundary
+
+M9 registers the ordered work for [EPIC-016](../roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage), its [execution dossier](../todo/agent-communication-channels.md) and Proposed ADR-0030. Registration authorizes the planning records and minimal M9 checker support, not product implementation, an accepted storage or CLI contract, a release assignment, installation or publication. The roadmap alone records lifecycle and eligibility; EPIC-015 retains its existing scope.
+
+TASK-105 must settle the material change record, accept or revise ADR-0030, and update all affected higher-authority specifications before TASK-106 begins. The newly registered Tasks temporarily use `None` in their Requirements cells because M9 requirement identifiers have not been adopted. TASK-105 must replace those placeholders with the accepted requirement citations and matching traceability in the same design candidate, including its own row; this is not permission to implement uncited behavior or bypass a current contract. Later implementation retains independent review, Contract classification and the full verification gate.
