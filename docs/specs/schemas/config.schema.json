@@ -130,7 +130,7 @@
       ],
       "properties": {
         "maxBytes": {
-          "description": "Maximum Artifact size, enforced mid-stream during import and never by buffering the whole body (VLT-015, NFR-005).",
+          "description": "Maximum accepted body size for Handoff Artifacts, Project Memo bodies, and Channel messages, enforced mid-stream during import and never by buffering the whole body (VLT-015, NFR-005, SHR-002).",
           "type": "integer",
           "minimum": 1,
           "default": 104857600

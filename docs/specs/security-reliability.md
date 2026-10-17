@@ -29,6 +29,10 @@ The commands that require `--as-user` are `review remove`, `pin`, `unpin`, `arch
 
 [MEM-003](required-specification.md#18-project-memos) and [the Memo contract](project-memos.md) add implicit User provenance for explicit Memo operations without claiming human authentication or a sender/recipient boundary. Existing Handoff actor guards and destructive-operation approvals remain unchanged. The CLI must not discover other Projects on a failed implicit resolution, and the HTTP API must authenticate and validate Host before any Memo read.
 
+### 1.3 Channel attribution boundary, milestone M9
+
+[CHN-002](required-specification.md#212-agent-communication-channels) and [interface section 38](interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9) add Channel participant attribution for orchestration communication. Participant identity and native-handle provenance answer "which registered participant sent this", exactly as working-directory resolution answers "where did this come from": they keep reports attributable and are not a permission check or a process boundary. Any process running as this operating-system user can assert any participant of any Channel (SEC-013), message bodies and Judge verdicts are untrusted data that grant no tool, network, commit, deletion, or publication authority (CHN-004, CHN-011), logs and event metadata exclude message bodies, and one Channel's records are not disclosed through another Channel's operations. Main-side dispatch and external-effect reconciliation stay with the consumer.
+
 A Memo body is untrusted text, even when written as a command or attributed to the User. Reading or storing it does not authorize execution, network access, commits, or deletion. No session-start scanning, stop hooks, automatic completion, or sibling-tool mutation is introduced. Safe Markdown rendering must not execute raw HTML, accept unsafe link schemes, or fetch remote images automatically.
 
 Memo row changes, metadata-only events, and receipts use one existing fenced write transaction with compare-and-set. The normalized application/DB receipt is the only Memo replay authority; Memo HTTP handlers bypass the legacy raw-body response cache, not Host/authentication checks or request limits. Content stays out of logs and events, but intentional backup includes current free text. Structured path redaction does not sanitize paths or secrets inside that text. Closed Memos remain retained; prior Git snapshots may contain older bodies. A caller-declared done state is not external verification or erasure.
@@ -204,13 +208,13 @@ Operations that cannot be one transaction take an exclusive lockfile under `~/.s
 | Lockfile | Protects | Stale when | Milestone |
 |---|---|---|---|
 | `config.lock` | Configuration writes | The recorded pid is dead, or the lock is older than 30 seconds | M1 |
-| `migration.lock` | Schema migration at process start | The recorded pid is dead | M1 |
+| `migration.lock` | Legacy inspection signal, not the runner's lock: migration serializes through `BEGIN IMMEDIATE` and the internal `migration_lock` table (NFR-009) | The recorded pid is dead | M1 |
 | `vault-move.lock` | Vault relocation and, once restore exists, `backup restore` | The recorded pid is dead | M1 |
 | `daemon.lock` | Single daemon instance | The recorded pid is dead | M2 |
 | `backup.lock` | Scheduled and manual backup runs; a run that finds it held by a live process fails with `BACKUP_IN_PROGRESS` | The recorded pid is dead | M3 |
 | `inbox-marker.lock` | Derived marker refresh and retired binding cleanup; contention retries for up to five seconds and then warns | The recorded pid is dead | M6 |
 
-A stale lock may be broken by the next process; a live lock produces a conflict rather than a wait loop, except for the bounded retry of advisory marker work. A lock whose pid belongs to a different program is treated as live and reported rather than broken.
+A stale lock may be broken by the next process; a live lock produces a conflict rather than a wait loop, except for the bounded retry of advisory marker work. A lock whose pid belongs to a different program is treated as live and reported rather than broken. The legacy `migration.lock` is excluded from that breaking rule: the current migrator does not acquire it, a live record remains a meaningful owner signal, and a stale record is preserved as inspection evidence rather than deleted (NFR-009, section 19 of [../architecture/README.md](../architecture/README.md)).
 
 While `vault-move.lock` is held by a Vault move or, once restore exists, by `backup restore`, every other process attempting a domain mutation fails with `SERVICE_PAUSED` and recovery guidance, and the daemon returns the same code to API callers (RUN-014).
 
@@ -307,6 +311,17 @@ The table below is the normative event catalog for Sorage; other documents cite 
 | `MEMO_DISMISSED` | `user` | M7 |
 | `MEMO_REOPENED` | `user` | M7 |
 | `TOKEN_ROTATED` | `user` | M2 |
+| `CONTENT_ACTIVATED` | `system` | M9 |
+| `CONTENT_UNLINKED` | `system` | M9 |
+| `CONTENT_INTEGRITY_FAILED` | `system` | M9 |
+| `CHANNEL_CREATED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_CLOSED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_PARTICIPANT_REGISTERED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_PARTICIPANT_DEACTIVATED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_ASSIGNMENT_CREATED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_ASSIGNMENT_CLOSED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_MESSAGE_SUBMITTED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_MESSAGE_HANDLED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
 
 `REVIEW_NOTE_RESOLVED` is appended in the same transaction as `HANDOFF_REVISED` or `HANDOFF_NO_CHANGE_RESOLVED` whenever that sender operation removed a Review Note; `REVIEW_NOTE_WITHDRAWN` means the recipient withdrew the current Note, and `REVIEW_NOTE_REMOVED` means the User removed it administratively.
 
@@ -315,6 +330,33 @@ The table below is the normative event catalog for Sorage; other documents cite 
 No event is ever sampled. Only the first `sorage fetch` or Web artifact-content read of a Handoff records `ARTIFACT_FETCHED_FIRST_TIME` and sets `firstFetchedAt`; later fetches record nothing, and `get`, listing, and the Web detail screen record nothing at all and never set `firstFetchedAt` (HND-012, HND-024).
 
 Path fields are redacted on export while `gitBackup.snapshot.redactWorkspacePaths` is `true`, which is its default: `senderPathSnapshot`, Project Binding paths, and every path field inside an event's metadata are dropped from `snapshots/events.jsonl`, so the exported ledger is the audit record minus machine-local paths, and `backup restore` rebuilds the ledger exactly as it was exported rather than reconstructing paths it no longer has (BKP-023, BKP-024).
+
+### 10.1 M9 event metadata
+
+SEC-012 and BKP-023 apply to the shared store and Channel domain. This subsection owns their exact event metadata; [interface section 38.9](interfaces-and-operations.md#389-m9-event-snapshot-inventory) owns the per-build snapshot inventory. Every object below is closed: all listed keys are present, no additional keys are accepted, and unqualified IDs are canonical UUIDs. The event row retains the existing ActorRef provenance: a registered Project UUID, an unregistered workspace key, or null for the User/system; a participant ID never replaces `actorId`. For a main-role operation `actingParticipantId` is that Channel's main participant UUID, or null when the User performs the operation. Submission records its sender participant separately from the row actor. No body, preview, title, label, handle, native provenance, handling note, context string, raw exception, or other free text is copied into these objects.
+
+| Channel event | Exact metadata keys and values | Event row `rowVersion` |
+|---|---|---|
+| `CHANNEL_CREATED` | `{channelId, mainParticipantId}` | null |
+| `CHANNEL_CLOSED` | `{channelId, actingParticipantId, fromState: "open", toState: "closed"}` | null |
+| `CHANNEL_PARTICIPANT_REGISTERED` | `{channelId, actingParticipantId, participantId, role: "worker" \| "judge"}` | null |
+| `CHANNEL_PARTICIPANT_DEACTIVATED` | `{channelId, actingParticipantId, participantId, fromActive: true, toActive: false}` | null |
+| `CHANNEL_ASSIGNMENT_CREATED` | `{channelId, actingParticipantId, assignmentId, participantId: UUID-or-null}` | null |
+| `CHANNEL_ASSIGNMENT_CLOSED` | `{channelId, actingParticipantId, assignmentId, fromState: "open", toState: "closed"}` | null |
+| `CHANNEL_MESSAGE_SUBMITTED` | `{channelId, participantId, messageId, kind, assignmentId: UUID-or-null, assignmentLate: boolean, relayToParticipantId: UUID-or-null, processingRowVersion: 1}` | 1 |
+| `CHANNEL_MESSAGE_HANDLED` | `{channelId, actingParticipantId, messageId, processingRowVersion: 2}` | 2 |
+
+The `kind` value and relay-target null rules are exactly the Channel message contract. Every Channel event has `handoffId = null` and `memoId = null`; associations live in typed metadata, with no new association column or top-level snapshot field. Channel creation includes initial main registration in its one event. The application validates existence, same-Channel membership, roles, and the relevant state/version before appending in the mutation transaction; failure rolls both back. Reads, listing, waiting, failed operations, retained duplicate replay, replay-only inspection, and unchanged no-ops append nothing. A currently inactive participant or closed Channel does not invalidate a historical valid submission or its retained outcome. Restore reconciles Channel creation/closure, participant registration/deactivation, assignment creation/closure, and message submission/first handling against their retained records, preserving original IDs, timestamps, actors, and links. It checks corresponding decisions and versions without treating wall-clock ordering as authentication or claiming an external effect.
+
+The common physical-content events apply to Memo/Channel-owned file content only. Their actor is `system`, with null `actorId`, `rowVersion`, `handoffId`, and `memoId`. Artifact-owned work keeps the existing `ARTIFACT_*` family and legacy metadata interpretations after adoption; one operation never emits both families. Inline content has no physical activation/unlink event, and unowned staging/cache/orphan cleanup never fabricates an owner or identifier.
+
+A new common intent retains `contentId`, `ownerDomain`, `ownerId`, `intentId`, and `operation` before its content record can disappear. `ownerDomain` is exactly `memo` or `channel`; IDs are UUIDs, and `operation` is `activate` or `unlink`. Successful common events contain exactly those five keys, with the operation matching the event type. A failure event has exactly those keys plus `attempt`, a positive safe integer for its committed failure assessment, and `reason`, exactly one of `missing_content`, `checksum_mismatch`, `size_mismatch`, `unsafe_path`, `io_error`, and `destination_conflict`.
+
+Completion marks activation materialized or completes unlink, clears the intent, and appends its success event in one completion transaction. A failed assessment retains the intent, updates its attempt/failure state, and appends one failure event atomically; every subsequent committed failed assessment appends its own event without sampling. If that transaction cannot commit, neither status nor event is claimed. Ordinary completion and startup drain use the same rules, and a competing/repeated drain that finds an already completed intent appends no duplicate success. Legacy intents preserve their original absent fields and fallback semantics; ownership is never invented from a pathname.
+
+If activation source and destination both exist, neither is overwritten or removed: retain both and the intent, commit the failed assessment with `destination_conflict`, emit no success, and require repair. A source-absent/destination-present retry completes only after size/hash verification proves the recorded destination and the same-intent completion conditions hold. For new common intents the legacy outcomes `both-gone`, `destination-conflict`, and `unsafe-path` map to `missing_content`, `destination_conflict`, and `unsafe_path`; size/hash failures and filesystem errors map to their corresponding common reasons. Existing Artifact reason strings and retained events are not rewritten.
+
+Common event owner/content IDs are historical attribution, not live foreign keys or GC references. Snapshot validation checks their syntax, enums, and closed metadata but never requires a current owner, content record, Artifact, or file, reconstructs historical bytes, keeps obsolete bodies because of events, or adds a content-file inventory entry solely from an event. An `ownerDomain` of `channel` does not require Channel tables in TASK-106. Receipt-only bodies remain excluded from current-state export. These historical physical events differ from Channel domain events, whose retained associations are checked against the Channel shards.
 
 ## 11. Logging
 

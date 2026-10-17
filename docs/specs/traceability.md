@@ -28,19 +28,21 @@ Milestone values come from the specification and name the release gate at whose 
 | CLI-001 to CLI-025 | M1, M3, M4, M6 | `TASK-004` to `TASK-005`, `TASK-013`, `TASK-017` to `TASK-018`, `TASK-026`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-064` to `TASK-065`, `TASK-067`, `TASK-080` to `TASK-082`, `TASK-086` | AJ-01 to AJ-10, AJ-17, AJ-19; `make test-contract` for golden envelopes, exit-code categories, and cursors |
 | API-001 to API-013 | M2, M5 | `TASK-042`, `TASK-045` to `TASK-048`, `TASK-060`, `TASK-067`, `TASK-070`, `TASK-084` | AJ-11, AJ-12, AJ-13, AJ-18; `make test-contract` for the symbolic-error to HTTP-status matrix and the DTOs |
 | WEB-001 to WEB-019 | M2, M5, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060`, `TASK-067`, `TASK-084` | AJ-12, AJ-13, AJ-18; `make test-e2e` under Playwright with the axe-core check as engineering practice |
-| BKP-001 to BKP-026 | M3 | `TASK-052` to `TASK-058`, `TASK-061`, `TASK-065` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify` |
-| SEC-001 to SEC-021 | M1, M2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063`, `TASK-068`, `TASK-070` to `TASK-071` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int` |
+| BKP-001 to BKP-026 | M3 | `TASK-052` to `TASK-058`, `TASK-061`, `TASK-065`, `TASK-105` to `TASK-110` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify`; M9 event atomicity and ledger recovery in AJ-27/AJ-28 |
+| SEC-001 to SEC-021 | M1, M2 | `TASK-006` to `TASK-007`, `TASK-011`, `TASK-013`, `TASK-018`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-035`, `TASK-040` to `TASK-044`, `TASK-052`, `TASK-057`, `TASK-060` to `TASK-061`, `TASK-063`, `TASK-068`, `TASK-070` to `TASK-071`, `TASK-105` to `TASK-110` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int`; M9 event atomicity and ledger recovery in AJ-27/AJ-28 |
 | NFR-001 to NFR-017 | M1, M3 | `TASK-001` to `TASK-006`, `TASK-008`, `TASK-014` to `TASK-015`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-036` to `TASK-037`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-062` to `TASK-065`, `TASK-073`, `TASK-080`, `TASK-083` to `TASK-084`, `TASK-096` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062` |
 | MEM-001 to MEM-024 | M7 | `TASK-087` to `TASK-094` | AJ-20 to AJ-23; pure domain/contract, real SQLite migration and restore, compiled CLI, authenticated daemon, browser, and separately observed skill behavior |
 | PFL-001 to PFL-008 | M8 | `TASK-097` to `TASK-100` | Required AJ-24; pure report, real filesystem/DB/WAL inspection, native CLI contracts and source no-write proof |
 | SND-001 to SND-006 | M8 | `TASK-101` to `TASK-102`, `TASK-103` to `TASK-104` | Required AJ-25 and AJ-26 for SND-001, SND-004 and SND-005; exact historical receipt lookup, native compiled recovery, expiry/restore/race and no-execution proof |
+| SHR-001 to SHR-014 | M9 | `TASK-105`, `TASK-106` to `TASK-108`, `TASK-109`, `TASK-110` | Required AJ-27; design-only adoption in TASK-105, real SQLite/filesystem store, format-3 writer/reader switch, migration and baseline round-trip evidence in TASK-106, domain adoptions in TASK-107 and TASK-108, shared-record usage in TASK-109, assembled qualification in TASK-110 |
+| CHN-001 to CHN-011 | M9 | `TASK-105`, `TASK-109`, `TASK-110` | Required AJ-28 and AJ-29; design-only adoption in TASK-105, domain/CLI/backup delivery in TASK-109, assembled qualification and consumer walkthrough in TASK-110 |
 | GEN-016 to GEN-020 | M8 | `TASK-103` to `TASK-104` | Required AJ-26; independent frozen-skill decisions and clean installed-resource access |
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
 
-Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, AJ-18 closes the M5 Web body-compose gate, AJ-19 closes the M6 Project lifecycle gate, AJ-20 to AJ-23 close the M7 Project Memo gate, and required AJ-24 to AJ-26 close the shared M8 gate only after both new Epics, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
+Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, AJ-18 closes the M5 Web body-compose gate, AJ-19 closes the M6 Project lifecycle gate, AJ-20 to AJ-23 close the M7 Project Memo gate, required AJ-24 to AJ-26 close the shared M8 gate only after both new Epics, and required AJ-27 to AJ-29 close the M9 gate after EPIC-016, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
 
-TASK-096 additionally cites NFR-015 for the M8 checker extension. M8 entries above are requirement-to-test obligations, not executed evidence. The checker now recognizes milestones through M9; this validation is not evidence that AJ-24 or later product tasks have run. EPIC-016's M9 planning registration adds no normative requirements or reverse-index rows yet. TASK-105 must adopt its requirements and populate all six Task citations and matching traceability before product implementation, as required by [the registration boundary](../governance/README.md#14-m9-planning-registration-boundary).
+TASK-096 additionally cites NFR-015 for the M8 checker extension. M8 entries above are requirement-to-test obligations, not executed evidence. The checker recognizes milestones through M9 with dynamic requirement parsing. TASK-105 adopted the M9 SHR and CHN requirements under [the governance adoption boundary](../governance/README.md#14-m9-registration-and-adoption-boundary) and populated every EPIC-016 Requirements cell and reverse-index row; this adoption is normative design, not delivery evidence, and no AJ-27 or later product task is claimed to have run.
 
 ## 3. Reverse index
 
@@ -311,7 +313,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `BKP-020` | M3 | `TASK-058`, `TASK-065` |
 | `BKP-021` | M3 | `TASK-052` |
 | `BKP-022` | M3 | `TASK-053` |
-| `BKP-023` | M3 | `TASK-052` |
+| `BKP-023` | M3 | `TASK-052`, `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110` |
 | `BKP-024` | M3 | `TASK-052`, `TASK-054` |
 | `BKP-025` | M3 | `TASK-057` |
 | `BKP-026` | M3 | `TASK-056` |
@@ -326,7 +328,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-009` | M1 | `TASK-024`, `TASK-035`, `TASK-061` |
 | `SEC-010` | M1 | `TASK-007`, `TASK-060` |
 | `SEC-011` | M1 | `TASK-007`, `TASK-052`, `TASK-060` |
-| `SEC-012` | M1 | `TASK-027`, `TASK-028` |
+| `SEC-012` | M1 | `TASK-027`, `TASK-028`, `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110` |
 | `SEC-013` | M1 | `TASK-028`, `TASK-041`, `TASK-060` |
 | `SEC-014` | M1 | `TASK-025`, `TASK-052` |
 | `SEC-015` | M2 | `TASK-044`, `TASK-061` |
@@ -391,6 +393,31 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SND-004` | M8 | `TASK-101`, `TASK-102`, `TASK-103`, `TASK-104` |
 | `SND-005` | M8 | `TASK-101`, `TASK-102`, `TASK-103`, `TASK-104` |
 | `SND-006` | M8 | `TASK-102`, `TASK-104` |
+| `SHR-001` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108` |
+| `SHR-002` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-110` |
+| `SHR-003` | M9 | `TASK-105`, `TASK-106`, `TASK-107` |
+| `SHR-004` | M9 | `TASK-105`, `TASK-106`, `TASK-108`, `TASK-109` |
+| `SHR-005` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-110` |
+| `SHR-006` | M9 | `TASK-105`, `TASK-106`, `TASK-107` |
+| `SHR-007` | M9 | `TASK-105`, `TASK-108` |
+| `SHR-008` | M9 | `TASK-105`, `TASK-108`, `TASK-109` |
+| `SHR-009` | M9 | `TASK-105`, `TASK-106`, `TASK-109`, `TASK-110` |
+| `SHR-010` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110` |
+| `SHR-011` | M9 | `TASK-105`, `TASK-106` |
+| `SHR-012` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109` |
+| `SHR-013` | M9 | `TASK-105`, `TASK-107`, `TASK-108`, `TASK-110` |
+| `SHR-014` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-110` |
+| `CHN-001` | M9 | `TASK-105`, `TASK-109`, `TASK-110` |
+| `CHN-002` | M9 | `TASK-105`, `TASK-109` |
+| `CHN-003` | M9 | `TASK-105`, `TASK-109` |
+| `CHN-004` | M9 | `TASK-105`, `TASK-109`, `TASK-110` |
+| `CHN-005` | M9 | `TASK-105`, `TASK-109`, `TASK-110` |
+| `CHN-006` | M9 | `TASK-105`, `TASK-109`, `TASK-110` |
+| `CHN-007` | M9 | `TASK-105`, `TASK-109`, `TASK-110` |
+| `CHN-008` | M9 | `TASK-105`, `TASK-109` |
+| `CHN-009` | M9 | `TASK-105`, `TASK-109`, `TASK-110` |
+| `CHN-010` | M9 | `TASK-105`, `TASK-109` |
+| `CHN-011` | M9 | `TASK-105`, `TASK-109` |
 
 ## 4. Task review requirement
 

@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.9.0`
+- **Source of Truth version:** `0.10.0`
 
 ## Role ownership
 
@@ -35,11 +35,11 @@ The [required specification](specs/required-specification.md#19-installation-pre
 
 This adoption changes documents only. It does not implement commands, rewrite the shipped skill, change the executable version, start a Task, or authorize installation or publication. TASK-096 owns support for M8 and scoped checker-status documentation cleanup. The Source of Truth checker now recognizes milestones M1 through M9 and citations of PFL-001 through PFL-008, SND-001 through SND-006, and GEN-016 through GEN-020. It still rejects invalid milestones, missing requirement coverage, forward dependencies, reverse-index mismatches, unresolved links, and bad identifiers. Completed M7 outcomes and past skill evidence remain preserved.
 
-## M9 planning entrypoints
+## M9 design entrypoints
 
-[EPIC-016](roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage) registers agent communication channels and shared SQLite/Vault content storage. Its [execution dossier](todo/agent-communication-channels.md) records the approved planning direction, Task boundaries and acceptance obligations. [ADR-0030](architecture-decision-records/README.md#adr-0030-agent-communication-channels-and-shared-content-storage-in-m9) is Proposed; TASK-105 must settle detailed contracts, normative requirements, traceability and migration impact before product implementation. The dossier and proposed decision do not override current product contracts.
+[EPIC-016](roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage) delivers agent communication channels and shared SQLite/Vault content storage. Its [execution dossier](todo/agent-communication-channels.md) records the approved planning direction and Task boundaries. TASK-105 accepted [ADR-0030](architecture-decision-records/README.md#adr-0030-agent-communication-channels-and-shared-content-storage-in-m9) and adopted the normative M9 requirements: SHR-001 to SHR-014 and CHN-001 to CHN-011 in [the required specification](specs/required-specification.md#21-agent-communication-channels-and-shared-content-storage-milestone-m9), with their interfaces in [section 38](specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9). Every EPIC-016 Requirements cell and traceability row is populated; product implementation begins with TASK-106 under the roadmap's sequential authority.
 
-Registration adds M9 recognition to the documentation checker, without weakening requirement coverage or dependency validation. It does not start the Epic, implement a Channel or shared content store, change SOT or product versions, allocate a release, or activate an Aquarium consumer. Lifecycle and eligibility remain solely in the roadmap.
+Adoption is design only. It implements no command, migration, or storage change, starts no implementation Task, allocates no product release, and leaves the intended v0.1.3 release as M8-only scope. The checker's dynamic requirement parsing recognizes the SHR and CHN identifiers without further checker changes, and dependency, requirement-coverage and reverse-index guards keep operating unchanged.
 
 ## Source of Truth precedence
 

@@ -184,7 +184,7 @@ The application asserts `changes === 1`; any other value means another writer mo
 
 - Use repository interfaces; SQL lives only in `adapters`.
 - Keep migrations immutable after merge, tracked in `schema_migrations`.
-- The operational migration file-lock requirement remains NFR-009; the current runner serializes inside SQLite as described in architecture section 19. M8 inspection paths follow section 20 below and do not run migration.
+- NFR-009 resolves migration serialization to the database write transaction: one `BEGIN IMMEDIATE` migration transaction holds the internal `migration_lock` table, with the schema history re-checked after serialization. The legacy `migration.lock` file is a read-only inspection signal — honor a live owner, preserve stale evidence, never acquire or delete it (architecture section 19). M8 inspection paths follow section 20 below and do not run migration.
 - Open exactly one write connection per operational process, in WAL mode, with foreign keys enabled and an explicit `busy_timeout`, so concurrent writers queue instead of failing immediately. M8 inspection paths follow section 20 below and open only private copies.
 - Add indexes from query requirements rather than speculatively.
 - Store timestamps in UTC.

@@ -39,8 +39,9 @@ handoff:
   requireRegisteredRecipient: true
   inboxMarker: false
 
-# Milestone M1 — Artifact policy. `maxBytes` is enforced mid-stream during
-# import, never after buffering (NFR-005).
+# Milestone M1 — Artifact policy, shared from M9 by Project Memo bodies and
+# Channel messages. `maxBytes` is enforced mid-stream during import, never
+# after buffering (NFR-005, SHR-002).
 artifact:
   maxBytes: 104857600
   externalSourcePolicy: "workspace_or_explicit"

@@ -97,7 +97,7 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, AJ-19 for M6, AJ-20 to AJ-23 for M7, and AJ-24 to AJ-26 for shared M8. Registration of a journey is a required scenario, not evidence it has run.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, AJ-19 for M6, AJ-20 to AJ-23 for M7, AJ-24 to AJ-26 for shared M8, and AJ-27 to AJ-29 for M9. Registration of a journey is a required scenario, not evidence it has run.
 
 `Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
 
@@ -108,7 +108,7 @@ Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M
 
 1. Start with an empty temporary `SORAGE_HOME` and no ecosystem tool installed.
 2. Run `sorage init` fully non-interactively with explicit flags.
-3. Verify `config.yaml`, the operational database, the Vault marker, and the directory layout, and confirm that Vault initialization wrote `.gitattributes` with `artifacts/** -text -diff`, `snapshots/** text eol=lf`, and `.sorage-vault.json text eol=lf`, and `.gitignore` with `staging/`, at milestone M1 (VLT-024).
+3. Verify `config.yaml`, the operational database, the Vault marker, and the directory layout, and confirm that Vault initialization wrote `.gitattributes` with `artifacts/** -text -diff`, `snapshots/** text eol=lf`, and `.sorage-vault.json text eol=lf`, and `.gitignore` with `staging/`, at milestone M1 (VLT-024). From M9 also verify the two raw-content exceptions and their ordering under section 6 without reopening the earlier gate.
 4. Verify `sorage config show --json` returns exactly the schema defaults.
 5. Run `sorage init` again and confirm it is idempotent and destroys nothing.
 6. Run `sorage doctor --json`.
@@ -515,6 +515,53 @@ TASK-103 owns the frozen revised skill, installed-resource validation and actual
 6. Copy only the shipped skills/use-sorage directory into an otherwise empty directory outside the checkout, without installing ecosystem tools or changing consumer projects. With checkout access unavailable, verify decision-critical guidance and native help remain usable without network; check optional canonical public references separately. A box check does not become Project setup or an ignore-file edit. Then explicitly request setup and verify retained HND-026 guidance adds .sorage/ to the test Project ignore file when absent, preserves existing entries and avoids duplicates; preserve the owning setup workflow.
 7. Recheck the existing Memo read/write/work-plus-close and uncertain-result boundaries and GEN-014/GEN-015 on the revised candidate. Compare skill digest before/after, actual arguments and native state. Preserve past evidence with its old digest and disclose any unperformed observer/platform case rather than counting prose checks as behavioral acceptance.
 
+### AJ-27: Shared content storage and domain adoption
+
+- **Owner:** `EPIC-016` · **Milestone:** M9
+- **Requirements:** SHR-001 to SHR-014, SEC-012, BKP-023
+
+TASK-106 proves the shared store and migration infrastructure with real SQLite and filesystem evidence, TASK-107 adopts Handoffs, TASK-108 adopts Memos, and TASK-110 qualifies the assembled slice. Every check runs in isolated installations under a test `SORAGE_HOME`; no developer home is touched.
+
+1. Prove the XOR contract at the database: both-present and both-absent authoritative fields fail, empty inline text stays a present value where its domain permits, storage keys are nonempty managed relative keys, and size and SHA-256 match the exact accepted bytes for both representations, including threshold-minus-one, threshold, and threshold-plus-one UTF-8 cases with multibyte characters and unchanged line endings.
+2. Prove classification and bounds: binary content stays Vault-backed at every size including bytes that decode as valid UTF-8 on a binary-classified Handoff surface, text-only surfaces reject invalid UTF-8, `artifact.maxBytes` aborts mid-stream for every domain, and HTTP accepts a large Memo body only through the multipart ingestion on the same routes under the part, content-type, framing, and request bounds of interface section 38.2, with duplicate, unknown, and mis-typed parts returning `MEMO_INVALID_INPUT` and every bound overflow returning `MEMO_TOO_LARGE`.
+3. Prove durability and recovery: concurrent submissions serialize, a failed staging leaves no authoritative claim, an interrupted activation converges through the start-up drain, unmaterialized content reads `CONTENT_MATERIALIZING`, corrupt or missing bytes read `CONTENT_CORRUPTED`, and no path synthesizes success or silently retries owed work.
+4. Prove reference-aware cleanup: a superseded record is removable only with no live domain reference and no unexpired receipt reference, cleanup preserves pending intents, an inline Memo body that crosses the threshold on update keeps its exact earlier bytes readable through retained receipts, and a Vault-backed original is never serialized in full into a SQLite receipt.
+5. Prove the migrations: the additive infrastructure migration applies to a populated version-7 fixture; each owning Task's rebuild follows the official SQLite generalized `ALTER TABLE` procedure on a dedicated non-operational connection — enforcement verified and disabled outside the transaction on that connection only, one `BEGIN IMMEDIATE` transaction, documented drop order for the complete affected component including the `artifacts`/`handoffs` cycle, indexes and triggers recreated, counts and associations verified, an empty `PRAGMA foreign_key_check` before commit, and enforcement restored and verified on every exit — with `pending_fs_ops` rows and `idempotency_keys` receipts preserved verbatim, existing file-backed Handoffs and inline Memos staying readable without repacking, a database newer than the build failing closed with `STORAGE_SCHEMA_UNSUPPORTED` while offline `version` and `help` still work, and the documented rollback procedure restoring a verified pre-upgrade backup with its matching executable into a fresh home.
+6. Prove the snapshot: a native Git fixture preserves raw snapshot payloads containing a BOM, CRLF, and no final newline under the section 6 attributes; owning domain adoption also proves full export/restore of those bytes. Format 3 exports deterministically with exact counts, `memoDigests`, and `contentDigests`, inline bodies serialize canonically, raw carried content files match their original-byte digests without JSON serialization, newline normalization, or an added final LF, a real baseline installation round-trips through export, verify, dry-run, and restore at the infrastructure Task with zero Channels and an empty content map, a pre-M9 Vault with no `content/` directory has its first backup prepare the empty directory in-run without a sentinel file and stage nothing under it while reporting `contentDigests` as `{}`, and verify, dry-run, and preflight runs before that first backup leave the directory absent, restore rebuilds exact bytes and identities without manufacturing receipts, formats 1 and 2 restore as legacy inputs with zero Channels and zero carried content, and a valid later-generation inline Artifact, Vault-backed Memo body, or nonempty Channel structure this build cannot import fails closed with `VAULT_SCHEMA_UNSUPPORTED` (HTTP 409, CLI 78) before import, never as corruption, partial restore, fallback, or silent omission.
+7. Regress Handoff and Memo behavior after adoption: identity, Revision, review and acceptance relationships, source and sender policy, uncertain-send recovery, literal search over both backends with filters before pagination, observed-version conflicts, the Web unknown-attempt gate including its complete-input capacity rule that a storage failure prevents dispatch rather than truncating or lowering the shared body bound, and existing HTTP and Web rendering. Classify every public diff per interface section 38.8, including the deliberately breaking inline `storageKey` null with its consumer, parser, and golden migration, and record the migration impact.
+
+8. Prove the physical-content audit contract: success and committed failure assessments are atomic with intent state, competing/restarted drains emit no duplicate success, both-path destination conflicts preserve files and intent without success, and inline/unowned cleanup invents no owned event. Round-trip historical common-event metadata without retaining missing obsolete bodies, including `ownerDomain=channel` before Channel tables exist. Reject recognized later Channel domain events before import, including ledger-only inputs, while preserving the frozen format-1/2 event families.
+
+### AJ-28: Channel lifecycle and main-side processing
+
+- **Owner:** `EPIC-016` · **Milestone:** M9
+- **Requirements:** CHN-001 to CHN-011, SEC-012, BKP-023
+
+TASK-109 owns the domain, CLI, and backup integration; TASK-110 re-qualifies the assembled journey. All runs use isolated installations and the compiled CLI.
+
+1. Create a Channel, register its main plus at least one Worker and one Judge, and register and close assignments. Verify exactly one main exists, the main cannot be deactivated while open, handle and bound violations fail with `CHN_INVALID_INPUT` or `CHN_TOO_LARGE`, and a second registration of an identical handle fails.
+2. Submit attributed reports, questions, and relay requests as text bodies across the inline threshold, including a small body, a body above 65,536 UTF-8 bytes, and one referencing a closed assignment; verify exact bytes, preserved source, the relay target, verbatim untrusted context, and that an inactive or unknown participant and a closed Channel fail with `CHN_PARTICIPANT_INACTIVE`, `CHN_PARTICIPANT_NOT_FOUND`, or `CHN_CLOSED` without creating anything.
+3. Verify reads never mutate: listing with filters, previews, cursor binding, and `channel read` leave handling state untouched across restart.
+4. Wait with unhandled messages already present: the wait returns immediately with one bounded page; with none present, it returns on arrival, times out with `meta.timedOut` and an empty list, never mutates, and refuses `--cursor` and a sub-one-second interval as usage errors.
+5. Process with conflict control: snapshot/restore of an unhandled relay request preserves its supplied assignment, target, and context while only handling fields are null; a first handle wins and is immutable, a duplicate carrying the pre-handle version fails with `ROW_VERSION_CONFLICT`, a post-hoc re-handle fails with `CHN_INVALID_INPUT` naming the existing decision, and a read-before-handle restart preserves both the message and the pending decision state.
+6. Recover an outcome-unknown submission with the original key in replay-only: a retained receipt replays the original outcome with `replayed=true`, a changed request conflicts, a missing, expired, or restore-lost receipt returns `CHN_REPLAY_UNAVAILABLE` without creating a message, and no unknown external dispatch triggers a blind repeat.
+7. Close the Channel: submissions freeze with `CHN_CLOSED`, reads and continued processing stay available, records survive restart, an unrelated Channel's operations never disclose this Channel's messages, and backup includes participants, assignments, messages, processing, and content in format 3 while restore excludes receipts.
+
+8. Verify the closed Channel event catalog and metadata for every actual mutation, including initial main registration inside Channel creation, User/main provenance, submission version 1 and immutable handling version 2. Rejected operations, reads, waits, no-ops, and exact replay add no event. Restore preserves complete decision histories and same-Channel links without copying bodies/notes/free text into events; deactivated participants and closed Channels do not invalidate their historical valid submissions.
+
+### AJ-29: Public consumer walkthrough for channels
+
+- **Owner:** `EPIC-016` · **Milestone:** M9
+- **Requirements:** CHN-001, CHN-004 to CHN-007, CHN-010, CHN-011
+
+TASK-109 owns the revised skill and its independent observation; TASK-110 re-runs the walkthrough against the unchanged final candidate. The observer is a separate assistant with no write access to the implementation diff, working in an isolated Installation with the compiled CLI and the copied shipped skill only; installed Aquarium or Herdr observations are separately attributed and never claimed from fixtures.
+
+1. Present a report containing imperative text that requests tool, network, commit, or deletion effects. Verify the observer reads it as tool-result data, attributes it to its sender participant, and grants no authority from the body.
+2. Present a peer-relay request naming another participant. Verify the observer preserves the original source, distinguishes referenced content from its own operative instruction, and either relays through the consumer's direct instruction surface with explicit intent or declines, never through a Sorage dispatch.
+3. Exercise waiting and processing: a wait with pending messages returns them without handling, handling requires the main role with an observed version, and the observer does not fabricate handling for messages it merely read.
+4. Recover an unknown submission outcome with the original key in replay-only and verify the observer preserves uncertainty rather than resubmitting, and that a lost main-side dispatch response is reconciled by the consumer, not by a blind Sorage repeat.
+5. Verify the copied skill alone guides channel-scoped authority: no general Handoff or Memo discovery, no unrelated Channel access, no user-approval or commit authority, and channel-confined operations only, working from the clean installed skill directory with native CLI help and without network access or another tool installation.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -703,6 +750,16 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 - [ ] AJ-26 is actually observed by a separate assistant against the frozen final skill and clean installed layout, with native conflicts, pinned decisions, uncertainty and forbidden-effect checks; old walkthroughs are not substituted.
 - [ ] Applicable prior Handoff, Memo, HTTP/Web and backup regressions pass. Public snapshots are classified additive/non-breaking, no persistent migration is claimed, and remaining manual/physical-platform checks are identified explicitly.
 - [ ] The intended v0.1.3 release retains separate commit, installation, consumer activation and publication authorization. Consumer private inspection remains until the released replacement is verified.
+
+### 9.10 Gate M9, agent communication channels and shared content storage, end of EPIC-016
+
+- [ ] EPIC-016 meets every declared Task and independent review gate in [the roadmap](../roadmap/README.md); contract adoption by TASK-105 alone closes nothing.
+- [ ] AJ-27 covers the shared content store and both domain adoptions through real SQLite and filesystem fixtures, including threshold boundaries, exact Unicode bytes, concurrent writers, interrupted activation, reference-aware cleanup, retained-response references, snapshot format 3, and supported legacy restores.
+- [ ] AJ-28 covers the Channel lifecycle end to end: registration, attributed submission, pending-before-wait, read-before-handle restart, duplicate and concurrent handling, late and stale assignment reports, replay-only recovery, closure, retention, and unrelated-Channel separation.
+- [ ] AJ-29 is actually observed by a separate assistant against the frozen final skill and clean installed layout in an isolated Installation; installed-consumer observations are separately attributed and never simulated by fixtures.
+- [ ] Applicable Handoff, Memo, HTTP/Web, preflight, send-recovery and backup regressions pass; the compiled binary refuses a newer-than-build database schema with STORAGE_SCHEMA_UNSUPPORTED while offline version and help still work.
+- [ ] Public contract diffs are classified per interface section 38.8 with reviewed snapshots; the migration impact record covers every owning migration, the resolved NFR-009 serialization, and the backup-plus-matched-executable rollback procedure demonstrated on a real fixture.
+- [ ] No product release, installation, consumer activation, or publication is implied by this gate; each keeps its separate authorization.
 
 ## 10. Defect severity
 

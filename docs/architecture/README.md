@@ -682,7 +682,8 @@ Sorage home:
 ├── state/
 │   ├── sorage.sqlite3            # plus -wal and -shm
 │   ├── api-token                 # M2, mode 0600, at least 32 random bytes, base64url
-│   └── backups/                  # database snapshots taken with VACUUM INTO
+│   ├── backups/                  # database snapshots taken with VACUUM INTO
+│   └── fetch-cache/              # M9, derived read-only inline fetch files, grace swept (SHR-006)
 ├── logs/
 │   └── sorage.log                # plus rotated files
 └── run/
@@ -690,7 +691,7 @@ Sorage home:
     ├── daemon.lock
     ├── config.lock
     ├── backup.lock
-    ├── migration.lock
+    ├── migration.lock            # legacy inspection signal; the runner does not acquire it (NFR-009)
     ├── vault-move.lock
     └── inbox-marker.lock
 ```
@@ -700,12 +701,13 @@ Vault:
 ```text
 <Vault>/
 ├── .sorage-vault.json            # {type, schemaVersion, installationId, createdAt}
-├── .gitattributes                # artifacts/** -text -diff ; snapshots/** text eol=lf ; .sorage-vault.json text eol=lf
+├── .gitattributes                # artifacts/** -text -diff ; content/** -text -diff (M9) ; snapshots/** text eol=lf ; snapshots/content/** -text -diff (M9, after general rule) ; .sorage-vault.json text eol=lf
 ├── .gitignore                    # staging/
 ├── artifacts/
 │   └── <handoff-id>/
 │       └── <artifact-id>/
 │           └── <stored-name>
+├── content/                      # M9, managed shared content: memo/<memo-id>/<content-id> and channel/<channel-id>/<content-id>
 ├── snapshots/
 │   ├── projects.json
 │   ├── handoffs/
@@ -729,7 +731,7 @@ Vault:
 Operational SQLite requirements (M8 inspection instead uses the separate source-copy boundary in section 26):
 
 - Explicit, immutable migrations tracked in `schema_migrations`
-- Foreign keys enabled on every connection
+- Foreign keys enabled on every connection; the only exception is the dedicated, non-operational rebuild-migration connection of SHR-009, whose documented disable window outside any transaction is verified and restored on that connection alone
 - WAL mode
 - Explicit `busy_timeout`
 - One write connection per process
@@ -751,6 +753,9 @@ events
 pending_fs_ops
 idempotency_keys
 backup_runs
+project_memos                      # M7
+content_records                    # M9, immutable shared content registry (SHR-004)
+channels                           # M9, with channel_participants, channel_assignments, and channel_messages
 ```
 
 `backup_runs` is the only scheduler authority; there is no separate scheduler state file.
@@ -802,14 +807,14 @@ Operations that span more than one transaction, or that touch files outside the 
 | `vault-move.lock` | Vault relocation and, once restore exists, backup restore |
 | `backup.lock` | Backup runs, scheduled or manual |
 | `daemon.lock` | Single daemon instance |
-| `migration.lock` | Schema migration at process start |
+| `migration.lock` | Legacy inspection signal only: from the resolved NFR-009 contract the migration runner serializes on the database write transaction through `BEGIN IMMEDIATE` and the `migration_lock` table and does not acquire this file; inspection surfaces honor a live record and preserve stale evidence |
 | `inbox-marker.lock` | Derived inbox marker refresh and retired binding cleanup |
 
-Each lockfile contains `{pid, startedAt, hostname}`. A lock is stale when its `pid` is not alive; `config.lock` is additionally stale when older than 30 seconds, while `daemon.lock`, `backup.lock`, `vault-move.lock`, `migration.lock`, and `inbox-marker.lock` have no age limit because their operations may legitimately run long. A stale lock may be broken by the next process; a live lock produces a conflict, except that advisory marker work retries for up to five seconds and then warns without failing its domain command.
+Each lockfile contains `{pid, startedAt, hostname}`. A lock is stale when its `pid` is not alive; `config.lock` is additionally stale when older than 30 seconds, while `daemon.lock`, `backup.lock`, `vault-move.lock`, `migration.lock`, and `inbox-marker.lock` have no age limit because their operations may legitimately run long. A stale lock may be broken by the next process; a live lock produces a conflict, except that advisory marker work retries for up to five seconds and then warns without failing its domain command. The legacy `migration.lock` is excluded from that breaking rule: the current migrator does not acquire it, a live record from an older writer remains a meaningful owner signal, and a stale record is preserved as inspection evidence rather than deleted (NFR-009, the table row above, and interface section 36.2).
 
-Schema migration runs at process start under `migration.lock`, which is stale only when the recorded pid is dead; the runner holds one SQLite write transaction per step and records the applied version in `schema_migrations`, so a process that waited on the lock re-checks `schema_migrations` after acquiring it and finds the version already applied (NFR-009).
+Schema migration runs at process start under the resolved NFR-009 contract: the runner serializes on the database write lock through a single `BEGIN IMMEDIATE` transaction holding the current internal `migration_lock` table, a waiter blocks on the busy timeout and then re-reads the schema history in `schema_migrations` after that serialization before applying anything, and a failure rolls back the whole migration transaction and its history (NFR-009).
 
-NFR-009 remains the operational file-lock requirement. The current native runner instead serializes with BEGIN IMMEDIATE and the internal migration_lock table; that pre-existing implementation difference is not resolved or reopened by M8 registration. M8 inspection uses the committed snapshot and actual native fence observations in section 26 and interface section 36.2. It neither creates nor removes the migration file, does not require its presence, and follows section 36.2 liveness/preservation rules when it exists. Operational migration changes are outside this inspection scope.
+The pre-M9 wording of NFR-009 prescribed the `run/migration.lock` whole-run file lock, and that wording is history: M9 resolved the requirement itself to the transactional runner above. Inspection keeps the M8 policy for a present file — a live record is honored as an owner signal and stale evidence is preserved, and inspection neither creates nor removes the file (section 26, interface section 36.2). No current operational surface acquires or deletes the migration file; manual user recovery guidance is unchanged.
 
 ## 20. Filesystem and database atomicity
 
@@ -1006,3 +1011,15 @@ Send recovery uses a dedicated inspection port, not HandoffWritePort.idempotency
 The shared adapter inspection scope retains the captured expanded configuration, validated migration prefix and a SELECT-only private reader for one consumer invocation. Capture retries finish before the consumer runs; a consumer error is never retried as capture. The scope closes its database and removes private scratch in a finally block, including failed final metadata reads and consumer exceptions. Recovery uses these retained causes before the preflight report projection combines them: live fences remain distinct from uncertain probes, Vault marker identity remains distinct from database/binding identity, and a conclusively missing database remains a storage-integrity failure under a supported configured Vault alias. Registry and receipt readers validate raw field types and enums without operational configuration rereads or enum defaults. Historical outcome validation uses retained immutable Handoff relationships and never requires an old Artifact row or file.
 
 The shipped skill remains policy, not an authentication boundary or workflow engine. Its independently observed M8 behavior covers native destructive decisions, observed versions and original-request recovery; setup ownership and untrusted content cannot be inferred from a recovery hint. Current historical acceptance remains attached to its original candidate.
+
+## 27. M9 shared content and Channel extension
+
+[ADR-0030](../architecture-decision-records/README.md#adr-0030-agent-communication-channels-and-shared-content-storage-in-m9) adds the shared content boundary and the Channel domain specified in [required-specification section 21](../specs/required-specification.md#21-agent-communication-channels-and-shared-content-storage-milestone-m9) and [interface section 38](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9). This section describes the required architecture, not installed feature readiness; consult the roadmap. The existing Handoff, Memo, actor, security, and backup models retain their scope and behavior except where section 21 amends them in place.
+
+`packages/core` owns the shared content value model: the XOR representation, routing threshold and classification, byte size and SHA-256 rules, managed-key validation, the immutable content-record concept, and one `ContentStore` port through which Handoff Artifact bodies, Memo bodies, and Channel message bodies are stored and read without the caller selecting a backend. `packages/adapters` owns the SQLite content-record table, the Vault `content/<domain>/<owner-id>/<content-id>` layout, staging and intent activation for file-backed bodies, reference-aware garbage collection, checksum census, the derived fetch cache under the Sorage home, and snapshot content files. `apps/cli` binds the new Channel commands and body-file input in-process; `apps/daemon` and `apps/web` keep their existing Handoff and Memo surfaces and gain no Channel surface in first delivery.
+
+The Channel domain is an installation-scoped broker record set: channels, participants, assignments, messages, and per-message processing decisions, all persisted in SQLite with message bodies through the shared content interface. Core owns lifecycle, registration, attribution, processing compare-and-set, wait semantics, and submission idempotency; adapters own the tables and transactions; CLI is the only first-delivery transport. There is no Podway, Herdr, or other ecosystem dependency, no automatic wake-up, and no inference from the working directory. Participant attribution reuses the existing actor provenance and adds no process isolation claim.
+
+The persistence rules of sections 17 to 20 extend unchanged: synchronous UnitOfWork transactions with no filesystem I/O or `await` inside, post-commit intent execution and drain for file-backed bodies, WAL writer serialization, the vault-move fences, and the existing crash-point discipline. The migration model is additive-first: version 8 delivers the shared infrastructure without rebuilding any domain table, TASK-107 then rebuilds the `artifacts`/`handoffs` cycle with its incoming dependents, TASK-108 rebuilds `project_memos` with `events`, and every rebuild follows the official SQLite generalized `ALTER TABLE` procedure of SHR-009 on a dedicated non-operational connection, ending with an empty `PRAGMA foreign_key_check` before commit. Backup moves to one coherent global snapshot format 3 covering all domains and carried content, with formats 1 and 2 as restorable legacy inputs; operational receipts stay outside restore. Rollback is the documented backup-plus-matched-executable procedure; old executables are never assumed to read an upgraded home, and a database newer than the build fails closed with `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
+
+M9 retains the shared event row and records Channel associations in the closed typed metadata of [the event catalog](../specs/security-reliability.md#101-m9-event-metadata), following existing Project-event practice. TASK-106 implements common physical-content events and historical-owner intent metadata without Channel tables; TASK-109 implements Channel domain events and stronger retained-association validation. Completion state, intent removal, and success events commit together, while failed assessments retain the intent and their event atomically. Historical physical-event IDs neither pin bodies nor require live owners at restore; no new Channel association column or separate audit service is introduced.
