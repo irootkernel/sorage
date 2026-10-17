@@ -110,15 +110,27 @@ sorage send \
   --body "Does Gul or Dolgorae own backpressure on the shared stream? One paragraph is enough."
 ```
 
-A retryable create carries its own key, so a network-less retry after a crash returns the original result instead of a second Handoff (CLI-021):
+A keyed original send can retain its creation receipt (CLI-021). Ordinary send may execute when no eligible receipt remains; an uncertain outcome requires the recovery mode below. Retain the key before the original dispatch:
 
 ```bash
+original_key="0d0a2c2a-7f38-4b0e-9a1f-6a1f2c4b8e11"
+
 sorage send \
   --to gul \
   --title "gRPC stream ownership proposal" \
   --file "./docs/gul-stream-proposal.md" \
-  --idempotency-key "0d0a2c2a-7f38-4b0e-9a1f-6a1f2c4b8e11"
+  --idempotency-key "$original_key"
 ```
+
+### Inspect an uncertain send
+
+Before the original send, retain its key, exact accepted input/source bytes, Installation and sender context. When its response is lost, inspect only that original request:
+
+```sh
+sorage send --to gul --title "gRPC stream ownership proposal" --file ./docs/gul-stream-proposal.md --idempotency-key "$original_key" --replay-only --json
+```
+
+Use the same Installation and sender directory or originally authorized actor options. Missing or empty keys are usage errors. A matching retained receipt returns historical creation data with `replayed: true`; it does not report current Handoff state, delivery or Artifact activation. A missing, expired or restore-lost receipt returns `HANDOFF_REPLAY_UNAVAILABLE`/75, leaving the original outcome unknown. It cannot cancel a late original request. Preserve the original material and diagnostic output on every refusal; recovery never authorizes ordinary execute retry or another key. This CLI-only inspection bypasses initialization, migration, intent draining, body staging, logging and inbox-marker refresh. Omitting `--replay-only` retains ordinary execution behavior.
 
 ## Recipient reviews
 

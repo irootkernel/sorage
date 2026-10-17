@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -10,7 +12,6 @@ import {
   openSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
   readSync,
   renameSync,
   rmSync,
@@ -19,10 +20,8 @@ import {
 } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Database } from "bun:sqlite";
 import { describe, expect, it } from "vitest";
-import { spawn, type ChildProcess } from "node:child_process";
-import { git, makeTempDir, sorage } from "./helpers";
+import { git, makeTempDir, sorage, storageProof } from "./helpers";
 import {
   configText,
   INSTALLATION_ID,
@@ -31,42 +30,6 @@ import {
   populateDomain,
   writeInstallation,
 } from "./preflight-fixtures";
-
-function storageProof(root: string): string[] {
-  let rootStat: ReturnType<typeof lstatSync>;
-  try {
-    rootStat = lstatSync(root);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return ["absent"];
-    throw error;
-  }
-  if (rootStat.isSymbolicLink()) {
-    return [`l . ${rootStat.mode} ${rootStat.mtimeMs} ${rootStat.dev}:${rootStat.ino} ${readlinkSync(root)}`];
-  }
-  if (!rootStat.isDirectory()) {
-    const hash = createHash("sha256").update(readFileSync(root)).digest("hex");
-    return [`f . ${rootStat.mode} ${rootStat.mtimeMs} ${rootStat.dev}:${rootStat.ino} ${hash}`];
-  }
-  const rows = [`@ ${rootStat.mode} ${rootStat.mtimeMs} ${rootStat.dev}:${rootStat.ino}`];
-  const walk = (dir: string): void => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      const stat = lstatSync(path);
-      const rel = relative(root, path);
-      if (stat.isSymbolicLink()) {
-        rows.push(`l ${rel} ${stat.mode} ${stat.mtimeMs} ${stat.dev}:${stat.ino} ${readlinkSync(path)}`);
-      } else if (stat.isDirectory()) {
-        rows.push(`d ${rel} ${stat.mode} ${stat.mtimeMs} ${stat.dev}:${stat.ino}`);
-        walk(path);
-      } else {
-        const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
-        rows.push(`f ${rel} ${stat.mode} ${stat.mtimeMs} ${stat.dev}:${stat.ino} ${hash}`);
-      }
-    }
-  };
-  walk(root);
-  return rows.sort();
-}
 
 describe("compiled preflight", () => {
   it("reports an absent home and rejects confirmation without creating the home", () => {

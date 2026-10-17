@@ -111,6 +111,7 @@ import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError } from "commander";
 import { buildCompletionScript } from "./completion";
 import { runPreflightCommand } from "./preflight-command";
+import { runSendRecoveryCommand } from "./send-recovery-command";
 import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
@@ -836,10 +837,53 @@ export function buildProgram(
     .option("--supersedes <handoff-id>", "link this Handoff to a terminal predecessor")
     .option("--allow-external-source", "import a source outside the resolved sender workspace")
     .option("--allow-unregistered", "send as an unregistered Workspace despite the downgrade guard")
-    .option("--idempotency-key <uuid>", "replay an identical send instead of creating a new one")
+    .option(
+      "--idempotency-key <key>",
+      "original receipt key, including retained legacy keys; ordinary send may execute on a miss",
+    )
+    .option("--replay-only", "inspect the original send receipt without executing; requires the original key and input")
+    .addHelpText(
+      "after",
+      "\nFor an unknown result, retain the original key, exact input/source bytes, Installation and sender context. Use only --replay-only with that material. A missing receipt leaves the outcome unknown; historical success does not establish current delivery or Artifact activation.\n",
+    )
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
+      if (options.replayOnly === true) {
+        let usage: string | undefined;
+        if (typeof options.idempotencyKey !== "string" || options.idempotencyKey.trim() === "")
+          usage = "send --replay-only requires the original nonempty --idempotency-key";
+        else if ((options.file === undefined) === (options.body === undefined))
+          usage = "send takes exactly one of --file or --body";
+        else if (options.body !== undefined && options.body.trim() === "") usage = "the --body text must not be empty";
+        if (usage !== undefined) {
+          ports.err(`sorage: ${usage}\nRun 'sorage --help' for usage.\n`);
+          reportExitCode(2);
+          return;
+        }
+        reportExitCode(
+          runSendRecoveryCommand({
+            ports,
+            json,
+            requestId: requestId(),
+            input: {
+              to: options.to as string[],
+              title: options.title,
+              file: options.file,
+              body: options.body,
+              supersedes: options.supersedes,
+              allowExternalSource: options.allowExternalSource === true,
+              allowUnregistered: options.allowUnregistered === true,
+              idempotencyKey: options.idempotencyKey,
+              path: process.cwd(),
+              userHome: homedir(),
+              as: typeof globals.as === "string" ? globals.as : undefined,
+              asUser: globals.asUser === true,
+            },
+          }),
+        );
+        return;
+      }
       if (!requireInitialized(ports, json, reportExitCode)) return;
       if ((options.file === undefined) === (options.body === undefined)) {
         ports.err("sorage: send takes exactly one of --file or --body\n");

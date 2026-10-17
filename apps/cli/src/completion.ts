@@ -40,6 +40,10 @@ function zshCompletionScript(root: Command, cliName: string): string {
   const rootOptions = optionSpecs(root)
     .map((spec) => `      '${escapeSingleQuotes(spec)}'`)
     .join("\n");
+  const send = root.commands.find((command) => command.name() === "send");
+  const sendOptions = [...optionSpecs(root), ...(send === undefined ? [] : optionSpecs(send))]
+    .map((spec) => `'${escapeSingleQuotes(spec)}'`)
+    .join(" ");
   return `#compdef ${cliName}
 
 _${cliName}() {
@@ -48,6 +52,9 @@ _${cliName}() {
 ${commandEntries}
   )
   _describe -t commands 'command' commands
+  case "$words[2]" in
+    send) _arguments ${sendOptions}; return ;;
+  esac
   _arguments \\
 ${rootOptions}
 }
@@ -63,11 +70,16 @@ function bashCompletionScript(root: Command, cliName: string): string {
   walkCommands(root, "", summaries);
   const uniqueCommands = [...new Set(summaries.map((summary) => summary.path.split(" ")[0]))].sort();
   const options = optionSpecs(root).sort();
+  const send = root.commands.find((command) => command.name() === "send");
+  const sendOptions = send === undefined ? "" : optionSpecs(send).join(" ");
   return `_${cliName}() {
   local cur commands option_words
   cur="\${COMP_WORDS[COMP_CWORD]}"
   commands="${uniqueCommands.join(" ")}"
   option_words="${options.join(" ")}"
+  case "\${COMP_WORDS[1]}" in
+    send) option_words="$option_words ${sendOptions}" ;;
+  esac
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") )
   else

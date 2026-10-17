@@ -1,0 +1,22 @@
+Usage: sorage send [options]
+
+hand one current document to one or more recipient Projects, one Handoff each
+
+Options:
+  --to <project>             recipient Project slug; repeat for a fan-out
+                             (default: [])
+  --title <title>            the Handoff title, in any script
+  --file <path>              the document to hand over, with ~ expansion
+  --body <text>              inline Markdown text materialized as the document
+  --supersedes <handoff-id>  link this Handoff to a terminal predecessor
+  --allow-external-source    import a source outside the resolved sender
+                             workspace
+  --allow-unregistered       send as an unregistered Workspace despite the
+                             downgrade guard
+  --idempotency-key <key>    original receipt key, including retained legacy
+                             keys; ordinary send may execute on a miss
+  --replay-only              inspect the original send receipt without
+                             executing; requires the original key and input
+  -h, --help                 display help for command
+
+For an unknown result, retain the original key, exact input/source bytes, Installation and sender context. Use only --replay-only with that material. A missing receipt leaves the outcome unknown; historical success does not establish current delivery or Artifact activation.

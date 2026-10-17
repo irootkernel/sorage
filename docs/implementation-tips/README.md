@@ -34,6 +34,8 @@ The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 - Record shipped outcomes in the root [CHANGELOG.md](../../CHANGELOG.md). Keep the next planned version under `Unreleased` until that version is published; do not treat the changelog as a second status authority.
 - Verification is local: the same `make` targets a developer runs are the whole gate, because this repository uses no hosted continuous-integration service.
 
+The native LaunchAgent journey runs a SHA-256-identical copy of the compiled candidate in its normal system temporary fixture. Every journey CLI invocation and generated plist uses that copy; teardown stops its unique job before removing the copy. This qualifies a temporary installation with the existing quoted-home, login-cycle, health/version and uninstall checks. Direct launchd execution from an external-volume checkout remains unqualified: observed startup blocked in the native loader before the application runtime.
+
 Bun does not use libuv, so `F_FULLFSYNC` durability MUST be verified empirically in the foundation milestone rather than assumed.
 
 The workspace is five packages, and the import rules are lint-enforced inside `make test-prepare` (NFR-014):

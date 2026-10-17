@@ -208,7 +208,7 @@ sorage doctor
 
 Every other command returns `NOT_INITIALIZED` with the expected configuration path and `sorage init` as the suggested command (INIT-012).
 
-This gate also applies to planned `send --replay-only`: an absent configuration returns NOT_INITIALIZED/78 without creating the home or an installation log. That failure does not authorize initialization or ordinary send.
+This gate also applies to `send --replay-only`: an absent configuration returns NOT_INITIALIZED/78 without creating the home or an installation log. That failure does not authorize initialization or ordinary send.
 
 Human form:
 
@@ -631,7 +631,8 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 
 | Command | Milestone | Notes |
 |---|---|---|
-| `sorage send --to <project> [--to <project> ...] --title <t> (--file <path> \| --body <text>) [--supersedes <id>] [--allow-external-source] [--allow-unregistered] [--idempotency-key <uuid>]` | M1 | One Handoff per recipient, one Dispatch Group, all-or-nothing (HND-006, HND-008) |
+| `sorage send --to <project> [--to <project> ...] --title <t> (--file <path> \| --body <text>) [--supersedes <id>] [--allow-external-source] [--allow-unregistered] [--idempotency-key <key>]` | M1 | One Handoff per recipient, one Dispatch Group, all-or-nothing (HND-006, HND-008) |
+| `sorage send --to <project> [--to <project> ...] --title <t> (--file <path> \| --body <text>) [original send options] --idempotency-key <original-key> --replay-only` | M8 | Inspect the original send receipt without executing; historical data only (SND-001 to SND-005) |
 | `sorage inbox [--wait] [--timeout <s>] [--interval <s>]` | M1 | Section 13.9 |
 | `sorage outbox [--current-workspace]` | M1 | Sender view for the resolved Project or Workspace |
 | `sorage get <handoff-id>` | M1 | Metadata only; never sets `firstFetchedAt` and never emits an event; does not carry the Review Note body (CLI-022, ADR-0024) |
@@ -767,7 +768,7 @@ Error:
 
 The envelope is versioned and contract-tested through `make test-contract` (NFR-003, NFR-011).
 
-M8 preflight uses a completed assessment envelope with ok=true even for blocking statuses that exit 75 or 78; [section 36](#36-installation-preflight-milestone-m8) owns that explicit status-based exception. The implemented command catalog above does not yet include planned preflight or send --replay-only; sections 36 and 37 own their prospective syntax.
+M8 preflight uses a completed assessment envelope with ok=true even for blocking statuses that exit 75 or 78; [section 36](#36-installation-preflight-milestone-m8) owns that explicit status-based exception. The implemented CLI includes preflight and send --replay-only; sections 36 and 37 own their inspection syntax and semantics.
 
 ## 15. Symbolic error codes
 
@@ -1568,11 +1569,11 @@ No initialization, operational PRAGMA configuration, migration, intent drain, se
 
 ## 37. Send replay-only and agent policy, milestone M8
 
-This is the required M8 design under SND-001 through SND-006, GEN-016 through GEN-020 and ADR-0029. Implementation readiness is recorded only in [EPIC-015](../roadmap/README.md#epic-015-safe-handoff-recovery-and-agent-policy). The current v0.1.2 send command has no replay-only flag; its ordinary same-key retry can execute when the receipt is absent. M8 adds a CLI send mode only, not an HTTP header, Web flow, generic Handoff recovery service, or another mutation mode.
+This is the required M8 design under SND-001 through SND-006, GEN-016 through GEN-020 and ADR-0029. Implementation readiness is recorded only in [EPIC-015](../roadmap/README.md#epic-015-safe-handoff-recovery-and-agent-policy). The published v0.1.2 executable predates this extension. Ordinary same-key send retry can execute when the receipt is absent. The implemented M8 extension adds a CLI send mode only, not an HTTP header, Web flow, generic Handoff recovery service, or another mutation mode.
 
 ### 37.1 Original-request recovery
 
-The planned syntax is the original `sorage send --to <project> [--to <project> ...] --title <title> (--file <path> | --body <text>) [original send options] --idempotency-key <original-key> --replay-only [--json]`. Require the original nonempty key, the same business input/source bytes, the intended Installation and the original sender context. Keep existing key compatibility rather than rejecting retained legacy keys under a new format rule. Reject a missing key as CLI usage error 2. Preserve existing input validation and actor/source guards. A different Installation or missing original material must not be substituted automatically.
+The recovery syntax is the original `sorage send --to <project> [--to <project> ...] --title <title> (--file <path> | --body <text>) [original send options] --idempotency-key <original-key> --replay-only [--json]`. Require the original nonempty key, the same business input/source bytes, the intended Installation and the original sender context. Keep existing key compatibility rather than rejecting retained legacy keys under a new format rule. Reject a missing key as CLI usage error 2. Preserve existing input validation and actor/source guards. A different Installation or missing original material must not be substituted automatically.
 
 Mode is excluded from the business request hash. Reuse existing normalized recipient/title/content/kind/supersedes/sender hashing and the verified legacy hash and Workspace-to-Project replay rules. Read and digest a file source without importing it; digest an inline body directly without a spool. A missing or changed source is not permission to fetch some newer Handoff content or reconstruct the request. Select the replay-only path before creating ordinary send ports, operational migration, Vault startup drain, body scratch or Artifact staging.
 

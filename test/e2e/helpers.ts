@@ -1,7 +1,18 @@
-import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -40,12 +51,18 @@ export function makeTempDir(prefix: string): string {
 
 export function sorage(
   args: string[],
-  options: { home?: string | undefined; cwd?: string | undefined; env?: Record<string, string> | undefined } = {},
+  options: {
+    home?: string | undefined;
+    cwd?: string | undefined;
+    env?: Record<string, string> | undefined;
+    binary?: string | undefined;
+  } = {},
 ): Run {
-  if (!existsSync(BINARY)) {
-    throw new Error(`the compiled binary is missing at ${BINARY}; run make build first`);
+  const binary = options.binary ?? BINARY;
+  if (!existsSync(binary)) {
+    throw new Error(`the compiled binary is missing at ${binary}; run make build first`);
   }
-  const result = spawnSync(BINARY, args, {
+  const result = spawnSync(binary, args, {
     encoding: "utf8",
     cwd: options.cwd ?? tmpdir(),
     env: {
@@ -169,4 +186,40 @@ export function mkdirp(path: string): string {
 /** Best-effort recursive removal for journey-managed directories. */
 export function rmSyncSafe(path: string): void {
   rmSync(path, { recursive: true, force: true });
+}
+
+export function storageProof(root: string): string[] {
+  let rootStat: ReturnType<typeof lstatSync>;
+  try {
+    rootStat = lstatSync(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return ["absent"];
+    throw error;
+  }
+  if (rootStat.isSymbolicLink()) {
+    return [`l . ${rootStat.mode} ${rootStat.mtimeMs} ${rootStat.dev}:${rootStat.ino} ${readlinkSync(root)}`];
+  }
+  if (!rootStat.isDirectory()) {
+    const hash = createHash("sha256").update(readFileSync(root)).digest("hex");
+    return [`f . ${rootStat.mode} ${rootStat.mtimeMs} ${rootStat.dev}:${rootStat.ino} ${hash}`];
+  }
+  const rows = [`@ ${rootStat.mode} ${rootStat.mtimeMs} ${rootStat.dev}:${rootStat.ino}`];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const stat = lstatSync(path);
+      const rel = relative(root, path);
+      if (stat.isSymbolicLink()) {
+        rows.push(`l ${rel} ${stat.mode} ${stat.mtimeMs} ${stat.dev}:${stat.ino} ${readlinkSync(path)}`);
+      } else if (stat.isDirectory()) {
+        rows.push(`d ${rel} ${stat.mode} ${stat.mtimeMs} ${stat.dev}:${stat.ino}`);
+        walk(path);
+      } else {
+        const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
+        rows.push(`f ${rel} ${stat.mode} ${stat.mtimeMs} ${stat.dev}:${stat.ino} ${hash}`);
+      }
+    }
+  };
+  walk(root);
+  return rows.sort();
 }
