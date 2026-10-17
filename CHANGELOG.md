@@ -4,13 +4,13 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.3 - Unreleased
 
-### Planned scope
+### Added
 
-- Non-mutating installation preflight through a supported public CLI contract.
-- Non-executing recovery of uncertain CLI sends, with original-request receipt lookup.
-- Shipped agent guidance for explicit authority, deletion decisions, stale edits, received content and safe recovery.
+- Add `sorage preflight` to inspect Installation compatibility without migration or managed-storage writes.
+- Add `sorage send --replay-only` to inspect original-request receipts without sending again, preserving unknown outcomes when recovery evidence is unavailable.
+- Harden the standalone shipped agent policy for explicit authority, pinned deletion, observed-version conflicts, untrusted content and recovery using original send material.
 
-These are adopted design targets, not implemented or shipped changes. [The roadmap](docs/roadmap/README.md) owns delivery status and [the M8 design](docs/README.md#m8-design-entrypoints) defines the contracts. Publication requires separate authorization.
+These capabilities are implemented in the source candidate for intended v0.1.3; the published v0.1.2 distribution predates them. [The roadmap](docs/roadmap/README.md) owns delivery status and [the M8 contracts](docs/README.md#m8-design-entrypoints) define behavior. Installation, consumer activation and publication require separate authorization.
 
 ## v0.1.2 - 2026-10-03
 
