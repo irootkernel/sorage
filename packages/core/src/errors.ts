@@ -60,6 +60,10 @@ export const ERROR_CODES = [
   "MEMO_TOO_LARGE",
   "MEMO_NOT_OPEN",
   "MEMO_REPLAY_UNAVAILABLE",
+  "HANDOFF_REPLAY_UNAVAILABLE",
+  "STORAGE_SCHEMA_UNSUPPORTED",
+  "STORAGE_INTEGRITY_ERROR",
+  "STORAGE_INSPECTION_UNAVAILABLE",
   "INTERNAL_ERROR",
 ] as const;
 
@@ -86,6 +90,13 @@ export const EXIT_USAGE = 2;
 export const EXIT_INTERNAL = 1;
 
 const RECOVERY: Partial<Record<ErrorCode, string>> = {
+  HANDOFF_REPLAY_UNAVAILABLE:
+    "The original outcome is unknown; retain the original key, input, Installation and sender context without executing again",
+  STORAGE_SCHEMA_UNSUPPORTED:
+    "Retain the original send material and use a Sorage version supporting this storage layout",
+  STORAGE_INTEGRITY_ERROR: "Retain the original send material and diagnose storage integrity before further inspection",
+  STORAGE_INSPECTION_UNAVAILABLE:
+    "Retain the original send material and inspect again only when a coherent read is available",
   MEMO_FILE_READ_FAILED: "Check the selected Memo body file path and read permissions",
   NOT_INITIALIZED: "sorage init",
   CONFIG_INVALID: "sorage config validate",
@@ -146,6 +157,10 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
 };
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
+  HANDOFF_REPLAY_UNAVAILABLE: 409,
+  STORAGE_SCHEMA_UNSUPPORTED: 422,
+  STORAGE_INTEGRITY_ERROR: 409,
+  STORAGE_INSPECTION_UNAVAILABLE: 503,
   MEMO_FILE_READ_FAILED: 500,
   NOT_INITIALIZED: 503,
   CONFIG_INVALID: 422,
@@ -206,6 +221,10 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
 };
 
 const EXIT_CODE: Record<ErrorCode, number> = {
+  HANDOFF_REPLAY_UNAVAILABLE: 75,
+  STORAGE_SCHEMA_UNSUPPORTED: 78,
+  STORAGE_INTEGRITY_ERROR: 73,
+  STORAGE_INSPECTION_UNAVAILABLE: 75,
   MEMO_FILE_READ_FAILED: 73,
   MEMO_NOT_FOUND: 66,
   MEMO_INVALID_INPUT: 64,

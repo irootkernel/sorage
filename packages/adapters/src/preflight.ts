@@ -1,8 +1,9 @@
+import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
   accessSync,
-  constants as fsConstants,
   copyFileSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,14 +13,14 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { constants as osConstants, homedir, tmpdir } from "node:os";
+import { homedir, constants as osConstants, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { Database } from "bun:sqlite";
-import { parseDocument } from "yaml";
 import {
+  type AppError,
+  appError,
   assessPreflight,
+  type Configuration,
   loadConfiguration,
-  parseConfigurationFile,
   type PreflightConfigFact,
   type PreflightDatabaseFact,
   type PreflightFacts,
@@ -28,9 +29,11 @@ import {
   type PreflightReport,
   type PreflightResidueEntry,
   type PreflightVaultFact,
+  parseConfigurationFile,
 } from "@sorage/core";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { parseDocument } from "yaml";
 import type { SorageSqlite } from "./sqlite/connection";
+import { MIGRATIONS } from "./sqlite/migrations";
 import { migrate } from "./sqlite/migrator";
 
 /**
@@ -73,39 +76,105 @@ interface CaptureFacts {
   vault: PreflightVaultFact;
   identity: PreflightIdentityFact;
   staleFence: boolean;
+  markerMismatch?: boolean;
 }
 
+/** Adapter-internal read capabilities, valid only during the consumer callback. */
+export interface InstallationInspectionReader {
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; get(...params: unknown[]): unknown };
+}
+
+export type InstallationInspection =
+  | {
+      kind: "ready";
+      facts: PreflightFacts;
+      config: Configuration;
+      migrationVersion: number;
+      reader: InstallationInspectionReader;
+    }
+  | { kind: "refused"; facts: PreflightFacts; error: AppError };
+
+type AcquiredInspection = InstallationInspection & { dispose?: () => void };
+const unavailable = () =>
+  appError("STORAGE_INSPECTION_UNAVAILABLE", "a safe coherent installation inspection is unavailable");
+const refuse = (
+  facts: PreflightFacts,
+  error: AppError = unavailable(),
+): Extract<AcquiredInspection, { kind: "refused" }> => ({
+  kind: "refused",
+  facts,
+  error,
+});
+
 export function inspectPreflight(homePath: string, ports: PreflightInspectPorts = {}): PreflightReport {
+  return withInstallationInspection(homePath, ports, (observation) => assessPreflight(observation.facts));
+}
+
+/** Capture retries end before the consumer runs. Reader and scratch never escape this lifetime. */
+export function withInstallationInspection<T>(
+  homePath: string,
+  ports: PreflightInspectPorts,
+  consume: (observation: InstallationInspection) => T,
+): T {
+  const observation = acquireInspection(homePath, ports);
+  try {
+    return consume(observation);
+  } finally {
+    observation.dispose?.();
+  }
+}
+
+function acquireInspection(homePath: string, ports: PreflightInspectPorts): AcquiredInspection {
   const userHome = ports.userHome ?? homedir();
   const located = locateHome(homePath);
   if (located.kind === "absent") {
     ports.onObserved?.();
     const again = pathLook(homePath);
     if (again.kind === "stat") return unstableHome();
-    if (again.kind === "missing") return assessPreflight(closedFacts("absent"));
-    return assessPreflight(closedFacts("unreadable"));
+    if (again.kind === "missing")
+      return refuse(
+        closedFacts("absent"),
+        appError("NOT_INITIALIZED", "the selected Installation has no configuration"),
+      );
+    return refuse(closedFacts("unreadable"));
   }
-  if (located.kind !== "directory") return assessPreflight(closedFacts(located.kind));
+  if (located.kind !== "directory") return refuse(closedFacts(located.kind));
   const listing = listHome(located.canonical);
-  if (listing.kind === "unsafe") return uncertain(listing.home);
-  if (listing.kind !== "installed") return assessPreflight(shallowFacts(listing));
+  if (listing.kind === "unsafe") {
+    const refused = uncertain(listing.home);
+    const error = listing.partialAlias ? partialAliasRefusal(located.canonical, userHome) : undefined;
+    return error === undefined ? refused : { ...refused, error };
+  }
+  if (listing.kind !== "installed") {
+    if (
+      listing.kind === "partial" &&
+      ((!listing.hasConfig && !listing.configMissing) || (!listing.hasDatabase && !listing.databaseMissing))
+    )
+      return refuse(shallowFacts(listing));
+    const missingConfig = listing.kind !== "partial" || !listing.hasConfig;
+    return refuse(
+      shallowFacts(listing),
+      appError(
+        missingConfig ? "NOT_INITIALIZED" : "STORAGE_INTEGRITY_ERROR",
+        missingConfig ? "the selected Installation has no configuration" : "the selected Installation has no database",
+      ),
+    );
+  }
   listing.requested = homePath;
-  listing.linkMoved = false;
   const homeBinding = rootBinding(homePath);
   if (homeBinding === undefined || homeBinding !== rootBinding(listing.canonical)) return uncertain("installed");
   listing.homeBinding = homeBinding;
-  const configPath = join(listing.canonical, "config.yaml");
   const readFile = ports.readFile ?? ((path: string) => readFileSync(path));
   try {
-    listing.observedConfig = readFile(configPath).toString("utf8");
+    listing.observedConfig = readFile(join(listing.canonical, "config.yaml")).toString("utf8");
   } catch {
     return uncertain("installed");
   }
-  if (listing.observedConfig !== undefined) {
-    const earlyConfig = classifyConfig(listing.observedConfig, userHome, listing.canonical);
-    if (earlyConfig.kind !== "supported") {
-      if (!observationHolds(listing, userHome)) return uncertain("installed");
-      return assessPreflight({
+  const earlyConfig = classifyConfig(listing.observedConfig, userHome, listing.canonical);
+  if (earlyConfig.kind !== "supported") {
+    if (!observationHolds(listing, userHome)) return uncertain("installed");
+    return refuse(
+      {
         home: { kind: "installed" },
         snapshot: { kind: "unverified" },
         config: earlyConfig,
@@ -113,39 +182,33 @@ export function inspectPreflight(homePath: string, ports: PreflightInspectPorts 
         integrity: { kind: "unverified" },
         vault: { kind: "unverified" },
         identity: { kind: "unverified" },
-      });
-    }
-    const loaded = loadConfiguration(listing.observedConfig, { userHome, sorageHome: listing.canonical });
-    if (!loaded.ok) return uncertain("installed");
-    listing.vaultPath = loaded.value.config.vault.path;
-    const vaultLook = pathLook(listing.vaultPath);
-    if (vaultLook.kind === "failed") return uncertain("installed");
-    if (vaultLook.kind === "missing") {
-      listing.observedVault = "absent";
-    } else if (vaultLook.stat.isSymbolicLink()) {
-      const target = pathTarget(listing.vaultPath);
-      if (target.kind !== "path") return uncertain("installed");
-      const vaultBinding = rootBinding(listing.vaultPath);
-      if (vaultBinding === undefined) return uncertain("installed");
-      listing.observedVault = vaultBinding;
-    } else if (!vaultLook.stat.isDirectory()) {
-      return uncertain("installed");
-    } else {
-      const vaultBinding = rootBinding(listing.vaultPath);
-      if (vaultBinding === undefined) return uncertain("installed");
-      listing.observedVault = vaultBinding;
-    }
-    if (!configuredVaultAlias(listing)) return uncertain("installed");
+      },
+      appError(
+        earlyConfig.kind === "newer" || earlyConfig.kind === "unsupported-format"
+          ? "STORAGE_SCHEMA_UNSUPPORTED"
+          : "CONFIG_INVALID",
+        "the selected configuration cannot support inspection",
+      ),
+    );
   }
+  const loaded = loadConfiguration(listing.observedConfig, { userHome, sorageHome: listing.canonical });
+  if (!loaded.ok) return uncertain("installed");
+  listing.vaultPath = loaded.value.config.vault.path;
+  const vaultLook = pathLook(listing.vaultPath);
+  if (vaultLook.kind === "failed") return uncertain("installed");
+  if (vaultLook.kind === "missing") listing.observedVault = "absent";
+  else {
+    if (!vaultLook.stat.isSymbolicLink() && !vaultLook.stat.isDirectory()) return uncertain("installed");
+    const vaultBinding = rootBinding(listing.vaultPath);
+    if (vaultBinding === undefined) return uncertain("installed");
+    listing.observedVault = vaultBinding;
+  }
+  if (!configuredVaultAlias(listing)) return uncertain("installed");
   const roots = [listing.canonical];
-  const observedVaultPath =
-    listing.observedVault === undefined || listing.observedVault === "absent"
-      ? undefined
-      : bindingPath(listing.observedVault);
+  const observedVaultPath = listing.observedVault === "absent" ? undefined : bindingPath(listing.observedVault);
   if (observedVaultPath !== undefined) roots.push(observedVaultPath);
-  const preferred = ports.scratchParent;
   if (!observationHolds(listing, userHome)) return uncertain("installed");
-  const parent = scratchParent(roots, preferred);
+  const parent = scratchParent(roots, ports.scratchParent);
   if (parent === undefined || !observationHolds(listing, userHome)) return uncertain("installed");
   let scratch: string;
   try {
@@ -153,10 +216,19 @@ export function inspectPreflight(homePath: string, ports: PreflightInspectPorts 
   } catch {
     return uncertain("installed");
   }
+  let captured: ReturnType<typeof capture> | undefined;
+  const dispose = () => {
+    try {
+      if (captured?.ok) captured.db?.close();
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
   try {
-    const captured = capture(listing, ports, scratch, userHome);
-    if (!captured.ok) return uncertain("installed");
-    return assessPreflight({
+    captured = capture(listing, ports, scratch, userHome);
+    if (!captured.ok)
+      return { ...uncertain("installed"), ...(captured.error === undefined ? {} : { error: captured.error }), dispose };
+    const facts: PreflightFacts = {
       home: { kind: "installed" },
       snapshot: { kind: "coherent", staleFence: captured.facts.staleFence },
       config: captured.facts.config,
@@ -164,10 +236,50 @@ export function inspectPreflight(homePath: string, ports: PreflightInspectPorts 
       integrity: captured.facts.integrity,
       vault: captured.facts.vault,
       identity: captured.facts.identity,
-    });
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    };
+    const error = recoveryRefusal(captured.facts);
+    if (error !== undefined) return { ...refuse(facts, error), dispose };
+    const db = captured.db;
+    if (db === undefined || captured.migrationVersion === undefined) return { ...refuse(facts), dispose };
+    return {
+      kind: "ready",
+      facts,
+      config: loaded.value.config,
+      migrationVersion: captured.migrationVersion,
+      reader: {
+        prepare(sql) {
+          if (!/^\s*SELECT\b/i.test(sql)) throw new Error("installation inspection accepts SELECT statements only");
+          return db.prepare(sql);
+        },
+      },
+      dispose,
+    };
+  } catch {
+    dispose();
+    return uncertain("installed");
   }
+}
+
+function recoveryRefusal(facts: CaptureFacts): AppError | undefined {
+  if (
+    facts.database.kind === "newer" ||
+    facts.database.kind === "maximum-version-only" ||
+    facts.database.kind === "memo-table-only"
+  )
+    return appError("STORAGE_SCHEMA_UNSUPPORTED", "the database schema is unsupported");
+  if (facts.vault.kind === "newer") return appError("VAULT_SCHEMA_UNSUPPORTED", "the Vault schema is unsupported");
+  if (facts.vault.kind !== "supported" || facts.markerMismatch)
+    return appError(
+      "VAULT_INTEGRITY_ERROR",
+      "the Vault marker is missing, malformed or belongs to another Installation",
+    );
+  if (
+    (facts.database.kind !== "current-ordered" && facts.database.kind !== "known-older-ordered") ||
+    facts.integrity.kind !== "passed" ||
+    facts.identity.kind !== "consistent"
+  )
+    return appError("STORAGE_INTEGRITY_ERROR", "the database, identity or required storage structures are invalid");
+  return undefined;
 }
 
 function capture(
@@ -175,7 +287,9 @@ function capture(
   ports: PreflightInspectPorts,
   scratch: string,
   userHome: string,
-): { ok: true; facts: CaptureFacts } | { ok: false } {
+):
+  | { ok: true; facts: CaptureFacts; db?: PrivateDatabase; migrationVersion?: number }
+  | { ok: false; error?: AppError } {
   listing.liveness = ports.liveness ?? ((pid) => probePid(pid, ports.kill ?? process.kill.bind(process)));
   const copyFile = ports.copyFile ?? copyFileSync;
   const readFile = ports.readFile ?? ((path: string) => readFileSync(path));
@@ -199,7 +313,8 @@ function capture(
       if (after === undefined || after !== before) continue;
       const observed = observeCopy(staged, openPrivate, listing.liveness);
       if (observed === undefined) continue;
-      return { ok: true, facts: observed };
+      if ("error" in observed) return { ok: false, error: observed.error };
+      return { ok: true, ...observed };
     } catch {
       // The next attempt, or the final unverifiable verdict, owns this failure.
     }
@@ -215,6 +330,7 @@ interface StagedCopy {
   databasePath: string;
   staleFence: boolean;
   blocked: boolean;
+  liveFence?: boolean;
 }
 
 function stageCopies(
@@ -233,6 +349,7 @@ function stageCopies(
       databasePath: "",
       staleFence: false,
       blocked: true,
+      liveFence: fences.live === true,
     };
   const configPath = join(listing.canonical, "config.yaml");
   const configText = readFile(configPath).toString("utf8");
@@ -336,16 +453,21 @@ function observeCopy(
   staged: StagedCopy,
   openPrivate: (path: string) => PrivateDatabase,
   liveness: (pid: number) => PreflightLiveness,
-): CaptureFacts | undefined {
-  if (staged.blocked) return undefined;
+): { facts: CaptureFacts; db?: PrivateDatabase; migrationVersion?: number } | { error: AppError } | undefined {
+  if (staged.blocked)
+    return {
+      error: staged.liveFence ? appError("SERVICE_PAUSED", "a live inspection fence blocks recovery") : unavailable(),
+    };
   if (staged.config.kind !== "supported") {
     return {
-      config: staged.config,
-      database: { kind: "unverified" },
-      integrity: { kind: "unverified" },
-      vault: { kind: "unverified" },
-      identity: { kind: "unverified" },
-      staleFence: staged.staleFence,
+      facts: {
+        config: staged.config,
+        database: { kind: "unverified" },
+        integrity: { kind: "unverified" },
+        vault: { kind: "unverified" },
+        identity: { kind: "unverified" },
+        staleFence: staged.staleFence,
+      },
     };
   }
   let configText: string;
@@ -355,7 +477,7 @@ function observeCopy(
     return undefined;
   }
   const config = parseConfigurationFile(configText);
-  if (!config.ok) return blankCapture({ kind: "invalid" }, staged.staleFence);
+  if (!config.ok) return { facts: blankCapture({ kind: "invalid" }, staged.staleFence) };
   let vaultText = "";
   let vault: PreflightVaultFact;
   if (staged.vaultAbsent) {
@@ -373,21 +495,24 @@ function observeCopy(
   const format = databaseFormat(staged.databasePath);
   if (format !== "sqlite") {
     return {
-      config: { kind: "supported" },
-      database: { kind: format },
-      integrity: { kind: "unverified" },
-      vault,
-      identity: classifyIdentity(
-        config.value.config.installationId,
-        markerInstallationId(vaultText, vault),
+      facts: {
+        config: { kind: "supported" },
+        database: { kind: format },
+        integrity: { kind: "unverified" },
         vault,
-        format,
-        undefined,
-      ),
-      staleFence: staged.staleFence,
+        identity: classifyIdentity(
+          config.value.config.installationId,
+          markerInstallationId(vaultText, vault),
+          vault,
+          format,
+          undefined,
+        ),
+        staleFence: staged.staleFence,
+      },
     };
   }
   let db: PrivateDatabase | undefined;
+  let retained = false;
   try {
     db = openPrivate(staged.databasePath);
     db.exec("PRAGMA busy_timeout = 1000");
@@ -405,27 +530,52 @@ function observeCopy(
       (database.kind === "current-ordered" || database.kind === "known-older-ordered") && hasMoveFenceColumn(db)
         ? databaseMoveFence(db, liveness)
         : "clear";
-    if (moveFence === "blocked") return undefined;
-    return {
-      config: { kind: "supported" },
-      database,
-      integrity,
-      vault,
-      identity,
-      staleFence: staged.staleFence || moveFence === "stale",
+    if (moveFence === "alive" || moveFence === "uncertain")
+      return {
+        error:
+          moveFence === "alive"
+            ? appError("SERVICE_PAUSED", "a live database move fence blocks recovery")
+            : unavailable(),
+      };
+    db.exec("PRAGMA query_only = ON");
+    const migrationVersion =
+      database.kind === "current-ordered" || database.kind === "known-older-ordered"
+        ? (
+            db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get() as {
+              version: number;
+            }
+          ).version
+        : undefined;
+    const observation: { facts: CaptureFacts; db: PrivateDatabase; migrationVersion?: number } = {
+      facts: {
+        config: { kind: "supported" },
+        database,
+        integrity,
+        vault,
+        identity,
+        staleFence: staged.staleFence || moveFence === "stale",
+        markerMismatch:
+          vault.kind === "supported" && markerInstallationId(vaultText, vault) !== config.value.config.installationId,
+      },
+      db,
+      ...(migrationVersion === undefined ? {} : { migrationVersion }),
     };
+    retained = true;
+    return observation;
   } catch (error) {
     if (!conclusivePrivateCorruption(error)) return undefined;
     return {
-      config: { kind: "supported" },
-      database: { kind: "corrupt" },
-      integrity: { kind: "unverified" },
-      vault,
-      identity: { kind: "unverified" },
-      staleFence: staged.staleFence,
+      facts: {
+        config: { kind: "supported" },
+        database: { kind: "corrupt" },
+        integrity: { kind: "unverified" },
+        vault,
+        identity: { kind: "unverified" },
+        staleFence: staged.staleFence,
+      },
     };
   } finally {
-    db?.close();
+    if (!retained) db?.close();
   }
 }
 
@@ -601,7 +751,7 @@ function classifyIdentity(
 function databaseMoveFence(
   db: PrivateDatabase,
   liveness: (pid: number) => PreflightLiveness,
-): "clear" | "stale" | "blocked" {
+): "clear" | "stale" | "alive" | "uncertain" {
   if (!hasMoveFenceColumn(db)) return "clear";
   const row = db.prepare("SELECT move_fence_pid FROM vault_state WHERE id = 1").get() as
     | { move_fence_pid?: number | null }
@@ -609,7 +759,7 @@ function databaseMoveFence(
   const pid = row?.move_fence_pid;
   if (pid === undefined || pid === null) return "clear";
   const verdict = liveness(pid);
-  if (verdict === "alive" || verdict === "uncertain") return "blocked";
+  if (verdict === "alive" || verdict === "uncertain") return verdict;
   return "stale";
 }
 
@@ -633,6 +783,7 @@ interface FenceRead {
   blocked: boolean;
   stale: boolean;
   stamp: string;
+  live?: boolean;
 }
 
 function readFences(listing: InstalledHome): FenceRead {
@@ -645,6 +796,7 @@ function readFences(listing: InstalledHome): FenceRead {
   }
   let blocked = false;
   let stale = false;
+  let live = false;
   const stamps: string[] = [];
   for (const path of paths) {
     const look = pathLook(path);
@@ -655,13 +807,17 @@ function readFences(listing: InstalledHome): FenceRead {
     const text = readFileSync(path, "utf8");
     stamps.push(`${path}:${text}`);
     const verdict = judgeLock(text, listing.liveness);
-    if (verdict === "blocked") blocked = true;
+    if (verdict === "alive" || verdict === "uncertain") blocked = true;
+    if (verdict === "alive") live = true;
     if (verdict === "stale") stale = true;
   }
-  return { blocked, stale, stamp: stamps.join("\n") };
+  return { blocked, stale, live, stamp: stamps.join("\n") };
 }
 
-function judgeLock(text: string, liveness: (pid: number) => PreflightLiveness): "clear" | "stale" | "blocked" {
+function judgeLock(
+  text: string,
+  liveness: (pid: number) => PreflightLiveness,
+): "clear" | "stale" | "alive" | "uncertain" {
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
@@ -672,7 +828,7 @@ function judgeLock(text: string, liveness: (pid: number) => PreflightLiveness): 
   const pid = (value as { pid?: unknown }).pid;
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return "stale";
   const verdict = liveness(pid);
-  if (verdict === "alive" || verdict === "uncertain") return "blocked";
+  if (verdict === "alive" || verdict === "uncertain") return verdict;
   return "stale";
 }
 
@@ -700,8 +856,8 @@ function probePid(pid: number, kill: (pid: number, signal: number) => void): Pre
   }
 }
 
-function unstableHome(): PreflightReport {
-  return assessPreflight({
+function unstableHome(): ReturnType<typeof refuse> {
+  return refuse({
     home: { kind: "unreadable" },
     snapshot: { kind: "unavailable" },
     config: { kind: "unverified" },
@@ -742,9 +898,10 @@ function locateHome(homePath: string): HomeLocation {
 }
 
 type HomeListing =
-  | { kind: "empty" | "partial" | "unexplained" }
+  | { kind: "empty" | "unexplained" }
+  | { kind: "partial"; hasConfig: boolean; hasDatabase: boolean; configMissing: boolean; databaseMissing: boolean }
   | { kind: "residue"; entries: PreflightResidueEntry[] }
-  | { kind: "unsafe"; home: "installed" }
+  | { kind: "unsafe"; home: "installed"; partialAlias?: boolean }
   | InstalledHome;
 
 interface InstalledHome {
@@ -833,10 +990,17 @@ function listHome(canonical: string): HomeListing {
   if (configStat?.isSymbolicLink() || databaseStat?.isSymbolicLink()) return { kind: "unsafe", home: "installed" };
   const hasConfig = configStat?.isFile() === true;
   const hasDatabase = databaseStat?.isFile() === true;
-  if (vaultAlias && (!hasConfig || !hasDatabase)) return { kind: "unsafe", home: "installed" };
+  if (vaultAlias && (!hasConfig || !hasDatabase)) return { kind: "unsafe", home: "installed", partialAlias: true };
   if (!hasConfig && !hasDatabase && !extra && permitted(entries)) return { kind: "residue", entries };
   if (!hasConfig && !hasDatabase) return { kind: "unexplained" };
-  if (!hasConfig || !hasDatabase) return { kind: "partial" };
+  if (!hasConfig || !hasDatabase)
+    return {
+      kind: "partial",
+      hasConfig,
+      hasDatabase,
+      configMissing: configLook.kind === "missing",
+      databaseMissing: databaseLook.kind === "missing",
+    };
   return {
     kind: "installed",
     requested: canonical,
@@ -846,6 +1010,39 @@ function listHome(canonical: string): HomeListing {
     liveness: (pid) => probePid(pid, process.kill.bind(process)),
     linkMoved: false,
   };
+}
+
+/** Keep preflight's conservative partial-alias projection, retaining conclusive recovery causes. */
+function partialAliasRefusal(home: string, userHome: string): AppError | undefined {
+  const before = rootBinding(home);
+  const alias = rootBinding(join(home, "vault"));
+  if (before === undefined || alias === undefined || !stableDirectory(bindingPath(alias) ?? "")) return undefined;
+  const configPath = join(home, "config.yaml");
+  if (pathLook(configPath).kind === "missing") {
+    if (
+      before === rootBinding(home) &&
+      alias === rootBinding(join(home, "vault")) &&
+      pathLook(configPath).kind === "missing"
+    )
+      return appError("NOT_INITIALIZED", "the selected Installation has no configuration");
+    return undefined;
+  }
+  if (pathLook(join(home, "state", "sorage.sqlite3")).kind !== "missing") return undefined;
+  try {
+    const bytes = readFileSync(configPath, "utf8");
+    const loaded = loadConfiguration(bytes, { userHome, sorageHome: home });
+    if (!loaded.ok || rootBinding(loaded.value.config.vault.path) !== alias) return undefined;
+    if (
+      bytes !== readFileSync(configPath, "utf8") ||
+      before !== rootBinding(home) ||
+      alias !== rootBinding(join(home, "vault")) ||
+      pathLook(join(home, "state", "sorage.sqlite3")).kind !== "missing"
+    )
+      return undefined;
+    return appError("STORAGE_INTEGRITY_ERROR", "the selected Installation has no database");
+  } catch {
+    return undefined;
+  }
 }
 
 function permitted(entries: PreflightResidueEntry[]): boolean {
@@ -891,8 +1088,8 @@ function closedFacts(kind: "absent" | "unreadable" | "broken-link" | "non-direct
   };
 }
 
-function uncertain(home: "installed"): PreflightReport {
-  return assessPreflight({
+function uncertain(home: "installed"): ReturnType<typeof refuse> {
+  return refuse({
     home: { kind: home },
     snapshot: { kind: "unavailable" },
     config: { kind: "unverified" },

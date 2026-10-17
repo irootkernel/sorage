@@ -1,28 +1,26 @@
-import { createHash } from "node:crypto";
-import { closeSync, mkdtempSync, openSync, readSync, rmSync, writeSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { closeSync, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { homedir } from "node:os";
 import type { HandoffDetailReadPorts, HandoffEventView, SendPorts } from "@sorage/core";
-import { type AppError, type Result, appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
+import { type AppError, appError, err, ok, type Result, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
+import { createSqliteHandoffReadStore } from "./handoff-read-store";
 import {
   createSqliteHandoffWriteStore,
   createSqliteRetentionStore,
   createSqliteRevisionStore,
   createSqliteTerminalStore,
 } from "./handoffs";
-import { createSqliteHandoffReadStore } from "./handoff-read-store";
-import { createSqliteReviewStore } from "./review-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
+import { digestFile, inspectSourceFile } from "./import-source";
 import { createNodeLockProbePorts } from "./lockfile";
-import { inspectSourceFile } from "./import-source";
 import { createNodeProjectPorts } from "./project-command-ports";
+import { createSqliteReviewStore } from "./review-store";
+import type { SorageSqlite } from "./sqlite/connection";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
-import type { SorageSqlite } from "./sqlite/connection";
 
 /**
  * The production wiring of the `sorage send` command of TASK-029: one migrated SQLite
@@ -32,33 +30,6 @@ import type { SorageSqlite } from "./sqlite/connection";
  * directory, which is removed after staging; the staged copy under the Vault is the
  * durable one (HND-023).
  */
-
-const DIGEST_BUFFER_BYTES = 1024 * 1024;
-
-/** Digests a file with a bounded read, shared by the send and revise wirings. */
-function digestFile(path: string): Result<string, AppError> {
-  const inspected = inspectSourceFile(path);
-  if (!inspected.ok) return err(inspected.error);
-  try {
-    const digest = createHash("sha256");
-    const handle = openSync(inspected.value.resolvedPath, "r");
-    try {
-      const buffer = Buffer.alloc(DIGEST_BUFFER_BYTES);
-      for (;;) {
-        const read_ = readSync(handle, buffer, 0, DIGEST_BUFFER_BYTES, null);
-        if (read_ === 0) break;
-        digest.update(buffer.subarray(0, read_));
-      }
-    } finally {
-      closeSync(handle);
-    }
-    return ok(digest.digest("hex"));
-  } catch (error) {
-    return err(
-      appError("INTERNAL_ERROR", `Digesting the source ${path} failed: ${String(error)}.`, { cause: String(error) }),
-    );
-  }
-}
 
 export interface NodeHandoffCommandPortsOptions {
   env?: HomeEnvironment | undefined;

@@ -46,6 +46,16 @@ export interface ProjectHandoffStatsPort {
   openHandoffCount(projectId: string): Result<number, AppError>;
 }
 
+/** Read-only Project and filesystem identity capabilities for actor resolution. */
+export interface ProjectResolutionPorts {
+  installationId: string;
+  projects: Pick<
+    ProjectRepositoryPort,
+    "findProjectBySlug" | "listProjects" | "listBindings" | "listBindingsForProject"
+  >;
+  bindings: Pick<ProjectBindingFsPort, "realPath" | "physicalIdentity" | "gitCommonDirectory">;
+}
+
 export interface ProjectCommandPorts {
   /** The Installation identity every unregistered Workspace key derives from (PRJ-014). */
   installationId: string;
@@ -453,7 +463,7 @@ export interface ResolveWorkspaceInput {
  * PRJ-008, PRJ-017, PRJ-018).
  */
 export function resolveWorkspaceActor(
-  ports: ProjectCommandPorts,
+  ports: ProjectResolutionPorts,
   input: ResolveWorkspaceInput,
 ): Result<ResolvedActor, AppError> {
   if (input.as !== undefined) {

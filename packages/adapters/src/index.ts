@@ -19,6 +19,7 @@ export * from "./project-command-ports";
 export * from "./projects";
 export * from "./preflight";
 export * from "./review-store";
+export * from "./send-recovery";
 export * from "./sqlite/connection";
 export * from "./sqlite/migrations";
 export * from "./sqlite/migrator";

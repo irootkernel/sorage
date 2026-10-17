@@ -2,16 +2,16 @@ import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import type { ProjectCommandPorts } from "@sorage/core";
+import type { ProjectCommandPorts, ProjectResolutionPorts } from "@sorage/core";
 import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
+import type { SorageSqlite } from "./sqlite/connection";
 import { MIGRATIONS } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
-import type { SorageSqlite } from "./sqlite/connection";
 
 /**
  * The production wiring of the `sorage project` commands: the migrated SQLite database,
@@ -54,6 +54,37 @@ const nativeGit: GitProbe = (directory) => {
   return common === "" ? null : common;
 };
 
+/** Filesystem/Git probes shared with inspection, without configuration or database wiring. */
+export function createNodeResolutionBindings(
+  options: Pick<NodeProjectPortsOptions, "git" | "fs"> = {},
+): ProjectResolutionPorts["bindings"] {
+  const git = options.git ?? nativeGit;
+  const fs = options.fs ?? { realpath: (path: string) => realpathSync(path) };
+  return {
+    realPath(path, currentUserHome) {
+      const expanded =
+        path === "~" ? currentUserHome : path.startsWith("~/") ? joinPath(currentUserHome, path.slice(2)) : path;
+      const absolute = isAbsolute(expanded) ? expanded : resolve(expanded);
+      if (!existsSync(absolute)) {
+        return err(appError("CONFIG_INVALID", `the directory '${absolute}' does not exist`, { directory: absolute }));
+      }
+      return ok(fs.realpath(absolute));
+    },
+    physicalIdentity(path) {
+      try {
+        const stats = statSync(path);
+        return `${stats.dev}:${stats.ino}`;
+      } catch {
+        return null;
+      }
+    },
+    gitCommonDirectory(path) {
+      const common = git(path);
+      return common === null ? null : fs.realpath(common);
+    },
+  };
+}
+
 export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): ProjectCommandPorts {
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
@@ -82,23 +113,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
     clock: new SystemClock(),
     ids: new UuidGenerator(),
     bindings: {
-      realPath(path, currentUserHome) {
-        const expanded =
-          path === "~" ? currentUserHome : path.startsWith("~/") ? joinPath(currentUserHome, path.slice(2)) : path;
-        const absolute = isAbsolute(expanded) ? expanded : resolve(expanded);
-        if (!existsSync(absolute)) {
-          return err(appError("CONFIG_INVALID", `the directory '${absolute}' does not exist`, { directory: absolute }));
-        }
-        return ok(fs.realpath(absolute));
-      },
-      physicalIdentity(path) {
-        try {
-          const stats = statSync(path);
-          return `${stats.dev}:${stats.ino}`;
-        } catch {
-          return null;
-        }
-      },
+      ...createNodeResolutionBindings({ git, fs }),
       absentRealPath(path, currentUserHome) {
         const expanded =
           path === "~" ? currentUserHome : path.startsWith("~/") ? joinPath(currentUserHome, path.slice(2)) : path;
@@ -114,10 +129,6 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
         const real = fs.realpath(existing);
         const rest = absolute.slice(existing.length).replace(/^\/+|\/+$/g, "");
         return ok(rest === "" ? real : `${real}/${rest}`);
-      },
-      gitCommonDirectory(path) {
-        const common = git(path);
-        return common === null ? null : fs.realpath(common);
       },
       resolveDirectory(path, currentUserHome) {
         const expanded =

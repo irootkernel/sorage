@@ -1344,6 +1344,102 @@
     "human": "MEMO_REPLAY_UNAVAILABLE: rendering probe\nRecovery: The original outcome is unknown; do not automatically execute or replace the key\n"
   },
   {
+    "code": "HANDOFF_REPLAY_UNAVAILABLE",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "The original outcome is unknown; retain the original key, input, Installation and sender context without executing again"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_REPLAY_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "The original outcome is unknown; retain the original key, input, Installation and sender context without executing again"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_REPLAY_UNAVAILABLE: rendering probe\nRecovery: The original outcome is unknown; retain the original key, input, Installation and sender context without executing again\n"
+  },
+  {
+    "code": "STORAGE_SCHEMA_UNSUPPORTED",
+    "exitCode": 78,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Retain the original send material and use a Sorage version supporting this storage layout"
+    },
+    "renderedExitCode": 78,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "STORAGE_SCHEMA_UNSUPPORTED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retain the original send material and use a Sorage version supporting this storage layout"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "STORAGE_SCHEMA_UNSUPPORTED: rendering probe\nRecovery: Retain the original send material and use a Sorage version supporting this storage layout\n"
+  },
+  {
+    "code": "STORAGE_INTEGRITY_ERROR",
+    "exitCode": 73,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Retain the original send material and diagnose storage integrity before further inspection"
+    },
+    "renderedExitCode": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "STORAGE_INTEGRITY_ERROR",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retain the original send material and diagnose storage integrity before further inspection"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "STORAGE_INTEGRITY_ERROR: rendering probe\nRecovery: Retain the original send material and diagnose storage integrity before further inspection\n"
+  },
+  {
+    "code": "STORAGE_INSPECTION_UNAVAILABLE",
+    "exitCode": 75,
+    "httpStatus": 503,
+    "recovery": {
+      "suggestedCommand": "Retain the original send material and inspect again only when a coherent read is available"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "STORAGE_INSPECTION_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retain the original send material and inspect again only when a coherent read is available"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "STORAGE_INSPECTION_UNAVAILABLE: rendering probe\nRecovery: Retain the original send material and inspect again only when a coherent read is available\n"
+  },
+  {
     "code": "INTERNAL_ERROR",
     "exitCode": 1,
     "httpStatus": 500,

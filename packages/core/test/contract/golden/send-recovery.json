@@ -1,0 +1,41 @@
+[
+  {
+    "handoffs": [
+      {
+        "handoffId": "00000000-0000-4000-8000-000000000010",
+        "recipientSlug": "recipient",
+        "artifactId": "00000000-0000-4000-8000-000000000020",
+        "storageKey": "artifacts/00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000020/original-1.md",
+        "revision": 1,
+        "rowVersion": 1,
+        "reviewState": "awaiting_recipient"
+      }
+    ],
+    "dispatchGroupId": null,
+    "replayed": false
+  },
+  {
+    "handoffs": [
+      {
+        "handoffId": "00000000-0000-4000-8000-000000000010",
+        "recipientSlug": "recipient",
+        "artifactId": "00000000-0000-4000-8000-000000000020",
+        "storageKey": "artifacts/00000000-0000-4000-8000-000000000010/00000000-0000-4000-8000-000000000020/original-1.md",
+        "revision": 1,
+        "rowVersion": 1,
+        "reviewState": "awaiting_recipient"
+      },
+      {
+        "handoffId": "00000000-0000-4000-8000-000000000011",
+        "recipientSlug": "other",
+        "artifactId": "00000000-0000-4000-8000-000000000021",
+        "storageKey": "artifacts/00000000-0000-4000-8000-000000000011/00000000-0000-4000-8000-000000000021/original-1.md",
+        "revision": 1,
+        "rowVersion": 1,
+        "reviewState": "awaiting_recipient"
+      }
+    ],
+    "dispatchGroupId": "00000000-0000-4000-8000-000000000030",
+    "replayed": false
+  }
+]

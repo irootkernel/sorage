@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { type ProjectCommandPorts, resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
+import { type ProjectResolutionPorts, resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
 
 /**
  * Unregistered Workspace identity and the downgrade guard of section 22.3 (PRJ-013,
@@ -41,7 +41,7 @@ export interface SenderIdentityInput {
  * resolution folds it onto the bound common directory first.
  */
 export function resolveSenderIdentity(
-  ports: ProjectCommandPorts,
+  ports: ProjectResolutionPorts,
   input: SenderIdentityInput,
 ): Result<SenderIdentity, AppError> {
   const actor = resolveWorkspaceActor(ports, { path: input.path, userHome: input.userHome, as: input.as });

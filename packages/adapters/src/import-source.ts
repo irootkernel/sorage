@@ -1,5 +1,6 @@
-import { realpathSync, statSync } from "node:fs";
-import { appError, err, ok, type AppError, type Result } from "@sorage/core";
+import { createHash } from "node:crypto";
+import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { type AppError, appError, err, ok, type Result } from "@sorage/core";
 
 export interface SourceInspection {
   kind: "file";
@@ -51,4 +52,31 @@ function rejected(sourcePath: string, kind: string, cause?: unknown): AppError {
     { sourcePath, kind },
     ...(cause === undefined ? [] : [cause]),
   );
+}
+
+const DIGEST_BUFFER_BYTES = 1024 * 1024;
+
+/** Digests a file with a bounded read, shared by send, revise and non-executing recovery. */
+export function digestFile(path: string): Result<string, AppError> {
+  const inspected = inspectSourceFile(path);
+  if (!inspected.ok) return err(inspected.error);
+  try {
+    const digest = createHash("sha256");
+    const handle = openSync(inspected.value.resolvedPath, "r");
+    try {
+      const buffer = Buffer.alloc(DIGEST_BUFFER_BYTES);
+      for (;;) {
+        const read_ = readSync(handle, buffer, 0, DIGEST_BUFFER_BYTES, null);
+        if (read_ === 0) break;
+        digest.update(buffer.subarray(0, read_));
+      }
+    } finally {
+      closeSync(handle);
+    }
+    return ok(digest.digest("hex"));
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Digesting the source ${path} failed: ${String(error)}.`, { cause: String(error) }),
+    );
+  }
 }

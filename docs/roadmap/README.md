@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** None
+- **Active Epic:** `EPIC-015`
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** `TASK-101`
+- **Next eligible Task:** `TASK-102`
 
 EPIC-013 and TASK-087 through TASK-094 retain their completed M7 acceptance. TASK-095 is a separately authorized post-release correction; it does not reopen a completed Epic. Its publication boundary is the explicitly authorized replacement of v0.1.2, with the runtime version unchanged.
 
@@ -92,7 +92,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-012` | Project archival and binding replacement | M6 | Completed | `TASK-085` to `TASK-086` |
 | `EPIC-013` | Project Memos | M7 | Completed | `TASK-087` to `TASK-094` |
 | `EPIC-014` | Non-mutating installation preflight | M8 | Completed | `TASK-096` to `TASK-100` |
-| `EPIC-015` | Safe Handoff recovery and agent policy | M8 | Planned | `TASK-101` to `TASK-104` |
+| `EPIC-015` | Safe Handoff recovery and agent policy | M8 | In Progress | `TASK-101` to `TASK-104` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -389,9 +389,10 @@ The source-design registration added the M7 documentation vocabulary and checker
 
 ## EPIC-015: Safe Handoff recovery and agent policy
 
-- **Status:** Planned
+- **Status:** In Progress
 - **Milestone:** M8
 - **Objective:** Inspect an uncertain send without executing again and make the shipped agent policy preserve user intent, deletion decisions, observed versions, Project identity and untrusted-content boundaries.
+- **Detailed SOT:** [Safe Handoff recovery and agent policy](../todo/safe-handoff-recovery.md)
 - **Design authorities:** [SND requirements](../specs/required-specification.md#20-non-executing-send-recovery-milestone-m8), GEN-016 through GEN-020, [ADR-0029](../architecture-decision-records/README.md#adr-0029-non-executing-send-recovery-and-agent-policy-in-m8), [recovery contract](../specs/interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8), [AJ-25](../specs/testing-and-acceptance.md#aj-25-non-executing-send-recovery), and [AJ-26](../specs/testing-and-acceptance.md#aj-26-independent-handoff-skill-walkthrough).
 - **Request context:** Aquarium's 2026-09-25 skill-correction request. Its review labels are consumer observations, not Sorage Task identifiers; M8 acceptance rechecks current native behavior.
 - **Prerequisite:** EPIC-014 must be Completed because recovery reuses its inspection boundary. Do not reopen EPIC-013 or TASK-095.
@@ -402,7 +403,7 @@ The source-design registration added the M7 documentation vocabulary and checker
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|
-| `TASK-101` | Planned | M8 | Contract: implement packages/core send recovery inputs/errors and packages/adapters non-executing receipt reads using the accepted preflight snapshot boundary; preserve original business hashes, sender checks and legacy identity compatibility; promote the planned errors into the implemented error tables and matching apps/cli and apps/daemon error-catalog contract fixtures, including fixed counts and goldens, without adding CLI-mode rendering or HTTP recovery; expose no CLI mode yet. | Focused core, real receipt/snapshot integration and contract checks plus make test exit 0; missing database returns STORAGE_INTEGRITY_ERROR/73; known version-4 (file fence only), version-5 and version-6/7 layouts plus retained, conflicting, absent/expired/restore-missing and wrong-sender cases cause no writes, cleanup, drain, staging or migration; independent snapshot review classifies the new errors/types as additive with no persistent-format migration. | `EPIC-014` | SND-001 to SND-005 | Not required |
+| `TASK-101` | Completed | M8 | Contract: implement packages/core send recovery inputs/errors and packages/adapters non-executing receipt reads using the accepted preflight snapshot boundary; preserve original business hashes, sender checks and legacy identity compatibility; promote the planned errors into the implemented error tables and matching apps/cli and apps/daemon error-catalog contract fixtures, including fixed counts and goldens, without adding CLI-mode rendering or HTTP recovery; expose no CLI mode yet. | Focused core, real receipt/snapshot integration and contract checks plus make test exit 0; missing database returns STORAGE_INTEGRITY_ERROR/73; known version-4 (file fence only), version-5 and version-6/7 layouts plus retained, conflicting, absent/expired/restore-missing and wrong-sender cases cause no writes, cleanup, drain, staging or migration; independent snapshot review classifies the new errors/types as additive with no persistent-format migration. | `EPIC-014` | SND-001 to SND-005 | Not required |
 | `TASK-102` | Planned | M8 | Contract: expose apps/cli send --replay-only with the original key/input and existing SendOutcome, the explicit section 37.1 error/exit mappings and contextual message and recovery text, help and completion, routing before send startup drain and body staging. | AJ-25 compiled CLI scenarios plus make test exit 0; exact original input replays with replayed=true, absent/expired receipts never send, late originals and source/identity failures retain uncertainty; existing execute, HTTP/Web and Memo contracts stay unchanged; separate Reviewer classifies additive CLI/error snapshots and no storage migration. | `TASK-101` | SND-001 to SND-006 | Not required |
 | `TASK-103` | Planned | M8 | Standard: update the shipped skills/use-sorage/SKILL.md, its required resource-validation fixtures including test/unit/use-sorage-skill.test.ts against the copied standalone directory rather than a mandatory checkout-relative link, and relevant public/operations guidance for hint authority, deletion and pinned decisions, observed versions, original-key send recovery, untrusted documents, Project setup ownership including retained HND-026 guidance, and clean-install resource usability. | Native stale-Note/revise, pinned-delete and send-recovery checks plus make test exit 0; a separate observer follows the frozen skill in isolated Installations for AJ-26, including copying only the shipped skill directory outside the checkout, requested-versus-unrequested setup/ignore decisions, and GEN-014/GEN-015 and Memo regressions; structural prose matching alone is insufficient. | `TASK-102` | GEN-014, GEN-015, GEN-016 to GEN-020, HND-026, SND-001, SND-004, SND-005 | Not required |
 | `TASK-104` | Planned | M8 | Standard: qualify complete send recovery and agent policy, combine unchanged owning-Task evidence for AJ-25/AJ-26, verify preflight integration and prior regressions, and prepare shared M8 acceptance without installation or publication. | AJ-25 and AJ-26, applicable earlier journeys, make test and git diff --check exit 0; a separate whole-Epic Reviewer verifies all SND and GEN criteria against the exact final candidate and actual independent walkthrough; missing manual checks remain unverified; shared M8 closes only with EPIC-014 acceptance. | `TASK-103` | SND-001 to SND-006, GEN-016 to GEN-020 | Not required |

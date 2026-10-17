@@ -32,6 +32,7 @@ export * from "./protocol";
 export * from "./retention-commands";
 export * from "./review-commands";
 export * from "./revision-commands";
+export * from "./send-recovery";
 export * from "./terminal-commands";
 export * from "./tokens";
 export * from "./uninstall";

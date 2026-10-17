@@ -65,6 +65,7 @@ const DEFERRED = new Set<string>([]);
 describe("the symbolic error to HTTP status matrix (API-011)", () => {
   it("maps every catalogue code to the status the section 15 table documents", () => {
     const documented = parseSection15();
+    expect(ERROR_CODES).toHaveLength(61);
     for (const code of ERROR_CODES) {
       const spec = errorSpec(code);
       expect(documented.has(code), `${code} has a section 15 row`).toBe(true);
