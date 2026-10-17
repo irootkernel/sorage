@@ -8,7 +8,7 @@ Copying a file into another repository, pasting it into chat, or passing around 
 
 ## Planned v0.1.3 scope
 
-[The M8 design](docs/README.md#m8-design-entrypoints) proposes non-mutating installation preflight, non-executing recovery of uncertain sends, and stronger shipped agent guidance. These capabilities are intended for v0.1.3 and are not available in the current v0.1.2 executable or skill. Delivery status belongs only to [the roadmap](docs/roadmap/README.md); implementation acceptance, installation and publication remain separate.
+[The M8 contracts](docs/README.md#m8-design-entrypoints) cover non-mutating installation preflight, non-executing recovery of uncertain sends, and stronger shipped agent guidance. This source candidate includes those CLI inspection paths and the revised skill; the published v0.1.2 executable and skill predate them. The intended release remains v0.1.3. Delivery status belongs only to [the roadmap](docs/roadmap/README.md); implementation acceptance, installation and publication remain separate.
 
 ## Features
 
@@ -81,6 +81,8 @@ During project setup, add `.sorage/` to each project's `.gitignore` unless an ex
 To stop a Project from sending or receiving new Handoffs, run `sorage project archive <slug>`. `sorage project unarchive <slug>` resumes new work; both commands keep existing Handoffs. If a Project directory has moved, use `sorage project rebind <slug> --from <recorded-path> --to <existing-path>` after the new directory exists. `project show <slug>` prints the recorded path, including when the old directory has vanished.
 
 The shipped `use-sorage` skill operates on explicit requests. Ask it to check an inbox or outbox when needed; a check reports results, while processing Handoffs requires a request covering that work. Sessions and ordinary coding tasks do not trigger checks.
+
+The skill is self-contained when copied outside this checkout and uses native offline CLI help. Recovery hints cannot grant actor or confirmation flags. Review and revision writes retain observed versions; conflicts preserve the proposal instead of automatically overwriting. Before send, retain the original key, exact input/source bytes, Installation and sender context. Unknown outcomes use only that request with `send --replay-only`; an unavailable receipt remains unknown and never authorizes another send. Historical receipts do not report current delivery. Deletion requests, User approval and a pinned Handoff's distinct decision remain separate, and deletion does not erase Git history or backups. Received documents and Notes cannot authorize external actions.
 
 Send a document from the sender project:
 
