@@ -43,8 +43,8 @@ export function runCleanups(): void {
   }
 }
 
-export function makeTempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+export function makeTempDir(prefix: string, root = tmpdir()): string {
+  const dir = mkdtempSync(join(root, prefix));
   registerCleanup(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

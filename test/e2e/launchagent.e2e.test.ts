@@ -1,6 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
 import { BINARY, makeTempDir, runCleanups, sorage } from "./helpers";
@@ -15,7 +24,8 @@ import { BINARY, makeTempDir, runCleanups, sorage } from "./helpers";
  */
 const LABEL = "xyz.rootkernel.sorage";
 const TEST_LABEL = `${LABEL}.e2e.${process.pid}`;
-const parent = makeTempDir("sorage-launchagent-e2e-");
+// launchd rejects plists on owner-disabled volumes, so this native fixture must not inherit TMPDIR.
+const parent = makeTempDir("sorage-launchagent-e2e-", "/private/tmp");
 const journeyBinary = `${parent}/sorage`;
 copyFileSync(BINARY, journeyBinary);
 // Spaces and a quotation mark in the user home prove the plist escaping rule.
@@ -193,6 +203,9 @@ describe("the LaunchAgent journey", () => {
     const isolatedPlist = plist.replace(`<string>${LABEL}</string>`, `<string>${TEST_LABEL}</string>`);
     expect(isolatedPlist).not.toBe(plist);
     writeFileSync(plistPath, isolatedPlist, "utf8");
+    const plistStat = statSync(plistPath);
+    expect(plistStat.uid).toBe(uid);
+    expect(plistStat.mode & 0o777).toBe(0o644);
     const initialBootstrap = launchctl(["bootstrap", `gui/${uid}`, plistPath]);
     expect(initialBootstrap.status, initialBootstrap.stderr).toBe(0);
     expect(agentLoaded(TEST_LABEL)).toBe(true);
