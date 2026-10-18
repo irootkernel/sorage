@@ -21,10 +21,18 @@ export const SUPPORTED_VAULT_MARKER_SCHEMA = 1;
 /** The only audited route to adopt a Vault of another installation (VLT-019). */
 export const VAULT_ADOPTION_COMMAND = "sorage backup restore --from <vault-path> --as-user --confirm";
 
-/** The `.gitattributes` lines Vault initialization writes verbatim (VLT-024). */
+/**
+ * The `.gitattributes` lines Vault initialization writes verbatim (VLT-024, as
+ * amended by SHR-011): the managed binary trees carry `-text -diff`, the general
+ * snapshot tree normalizes to LF text, and the more-specific raw snapshot-content
+ * exception follows the general rule so Git preserves accepted payload bytes even
+ * when they contain a BOM, CRLF, or no final newline.
+ */
 export const REQUIRED_GITATTRIBUTES_LINES = [
   "artifacts/** -text -diff",
+  "content/** -text -diff",
   "snapshots/** text eol=lf",
+  "snapshots/content/** -text -diff",
   ".sorage-vault.json text eol=lf",
 ] as const;
 
@@ -114,19 +122,28 @@ export function validateVaultMarkerForInstallation(
 
 /**
  * Verifies the policy-file content initialization writes (VLT-024). The check
- * is per required line, because a reportable Vault may carry additional lines
- * while still asserting the ones the layout contract depends on; a null body
- * means the file is missing entirely. Returns one problem string per finding.
+ * is per required line and per relative order, because a reportable Vault may
+ * carry additional lines while still asserting the lines the layout contract
+ * depends on in their stated order; a null body means the file is missing
+ * entirely. Returns one problem string per finding.
  */
 export function verifyVaultPolicyFiles(gitattributes: string | null, gitignore: string | null): string[] {
   const problems: string[] = [];
   if (gitattributes === null) {
     problems.push(".gitattributes is missing from the Vault.");
   } else {
+    const lines = gitattributes.split("\n");
+    let previousIndex = -1;
     for (const line of REQUIRED_GITATTRIBUTES_LINES) {
-      if (!gitattributes.split("\n").includes(line)) {
+      const index = lines.indexOf(line);
+      if (index === -1) {
         problems.push(`.gitattributes is missing the required line '${line}'.`);
+        continue;
       }
+      if (index < previousIndex) {
+        problems.push(`.gitattributes carries the required line '${line}' out of its stated order.`);
+      }
+      previousIndex = index;
     }
   }
   if (gitignore === null) {

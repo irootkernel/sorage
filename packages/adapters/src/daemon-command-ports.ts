@@ -14,14 +14,15 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
-import { ok, type AppError, type Result } from "@sorage/core";
+import { appError, ok, type AppError, type Result } from "@sorage/core";
 import type { Configuration } from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { createNodeHomePaths, type HomePaths } from "./home";
 import { acquireLock, createNodeLockProbePorts, isPidAlive, releaseLock } from "./lockfile";
 import { openSorageDatabase } from "./sqlite/connection";
 import { MIGRATIONS } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { withInstallationInspection } from "./preflight";
 
 /**
  * The daemon composition surface (RUN-006, RUN-013, SEC-015): the atomic
@@ -219,4 +220,27 @@ export function atomicWrite(path: string, contents: string): void {
 function basenameOf(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1] ?? "record";
+}
+
+/** Apps classify only the migrator's typed admission exceptions through composition. */
+export function schemaAdmissionOf(error: unknown): AppError | null {
+  return asSchemaAdmission(error);
+}
+
+/** Inspect a coherent private copy without opening the selected DB or its sidecars. */
+export function daemonStartAdmissionRefusal(env: NodeJS.ProcessEnv = process.env): AppError | null {
+  const home = createNodeHomePaths(env);
+  return withInstallationInspection(home.home, { userHome: env.HOME ?? homedir() }, (observation) => {
+    const database = observation.facts.database.kind;
+    if (database === "newer" || database === "maximum-version-only" || database === "memo-table-only")
+      return appError(
+        "STORAGE_SCHEMA_UNSUPPORTED",
+        "The database history is newer than or unsupported by this executable.",
+      );
+    if (database === "invalid-structure" || database === "corrupt" || database === "unsupported-format")
+      return appError("STORAGE_INTEGRITY_ERROR", "The database history or storage structure is invalid.");
+    // Unavailable inspection is not evidence of schema refusal. The child
+    // still performs real admission; ordinary startup diagnostics remain.
+    return null;
+  });
 }

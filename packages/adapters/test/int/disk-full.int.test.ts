@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { defaultConfiguration } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNodeArtifactStore } from "../../src/artifact-store";
@@ -24,15 +24,17 @@ let device = "";
 let mountPoint = "";
 
 function sh(bin: string, args: string[]): string {
-  const result = spawnSync(bin, args, { encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(`${bin} ${args.join(" ")} failed: ${(result.stderr ?? "").trim()}`);
+  const result = spawnSync(bin, args, { encoding: "utf8", timeout: 5_000 });
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error(
+      `${bin} ${args.join(" ")} failed: ${result.error?.message ?? result.signal ?? result.status}; ${(result.stderr ?? "").trim()}`,
+    );
   }
   return (result.stdout ?? "").trim();
 }
 
 function freeBytes(): number {
-  const output = execFileSync("df", ["-k", mountPoint], { encoding: "utf8" });
+  const output = execFileSync("df", ["-k", mountPoint], { encoding: "utf8", timeout: 5_000 });
   // Columns: Filesystem 1024-blocks Used Available ...; "Available" is index 3.
   const columns = (output.trim().split("\n").at(-1) as string).split(/\s+/);
   return Number.parseInt(columns[3] ?? "0", 10) * 1024;
@@ -51,32 +53,55 @@ function fillTo(targetBytes: number): void {
     index += 1;
     try {
       writeFileSync(join(fillerDir, `f${index}`), chunk);
-    } catch {
-      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOSPC") return;
+      throw error;
     }
   }
 }
 
 /** Each scenario gets a fresh volume, so one test's filler never poisons the next. */
 function freshVolume(): void {
+  if (device !== "" || mountPoint !== "") throw new Error("The previous owned RAM volume still requires cleanup");
   mountPoint = mkdtempSync(join(tmpdir(), "sorage-disk-full-"));
-  device = sh("hdiutil", ["attach", "-nomount", `ram://${SECTORS}`]);
-  sh("newfs_hfs", ["-v", "SorageDiskFull", device]);
-  sh("diskutil", ["mount", "-mountPoint", mountPoint, device]);
+  try {
+    const attached = sh("hdiutil", ["attach", "-nomount", `ram://${SECTORS}`]);
+    if (!/^\/dev\/disk[0-9]+$/.test(attached)) throw new Error(`Unexpected RAM device: ${attached}`);
+    device = attached;
+    sh("newfs_hfs", ["-v", "SorageDiskFull", device]);
+    // The direct filesystem helper avoids Disk Arbitration discovery stalling
+    // on a freshly formatted RAM device. The filesystem and ENOSPC are real.
+    sh("/sbin/mount_hfs", ["-o", "nobrowse,nodev,nosuid", device, mountPoint]);
+    if (!isMounted()) throw new Error("The owned RAM filesystem did not mount");
+  } catch (error) {
+    dropVolume();
+    throw error;
+  }
+}
+
+function isMounted(): boolean {
+  return mountPoint !== "" && statSync(mountPoint).dev !== statSync(dirname(mountPoint)).dev;
 }
 
 function dropVolume(): void {
+  if (mountPoint === "") return;
+  const failures: string[] = [];
   try {
-    sh("diskutil", ["unmount", "force", mountPoint]);
-  } catch {
-    // A failed unmount must not mask the detach.
+    if (isMounted()) sh("/sbin/umount", [mountPoint]);
+  } catch (error) {
+    failures.push(String(error));
   }
   try {
-    sh("hdiutil", ["detach", device]);
-  } catch {
-    // Best effort: the ram disk is destroyed with the session anyway.
+    if (device !== "") sh("hdiutil", ["detach", device]);
+    device = "";
+  } catch (error) {
+    failures.push(String(error));
   }
-  rmSync(mountPoint, { recursive: true, force: true });
+  if (!isMounted()) {
+    rmSync(mountPoint, { recursive: true, force: true });
+    mountPoint = "";
+  } else failures.push(`The owned RAM filesystem remains mounted at ${mountPoint}`);
+  if (failures.length > 0) throw new Error(`RAM volume cleanup failed: ${failures.join("; ")}`);
 }
 
 beforeEach(() => freshVolume());

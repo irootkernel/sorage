@@ -95,14 +95,17 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
     const root = join(f.home, "vault", "snapshots");
     const first = files(root);
     const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
-    expect(manifest.formatVersion).toBe(2);
+    expect(manifest.formatVersion).toBe(3);
+    expect(manifest.counts.channels).toBe(0);
+    expect(manifest.contentDigests).toEqual({});
     expect(manifest.counts.memos).toBe(5);
     expect(Object.keys(manifest.memoDigests)).toHaveLength(5);
     for (const memo of memos) {
       const path = `memos/${memo.id.slice(0, 2)}/${memo.id}.json`;
       const bytes = readFileSync(join(root, path));
       expect(bytes.at(-1)).toBe(10);
-      expect(JSON.parse(bytes.toString("utf8"))).toEqual(memo);
+      const { body, ...record } = memo;
+      expect(JSON.parse(bytes.toString("utf8"))).toEqual({ ...record, bodyContent: { inline: body } });
       expect(manifest.memoDigests[path]).toBe(createHash("sha256").update(bytes).digest("hex"));
       expect(readFileSync(join(root, "events.jsonl"), "utf8")).not.toContain(memo.body.split("\r\n")[0]);
     }
@@ -136,7 +139,7 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
     const source = emptyHome();
     const root = join(source, "vault", "snapshots");
     const projectId = "ab000000-0000-4000-8000-000000000001";
-    // Use the retained format-1 serializer, not the current format-2 writer.
+    // Use the retained format-1 serializer, not the current format-3 writer.
     const legacy = snapshotFiles({
       projects: [
         {

@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SorageSqlite } from "../../packages/adapters/src/sqlite/connection";
 import { MIGRATIONS } from "../../packages/adapters/src/sqlite/migrations";
 import { migrate } from "../../packages/adapters/src/sqlite/migrator";
-import { type SendOutcome, sendRequestHash, workspaceKey } from "../../packages/core/src/index";
+import { type SendOutcome, knownSchemaMaximum, sendRequestHash, workspaceKey } from "../../packages/core/src/index";
 import { BINARY, envelopeOf, makeTempDir, runCleanups, sorage, storageProof, twoProjectFixture } from "./helpers";
 
 afterEach(runCleanups);
@@ -153,9 +153,9 @@ describe("AJ-25 compiled send recovery", () => {
     data(f.run(["project", "unbind", "beta", "--dir", f.workB, "--json"]));
     expect(data(f.recover())).toEqual({ ...f.outcome, replayed: true });
   });
-  it.each([4, 5, 6, 7])("reads complete historical schema %s without migration, drain or locks", (version) => {
+  it.each([4, 5, 6, 7, 8])("reads complete historical schema %s without migration, drain or locks", (version) => {
     const f = fixture();
-    if (version !== 7) historical(f, version);
+    if (version !== knownSchemaMaximum()) historical(f, version);
     expect(data(f.recover())).toEqual({ ...f.outcome, replayed: true });
     f.db((d) => expect(d.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: version }));
     if (version === 4) {
@@ -336,7 +336,11 @@ describe("AJ-25 compiled send recovery", () => {
     if (scenario === "db-corrupt") writeFileSync(f.path, "garbage database");
     if (scenario === "db-history") f.db((d) => d.exec("UPDATE schema_migrations SET name='invalid' WHERE version=4"));
     if (scenario === "db-newer")
-      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(8,'future','2026-01-01')"));
+      f.db((d) =>
+        d
+          .prepare("INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,'future','2026-01-01')")
+          .run(knownSchemaMaximum() + 1),
+      );
     if (scenario === "db-identity")
       f.db((d) =>
         d

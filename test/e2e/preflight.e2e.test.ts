@@ -21,6 +21,7 @@ import {
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { knownSchemaMaximum } from "../../packages/core/src/known-schemas";
 import { git, makeTempDir, sorage, storageProof } from "./helpers";
 import {
   configText,
@@ -202,7 +203,8 @@ describe("compiled preflight", () => {
     const newerDatabase = makeTempDir("sorage-preflight-e2e-newer-db-");
     writeInstallation(newerDatabase);
     const db = new Database(join(newerDatabase, "state", "sorage.sqlite3"));
-    db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'future', ?)").run(
+    db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future', ?)").run(
+      knownSchemaMaximum() + 1,
       "2026-01-01T00:00:00.000Z",
     );
     db.close();
@@ -239,7 +241,7 @@ describe("compiled preflight", () => {
       backup: (db.prepare("SELECT id FROM backup_runs").get() as { id: string }).id,
     }));
     expect(preserved).toEqual({
-      versions: 7,
+      versions: knownSchemaMaximum(),
       slug: "demo",
       bindings: ["directory", "git_repository"],
       receipt: "receipt-1",

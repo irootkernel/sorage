@@ -131,7 +131,7 @@ Handoff
 - senderWorkspaceKey: nullable string
 - senderPathSnapshot: nullable string
 - recipientProjectId: UUID
-- currentArtifactId: nullable UUID
+- currentArtifactId: nullable UUID or legacy short Artifact identifier (section 3.4)
 - revision: integer >= 1
 - rowVersion: integer >= 1
 - reviewState: awaiting_recipient | changes_requested | accepted | declined | withdrawn
@@ -162,7 +162,7 @@ Handoff
 
 ```text
 Artifact
-- id: UUID
+- id: UUID or legacy short Artifact identifier
 - handoffId: UUID
 - storageKey: string, artifacts/<handoff-id>/<artifact-id>/<stored-name>
 - originalName: string
@@ -174,6 +174,8 @@ Artifact
 - materialized: boolean
 - createdAt: timestamp
 ```
+
+A legacy short Artifact identifier is exactly `a` followed by eight lowercase hexadecimal characters, for example `a1b2c3d4e`. The pre-M9 `revise` producer generated this form; existing Artifact IDs and their `currentArtifactId` references remain valid and MUST be preserved. Every new Artifact uses a UUID, including new revisions. [ADR-0031](../architecture-decision-records/README.md#adr-0031-legacy-short-artifact-identifiers-and-format-3-acceptance) records this compatibility boundary; other UUID-typed fields retain their existing rules.
 
 `storageKey` is the sole authority for an Artifact's location inside the Vault; no other field, convention, or derived path may be used to find the bytes (VLT-020). The `<artifact-id>` segment gives every Revision a unique slot, so replacement never overwrites in place.
 

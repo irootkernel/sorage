@@ -1,4 +1,15 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { describe, expect, it } from "vitest";
 import { loadConfiguration } from "@sorage/core";
 import { createNodeInitPorts } from "../../src/init-ports";
@@ -8,7 +19,9 @@ import { FakeClock } from "../../src/testkit/fakes";
 import { makeTempHome } from "../../src/testkit/temp-home";
 
 const GITATTRIBUTES = `artifacts/** -text -diff
+content/** -text -diff
 snapshots/** text eol=lf
+snapshots/content/** -text -diff
 .sorage-vault.json text eol=lf
 `;
 
@@ -17,6 +30,42 @@ function portsFor(home: string) {
 }
 
 describe("initializeInstallation", () => {
+  it.each(["unreadable", "symlink", "invalid-utf8", "directory"])(
+    "preserves an unsafe or unreadable attributes file on reconfigure: %s",
+    (scenario) => {
+      const scratch = makeTempHome("sorage-attributes-refusal-");
+      const home = `${scratch.home}/installation`;
+      const path = `${home}/vault/.gitattributes`;
+      const outside = `${scratch.home}/outside-attributes`;
+      try {
+        expect(initializeInstallation(portsFor(home), {}).ok).toBe(true);
+        if (scenario === "unreadable") chmodSync(path, 0);
+        else {
+          rmSync(path);
+          if (scenario === "symlink") {
+            writeFileSync(outside, "outside untouched\n");
+            symlinkSync(outside, path);
+          }
+          if (scenario === "invalid-utf8") writeFileSync(path, Buffer.from([0xff, 0x0a]));
+          if (scenario === "directory") mkdirSync(path);
+        }
+        expect(initializeInstallation(portsFor(home), { reconfigure: true })).toMatchObject({
+          ok: false,
+          error: { code: "INTERNAL_ERROR" },
+        });
+        if (scenario === "symlink") {
+          expect(lstatSync(path).isSymbolicLink()).toBe(true);
+          expect(readFileSync(outside, "utf8")).toBe("outside untouched\n");
+        }
+        if (scenario === "invalid-utf8") expect(readFileSync(path)).toEqual(Buffer.from([0xff, 0x0a]));
+        expect(readdirSync(`${home}/vault`).some((name) => name.startsWith(".gitattributes.tmp-"))).toBe(false);
+      } finally {
+        if (scenario === "unreadable" && existsSync(path)) chmodSync(path, 0o644);
+        scratch.cleanup();
+      }
+    },
+  );
+
   it("creates the home tree, configuration, database, and the complete Vault", async () => {
     await withTempHome(async (home) => {
       const vault = `${home}/custom-vault`;

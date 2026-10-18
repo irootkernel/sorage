@@ -263,7 +263,7 @@ describe("installation preflight inspection", () => {
     writeCurrent(newer);
     const newerDb = new DatabaseSync(join(newer, "state", "sorage.sqlite3"));
     newerDb
-      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'future', ?)")
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (9, 'future', ?)")
       .run("2026-01-01T00:00:00.000Z");
     newerDb.close();
     const newerReport = inspectPreflight(newer);
@@ -1401,7 +1401,7 @@ describe("installation preflight inspection", () => {
     rmSync(join(newer, "vault", ".sorage-vault.json"));
     const newerDb = new DatabaseSync(join(newer, "state", "sorage.sqlite3"));
     newerDb
-      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (8, 'future', ?)")
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (9, 'future', ?)")
       .run("2026-01-01T00:00:00.000Z");
     newerDb.close();
     const newerReport = inspectPreflight(newer);

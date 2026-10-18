@@ -1,8 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { NewPendingFsOp, PendingFsOp } from "@sorage/core";
-import { collectVaultGarbage, createSqliteIntentLog } from "../../src/intent-log";
+import { SYSTEM_ACTOR, type NewPendingFsOp, type PendingFsOp } from "@sorage/core";
+import { collectVaultGarbage, createSqliteIntentLog, executeIntent } from "../../src/intent-log";
+import { createSqliteEventLedger } from "../../src/events";
+import {
+  createSqliteHandoffWriteStore,
+  createSqliteRevisionStore,
+  createSqliteRetentionStore,
+} from "../../src/handoffs";
+import { openSorageDatabase } from "../../src/sqlite/connection";
 import { createVaultInitializer } from "../../src/vault";
 import { migrate } from "../../src/sqlite/migrator";
 import { MIGRATIONS } from "../../src/sqlite/migrations";
@@ -26,6 +33,7 @@ function intentFixture(prefix: string) {
   return {
     vaultPath: vault.vaultPath,
     db: database.db,
+    databasePath: database.databasePath,
     log,
     cleanup: () => {
       database.cleanup();
@@ -284,6 +292,9 @@ describe("collectVaultGarbage", () => {
           fromPath: null,
           toPath: "artifacts/h-1/a-2/pending.md",
           artifactId: null,
+          ownerDomain: null,
+          ownerId: null,
+          contentId: null,
           createdAt: "2026-05-01T00:00:00.000Z",
           attempts: 0,
         },
@@ -379,6 +390,9 @@ describe("staging sweep guard (epic audit round 3)", () => {
         fromPath: "staging/conflicted",
         toPath: "artifacts/h-1/a-1/doc.md",
         artifactId: "a-1",
+        ownerDomain: null,
+        ownerId: null,
+        contentId: null,
         createdAt: "2026-05-01T00:00:00.000Z",
         attempts: 1,
       };
@@ -391,6 +405,384 @@ describe("staging sweep guard (epic audit round 3)", () => {
       if (!collected.ok) return;
       expect(collected.value.sweptStaging).toEqual([oldStaged]);
       expect(existsSync(guardedStaged)).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("legacy completion events in the drain (SEC-012)", () => {
+  const HANDOFF = "0a111111-1111-4111-8111-1111111111aa";
+  const ARTIFACT = "0a111111-2222-4111-8111-1111111111ab";
+  const PROJECT = "0a111111-5555-4111-8111-1111111111ae";
+  const KEY = "artifacts/h-1/a-1/doc.md";
+  const SHA = "1b".repeat(32);
+
+  function completionFixture(prefix: string) {
+    const fixture = intentFixture(prefix);
+    const ledger = createSqliteEventLedger(fixture.db);
+    // One live Artifact row: the authoritative association and digest source.
+    // Insert the deferred Handoff/Artifact reference cycle in one transaction.
+    fixture.db.exec("BEGIN");
+    fixture.db
+      .prepare(
+        "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, 'drain-probe', 'Drain Probe', NULL, 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+      )
+      .run(PROJECT);
+    fixture.db
+      .prepare(
+        `INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version,
+          review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at)
+        VALUES (?, 'Drain event probe', 'user', ?, ?, 1, 1, 'awaiting_recipient', 0, 0, '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`,
+      )
+      .run(HANDOFF, PROJECT, ARTIFACT);
+    fixture.db
+      .prepare(
+        `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256,
+          imported_from_path, materialized, created_at) VALUES (?, ?, ?, 'doc.md', 'doc.md', 'text/markdown', 6, ?, NULL, 0, '2026-05-01T00:00:00.000Z')`,
+      )
+      .run(ARTIFACT, HANDOFF, KEY, SHA);
+    fixture.db.exec("COMMIT");
+    mkdirSync(join(fixture.vaultPath, "staging"), { recursive: true });
+    writeFileSync(join(fixture.vaultPath, "staging", "staged-doc"), "doc by");
+    return { ...fixture, ledger };
+  }
+
+  function artifactEvents(db: ReturnType<typeof intentFixture>["db"], type: string) {
+    return db
+      .prepare("SELECT handoff_id, actor_kind, metadata_json FROM events WHERE event_type = ? ORDER BY id")
+      .all(type) as Array<{ handoff_id: string | null; actor_kind: string; metadata_json: string }>;
+  }
+
+  it("records an activation without inventing an association or hash when its Artifact row is gone", () => {
+    const fixture = intentFixture("sorage-drain-missing-row-");
+    try {
+      mkdirSync(join(fixture.vaultPath, "artifacts", "h-1", "a-1"), { recursive: true });
+      writeFileSync(join(fixture.vaultPath, KEY), "doc by");
+      expect(
+        fixture.log.record([
+          {
+            id: "missing-row",
+            op: "activate",
+            fromPath: "staging/gone",
+            toPath: KEY,
+            artifactId: ARTIFACT,
+            createdAt: "2026-05-01T00:00:00.000Z",
+          },
+        ]).ok,
+      ).toBe(true);
+      const log = createSqliteIntentLog({
+        db: fixture.db,
+        installationId: INSTALLATION,
+        events: createSqliteEventLedger(fixture.db),
+      });
+      expect(log.drain(fixture.vaultPath).ok).toBe(true);
+      const events = artifactEvents(fixture.db, "ARTIFACT_ACTIVATED");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.handoff_id).toBeNull();
+      expect(JSON.parse(events[0]?.metadata_json ?? "{}")).toEqual({ storageKey: KEY });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each(["revision", "retention"] as const)(
+    "keeps %s unlink completion idempotent in both completion orders",
+    (kind) => {
+      for (const drainFirst of [false, true]) {
+        const fixture = intentFixture(`sorage-unlink-${kind}-`);
+        try {
+          const ledger = createSqliteEventLedger(fixture.db);
+          const input = {
+            intentId: "unlink-race",
+            event: {
+              id: "0a111111-3333-4111-8111-1111111111ac",
+              eventType: "ARTIFACT_UNLINKED" as const,
+              actor: SYSTEM_ACTOR,
+              metadata: { storageKey: KEY },
+              createdAt: "2026-05-01T00:00:00.000Z",
+            },
+          };
+          expect(
+            fixture.log.record([
+              {
+                id: input.intentId,
+                op: "unlink",
+                fromPath: null,
+                toPath: KEY,
+                artifactId: ARTIFACT,
+                createdAt: input.event.createdAt,
+              },
+            ]).ok,
+          ).toBe(true);
+          const log = createSqliteIntentLog({ db: fixture.db, installationId: INSTALLATION, events: ledger });
+          const complete = () =>
+            kind === "revision"
+              ? createSqliteRevisionStore(fixture.db, ledger).completeUnlinks([input])
+              : createSqliteRetentionStore(fixture.db, ledger).completeUnlink(input);
+          if (drainFirst) expect(log.drain(fixture.vaultPath).ok).toBe(true);
+          const outcome = complete();
+          expect(outcome).toMatchObject({ ok: true, value: { completed: drainFirst ? 0 : 1 } });
+          expect(log.drain(fixture.vaultPath).ok).toBe(true);
+          expect(complete()).toMatchObject({ ok: true, value: { completed: 0 } });
+          expect(artifactEvents(fixture.db, "ARTIFACT_UNLINKED")).toHaveLength(1);
+        } finally {
+          fixture.cleanup();
+        }
+      }
+    },
+  );
+
+  it("appends exactly one ARTIFACT_ACTIVATED from authoritative rows when the drain's own DELETE clears the intent", () => {
+    const fixture = completionFixture("sorage-drain-activated-");
+    try {
+      const recorded = fixture.log.record([
+        {
+          id: "ci-1",
+          op: "activate",
+          fromPath: "staging/staged-doc",
+          toPath: KEY,
+          artifactId: ARTIFACT,
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ]);
+      expect(recorded.ok).toBe(true);
+      const log = createSqliteIntentLog({
+        db: fixture.db,
+        installationId: INSTALLATION,
+        events: fixture.ledger,
+      });
+      const drained = log.drain(fixture.vaultPath);
+      expect(drained.ok).toBe(true);
+      if (drained.ok) expect(drained.value.resolved).toEqual(["ci-1"]);
+      const activated = artifactEvents(fixture.db, "ARTIFACT_ACTIVATED");
+      expect(activated).toHaveLength(1);
+      expect(activated[0]?.handoff_id).toBe(HANDOFF);
+      expect(activated[0]?.actor_kind).toBe("system");
+      expect(JSON.parse(activated[0]?.metadata_json ?? "{}")).toEqual({ storageKey: KEY, sha256: SHA });
+      expect(fixture.db.prepare("SELECT materialized FROM artifacts WHERE id = ?").get(ARTIFACT)).toMatchObject({
+        materialized: 1,
+      });
+      // No pathname-derived association ever appears in the metadata.
+      expect(JSON.stringify(activated[0]?.metadata_json)).not.toContain(HANDOFF);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("appends ARTIFACT_UNLINKED with a null association when no authoritative row remains", () => {
+    const fixture = completionFixture("sorage-drain-unlinked-");
+    try {
+      mkdirSync(join(fixture.vaultPath, "artifacts", "h-1", "a-1"), { recursive: true });
+      writeFileSync(join(fixture.vaultPath, KEY), "doc by");
+      const recorded = fixture.log.record([
+        {
+          id: "ci-2",
+          op: "unlink",
+          fromPath: null,
+          toPath: KEY,
+          artifactId: "gone-artifact",
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ]);
+      expect(recorded.ok).toBe(true);
+      const log = createSqliteIntentLog({
+        db: fixture.db,
+        installationId: INSTALLATION,
+        events: fixture.ledger,
+      });
+      const drained = log.drain(fixture.vaultPath);
+      expect(drained.ok).toBe(true);
+      const unlinked = artifactEvents(fixture.db, "ARTIFACT_UNLINKED");
+      expect(unlinked).toHaveLength(1);
+      expect(unlinked[0]?.handoff_id).toBeNull();
+      expect(JSON.parse(unlinked[0]?.metadata_json ?? "{}")).toEqual({ storageKey: KEY });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("appends nothing when a repeated drain finds the intent already cleared", () => {
+    const fixture = completionFixture("sorage-drain-repeat-");
+    try {
+      const log = createSqliteIntentLog({
+        db: fixture.db,
+        installationId: INSTALLATION,
+        events: fixture.ledger,
+      });
+      fixture.log.record([
+        {
+          id: "ci-3",
+          op: "activate",
+          fromPath: "staging/staged-doc",
+          toPath: KEY,
+          artifactId: ARTIFACT,
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ]);
+      expect(log.drain(fixture.vaultPath).ok).toBe(true);
+      expect(log.drain(fixture.vaultPath).ok).toBe(true);
+      expect(artifactEvents(fixture.db, "ARTIFACT_ACTIVATED")).toHaveLength(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps exactly-once across competing ordinary and drain completions in both orders", () => {
+    // Order one: the drain wins; the stale ordinary completion appends nothing
+    // and counts no winner.
+    const drainFirst = completionFixture("sorage-compete-drain-");
+    try {
+      const log = createSqliteIntentLog({
+        db: drainFirst.db,
+        installationId: INSTALLATION,
+        events: drainFirst.ledger,
+      });
+      drainFirst.log.record([
+        {
+          id: "ci-4",
+          op: "activate",
+          fromPath: "staging/staged-doc",
+          toPath: KEY,
+          artifactId: ARTIFACT,
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ]);
+      expect(log.drain(drainFirst.vaultPath).ok).toBe(true);
+      const store = createSqliteHandoffWriteStore(drainFirst.db, drainFirst.ledger);
+      const stale = store.completeActivations([
+        {
+          intentId: "ci-4",
+          artifactId: ARTIFACT,
+          event: {
+            id: "0a111111-3333-4111-8111-1111111111ac",
+            handoffId: HANDOFF,
+            eventType: "ARTIFACT_ACTIVATED",
+            actor: SYSTEM_ACTOR,
+            createdAt: "2026-05-02T00:00:00.000Z",
+            metadata: { storageKey: KEY },
+          },
+        },
+      ]);
+      expect(stale.ok && stale.value.completed).toBe(0);
+      expect(artifactEvents(drainFirst.db, "ARTIFACT_ACTIVATED")).toHaveLength(1);
+    } finally {
+      drainFirst.cleanup();
+    }
+
+    // Order two: capture the drain's pending read, then let a second SQLite
+    // connection perform and complete the ordinary operation before it resumes.
+    const ordinaryFirst = completionFixture("sorage-compete-ordinary-");
+    const competing = openSorageDatabase(ordinaryFirst.databasePath);
+    try {
+      ordinaryFirst.log.record([
+        {
+          id: "ci-5",
+          op: "activate",
+          fromPath: "staging/staged-doc",
+          toPath: KEY,
+          artifactId: ARTIFACT,
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ]);
+      const store = createSqliteHandoffWriteStore(competing, createSqliteEventLedger(competing));
+      let interleaved = false;
+      const win = () => {
+        const pending = ordinaryFirst.log.pending();
+        if (!pending.ok || pending.value[0] === undefined) throw new Error("The ordinary intent must remain pending");
+        expect(executeIntent(pending.value[0], ordinaryFirst.vaultPath)).toBe("done");
+        const won = store.completeActivations([
+          {
+            intentId: "ci-5",
+            artifactId: ARTIFACT,
+            event: {
+              id: "0a111111-4444-4111-8111-1111111111ad",
+              handoffId: HANDOFF,
+              eventType: "ARTIFACT_ACTIVATED",
+              actor: SYSTEM_ACTOR,
+              createdAt: "2026-05-02T00:00:00.000Z",
+              metadata: { storageKey: KEY },
+            },
+          },
+        ]);
+        expect(won.ok && won.value.completed).toBe(1);
+      };
+      const staleRead = new Proxy(ordinaryFirst.db, {
+        get(target, property) {
+          if (property === "prepare")
+            return (sql: string) => {
+              const statement = target.prepare(sql);
+              if (sql !== "SELECT * FROM pending_fs_ops ORDER BY created_at, id") return statement;
+              return new Proxy(statement, {
+                get(selected, key) {
+                  if (key === "all")
+                    return (...args: Parameters<typeof selected.all>) => {
+                      const rows = selected.all(...args);
+                      if (!interleaved) {
+                        interleaved = true;
+                        win();
+                      }
+                      return rows;
+                    };
+                  const value = Reflect.get(selected, key);
+                  return typeof value === "function" ? value.bind(selected) : value;
+                },
+              });
+            };
+          const value = Reflect.get(target, property);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const log = createSqliteIntentLog({
+        db: staleRead,
+        installationId: INSTALLATION,
+        events: ordinaryFirst.ledger,
+      });
+      expect(log.drain(ordinaryFirst.vaultPath)).toMatchObject({ ok: true, value: { resolved: [] } });
+      expect(interleaved).toBe(true);
+      expect(artifactEvents(ordinaryFirst.db, "ARTIFACT_ACTIVATED")).toHaveLength(1);
+      expect(readFileSync(join(ordinaryFirst.vaultPath, KEY), "utf8")).toBe("doc by");
+    } finally {
+      competing.close();
+      ordinaryFirst.cleanup();
+    }
+  });
+
+  it("rolls the whole completion transaction back when the ledger append fails", () => {
+    const fixture = completionFixture("sorage-drain-rollback-");
+    try {
+      fixture.log.record([
+        {
+          id: "ci-6",
+          op: "activate",
+          fromPath: "staging/staged-doc",
+          toPath: KEY,
+          artifactId: ARTIFACT,
+          createdAt: "2026-05-01T00:00:00.000Z",
+        },
+      ]);
+      const throwingLedger = createSqliteEventLedger(fixture.db);
+      (throwingLedger as unknown as { appendNow: () => void }).appendNow = () => {
+        throw new Error("injected append failure");
+      };
+      const log = createSqliteIntentLog({
+        db: fixture.db,
+        installationId: INSTALLATION,
+        events: throwingLedger,
+      });
+      const drained = log.drain(fixture.vaultPath);
+      expect(drained.ok).toBe(false);
+      if (!drained.ok) expect(drained.error.code).toBe("INTERNAL_ERROR");
+      // The rollback leaves the intent row, its attempts, the materialized
+      // flag, and the event ledger exactly as they were.
+      const pending = fixture.db.prepare("SELECT attempts FROM pending_fs_ops WHERE id = ?").get("ci-6") as
+        | { attempts: number }
+        | undefined;
+      expect(pending?.attempts).toBe(0);
+      expect(fixture.db.prepare("SELECT materialized FROM artifacts WHERE id = ?").get(ARTIFACT)).toMatchObject({
+        materialized: 0,
+      });
+      expect(artifactEvents(fixture.db, "ARTIFACT_ACTIVATED")).toHaveLength(0);
     } finally {
       fixture.cleanup();
     }

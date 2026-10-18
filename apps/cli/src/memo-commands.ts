@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { createNodeMemoPorts } from "@sorage/adapters/src/memo-command-ports";
+import { createNodeMemoPorts, memoStorageError } from "@sorage/adapters/src/memo-command-ports";
 import { readMemoBodyFile } from "@sorage/adapters/src/memo-body-file";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -106,8 +106,10 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
     let ports: ReturnType<typeof createNodeMemoPorts>;
     try {
       ports = createNodeMemoPorts();
-    } catch {
-      return output.fail(appError("INTERNAL_ERROR", "Memo storage could not be opened"), json);
+    } catch (error) {
+      // A schema admission refusal keeps its public code and exit mapping
+      // instead of collapsing into INTERNAL_ERROR (SHR-009).
+      return output.fail(memoStorageError(error), json);
     }
     try {
       let projectId: string | undefined;

@@ -31,6 +31,45 @@ export function isMemoEventType(value: string): value is MemoEventType {
 }
 
 /**
+ * The common physical-content family of M9 (SHR-005, SHR-011, security section 10.1):
+ * system-actor events whose closed metadata names the content record, its owner,
+ * and the intent that activated or unlinked it. Memo/Channel-owned file content
+ * uses this family; Handoff Artifacts keep the existing `ARTIFACT_*` family.
+ */
+export const COMMON_CONTENT_EVENT_TYPES = [
+  "CONTENT_ACTIVATED",
+  "CONTENT_UNLINKED",
+  "CONTENT_INTEGRITY_FAILED",
+] as const;
+export type CommonContentEventType = (typeof COMMON_CONTENT_EVENT_TYPES)[number];
+
+export function isCommonContentEventType(value: string): value is CommonContentEventType {
+  return (COMMON_CONTENT_EVENT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * The Channel domain family of TASK-109 (CHN-005, interface section 38.9). This
+ * build never appends it; snapshot readers know the names only so a recognized
+ * later-generation Channel event fails closed as an unsupported representation
+ * before import instead of surfacing as unknown-event corruption.
+ */
+export const CHANNEL_DOMAIN_EVENT_TYPES = [
+  "CHANNEL_CREATED",
+  "CHANNEL_CLOSED",
+  "CHANNEL_PARTICIPANT_REGISTERED",
+  "CHANNEL_PARTICIPANT_DEACTIVATED",
+  "CHANNEL_ASSIGNMENT_CREATED",
+  "CHANNEL_ASSIGNMENT_CLOSED",
+  "CHANNEL_MESSAGE_SUBMITTED",
+  "CHANNEL_MESSAGE_HANDLED",
+] as const;
+export type ChannelDomainEventType = (typeof CHANNEL_DOMAIN_EVENT_TYPES)[number];
+
+export function isChannelDomainEventType(value: string): value is ChannelDomainEventType {
+  return (CHANNEL_DOMAIN_EVENT_TYPES as readonly string[]).includes(value);
+}
+
+/**
  * The actor recorded on an event: provenance, not authorization. `id` is the Project id
  * for a registered Project, the workspace key for an unregistered Workspace, and null
  * for the User and the system actor (SEC-013, section 2 of domain-and-architecture.md).
@@ -51,8 +90,8 @@ export function workspaceActor(workspaceKey: string): ActorRef {
   return { kind: "unregistered_workspace", id: workspaceKey };
 }
 
-/** The normative event catalog of section 10 of security-reliability.md this build may append. */
-export const EVENT_TYPES = [
+/** The pre-M7 event names, the frozen family a format-1 snapshot may carry. */
+export const LEGACY_EVENT_TYPES = [
   "HANDOFF_CREATED",
   "ARTIFACT_FETCHED_FIRST_TIME",
   "REVIEW_NOTE_CREATED",
@@ -86,8 +125,10 @@ export const EVENT_TYPES = [
   "VAULT_MOVED",
   "VAULT_ADOPTED",
   "RESTORE_COMPLETED",
-  ...MEMO_EVENT_TYPES,
 ] as const;
+
+/** The normative event catalog of section 10 of security-reliability.md this build may append. */
+export const EVENT_TYPES = [...LEGACY_EVENT_TYPES, ...MEMO_EVENT_TYPES, ...COMMON_CONTENT_EVENT_TYPES] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -140,4 +181,24 @@ export function encodeEventMetadata(metadata: Record<string, unknown>): Result<s
   } catch {
     return err(appError("INTERNAL_ERROR", "event metadata is not JSON-serializable"));
   }
+}
+
+/**
+ * The frozen per-format snapshot event families (interface section 38.9): formats 1
+ * and 2 keep their pre-M9 allowlists however the runtime union grows, and format 3
+ * adds exactly the common physical-content family. Channel domain events belong to
+ * no format this build reads and are classified before this family check.
+ */
+export function snapshotEventTypeAllowed(formatVersion: 1 | 2 | 3, eventType: string): boolean {
+  if (formatVersion === 1) return (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType);
+  if (formatVersion === 2)
+    return (
+      (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType) ||
+      (MEMO_EVENT_TYPES as readonly string[]).includes(eventType)
+    );
+  return (
+    (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType) ||
+    (MEMO_EVENT_TYPES as readonly string[]).includes(eventType) ||
+    (COMMON_CONTENT_EVENT_TYPES as readonly string[]).includes(eventType)
+  );
 }

@@ -376,13 +376,23 @@ export function createSqliteHandoffWriteStore(
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
+          let winners = 0;
           for (const completion of completions) {
             db.prepare("UPDATE artifacts SET materialized = 1 WHERE id = ?").run(completion.artifactId);
-            db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId);
-            ledger.append(completion.event);
+            // The append is gated on this completion's own DELETE: a competing
+            // startup drain that already cleared the row means this stale
+            // ordinary completion appends nothing, and only actual winners
+            // count (SEC-012, exactly-once completions).
+            const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId) as {
+              changes: number;
+            };
+            if (cleared.changes === 1) {
+              ledger.append(completion.event);
+              winners += 1;
+            }
           }
           db.exec("COMMIT");
-          return ok({ completed: completions.length });
+          return ok({ completed: winners });
         } catch (transactionError) {
           try {
             db.exec("ROLLBACK");
@@ -629,12 +639,20 @@ export function createSqliteRevisionStore(
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
+          let winners = 0;
           for (const completion of completions) {
-            db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId);
-            ledger.append(completion.event);
+            // Exactly-once: only this completion's own DELETE winner appends
+            // the ARTIFACT_UNLINKED event and counts as completed.
+            const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId) as {
+              changes: number;
+            };
+            if (cleared.changes === 1) {
+              ledger.append(completion.event);
+              winners += 1;
+            }
           }
           db.exec("COMMIT");
-          return ok({ completed: completions.length });
+          return ok({ completed: winners });
         } catch (transactionError) {
           try {
             db.exec("ROLLBACK");
@@ -863,10 +881,16 @@ export function createSqliteRetentionStore(
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
-          db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(input.intentId);
-          ledger.append(input.event);
+          // Exactly-once: the retention completion appends its event only when
+          // its own DELETE cleared the row, and counts only that winner.
+          const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(input.intentId) as {
+            changes: number;
+          };
+          if (cleared.changes === 1) {
+            ledger.append(input.event);
+          }
           db.exec("COMMIT");
-          return ok({ completed: 1 });
+          return ok({ completed: cleared.changes === 1 ? 1 : 0 });
         } catch (transactionError) {
           try {
             db.exec("ROLLBACK");

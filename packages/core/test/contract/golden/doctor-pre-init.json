@@ -81,6 +81,14 @@
       }
     },
     {
+      "id": "content.checksums",
+      "severity": "blocking",
+      "message": "Sorage is not initialized",
+      "recovery": {
+        "suggestedCommand": "sorage init"
+      }
+    },
+    {
       "id": "bindings.exist",
       "severity": "blocking",
       "message": "Sorage is not initialized",

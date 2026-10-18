@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { backupRestore, validateSnapshot } from "../../src/backup-commands";
-import { SNAPSHOT_FORMAT_VERSION, type SnapshotData, type SnapshotManifest } from "../../src/backup-snapshot";
+import type { SnapshotData } from "../../src/backup-snapshot";
+import type { LegacySnapshotManifest } from "../../src/memo-snapshot";
 import { type AppError, errorSpec } from "../../src/errors";
 import type { VaultMarker } from "../../src/vault";
 
@@ -23,9 +24,9 @@ function emptyData(): SnapshotData {
   return { projects: [], handoffs: [], events: [] };
 }
 
-function manifestOf(data: SnapshotData): SnapshotManifest {
+function manifestOf(data: SnapshotData): LegacySnapshotManifest {
   return {
-    formatVersion: SNAPSHOT_FORMAT_VERSION,
+    formatVersion: 1,
     counts: {
       projects: data.projects.length,
       handoffs: data.handoffs.length,
@@ -38,7 +39,7 @@ function manifestOf(data: SnapshotData): SnapshotManifest {
 interface Recording {
   calls: string[];
   data: SnapshotData;
-  manifest: SnapshotManifest;
+  manifest: LegacySnapshotManifest;
   daemonRunning: boolean;
   targetEmpty: boolean;
   verifyFailsWith: AppError | null;
@@ -49,7 +50,7 @@ function fakePorts(recording: Partial<Recording> = {}) {
   const state: Recording = {
     calls: [],
     data: emptyData(),
-    manifest: { formatVersion: SNAPSHOT_FORMAT_VERSION, counts: { projects: 0, handoffs: 0, events: 0, artifacts: 0 } },
+    manifest: { formatVersion: 1, counts: { projects: 0, handoffs: 0, events: 0, artifacts: 0 } },
     daemonRunning: false,
     targetEmpty: true,
     verifyFailsWith: null,
@@ -223,6 +224,7 @@ describe("validateSnapshot", () => {
   it("rejects manifest counts that disagree with the parsed content", () => {
     const data = emptyData();
     const result = validateSnapshot(data, {
+      formatVersion: 1,
       counts: { projects: 3, handoffs: 0, events: 0, artifacts: 0 },
     });
     expect(result.ok).toBe(false);

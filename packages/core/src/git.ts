@@ -89,12 +89,13 @@ export function isRuntimeTrackedPath(path: string): boolean {
   return false;
 }
 
-/** The five managed pathspecs section 26 permits Sorage to stage and commit. */
+/** The managed pathspecs section 26 permits Sorage to stage and commit; `content` exists from M9 (SHR-011). */
 export const MANAGED_PATHSPECS = [
   ".sorage-vault.json",
   ".gitattributes",
   ".gitignore",
   "artifacts",
+  "content",
   "snapshots",
 ] as const;
 
@@ -105,6 +106,7 @@ export function isManagedVaultPath(path: string): boolean {
     path === ".gitattributes" ||
     path === ".gitignore" ||
     path.startsWith("artifacts/") ||
+    path.startsWith("content/") ||
     path.startsWith("snapshots/")
   );
 }

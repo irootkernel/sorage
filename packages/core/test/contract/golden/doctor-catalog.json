@@ -40,6 +40,10 @@
     "worst": "blocking"
   },
   {
+    "id": "content.checksums",
+    "worst": "blocking"
+  },
+  {
     "id": "bindings.exist",
     "worst": "warning"
   },

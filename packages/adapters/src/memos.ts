@@ -41,11 +41,11 @@ export function insertMemoRow(db: SorageSqlite, memo: Memo): void {
   if (!checked.ok) throw new Error("Invalid Memo row");
   db.prepare(`INSERT INTO project_memos
     (id, project_id, title, body, state, row_version, created_at, updated_at, created_by, updated_by, closed_at, closed_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    VALUES (?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     memo.id,
     memo.projectId,
     memo.title,
-    memo.body,
+    Buffer.from(memo.body, "utf8"),
     memo.state,
     memo.rowVersion,
     memo.createdAt,

@@ -63,7 +63,7 @@ describe("AJ-01: fresh non-interactive initialization and doctor", () => {
     expect(runCli(["--help"], capture().ports)).toBe(0);
 
     expect(readFileSync(join(vault, ".gitattributes"), "utf8")).toBe(
-      "artifacts/** -text -diff\nsnapshots/** text eol=lf\n.sorage-vault.json text eol=lf\n",
+      "artifacts/** -text -diff\ncontent/** -text -diff\nsnapshots/** text eol=lf\nsnapshots/content/** -text -diff\n.sorage-vault.json text eol=lf\n",
     );
     expect(readFileSync(join(vault, ".gitignore"), "utf8")).toBe("staging/\n");
     expect(readFileSync(join(vault, ".sorage-vault.json"), "utf8")).toContain("sorage-vault");
@@ -91,7 +91,7 @@ describe("AJ-01: fresh non-interactive initialization and doctor", () => {
     expect(runCli(["doctor", "--json"], doctor.ports)).toBe(0);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(20);
+    expect(report.data.checks).toHaveLength(21);
     for (const check of report.data.checks) {
       // The LaunchAgent is the one optional piece: an installation without it is
       // healthy and reports service.installed as a warning, never blocking.
@@ -140,7 +140,7 @@ describe("AJ-02: pre-initialization guidance", () => {
     expect(code).toBe(1);
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     expect(report.ok).toBe(true);
-    expect(report.data.checks).toHaveLength(20);
+    expect(report.data.checks).toHaveLength(21);
     const expectedIds = [
       "home.permissions",
       "config.schema",
@@ -152,6 +152,7 @@ describe("AJ-02: pre-initialization guidance", () => {
       "db.pendingIntents",
       "db.migrations",
       "artifacts.checksums",
+      "content.checksums",
       "bindings.exist",
       "bindings.nested",
       "bindings.ambiguous",

@@ -128,16 +128,24 @@ describe("openVault", () => {
     }
   });
 
-  it("reports a missing .gitattributes line and a missing staging/ entry without blocking", () => {
+  it("reports missing .gitattributes lines and order violations plus a missing staging/ entry without blocking", () => {
     const { vaultPath, cleanup } = initializedVault();
     try {
-      writeFileSync(join(vaultPath, ".gitattributes"), "snapshots/** text eol=lf\n.sorage-vault.json text eol=lf\n");
+      // Every required line except the artifacts rule, with the M9 raw-content
+      // exception out of order relative to the general snapshots rule.
+      writeFileSync(
+        join(vaultPath, ".gitattributes"),
+        "content/** -text -diff\nsnapshots/content/** -text -diff\nsnapshots/** text eol=lf\n.sorage-vault.json text eol=lf\n",
+      );
       writeFileSync(join(vaultPath, ".gitignore"), "node_modules/\n");
       const opened = openVault(vaultPath, INSTALLATION);
       expect(opened.ok).toBe(true);
       if (!opened.ok) return;
       expect(opened.value.layoutProblems).toContain(
         ".gitattributes is missing the required line 'artifacts/** -text -diff'.",
+      );
+      expect(opened.value.layoutProblems).toContain(
+        ".gitattributes carries the required line 'snapshots/content/** -text -diff' out of its stated order.",
       );
       expect(opened.value.layoutProblems).toContain(".gitignore is missing the required entry 'staging/'.");
     } finally {

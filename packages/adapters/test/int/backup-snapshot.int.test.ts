@@ -51,27 +51,32 @@ function seedInstallation(home: string, vault: string, options: { workspacePath:
   db.exec("BEGIN");
   db.prepare(
     `INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at)
-    VALUES ('p-1', 'beta', 'Beta', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    VALUES ('11111111-1111-4111-8111-111111111111', 'beta', 'Beta', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
   ).run();
   db.prepare(
     `INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at)
-    VALUES ('b-1', 'p-1', 'installation-a', ?, 'directory', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    VALUES ('33333333-3333-4333-8333-333333333333', '11111111-1111-4111-8111-111111111111', '77777777-7777-4777-8777-777777777777', ?, 'directory', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
   ).run(options.workspacePath);
   db.prepare(
-    `INSERT INTO handoffs (id, title, sender_kind, sender_path_snapshot, recipient_project_id,
+    `INSERT INTO handoffs (id, title, sender_kind, sender_workspace_key, sender_path_snapshot, recipient_project_id,
       current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions,
       pinned, created_at, updated_at)
-    VALUES ('1a111111-1111-4111-8111-111111111111', 'Brief', 'unregistered_workspace', ?, 'p-1', 'a-1', 1, 2, 'awaiting_recipient', 0, 0,
+    VALUES ('1a111111-1111-4111-8111-111111111111', 'Brief', 'unregistered_workspace', 'workspace-key', ?, '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 1, 2, 'awaiting_recipient', 0, 0,
       '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
   ).run(options.workspacePath);
   const artifactBytes = "# The brief\n";
-  const artifactPath = join(vault, "artifacts/1a111111-1111-4111-8111-111111111111/a-1/brief.md");
-  mkdirSync(join(vault, "artifacts/1a111111-1111-4111-8111-111111111111/a-1"), { recursive: true });
+  const artifactPath = join(
+    vault,
+    "artifacts/1a111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/brief.md",
+  );
+  mkdirSync(join(vault, "artifacts/1a111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222"), {
+    recursive: true,
+  });
   writeFileSync(artifactPath, artifactBytes);
   db.prepare(
     `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes,
       sha256, imported_from_path, materialized, created_at)
-    VALUES ('a-1', '1a111111-1111-4111-8111-111111111111', 'artifacts/1a111111-1111-4111-8111-111111111111/a-1/brief.md', 'brief.md', 'brief.md', 'text/markdown', ?,
+    VALUES ('22222222-2222-4222-8222-222222222222', '1a111111-1111-4111-8111-111111111111', 'artifacts/1a111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/brief.md', 'brief.md', 'brief.md', 'text/markdown', ?,
       ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
   ).run(
     artifactBytes.length,
@@ -80,11 +85,11 @@ function seedInstallation(home: string, vault: string, options: { workspacePath:
   );
   db.prepare(
     `INSERT INTO events (id, handoff_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
-    VALUES ('e-1', '1a111111-1111-4111-8111-111111111111', 'HANDOFF_CREATED', 'unregistered_workspace', 'workspace-key', 1, ?, '2026-01-02T00:00:00.000Z')`,
+    VALUES ('44444444-4444-4444-8444-444444444444', '1a111111-1111-4111-8111-111111111111', 'HANDOFF_CREATED', 'unregistered_workspace', 'workspace-key', 1, ?, '2026-01-02T00:00:00.000Z')`,
   ).run(
     JSON.stringify({
       title: "Brief",
-      storageKey: "artifacts/1a111111-1111-4111-8111-111111111111/a-1/brief.md",
+      storageKey: "artifacts/1a111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/brief.md",
       fromPath: "/somewhere",
     }),
   );
@@ -155,7 +160,7 @@ describe("exportSnapshot over a real installation", () => {
     expect(redacted["events.jsonl"]).not.toContain("/somewhere");
     expect(redacted["events.jsonl"]).toContain("storageKey");
     const manifest = JSON.parse(redacted["manifest.json"] as string) as { counts: Record<string, number> };
-    expect(manifest.counts).toEqual({ projects: 1, handoffs: 1, events: 1, artifacts: 1, memos: 0 });
+    expect(manifest.counts).toEqual({ projects: 1, handoffs: 1, events: 1, artifacts: 1, memos: 0, channels: 0 });
 
     // Flipping the policy off exposes the same paths the redaction removed.
     const configPath = join(home, "config.yaml");

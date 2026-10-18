@@ -7,10 +7,18 @@ import {
   type SnapshotManifest,
   snapshotManifest,
 } from "./backup-snapshot";
-import { snapshotFilesV2, validateMemoInventory, parseVersionedSnapshotManifest } from "./memo-snapshot";
-import { canonicalJson } from "./backup-snapshot";
+import {
+  classifySnapshotArtifactBody,
+  classifySnapshotEvent,
+  snapshotFilesV3,
+  validateSnapshotCommonEvent,
+  validateSnapshotHandoffV3,
+  validateSnapshotProjectV3,
+} from "./content-snapshot";
+import { parseMemoEventAssociation, validateMemoInventory, type VersionedSnapshotManifest } from "./memo-snapshot";
 import { type Configuration, isValidTimezone, SCHEDULE_AT_PATTERN } from "./config";
 import { type AppError, appError, err, ok, type Result } from "./errors";
+import { isMemoUuid } from "./memos";
 import {
   classifyPushFailure,
   GIT_ARGS,
@@ -52,7 +60,10 @@ export function exportSnapshot(ports: BackupExportPorts): Result<BackupExportRep
   const read = ports.readSnapshotData();
   if (!read.ok) return err(read.error);
   const data = ports.redactWorkspacePaths ? redactSnapshotData(read.value) : read.value;
-  const built = snapshotFilesV2(data);
+  // The writer turned to snapshot format 3 at this Task (SHR-010): zero
+  // Channels and an empty shared-content digest map, with the format-2 record
+  // families this schema exports faithfully.
+  const built = snapshotFilesV3(data);
   if (!built.ok) return built;
   const written = ports.writeSnapshotTree(built.value.files);
   if (!written.ok) return err(written.error);
@@ -95,7 +106,7 @@ export interface BackupRestorePorts {
   /** Reads and parses `snapshots/` from the source Vault into one snapshot set. */
   readSourceSnapshot(): Result<SnapshotData, AppError>;
   /** Cross-checks the manifest counts against the parsed snapshot (BKP-005). */
-  readSourceManifest(): Result<SnapshotManifest, AppError>;
+  readSourceManifest(): Result<VersionedSnapshotManifest, AppError>;
   /** False once any domain row or ledger row exists; the empty rule of section 32 (BKP-021). */
   targetIsEmpty(): Result<boolean, AppError>;
   /**
@@ -126,27 +137,70 @@ function snapshotProblem(message: string): Result<never, AppError> {
 
 /**
  * Validates the internal consistency restore depends on before any write:
- * every Project reference resolves, the ledger only names known Handoffs, and
- * the manifest counts match what was parsed, so a truncated or hand-edited
- * snapshot fails as `VAULT_INTEGRITY_ERROR` rather than as a foreign-key
- * error halfway through the rebuild.
+ * every Project reference resolves, the ledger only names known Handoffs, the
+ * manifest counts match what was parsed, and the format-3 record families stay
+ * inside what this schema can faithfully import — a recognized later
+ * representation (an inline Artifact body, a Vault-backed Memo body, nonempty
+ * Channel structure, or a Channel domain event, ledger-only input included)
+ * fails closed with `VAULT_SCHEMA_UNSUPPORTED` before import rather than as
+ * corruption, partial restore, fallback, or silent omission — so a truncated or
+ * hand-edited snapshot fails as `VAULT_INTEGRITY_ERROR` rather than as a
+ * foreign-key error halfway through the rebuild.
  */
 export function validateSnapshot(
   data: SnapshotData,
-  manifest: {
-    formatVersion?: number;
-    counts: SnapshotManifest["counts"];
-    memoDigests?: Record<string, string>;
-  },
+  manifest: VersionedSnapshotManifest,
 ): Result<{ reviewNotes: number }, AppError> {
-  const versioned = parseVersionedSnapshotManifest(
-    canonicalJson({ ...manifest, formatVersion: manifest.formatVersion ?? 1 }),
-  );
-  if (!versioned.ok) return versioned;
-  const memoInventory = validateMemoInventory(data, versioned.value);
+  if (manifest.formatVersion === 3 && manifest.counts.channels !== 0) {
+    return err(
+      appError(
+        "VAULT_SCHEMA_UNSUPPORTED",
+        `The snapshot counts ${String(manifest.counts.channels)} Channel record(s), a valid later representation this build cannot import`,
+      ),
+    );
+  }
+  if (manifest.formatVersion === 3 && Object.keys(manifest.contentDigests).length > 0) {
+    return err(
+      appError(
+        "VAULT_SCHEMA_UNSUPPORTED",
+        "The snapshot carries exported shared-content files, a valid later representation this build cannot import",
+      ),
+    );
+  }
+  if (manifest.formatVersion === 3) {
+    // Refuse recognized later ledger families before the legacy Memo inventory
+    // or supported-family associations can interpret their rows.
+    for (const event of data.events) {
+      if (typeof event.eventType !== "string")
+        return snapshotProblem("The format-3 snapshot event type must be a string.");
+      if (classifySnapshotEvent(event.eventType, 3) === "later-channel") {
+        return err(
+          appError(
+            "VAULT_SCHEMA_UNSUPPORTED",
+            `The snapshot ledger carries the Channel domain event ${event.eventType}, a valid later representation this build cannot import`,
+          ),
+        );
+      }
+    }
+    const ids = new Set<string>();
+    const slugs = new Set<string>();
+    for (const project of data.projects) {
+      const shape = validateSnapshotProjectV3(project);
+      if (!shape.ok) return shape;
+      if (ids.has(project.id) || slugs.has(project.slug.replace(/[A-Z]/g, (letter) => letter.toLowerCase())))
+        return snapshotProblem("The format-3 snapshot repeats a Project identity or slug.");
+      ids.add(project.id);
+      slugs.add(project.slug.replace(/[A-Z]/g, (letter) => letter.toLowerCase()));
+    }
+  }
+  const memoInventory = validateMemoInventory(data, manifest);
   if (!memoInventory.ok) return memoInventory;
   const projectIds = new Set(data.projects.map((project) => project.id));
   for (const handoff of data.handoffs) {
+    if (manifest.formatVersion === 3) {
+      const shape = validateSnapshotHandoffV3(handoff);
+      if (!shape.ok) return shape;
+    }
     if (!isValidStorageKeySegment(handoff.id)) {
       return snapshotProblem(`Handoff ${String(handoff.id)} has an invalid identifier.`);
     }
@@ -157,12 +211,33 @@ export function validateSnapshot(
         !isValidStorageKeySegment(artifact.id) ||
         artifact.handoffId !== handoff.id ||
         !isValidStorageKeySegment(artifact.storedName) ||
-        !isManagedStorageKey(artifact.storageKey) ||
         !Number.isSafeInteger(artifact.sizeBytes) ||
         artifact.sizeBytes < 0 ||
         !/^[0-9a-f]{64}$/i.test(artifact.sha256) ||
         typeof artifact.materialized !== "boolean"
       ) {
+        return snapshotProblem(`Handoff ${handoff.id} carries a malformed Artifact record.`);
+      }
+      const raw = artifact as unknown as Record<string, unknown>;
+      if (manifest.formatVersion === 3) {
+        const classified = classifySnapshotArtifactBody(raw);
+        if (!classified.ok) return classified;
+        if (classified.value !== "file-backed-baseline") {
+          return err(
+            appError(
+              "VAULT_SCHEMA_UNSUPPORTED",
+              "The snapshot carries an inline Artifact body, a valid later representation this build cannot import",
+            ),
+          );
+        }
+      } else if (Object.hasOwn(raw, "inlineBody")) {
+        // Formats 1 and 2 keep their frozen closed Artifact shapes: the
+        // explicit containing field of format 3 is an unknown field there.
+        return snapshotProblem(
+          `Handoff ${handoff.id} carries an Artifact record with a field this snapshot format does not define.`,
+        );
+      }
+      if (!isManagedStorageKey(artifact.storageKey)) {
         return snapshotProblem(`Handoff ${handoff.id} carries a malformed Artifact record.`);
       }
       const canonical = buildStorageKey({
@@ -197,11 +272,43 @@ export function validateSnapshot(
     }
   }
   const handoffIds = new Set(data.handoffs.map((handoff) => handoff.id));
+  const memoOwners = new Map((data.memos ?? []).map((memo) => [memo.id, memo]));
   for (const event of data.events) {
+    const classification = classifySnapshotEvent(event.eventType, manifest.formatVersion);
+    if (classification === "unknown") {
+      return snapshotProblem(
+        `The snapshot ledger carries event ${String(event.eventType)}, which this format does not define.`,
+      );
+    }
+    if (manifest.formatVersion === 3) {
+      const row = parseMemoEventAssociation(event, manifest.formatVersion, memoOwners);
+      if (!row.ok) return row;
+      if (
+        event.actorKind === "registered_project"
+          ? !isMemoUuid(event.actorId)
+          : event.actorKind === "unregistered_workspace"
+            ? typeof event.actorId !== "string"
+            : event.actorId !== null
+      )
+        return snapshotProblem("The format-3 snapshot event does not carry its ActorRef identity.");
+    }
     if (event.handoffId !== null && !handoffIds.has(event.handoffId)) {
       return snapshotProblem(
         `Ledger event ${event.id} names handoff ${event.handoffId}, which the snapshot does not contain.`,
       );
+    }
+    if (classification === "family" && manifest.formatVersion === 3 && event.eventType.startsWith("CONTENT_")) {
+      if (
+        event.actorKind !== "system" ||
+        event.actorId !== null ||
+        event.rowVersion !== null ||
+        event.handoffId !== null ||
+        event.memoId !== null
+      ) {
+        return snapshotProblem(`The ${event.eventType} snapshot event does not carry its fixed system header.`);
+      }
+      const common = validateSnapshotCommonEvent(event.eventType, event.metadata);
+      if (!common.ok) return common;
     }
   }
   const artifactCount = data.handoffs.filter((handoff) => handoff.artifact !== null).length;
@@ -382,6 +489,8 @@ export interface BackupCensus {
   events: number;
   artifacts: number;
   memos?: number;
+  /** Always zero at this schema: the Channel tables arrive with TASK-109 (SHR-010). */
+  channels: number;
   /** Live Handoffs whose current Artifact has `materialized = 0`. */
   materializing: number;
   /** Tombstoned Handoffs that still hold an active Artifact row. */
@@ -418,7 +527,8 @@ export interface BackupVerifyReport {
 
 /**
  * `sorage backup verify` (TASK-053, BKP-022, section 31): every `vault verify`
- * check plus the Git-backed ones — the three `.gitattributes` lines,
+ * check plus the Git-backed ones — the required `.gitattributes` lines of
+ * section 6 for this build in their stated order,
  * `core.autocrlf=false`, the managed branch, no merge or rebase in progress,
  * no unrelated staged work, no runtime file ever tracked, and a manifest whose
  * counts agree with both the database census and the exported tree. The
@@ -533,6 +643,11 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
         `The manifest counts ${manifest.value.counts.memos ?? 0} Memo(s) against the database's ${census.value.memos ?? 0}.`,
       );
     }
+    if (manifest.value.formatVersion === 3 && manifest.value.counts.channels !== census.value.channels) {
+      findings.push(
+        `The manifest counts ${manifest.value.counts.channels} Channel record(s) against the database's ${census.value.channels}.`,
+      );
+    }
   }
 
   return ok({
@@ -574,6 +689,14 @@ export interface BackupRunPorts {
   /** Hashes every current Artifact against its recorded SHA-256 (VLT-023). */
   verifyCurrentArtifacts(): Result<{ verified: number }, AppError>;
   ensureRepository(): Result<VaultGitOutcome, AppError>;
+  /**
+   * The backup run's writable setup (SHR-011, section 26): idempotently prepares
+   * the managed `content/` directory inside the validated selected Vault before
+   * the exact Git change test, on every supported Vault, without a sentinel
+   * file and without writing outside the Vault root. Read-only surfaces never
+   * call it, so verify, dry-run, and preflight leave an absent directory absent.
+   */
+  prepareWritableContent(): Result<void, AppError>;
   git: GitClient;
   /** Merge and rebase indicators read from the repository's state directories. */
   gitState(): Result<{ mergeInProgress: boolean; rebaseInProgress: boolean }, AppError>;
@@ -735,6 +858,14 @@ function runUnderBackupLock(
       ),
     );
   }
+
+  // The writable setup precedes the exact `git add`: the change test uses the
+  // managed pathspecs unchanged, so an absent `content/` path would be a hard
+  // Git error rather than a match of nothing (section 26). Preparation creates
+  // no sentinel file, so an empty directory stages nothing and a run with no
+  // other change still reaches the clean no-change exit.
+  const preparedContent = ports.prepareWritableContent();
+  if (!preparedContent.ok) return err(preparedContent.error);
 
   const added = runGit(ports, ["add", "--", ...MANAGED_PATHSPECS]);
   if (!added.ok) return err(added.error);

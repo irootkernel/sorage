@@ -1,3 +1,4 @@
+import { managedDirectory } from "./managed-paths";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -22,6 +23,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import {
   type AppError,
   appError,
+  canonicalJson,
+  canonicalJsonLine,
   type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
@@ -31,12 +34,14 @@ import {
   ensureVaultGitRepository,
   err,
   expandConfigurationPath,
+  isMemoUuid,
   exportSnapshot,
   type GitClient,
   nextDueAt,
   ok,
   parseVersionedSnapshotManifest,
   parseMemoSnapshot,
+  parseMemoSnapshotV3,
   parseUniqueSnapshotJson,
   validateSnapshot,
   type Memo,
@@ -57,6 +62,7 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
+import { receiptReferencedContentKeys, sweepFetchCache } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { memoFromRow, insertMemoRow } from "./memos";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
@@ -65,9 +71,9 @@ import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createNodeApiTokenStore } from "./token-store";
-import { createVaultInitializer } from "./vault";
+import { createVaultInitializer, openVault } from "./vault";
 import { createNodeVaultCommandPorts } from "./vault-command-ports";
 
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -175,6 +181,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         migrated.db.close();
       }
     } catch (error) {
+      // A schema admission refusal keeps its public code instead of collapsing
+      // into INTERNAL_ERROR (SHR-009).
+      const admission = asSchemaAdmission(error);
+      if (admission !== null) return err(admission);
       return err(
         appError("INTERNAL_ERROR", `Accessing the database failed: ${messageOf(error)}.`, { cause: String(error) }),
       );
@@ -348,46 +358,124 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     return (): Result<SnapshotData, AppError> => {
       const manifest = readSourceManifest(sourcePath)();
       if (!manifest.ok) return manifest;
+      const channels = snapshotTreeFiles(join(sourcePath, "snapshots", "channels"));
+      if (!channels.ok) return channels;
+      const content = snapshotTreeFiles(join(sourcePath, "snapshots", "content"));
+      if (!content.ok) return content;
+      // Inspect filesystem safety without applying this build's empty content
+      // inventory assumption to a recognized later representation.
+      if (
+        manifest.value.formatVersion === 3 &&
+        (manifest.value.counts.channels !== 0 || Object.keys(manifest.value.contentDigests).length !== 0)
+      ) {
+        return err(
+          appError(
+            "VAULT_SCHEMA_UNSUPPORTED",
+            "The snapshot carries a later Channel or shared-content representation this build cannot import",
+          ),
+        );
+      }
+      if (channels.value.length !== 0) {
+        return err(
+          appError(
+            "VAULT_SCHEMA_UNSUPPORTED",
+            "The snapshot carries Channel shards, a valid later representation this build cannot import",
+          ),
+        );
+      }
+      if (manifest.value.formatVersion === 3) {
+        // The content-file inventory must agree with the map before import: an
+        // empty `contentDigests` with files present is a disagreement, and a
+        // nonempty map was already refused with the later-generation check.
+        if (content.value.length !== 0) {
+          return err(
+            appError(
+              "VAULT_INTEGRITY_ERROR",
+              "The snapshot's exported content files disagree with its empty content digest inventory",
+            ),
+          );
+        }
+      }
       const memoFiles = readMemoSnapshotFiles(sourcePath, manifest.value);
       if (!memoFiles.ok) return memoFiles;
       const memos: Memo[] = [];
       for (const file of memoFiles.value) {
-        const parsed = parseMemoSnapshot(file.path, file.bytes, file.digest);
+        const parsed =
+          manifest.value.formatVersion === 3
+            ? parseMemoSnapshotV3(file.path, file.bytes, file.digest)
+            : parseMemoSnapshot(file.path, file.bytes, file.digest);
         if (!parsed.ok) return parsed;
         memos.push(parsed.value);
       }
       const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
       if (!projectsRaw.ok) return err(projectsRaw.error);
-      const projects = parseJsonArray(projectsRaw.value, "snapshots/projects.json");
+      const projects =
+        manifest.value.formatVersion === 3
+          ? parseUniqueSnapshotJson(projectsRaw.value)
+          : parseJsonArray(projectsRaw.value, "snapshots/projects.json");
       if (!projects.ok) return err(projects.error);
+      if (
+        !Array.isArray(projects.value) ||
+        (manifest.value.formatVersion === 3 && canonicalJson(projects.value) !== projectsRaw.value)
+      )
+        return err(appError("VAULT_INTEGRITY_ERROR", "The snapshot Project metadata is not a canonical array."));
 
       const shardFiles: string[] = [];
       const shardsRoot = join(sourcePath, "snapshots/handoffs");
-      try {
-        for (const shard of existsSync(shardsRoot) ? readdirSync(shardsRoot) : []) {
-          const shardPath = join(shardsRoot, shard);
-          if (!statSync(shardPath).isDirectory()) continue;
-          for (const name of readdirSync(shardPath)) {
-            if (name.endsWith(".json")) shardFiles.push(`handoffs/${shard}/${name}`);
+      if (manifest.value.formatVersion === 3) {
+        const files = snapshotTreeFiles(shardsRoot);
+        if (!files.ok) return files;
+        shardFiles.push(...files.value.map((file) => `handoffs/${file}`));
+      } else
+        try {
+          for (const shard of existsSync(shardsRoot) ? readdirSync(shardsRoot) : []) {
+            const shardPath = join(shardsRoot, shard);
+            if (!statSync(shardPath).isDirectory()) continue;
+            for (const name of readdirSync(shardPath)) {
+              if (name.endsWith(".json")) shardFiles.push(`handoffs/${shard}/${name}`);
+            }
           }
+        } catch (error) {
+          return err(
+            appError("VAULT_INTEGRITY_ERROR", `The backup copy has no readable handoff shards: ${messageOf(error)}.`, {
+              sourcePath,
+            }),
+          );
         }
-      } catch (error) {
-        return err(
-          appError("VAULT_INTEGRITY_ERROR", `The backup copy has no readable handoff shards: ${messageOf(error)}.`, {
-            sourcePath,
-          }),
-        );
-      }
       shardFiles.sort();
       const handoffs: SnapshotHandoff[] = [];
       for (const shardFile of shardFiles) {
         const raw = readSourceFile(sourcePath, `snapshots/${shardFile}`);
         if (!raw.ok) return err(raw.error);
-        const parsed = parseJsonObject(raw.value, `snapshots/${shardFile}`);
-        if (!parsed.ok) return err(parsed.error);
-        const handoff = parsed.value as unknown as SnapshotHandoff;
+        // Format 3 parses its Handoff shards with the duplicate-key-rejecting
+        // parser of the Memo contract, over the same safe bounded reader the
+        // memo shards use; formats 1 and 2 keep their existing parser and rules.
+        const parsed =
+          manifest.value.formatVersion === 3
+            ? parseUniqueSnapshotJson(raw.value)
+            : parseJsonObject(raw.value, `snapshots/${shardFile}`);
+        if (!parsed.ok) return parsed;
+        const value = parsed.value;
+        if (manifest.value.formatVersion === 3 && canonicalJson(value) !== raw.value) {
+          return err(
+            appError("VAULT_INTEGRITY_ERROR", `The handoff shard ${shardFile} does not carry canonical bytes.`),
+          );
+        }
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          return err(
+            appError("VAULT_INTEGRITY_ERROR", `The backup entry snapshots/${shardFile} is not a JSON object.`),
+          );
+        }
+        const handoff = value as unknown as SnapshotHandoff;
+        if (manifest.value.formatVersion === 3 && !isMemoUuid(handoff.id)) {
+          return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
+        }
         const expected = `${handoff.id}.json`;
-        if (!shardFile.endsWith(`/${expected}`)) {
+        if (
+          manifest.value.formatVersion === 3
+            ? typeof handoff.id !== "string" || shardFile !== `handoffs/${handoff.id.slice(0, 2)}/${expected}`
+            : !shardFile.endsWith(`/${expected}`)
+        ) {
           return err(
             appError(
               "VAULT_INTEGRITY_ERROR",
@@ -412,8 +500,55 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       }
       const data = { projects: projects.value as unknown as SnapshotProject[], handoffs, events, memos };
       const valid = validateSnapshot(data, manifest.value);
-      return valid.ok ? ok(data) : valid;
+      if (!valid.ok) return valid;
+      if (manifest.value.formatVersion === 3) {
+        const canonicalLedger = [...events]
+          .sort((a, b) =>
+            a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+          )
+          .map(canonicalJsonLine)
+          .join("");
+        if (canonicalLedger !== eventsRaw.value)
+          return err(
+            appError("VAULT_INTEGRITY_ERROR", "The snapshot ledger does not carry canonical ordered JSONL bytes."),
+          );
+      }
+      return ok(data);
     };
+  }
+
+  /** Only confirmed absence is empty; unreadable and nonregular entries fail closed. */
+  function snapshotTreeFiles(root: string): Result<string[], AppError> {
+    try {
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(root);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return ok([]);
+        throw error;
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe snapshot directory");
+      const files: string[] = [];
+      const walk = (directory: string, prefix: string): void => {
+        for (const name of readdirSync(directory)) {
+          const path = join(directory, name);
+          const stat = lstatSync(path);
+          if (stat.isSymbolicLink()) throw new Error("Linked snapshot entry");
+          const relativePath = `${prefix}${name}`;
+          if (stat.isDirectory()) walk(path, `${relativePath}/`);
+          else if (stat.isFile()) files.push(relativePath);
+          else throw new Error("Nonregular snapshot entry");
+        }
+      };
+      walk(root, "");
+      return ok(files.sort());
+    } catch (error) {
+      return err(
+        appError("VAULT_INTEGRITY_ERROR", `The snapshot inventory is unsafe or unreadable: ${messageOf(error)}.`, {
+          root,
+        }),
+      );
+    }
   }
 
   function readSourceManifest(sourcePath: string) {
@@ -468,6 +603,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         events: Number(row?.events ?? 0),
         artifacts: Number(row?.artifacts ?? 0),
         memos: Number(row?.memos ?? 0),
+        // The Channel tables arrive with TASK-109; the census stays an honest
+        // zero at this schema (SHR-010).
+        channels: 0,
         materializing: Number(row?.materializing ?? 0),
         deletedWithArtifact: Number(row?.deleted_with_artifact ?? 0),
       });
@@ -682,13 +820,13 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           if (note !== null) {
             db.prepare(
               `INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, CAST(? AS TEXT), ?, ?)`,
             ).run(
               note.handoffId,
               note.authorKind,
               note.authorProjectId,
               note.targetRevision,
-              note.body,
+              Buffer.from(note.body, "utf8"),
               note.createdAt,
               note.updatedAt,
             );
@@ -912,6 +1050,26 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         },
         ensureRepository: () =>
           nodeEnsureVaultGit(vaultPath, view.value.installationId, clock, view.value.backupBranch),
+        prepareWritableContent: (): Result<void, AppError> => {
+          // The writable setup of section 26: idempotently prepare the managed
+          // content/ directory inside the validated selected Vault before the
+          // exact Git change test, with no sentinel file and nothing written
+          // outside the Vault root. An unavailable or unsafe target fails
+          // through the validated Vault safety path.
+          const opened = openVault(vaultPath, view.value.installationId);
+          if (!opened.ok) return err(opened.error);
+          try {
+            managedDirectory(vaultPath, "content", true);
+            return ok(undefined);
+          } catch (error) {
+            return err(
+              appError("INTERNAL_ERROR", `Preparing the managed content directory failed: ${messageOf(error)}.`, {
+                vaultPath,
+                cause: String(error),
+              }),
+            );
+          }
+        },
         git,
         gitState: () =>
           ok({
@@ -1054,17 +1212,40 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         if (!drained.ok) return drained;
         const surviving = log.pending();
         const recorded = readRecordedStorageKeys(db);
-        if (surviving.ok) {
+        const contentKeys = readRecordedContentKeys(db);
+        const receiptKeys = receiptReferencedContentKeys(db, clock.now());
+        if (surviving.ok && contentKeys.ok && receiptKeys.ok) {
           void collectVaultGarbage(view.value.vaultPath, surviving.value, {
             liveStorageKeys: recorded,
+            liveContentKeys: contentKeys.value,
+            receiptReferencedKeys: receiptKeys.value,
             graceHours: view.value.graceHours,
             now: clock.now(),
           });
         }
+        sweepFetchCache(home.stateDir, { graceHours: view.value.graceHours, now: clock.now() });
         return drained;
       });
     },
   };
+}
+
+/** The managed `content/` keys live content records name, the GC guard input. */
+function readRecordedContentKeys(db: ReturnType<typeof openAndMigrate>["db"]): Result<string[], AppError> {
+  try {
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+      .get() as { name: string } | null | undefined;
+    if (!table) return ok([]);
+    const rows = db
+      .prepare("SELECT storage_key FROM content_records WHERE storage_key IS NOT NULL")
+      .all() as unknown as Row[];
+    return ok(rows.map((row) => String(row.storage_key ?? "")));
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Reading the content keys failed: ${messageOf(error)}.`, { cause: String(error) }),
+    );
+  }
 }
 
 interface Row {

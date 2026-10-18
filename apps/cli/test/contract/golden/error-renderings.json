@@ -984,6 +984,54 @@
     "human": "ARTIFACT_CORRUPTED: rendering probe\nRecovery: sorage vault verify, then restore from backup\n"
   },
   {
+    "code": "CONTENT_MATERIALIZING",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Retry; the next process start drains the intent"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CONTENT_MATERIALIZING",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retry; the next process start drains the intent"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CONTENT_MATERIALIZING: rendering probe\nRecovery: Retry; the next process start drains the intent\n"
+  },
+  {
+    "code": "CONTENT_CORRUPTED",
+    "exitCode": 73,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "sorage vault verify, then restore from backup"
+    },
+    "renderedExitCode": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CONTENT_CORRUPTED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "sorage vault verify, then restore from backup"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CONTENT_CORRUPTED: rendering probe\nRecovery: sorage vault verify, then restore from backup\n"
+  },
+  {
     "code": "SOURCE_OUTSIDE_WORKSPACE",
     "exitCode": 77,
     "httpStatus": 403,
@@ -1438,6 +1486,246 @@
       }
     },
     "human": "STORAGE_INSPECTION_UNAVAILABLE: rendering probe\nRecovery: Retain the original send material and inspect again only when a coherent read is available\n"
+  },
+  {
+    "code": "CHN_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Verify the UUID with sorage channel list"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the UUID with sorage channel list"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_NOT_FOUND: rendering probe\nRecovery: Verify the UUID with sorage channel list\n"
+  },
+  {
+    "code": "CHN_MESSAGE_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Verify the message UUID with sorage channel messages <channel>"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_MESSAGE_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the message UUID with sorage channel messages <channel>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_MESSAGE_NOT_FOUND: rendering probe\nRecovery: Verify the message UUID with sorage channel messages <channel>\n"
+  },
+  {
+    "code": "CHN_PARTICIPANT_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Verify the participant with sorage channel show <channel>"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_PARTICIPANT_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the participant with sorage channel show <channel>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_PARTICIPANT_NOT_FOUND: rendering probe\nRecovery: Verify the participant with sorage channel show <channel>\n"
+  },
+  {
+    "code": "CHN_ASSIGNMENT_NOT_FOUND",
+    "exitCode": 66,
+    "httpStatus": 404,
+    "recovery": {
+      "suggestedCommand": "Verify the assignment with sorage channel show <channel>"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_ASSIGNMENT_NOT_FOUND",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the assignment with sorage channel show <channel>"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_ASSIGNMENT_NOT_FOUND: rendering probe\nRecovery: Verify the assignment with sorage channel show <channel>\n"
+  },
+  {
+    "code": "CHN_INVALID_INPUT",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Check Channel fields, Unicode, message kind, and expected Row Version"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check Channel fields, Unicode, message kind, and expected Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_INVALID_INPUT: rendering probe\nRecovery: Check Channel fields, Unicode, message kind, and expected Row Version\n"
+  },
+  {
+    "code": "CHN_TOO_LARGE",
+    "exitCode": 65,
+    "httpStatus": 413,
+    "recovery": {
+      "suggestedCommand": "Reduce the Channel body or encoded request size"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_TOO_LARGE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reduce the Channel body or encoded request size"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_TOO_LARGE: rendering probe\nRecovery: Reduce the Channel body or encoded request size\n"
+  },
+  {
+    "code": "CHN_CLOSED",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Reopen is not offered in M9; use or create another Channel explicitly"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_CLOSED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reopen is not offered in M9; use or create another Channel explicitly"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_CLOSED: rendering probe\nRecovery: Reopen is not offered in M9; use or create another Channel explicitly\n"
+  },
+  {
+    "code": "CHN_PARTICIPANT_INACTIVE",
+    "exitCode": 65,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Main or the User registers an active participant for further submissions"
+    },
+    "renderedExitCode": 65,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_PARTICIPANT_INACTIVE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Main or the User registers an active participant for further submissions"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_PARTICIPANT_INACTIVE: rendering probe\nRecovery: Main or the User registers an active participant for further submissions\n"
+  },
+  {
+    "code": "CHN_FORBIDDEN_ROLE",
+    "exitCode": 77,
+    "httpStatus": 403,
+    "recovery": {
+      "suggestedCommand": "Run as the main participant or with --as-user"
+    },
+    "renderedExitCode": 77,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_FORBIDDEN_ROLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Run as the main participant or with --as-user"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_FORBIDDEN_ROLE: rendering probe\nRecovery: Run as the main participant or with --as-user\n"
+  },
+  {
+    "code": "CHN_REPLAY_UNAVAILABLE",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "The original outcome is unknown; retain the original key and input without executing again"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "CHN_REPLAY_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "The original outcome is unknown; retain the original key and input without executing again"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "CHN_REPLAY_UNAVAILABLE: rendering probe\nRecovery: The original outcome is unknown; retain the original key and input without executing again\n"
   },
   {
     "code": "INTERNAL_ERROR",

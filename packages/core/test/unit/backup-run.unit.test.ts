@@ -50,6 +50,7 @@ function fakePorts(script: Scripted[], options: { lockLive?: boolean; verifyErro
       ok({ files: 4, counts: { projects: 1, handoffs: 1, events: 1, artifacts: 1 }, redactedWorkspacePaths: true }),
     verifyCurrentArtifacts: () => (options.verifyError ? err(options.verifyError) : ok({ verified: 1 })),
     ensureRepository: () => ok({ initialized: false, existingReported: true }),
+    prepareWritableContent: () => ok(undefined),
     git: client,
     gitState: () => ok({ mergeInProgress: false, rebaseInProgress: false }),
     recordRun: (row) => {
@@ -84,6 +85,7 @@ describe("runBackupOnce", () => {
       ".gitattributes",
       ".gitignore",
       "artifacts",
+      "content",
       "snapshots",
     ]);
     const commit = invocations.find((args) => args.includes("commit"));

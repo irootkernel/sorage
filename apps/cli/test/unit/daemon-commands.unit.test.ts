@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ok } from "@sorage/core";
+import { appError, ok } from "@sorage/core";
 import { defaultConfiguration } from "@sorage/core";
 import type { DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
 import {
@@ -69,6 +69,7 @@ function ports(behavior: Partial<Behavior> = {}): DaemonRuntimePorts & {
     isPidAlive: () => state.alive,
     portHeld: () => state.portHeld,
     healthConfirms: () => state.health,
+    historyAdmissionRefusal: () => null,
     spawnDaemon: () => {
       state.spawned += 1;
     },
@@ -93,9 +94,21 @@ function sink() {
 describe("daemon start (RUN-013)", () => {
   it("refuses a bound port with PORT_IN_USE before spawning anything", () => {
     const runtime = ports({ portHeld: true });
+    runtime.historyAdmissionRefusal = () => {
+      throw new Error("port refusal must precede history inspection");
+    };
     const harness = sink();
     expect(daemonStart(runtime, harness.ports)).toBe(75);
     expect(JSON.parse(harness.err.join("")).error.code).toBe("PORT_IN_USE");
+    expect(runtime.calls.spawned).toBe(0);
+  });
+
+  it("preserves a confirmed schema refusal without spawning or guessing from health", () => {
+    const runtime = ports();
+    runtime.historyAdmissionRefusal = () => appError("STORAGE_SCHEMA_UNSUPPORTED", "future schema");
+    const harness = sink();
+    expect(daemonStart(runtime, harness.ports)).toBe(78);
+    expect(JSON.parse(harness.err.join("")).error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
     expect(runtime.calls.spawned).toBe(0);
   });
 

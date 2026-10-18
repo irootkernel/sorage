@@ -132,14 +132,21 @@ export interface SnapshotData {
 
 export interface SnapshotManifest {
   formatVersion: number;
-  counts: { projects: number; handoffs: number; events: number; artifacts: number; memos?: number };
+  counts: { projects: number; handoffs: number; events: number; artifacts: number; memos?: number; channels?: number };
   memoDigests?: Record<string, string>;
+  /** Format 3 only: the exported shared-content file inventory (SHR-010). */
+  contentDigests?: Record<string, string>;
 }
 
-/** One snapshot file with its exact destination-relative path and final bytes. */
+/**
+ * One snapshot file with its exact destination-relative path and final bytes.
+ * String content is canonical JSON text; `Uint8Array` content is raw accepted
+ * body bytes a format-3 snapshot carries without JSON serialization or newline
+ * normalization (section 38.8).
+ */
 export interface SnapshotFile {
   path: string;
-  content: string;
+  content: string | Uint8Array;
 }
 
 const PATH_FIELD_KEY = /(?:path|dir|directory)$/i;

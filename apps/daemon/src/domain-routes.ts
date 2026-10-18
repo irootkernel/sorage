@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
-import type { NodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
+import { schemaAdmissionOf, type NodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 import {
   createNodeHandoffReadPorts as createHandoffReadPorts,
@@ -910,9 +910,22 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "GET",
     pattern: "/api/v1/diagnostics",
     handler: async (_request, response, context) => {
-      const ports = createNodeDoctorPorts();
-      const report = runDoctor(ports, "");
-      return void respond(response, context, { ok: true, value: report });
+      try {
+        const ports = createNodeDoctorPorts();
+        const report = runDoctor(ports, "");
+        return void respond(response, context, { ok: true, value: report });
+      } catch (error) {
+        // The doctor's eager history-admission guard throws the typed
+        // SchemaAdmissionError for a confirmed future database — translate
+        // only that narrow case through the existing composition classifier
+        // and error responder, and rethrow everything else to the server's
+        // generic handler.
+        const admission = schemaAdmissionOf(error);
+        if (admission !== null) {
+          return void respondError(response, context, admission);
+        }
+        throw error;
+      }
     },
   });
 

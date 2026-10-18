@@ -16,7 +16,7 @@ afterEach(() => {
 function fixture(legacy = false) {
   const temp = makeTempDatabase();
   cleanups.push(temp.cleanup);
-  migrate(temp.db, legacy ? MIGRATIONS.slice(0, -1) : MIGRATIONS);
+  migrate(temp.db, legacy ? MIGRATIONS.filter((migration) => migration.version <= 6) : MIGRATIONS);
   temp.db
     .prepare(
       "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES (?, 'memo', 'Memo', 'active', ?, ?)",
@@ -63,11 +63,21 @@ describe("Memo migration and transactional repository", () => {
     const tables = ["projects", "project_bindings", "handoffs", "artifacts", "review_notes", "idempotency_keys"];
     const before = tables.map((table) => db.prepare(`SELECT * FROM ${table}`).all());
     const migrations = db.prepare("SELECT * FROM schema_migrations").all();
-    expect(migrate(db, MIGRATIONS).appliedVersions).toEqual([7]);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((migration) => migration.version <= 7),
+      ).appliedVersions,
+    ).toEqual([7]);
     expect(tables.map((table) => db.prepare(`SELECT * FROM ${table}`).all())).toEqual(before);
     expect(db.prepare("SELECT * FROM schema_migrations WHERE version < 7").all()).toEqual(migrations);
     expect(db.prepare("SELECT memo_id FROM events").get()).toMatchObject({ memo_id: null });
-    expect(migrate(db, MIGRATIONS).alreadyUpToDate).toBe(true);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((migration) => migration.version <= 7),
+      ).alreadyUpToDate,
+    ).toBe(true);
     expect(() => db.exec("UPDATE events SET memo_id=NULL")).toThrow();
     expect(() => db.exec("DELETE FROM events")).toThrow();
   });
@@ -75,7 +85,7 @@ describe("Memo migration and transactional repository", () => {
     const { db } = fixture(true);
     expect(() =>
       migrate(db, [
-        ...MIGRATIONS.slice(0, -1),
+        ...MIGRATIONS.filter((migration) => migration.version <= 6),
         { ...PROJECT_MEMOS_MIGRATION, sql: `${PROJECT_MEMOS_MIGRATION.sql}\nINSERT INTO missing_table VALUES (1);` },
       ]),
     ).toThrow();
@@ -86,7 +96,12 @@ describe("Memo migration and transactional repository", () => {
         .all()
         .some((row) => row.name === "memo_id"),
     ).toBe(false);
-    expect(migrate(db, MIGRATIONS).appliedVersions).toEqual([7]);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((migration) => migration.version <= 7),
+      ).appliedVersions,
+    ).toEqual([7]);
   });
   it("commits Memo and metadata together, fences stale CAS, and keeps summaries bounded with literal search", () => {
     const { db } = fixture();
@@ -261,6 +276,6 @@ describe("Memo migration and transactional repository", () => {
       });
     const results = await Promise.all([run(), run()]);
     expect(results.map((result) => result.code)).toEqual([0, 0]);
-    expect(results.flatMap((result) => JSON.parse(result.output).appliedVersions)).toEqual([7]);
+    expect(results.flatMap((result) => JSON.parse(result.output).appliedVersions)).toEqual([7, 8]);
   });
 });

@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
 
 /**
  * The structural slice of the SQLite API Sorage code touches. Declaring it keeps the
@@ -13,6 +14,8 @@ export interface SorageSqlite {
     all(...params: unknown[]): Row[];
     get(...params: unknown[]): unknown;
     run(...params: unknown[]): unknown;
+    /** Bun statements need explicit finalization before their connection closes. */
+    finalize?(): void;
   };
   close(): void;
 }
@@ -25,15 +28,76 @@ export interface SorageDatabaseOptions {
 }
 
 /**
- * SQLite connection factory (RUN-001, NFR-009): every Sorage process opens exactly one
- * connection configured for WAL journaling, enforced foreign keys, and a busy timeout,
+ * Operational SQLite connection factory (RUN-001, NFR-009), configured for
+ * WAL journaling, enforced foreign keys, and a busy timeout,
  * which is what lets concurrent CLI processes and the daemon share one database file.
  */
 export function openSorageDatabase(path: string, options: SorageDatabaseOptions = {}): SorageSqlite {
   const db = new Database(path);
   const view = db as unknown as SorageSqlite;
-  configure(view, options);
+  try {
+    configure(view, options);
+  } catch (error) {
+    try {
+      view.close();
+    } catch {
+      // Best effort on the configuration failure path.
+    }
+    throw error;
+  }
   return view;
+}
+
+/**
+ * The true-readonly history-admission connection (SHR-009): Bun's native
+ * `readonly: true` refuses writes with SQLITE_READONLY and reads live WAL
+ * content, so a refused database's main file bytes and its existing committed
+ * WAL bytes stay byte-identical after the refusal. Reader-side SHM
+ * housekeeping may still occur and is not claimed invariant. Only the
+ * connection-local busy timeout is set — never journal_mode, foreign keys,
+ * or any persistent pragma. The handle never escapes to operational callers;
+ * it reads the migration history and closes.
+ */
+export function openSorageReadonlyAdmission(path: string): SorageSqlite {
+  const db = new Database(path, { readonly: true }) as unknown as SorageSqlite;
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+  } catch (error) {
+    try {
+      db.close();
+    } catch (closeError) {
+      // Keep uncertain ownership distinct from retryable CANTOPEN failures.
+      throw new AggregateError(
+        [error, closeError],
+        "Readonly history configuration failed and its connection could not close",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return db;
+}
+
+/** Opens only an owned history-capture copy; recovery may write that copy. */
+export function openSorageInspectionCopy(path: string): SorageSqlite {
+  return new Database(path) as unknown as SorageSqlite;
+}
+
+/**
+ * Confirms the database file itself exists by stat: a confirmed ENOENT (no
+ * existing history, safe to initialize fresh) returns false; every other
+ * inspection failure throws so the caller stops rather than proceeding to a
+ * writable open on an uncertain filesystem state. Only `false` from this
+ * function may bypass the readonly admission step.
+ */
+export function databaseFileExists(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 /** Applies the Sorage pragmas to an already-open connection; used by tests too. */

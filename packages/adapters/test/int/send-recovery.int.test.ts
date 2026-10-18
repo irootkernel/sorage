@@ -17,6 +17,7 @@ import {
 import { join, relative } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { setImmediate } from "node:timers/promises";
 import {
   type AppError,
   type Result,
@@ -41,8 +42,10 @@ import { makeTempHome } from "../../src/testkit/temp-home";
 
 const entry = fileURLToPath(new URL("../../../../apps/cli/src/main.ts", import.meta.url));
 const cleanups: Array<() => void> = [];
-afterEach(() => {
+afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  // Native synchronous scenarios must let worker RPC responses run between tests.
+  await setImmediate();
 });
 function inventory(root: string): string[] {
   const rows: string[] = [];
@@ -219,9 +222,9 @@ describe("native send receipt inspection", () => {
       expect(f.recover()).toEqual({ ok: true, value: { ...f.outcome, replayed: true } });
     },
   );
-  it.each([4, 5, 6, 7])("reads complete schema %s without migration", (version) => {
+  it.each([4, 5, 6, 7, 8])("reads complete schema %s without migration", (version) => {
     const f = fixture();
-    if (version !== 7) legacy(f, version);
+    if (version !== 8) legacy(f, version);
     expect(code(f.recover())).toBe("OK");
     f.db((d) => expect(d.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get()).toEqual({ n: version }));
   });
@@ -391,7 +394,7 @@ describe("native send receipt inspection", () => {
     if (scenario === "db-header") writeFileSync(f.databasePath, "garbage");
     if (scenario === "db-history") f.db((d) => d.exec("UPDATE schema_migrations SET name='invalid' WHERE version=4"));
     if (scenario === "db-newer")
-      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(8,'future','2026-01-01')"));
+      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(9,'future','2026-01-01')"));
     if (scenario === "db-identity")
       f.db((d) =>
         d

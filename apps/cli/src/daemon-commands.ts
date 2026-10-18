@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AppError, Configuration, Result } from "@sorage/core";
-import { appError, errorEnvelope } from "@sorage/core";
+import { appError, errorEnvelope, errorSpec } from "@sorage/core";
 import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
+import { daemonStartAdmissionRefusal } from "@sorage/adapters/src/daemon-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 
 /**
@@ -30,6 +31,12 @@ export interface DaemonRuntimePorts {
   portHeld(host: string, port: number): boolean;
   /** True when health answers at the address with the expected installationId. */
   healthConfirms(host: string, port: number, installationId: string): boolean;
+  /**
+   * The non-mutating history-admission check a spawning parent runs before
+   * detaching a child: the established typed refusal when the database schema
+   * is confirmed unsupported, or null when the caller keeps its own behavior.
+   */
+  historyAdmissionRefusal(): AppError | null;
   spawnDaemon(): void;
   signal(pid: number, signal: NodeJS.Signals): boolean;
 }
@@ -43,6 +50,7 @@ export function createDaemonRuntimePorts(): DaemonRuntimePorts {
     isPidAlive: (pid) => ports.isPidAlive(pid),
     portHeld: (host, port) => selfProbe(["__port-probe", host, String(port)]),
     healthConfirms: (host, port, installationId) => selfProbe(["__health-probe", host, String(port), installationId]),
+    historyAdmissionRefusal: () => daemonStartAdmissionRefusal(),
     spawnDaemon: () => {
       const scriptArgs = process.argv[1]?.endsWith("main.ts")
         ? [process.argv[1] as string, "daemon", "serve"]
@@ -96,7 +104,7 @@ function liveDaemon(ports: DaemonRuntimePorts): DaemonRunRecord | null {
   return record;
 }
 
-/** `sorage daemon start`: refuse a bound port, spawn, then confirm health. */
+/** `sorage daemon start`: refuse a bound port, confirm history admission, spawn, then confirm health. */
 export function daemonStart(
   runtime: DaemonRuntimePorts,
   ports: DaemonCommandPorts,
@@ -112,6 +120,15 @@ export function daemonStart(
       75,
       "Stop the other listener, or change server.port and restart",
     );
+  }
+  // A confirmed unsupported database history is the one refusal the parent
+  // establishes itself before spawning (SHR-009): the check reads a stable
+  // private copy, so the selected installation's database, WAL, SHM, history,
+  // configuration, and marker stay unchanged, and only the established typed
+  // refusal surfaces — anything else keeps the original lifecycle behavior.
+  const admission = runtime.historyAdmissionRefusal();
+  if (admission !== null) {
+    return renderTypedRefusal(admission, ports);
   }
   runtime.spawnDaemon();
   const deadline = Date.now() + (options.startTimeoutMs ?? DAEMON_START_TIMEOUT_MS);
@@ -222,4 +239,11 @@ function renderDomainError(
   envelope.error.recovery = { suggestedCommand: recovery };
   ports.err(`${JSON.stringify(envelope, null, 2)}\n`);
   return exit;
+}
+
+/** Renders one established typed admission refusal with its documented exit code and recovery. */
+function renderTypedRefusal(error: AppError, ports: DaemonCommandPorts): number {
+  const envelope = errorEnvelope(error, randomUUID());
+  ports.err(`${JSON.stringify(envelope, null, 2)}\n`);
+  return errorSpec(error.code).exitCode;
 }

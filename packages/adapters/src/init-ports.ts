@@ -8,7 +8,7 @@ import { type ConfigStoreFs, createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, type LockClock } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createNodeApiTokenStore } from "./token-store";
 import { createVaultInitializer } from "./vault";
 
@@ -81,7 +81,7 @@ function databasePort(databasePath: string): InitDatabasePort {
         return ok(outcome);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return err(appError("INTERNAL_ERROR", `the database migration failed: ${message}`));
+        return err(asSchemaAdmission(error) ?? appError("INTERNAL_ERROR", `the database migration failed: ${message}`));
       }
     },
   };

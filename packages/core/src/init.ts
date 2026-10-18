@@ -90,10 +90,10 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
       // Explicit repair: backfill directories, migrations, and Vault files without
       // touching the configuration, the identity, or any existing Vault content.
       ensureHomeTree(ports);
-      const token = ports.token?.ensure();
-      if (token !== undefined && !token.ok) return token;
       const migrated = ports.database.migrate();
       if (!migrated.ok) return migrated;
+      const token = ports.token?.ensure();
+      if (token !== undefined && !token.ok) return token;
       const vaultPath = expandConfigurationPath(existing.vault.path, ports.userHome, ports.paths.home);
       const vault = ports.vault.initialize(vaultPath, existing.installationId);
       if (!vault.ok) return vault;
@@ -127,10 +127,10 @@ export function initializeInstallation(ports: InitPorts, options: InitOptions = 
   }
 
   ensureHomeTree(ports);
-  const token = ports.token?.ensure();
-  if (token !== undefined && !token.ok) return token;
   const migrated = ports.database.migrate();
   if (!migrated.ok) return migrated;
+  const token = ports.token?.ensure();
+  if (token !== undefined && !token.ok) return token;
   const vaultPath = expandConfigurationPath(config.vault.path, ports.userHome, ports.paths.home);
   const vault = ports.vault.initialize(vaultPath, installationId);
   if (!vault.ok) return vault;

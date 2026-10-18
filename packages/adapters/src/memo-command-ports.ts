@@ -1,6 +1,14 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { SystemClock, UuidGenerator, type Clock, type MemoCommandPorts, type ProjectCommandPorts } from "@sorage/core";
+import {
+  appError,
+  SystemClock,
+  UuidGenerator,
+  type AppError,
+  type Clock,
+  type MemoCommandPorts,
+  type ProjectCommandPorts,
+} from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
@@ -8,7 +16,12 @@ import { createSqliteMemoRepository } from "./memos";
 import { createNodeProjectPorts } from "./project-command-ports";
 import type { SorageSqlite } from "./sqlite/connection";
 import { MIGRATIONS } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+
+/** Keeps database admission details inside the composition boundary. */
+export function memoStorageError(error: unknown): AppError {
+  return asSchemaAdmission(error) ?? appError("INTERNAL_ERROR", "Memo storage could not be opened");
+}
 
 export interface NodeMemoPortsOptions {
   env?: HomeEnvironment;

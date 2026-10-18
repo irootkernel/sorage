@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { verifyVaultArtifacts } from "./artifact-integrity";
 import type { ArtifactStore } from "./artifacts";
 import { type AppError, appError, err, ok, type Result } from "./errors";
@@ -67,13 +68,20 @@ export interface VaultVerifyPorts extends VaultStatusPorts {
   graceHours: number;
   /** The recorded current Artifacts; empty while the TASK-027 registry is absent. */
   recordedArtifacts(): Result<Array<{ storageKey: string; sha256: string }>, AppError>;
+  /**
+   * The recorded live content records of the shared store (SHR-011): a
+   * file-backed entry carries its managed key, an inline entry its exact text.
+   */
+  recordedContent(): Result<Array<{ storageKey: string | null; inlineText: string | null; sha256: string }>, AppError>;
+  /** Recomputes the SHA-256 of the bytes at one managed content key (SEC-014). */
+  contentChecksum(storageKey: string): Result<string, AppError>;
   /** One entry per staged file with its age, for the grace-window finding. */
   stagingEntries(): Result<Array<{ name: string; mtimeMs: number }>, AppError>;
 }
 
 export interface VaultVerifyReport {
   findings: string[];
-  checked: { artifacts: number; recordedArtifacts: number; stagedFiles: number };
+  checked: { artifacts: number; recordedArtifacts: number; stagedFiles: number; contentRecords: number };
 }
 
 export function vaultVerify(ports: VaultVerifyPorts, options: { now: Date }): Result<VaultVerifyReport, AppError> {
@@ -85,6 +93,32 @@ export function vaultVerify(ports: VaultVerifyPorts, options: { now: Date }): Re
   const integrity = verifyVaultArtifacts({ artifactStore: ports.artifactStore }, recorded.value);
   if (!integrity.ok) return err(integrity.error);
   findings.push(...integrity.value.map((finding) => finding.message));
+  // The shared-content census of `content.checksums` (SHR-011, section 35): an
+  // inline record is verified by recomputing the digest over its stored text,
+  // a file-backed record by recomputing it at its managed key. Never repairing.
+  const content = ports.recordedContent();
+  if (!content.ok) return err(content.error);
+  for (const record of content.value) {
+    if (record.storageKey === null) {
+      const recomputed = createHash("sha256")
+        .update(Buffer.from(record.inlineText ?? "", "utf8"))
+        .digest("hex");
+      if (recomputed !== record.sha256) {
+        findings.push(
+          `An inline content record records SHA-256 ${record.sha256} but its stored text digests to ${recomputed}.`,
+        );
+      }
+      continue;
+    }
+    const digest = ports.contentChecksum(record.storageKey);
+    if (!digest.ok) {
+      findings.push(digest.error.message);
+      continue;
+    }
+    if (digest.value.toLowerCase() !== record.sha256.toLowerCase()) {
+      findings.push(`The content bytes at ${record.storageKey} do not match their recorded SHA-256 ${record.sha256}.`);
+    }
+  }
   const cutoffMs = options.now.getTime() - ports.graceHours * 3_600_000;
   const entries = ports.stagingEntries();
   if (!entries.ok) return err(entries.error);
@@ -103,6 +137,7 @@ export function vaultVerify(ports: VaultVerifyPorts, options: { now: Date }): Re
       artifacts: onDisk.value.count,
       recordedArtifacts: recorded.value.length,
       stagedFiles: entries.value.length,
+      contentRecords: content.value.length,
     },
   });
 }

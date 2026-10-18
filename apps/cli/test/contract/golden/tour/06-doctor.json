@@ -25,7 +25,7 @@
       {
         "id": "vault.gitattributes",
         "severity": "ok",
-        "message": "The Vault policy files match the documented bytes."
+        "message": "The Vault policy files carry every required line in its stated order."
       },
       {
         "id": "vault.writable",
@@ -51,6 +51,11 @@
         "id": "artifacts.checksums",
         "severity": "ok",
         "message": "No Artifacts are recorded yet on this installation."
+      },
+      {
+        "id": "content.checksums",
+        "severity": "ok",
+        "message": "No content records are recorded yet on this installation."
       },
       {
         "id": "bindings.exist",

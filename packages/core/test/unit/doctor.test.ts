@@ -10,9 +10,9 @@ import {
 } from "../../src/doctor";
 
 describe("the doctor catalog", () => {
-  it("holds exactly the twenty documented ids in the section 35 order", () => {
-    expect(DOCTOR_CATALOG_0_1).toHaveLength(20);
-    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(20);
+  it("holds exactly the twenty-one documented ids in the section 35 order", () => {
+    expect(DOCTOR_CATALOG_0_1).toHaveLength(21);
+    expect(new Set(DOCTOR_CATALOG_0_1).size).toBe(21);
     expect(DOCTOR_CATALOG_0_1).toEqual([
       "home.permissions",
       "config.schema",
@@ -24,6 +24,7 @@ describe("the doctor catalog", () => {
       "db.pendingIntents",
       "db.migrations",
       "artifacts.checksums",
+      "content.checksums",
       "bindings.exist",
       "bindings.nested",
       "bindings.ambiguous",
@@ -48,6 +49,7 @@ describe("the doctor catalog", () => {
     expect(DOCTOR_CATALOG_SEVERITY["db.pendingIntents"]).toBe("warning");
     expect(DOCTOR_CATALOG_SEVERITY["db.migrations"]).toBe("blocking");
     expect(DOCTOR_CATALOG_SEVERITY["artifacts.checksums"]).toBe("blocking");
+    expect(DOCTOR_CATALOG_SEVERITY["content.checksums"]).toBe("blocking");
     expect(DOCTOR_CATALOG_SEVERITY["bindings.exist"]).toBe("warning");
     expect(DOCTOR_CATALOG_SEVERITY["bindings.nested"]).toBe("warning");
     expect(DOCTOR_CATALOG_SEVERITY["bindings.ambiguous"]).toBe("warning");
@@ -60,7 +62,7 @@ describe("the doctor catalog", () => {
 describe("the pre-initialization report", () => {
   it("marks every check blocking with the init recovery", () => {
     const report = notInitializedReport("/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(20);
+    expect(report.checks).toHaveLength(21);
     for (const check of report.checks) {
       expect(check.severity).toBe("blocking");
       if (check.id !== "config.schema") {
@@ -110,7 +112,7 @@ describe("runDoctor", () => {
       },
     };
     const report = runDoctor(ports, "/tmp/expected/config.yaml");
-    expect(report.checks).toHaveLength(20);
+    expect(report.checks).toHaveLength(21);
     expect(report.checks.every((check) => check.severity === "blocking")).toBe(true);
   });
 });

@@ -34,7 +34,10 @@ export interface RetentionMutationPort {
   idempotencyLookup(key: string, scope: string): Result<{ requestHash: string; responseJson: string } | null, AppError>;
   /** The pending deletion request of one Handoff, or null. */
   findPendingRequest(handoffId: string): Result<{ id: string } | null, AppError>;
-  /** Marks the executed unlink complete and appends ARTIFACT_UNLINKED. */
+  /**
+   * Marks the executed unlink complete and appends ARTIFACT_UNLINKED, gated on
+   * the completion's own row clear; `completed` counts the actual winner only.
+   */
   completeUnlink(input: { intentId: string; event: NewDomainEvent }): Result<{ completed: number }, AppError>;
 }
 

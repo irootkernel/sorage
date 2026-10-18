@@ -17,6 +17,7 @@ import {
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { digestFile, inspectSourceFile } from "./import-source";
 import { type InstallationInspectionReader, type PreflightInspectPorts, withInstallationInspection } from "./preflight";
+import { schemaSurfaceFloor } from "@sorage/core";
 import { createNodeResolutionBindings } from "./project-command-ports";
 
 export interface NodeSendRecoveryOptions {
@@ -35,7 +36,10 @@ export function createNodeSendRecoveryPorts(options: NodeSendRecoveryOptions = {
     inspect(consume) {
       return withInstallationInspection(home.home, { ...options.inspection, userHome }, (observation) => {
         if (observation.kind === "refused") return err(observation.error);
-        if (observation.migrationVersion < 4)
+        // The send-replay floor comes from the central known-schema inventory
+        // (SHR-009, section 38.7): replay reads complete known receipt
+        // histories from version 4 through this build's known maximum.
+        if (observation.migrationVersion < schemaSurfaceFloor("send-replay"))
           return err(
             appError("STORAGE_SCHEMA_UNSUPPORTED", "the historical database layout has no send receipt domain"),
           );

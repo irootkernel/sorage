@@ -10,7 +10,8 @@
       "vault": {
         "artifacts": 5,
         "recordedArtifacts": 5,
-        "stagedFiles": 0
+        "stagedFiles": 0,
+        "contentRecords": 0
       },
       "manifest": {
         "present": false,

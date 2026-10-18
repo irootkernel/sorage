@@ -1,3 +1,11 @@
+import {
+  digestManagedFile,
+  managedDirectory,
+  managedFile,
+  managedPath,
+  managedRoot,
+  openManagedFile,
+} from "./managed-paths";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -15,13 +23,15 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   type AppError,
   appError,
   type DrainReport,
   err,
   expandConfigurationPath,
+  isManagedContentStorageKey,
+  isManagedStorageKey,
   ok,
   type Result,
   USER_ACTOR,
@@ -31,6 +41,7 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
+import { receiptReferencedContentKeys, sweepFetchCache } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import {
@@ -42,7 +53,7 @@ import {
 } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { MIGRATIONS } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createVaultInitializer, openVault } from "./vault";
 
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -121,6 +132,10 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         migrated.db.close();
       }
     } catch (error) {
+      // A schema admission refusal keeps its public code instead of collapsing
+      // into INTERNAL_ERROR (SHR-009).
+      const admission = asSchemaAdmission(error);
+      if (admission !== null) return err(admission);
       return err(
         appError("INTERNAL_ERROR", `Reading the database failed: ${messageOf(error)}.`, { cause: String(error) }),
       );
@@ -180,6 +195,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       const path = join(root, entry.name);
       if (entry.isDirectory()) yield* filesUnder(path);
       else if (entry.isFile()) yield path;
+      else throw new Error(`The managed tree contains an unsafe entry: ${path}`);
     }
   }
 
@@ -237,6 +253,37 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         artifactStore: createNodeArtifactStore({ vaultPath, installationId: view.value.installationId }),
         graceHours: view.value.graceHours,
         recordedArtifacts,
+        recordedContent: () =>
+          withDatabase((db) => {
+            const table = db
+              .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+              .get() as { name: string } | null | undefined;
+            if (!table) return ok([]);
+            const rows = db
+              .prepare("SELECT storage_key, inline_text, sha256 FROM content_records WHERE materialized = 1")
+              .all() as unknown as Array<{ storage_key: string | null; inline_text: string | null; sha256: string }>;
+            return ok(
+              rows.map((row) => ({ storageKey: row.storage_key, inlineText: row.inline_text, sha256: row.sha256 })),
+            );
+          }),
+        contentChecksum: (storageKey: string) => {
+          if (!isManagedContentStorageKey(storageKey) && !isManagedStorageKey(storageKey)) {
+            return err(
+              appError("CONTENT_CORRUPTED", `A content record names the non-managed storage key ${storageKey}.`, {
+                storageKey,
+              }),
+            );
+          }
+          try {
+            return ok(digestManagedFile(vaultPath, storageKey).sha256);
+          } catch {
+            return err(
+              appError("CONTENT_CORRUPTED", `Content is missing or unreadable at the managed key ${storageKey}.`, {
+                storageKey,
+              }),
+            );
+          }
+        },
         stagingEntries: () => {
           const entries: Array<{ name: string; mtimeMs: number }> = [];
           try {
@@ -261,9 +308,6 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       const vaultPath = view.value.vaultPath;
       const targetPath = expandConfigurationPath(options.targetPath, userHome, home.home);
       const installationId = view.value.installationId;
-      const artifactsRoot = join(vaultPath, "artifacts");
-      const targetArtifacts = join(targetPath, "artifacts");
-      const targetStaging = join(targetPath, "staging");
 
       return ok({
         vaultPath,
@@ -275,8 +319,15 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         drainUnderLock: () =>
           withDatabase((db) => {
             // The lock owner's own drain: no pause guard, because this process
-            // holds the very lock other processes would pause on.
-            const log = createSqliteIntentLog({ db, installationId });
+            // holds the very lock other processes would pause on. The real
+            // ledger is wired so the mover's drain is a first-class completion
+            // path whose success and failure events land like any production
+            // drain's (SEC-012).
+            const log = createSqliteIntentLog({
+              db,
+              installationId,
+              events: createSqliteEventLedger(db),
+            });
             return log.drain(vaultPath);
           }),
         fenceAndCountPendingIntents: () =>
@@ -296,74 +347,70 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         lock: { acquire: acquireVaultMoveLock },
         target: {
           prepare(): Result<{ reusedScratch: boolean }, AppError> {
-            let existed = false;
             try {
-              existed = statSync(targetPath).isDirectory();
-            } catch {
-              existed = false;
-            }
-            let reusedScratch = false;
-            if (existed) {
-              const entries = readdirSync(targetPath);
-              if (entries.length > 0) {
-                const marker = readMoveScratchMarker(join(targetPath, MOVE_SCRATCH_MARKER));
+              const existed = existsSync(targetPath);
+              const root = managedRoot(targetPath, true);
+              const entries = readdirSync(root);
+              let reusedScratch = false;
+              if (existed && entries.length > 0) {
+                const marker = readMoveScratchMarker(root);
                 const foreign = entries.filter(
-                  (entry) => entry !== MOVE_SCRATCH_MARKER && entry !== "staging" && entry !== "artifacts",
+                  (entry) => ![MOVE_SCRATCH_MARKER, "staging", "artifacts", "content"].includes(entry),
                 );
                 if (
                   marker === null ||
                   marker.installationId !== installationId ||
                   marker.sourceVaultPath !== resolvePhysicalPath(vaultPath) ||
                   foreign.length > 0
-                ) {
+                )
                   return err(
                     appError(
                       "VAULT_INTEGRITY_ERROR",
-                      `Refusing to move into the non-empty directory ${targetPath} because Sorage cannot prove it owns the existing contents (VLT-003).`,
+                      "The nonempty move target does not carry this Installation's exact scratch ownership.",
                       { targetPath, foreignEntries: foreign },
                     ),
                   );
-                }
                 reusedScratch = true;
               }
-            }
-            try {
-              mkdirSync(targetPath, { recursive: true });
-              if (!reusedScratch) {
-                writeMoveScratchMarker(join(targetPath, MOVE_SCRATCH_MARKER), {
+              // Check every owned subtree before creating a marker or removing scratch.
+              for (const key of ["staging", "artifacts", "content"]) {
+                const directory = managedDirectory(root, key);
+                if (directory !== undefined)
+                  for (const file of filesUnder(directory)) {
+                    void file;
+                  }
+              }
+              if (!reusedScratch)
+                writeMoveScratchMarker(join(root, MOVE_SCRATCH_MARKER), {
                   installationId,
                   sourceVaultPath: resolvePhysicalPath(vaultPath),
                 });
+              for (const key of ["staging", "artifacts", "content"]) {
+                const directory = managedDirectory(root, key);
+                if (directory !== undefined) rmSync(directory, { recursive: true });
+                managedDirectory(root, key, true);
               }
+              return ok({ reusedScratch });
             } catch (error) {
               return err(
-                appError("INTERNAL_ERROR", `Claiming the move target failed: ${messageOf(error)}.`, {
+                appError("VAULT_INTEGRITY_ERROR", `Preparing the owned move target failed: ${messageOf(error)}.`, {
                   targetPath,
                   cause: String(error),
                 }),
               );
             }
-            // Clear only scratch carrying this Installation's exact move marker.
-            try {
-              rmSync(targetStaging, { recursive: true, force: true });
-              rmSync(targetArtifacts, { recursive: true, force: true });
-              mkdirSync(targetStaging, { recursive: true });
-              mkdirSync(targetArtifacts, { recursive: true });
-            } catch (error) {
-              return err(
-                appError("INTERNAL_ERROR", `Preparing the move target failed: ${messageOf(error)}.`, {
-                  targetPath,
-                  cause: String(error),
-                }),
-              );
-            }
-            return ok({ reusedScratch });
           },
           managedFiles(): Result<string[], AppError> {
             const files: string[] = [];
             try {
-              for (const file of filesUnder(artifactsRoot)) {
-                files.push(file.slice(artifactsRoot.length + 1));
+              // Root-relative managed paths, so one mechanism relocates the
+              // `artifacts/` tree and the M9 `content/` subtree together and
+              // the copy, verify, and activate arms stay identical.
+              const sourceRoot = managedRoot(vaultPath);
+              for (const key of ["artifacts", "content"] as const) {
+                const directory = managedDirectory(sourceRoot, key);
+                if (directory === undefined) continue;
+                for (const file of filesUnder(directory)) files.push(relative(sourceRoot, file));
               }
             } catch (error) {
               return err(
@@ -375,10 +422,9 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             return ok(files);
           },
           stageCopy(relativePath: string): Result<{ stagedPath: string; sha256: string }, AppError> {
-            const source = join(artifactsRoot, relativePath);
-            const stagedPath = join(targetStaging, randomUUID());
             try {
-              return ok({ stagedPath, sha256: streamCopy(source, stagedPath) });
+              const stagedPath = managedPath(targetPath, `staging/${randomUUID()}`);
+              return ok({ stagedPath, sha256: streamCopy(vaultPath, relativePath, stagedPath) });
             } catch (error) {
               return err(
                 appError("INTERNAL_ERROR", `Copying ${relativePath} failed: ${messageOf(error)}.`, {
@@ -390,7 +436,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           },
           sourceChecksum(relativePath: string): Result<string, AppError> {
             try {
-              return ok(hashFile(join(artifactsRoot, relativePath)));
+              return ok(digestManagedFile(vaultPath, relativePath).sha256);
             } catch (error) {
               return err(
                 appError("INTERNAL_ERROR", `Hashing ${relativePath} failed: ${messageOf(error)}.`, {
@@ -401,10 +447,13 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             }
           },
           activate(relativePath: string, stagedPath: string): Result<void, AppError> {
-            const destination = join(targetArtifacts, relativePath);
             try {
-              mkdirSync(dirname(destination), { recursive: true });
-              renameSync(stagedPath, destination);
+              const sourceKey = relative(managedRoot(targetPath), stagedPath);
+              const source = managedFile(targetPath, sourceKey);
+              if (source.stat === undefined) throw new Error("The staged move copy is missing");
+              const destination = managedPath(targetPath, relativePath, true);
+              managedFile(targetPath, relativePath);
+              renameSync(source.path, destination);
               fsyncDirectory(dirname(destination));
               return ok(undefined);
             } catch (error) {
@@ -477,23 +526,50 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         const drained = log.drain(view.value.vaultPath);
         if (!drained.ok) return drained;
         // Garbage collection runs only after the drain, over the surviving
-        // intents and the recorded storage keys (VLT-013, VLT-014); the
-        // daemon's scheduled job takes the recurring pass over in 0.2. A failed
-        // sweep never fails the command: doctor's vault.writable reports the
-        // underlying condition.
+        // intents and the recorded storage keys (VLT-013, VLT-014); the M9
+        // guard set gains the live content keys and the keys unexpired
+        // retained responses reference, and the sweep covers content/ while the
+        // fetch-cache sweeps under the same grace window (SHR-006, SHR-011). A
+        // failed sweep never fails the command: doctor's vault.writable reports
+        // the underlying condition.
         const surviving = log.pending();
         const recorded = recordedArtifacts();
-        if (surviving.ok && recorded.ok) {
+        const contentKeys = recordedContentKeys(db);
+        const receiptKeys = receiptReferencedContentKeys(db, clock.now());
+        if (surviving.ok && recorded.ok && contentKeys.ok && receiptKeys.ok) {
           void collectVaultGarbage(view.value.vaultPath, surviving.value, {
             liveStorageKeys: recorded.value.map((row) => row.storageKey),
+            liveContentKeys: contentKeys.value,
+            receiptReferencedKeys: receiptKeys.value,
             graceHours: view.value.graceHours,
             now: clock.now(),
           });
         }
+        sweepFetchCache(home.stateDir, { graceHours: view.value.graceHours, now: clock.now() });
         return drained;
       });
     },
   };
+}
+
+/** The managed `content/` keys live content records name, the GC guard input. */
+function recordedContentKeys(db: ReturnType<typeof openAndMigrate>["db"]): Result<string[], AppError> {
+  try {
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+      .get() as { name: string } | null | undefined;
+    if (!table) return ok([]);
+    const rows = db
+      .prepare("SELECT storage_key FROM content_records WHERE storage_key IS NOT NULL")
+      .all() as unknown as Array<{
+      storage_key: string;
+    }>;
+    return ok(rows.map((row) => row.storage_key));
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Reading the content keys failed: ${messageOf(error)}.`, { cause: String(error) }),
+    );
+  }
 }
 
 interface MoveScratchMarker {
@@ -501,9 +577,11 @@ interface MoveScratchMarker {
   sourceVaultPath: string;
 }
 
-function readMoveScratchMarker(path: string): MoveScratchMarker | null {
+function readMoveScratchMarker(root: string): MoveScratchMarker | null {
+  let handle: number | undefined;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    handle = openManagedFile(root, MOVE_SCRATCH_MARKER);
+    const parsed = JSON.parse(readFileSync(handle, "utf8")) as unknown;
     if (typeof parsed !== "object" || parsed === null) return null;
     const marker = parsed as Partial<MoveScratchMarker> & { type?: unknown };
     if (
@@ -516,6 +594,8 @@ function readMoveScratchMarker(path: string): MoveScratchMarker | null {
     return { installationId: marker.installationId, sourceVaultPath: marker.sourceVaultPath };
   } catch {
     return null;
+  } finally {
+    if (handle !== undefined) closeSync(handle);
   }
 }
 
@@ -572,8 +652,8 @@ function logVaultMoved(fromPath: string, toPath: string, artifactsMoved: number)
 }
 
 /** Copies one file streaming through a fixed buffer, hashing in the same pass. */
-function streamCopy(source: string, destination: string): string {
-  const input = openSync(source, "r");
+function streamCopy(sourceRoot: string, sourceKey: string, destination: string): string {
+  const input = openManagedFile(sourceRoot, sourceKey);
   let output: number | undefined;
   try {
     output = openSync(destination, "wx");
@@ -606,22 +686,6 @@ function streamCopy(source: string, destination: string): string {
       }
     }
   }
-}
-
-function hashFile(path: string): string {
-  const hash = createHash("sha256");
-  const handle = openSync(path, "r");
-  try {
-    const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
-    for (;;) {
-      const read = readSync(handle, buffer, 0, buffer.length, null);
-      if (read === 0) break;
-      hash.update(buffer.subarray(0, read));
-    }
-  } finally {
-    closeSync(handle);
-  }
-  return hash.digest("hex");
 }
 
 function messageOf(error: unknown): string {

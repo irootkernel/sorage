@@ -1,4 +1,6 @@
+import { digestManagedFile } from "./managed-paths";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -6,22 +8,29 @@ import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
 import {
   type BackupRunRow,
   type Configuration,
+  isManagedContentStorageKey,
+  isManagedStorageKey,
   isManagedVaultPath,
   nextDueAt,
   parseConfigurationFile,
   parseVaultMarker,
+  KNOWN_SCHEMA_HISTORY,
   validateVaultMarkerForInstallation,
-  vaultGitattributesContent,
-  vaultGitignoreContent,
+  verifyVaultPolicyFiles,
   verifyVaultArtifacts,
+  type AppError,
+  type Result,
+  appError,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { launchAgentPlistPath, launchAgentsDirectory, launchAgentUid, plistPointsAtBinary } from "./launchagent-ports";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
-import { openSorageDatabase } from "./sqlite/connection";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { openSorageDatabase, type SorageSqlite } from "./sqlite/connection";
+import { inspectAppliedHistory } from "./sqlite/history-inspection";
+import { SchemaAdmissionError } from "./sqlite/migrator";
+import { admitAppliedHistory } from "@sorage/core";
 
 /**
  * The production doctor probes over the live installation: every check the M1
@@ -42,6 +51,7 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
     "Inspect the ARTIFACT_INTEGRITY_FAILED events for the affected Handoffs and restore them from backup",
   "db.migrations": "Install the matching sorage build; remove a stale ~/.sorage/run/migration.lock",
   "artifacts.checksums": "sorage vault verify, then restore the affected Handoff from backup",
+  "content.checksums": "sorage vault verify, then restore the affected records from backup",
   "bindings.exist":
     "sorage project bind <project> --dir <path> for an unbound Project, or sorage project unbind <project> --dir <the recorded directory this warning names> for a binding whose directory vanished",
   "bindings.nested": "Pass --as <project-slug> wherever the deepest match is not the intended Project",
@@ -54,10 +64,6 @@ const RECOVERIES: Record<DoctorCheckId, string> = {
   "backup.schedule": "sorage backup run, then read sorage backup status",
   "git.state": "Resolve the repository state manually; Sorage never rebases or merges",
 };
-
-const GITATTRIBUTES = vaultGitattributesContent();
-
-const GITIGNORE = vaultGitignoreContent();
 
 export interface NodeDoctorPortsOptions {
   env?: HomeEnvironment | undefined;
@@ -87,6 +93,82 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     userHome,
   });
   const databasePath = join(home.stateDir, "sorage.sqlite3");
+
+  // The eager readonly history-admission guard (SHR-009): every DB open the
+  // doctor performs — including the indirect bindingRegistry and backupRunRows
+  // helpers — routes through this saved admission boundary, so no per-check or
+  // helper catch can cause a writable retry after a refusal or an unreadable
+  // history. A confirmed future maximum throws the typed SchemaAdmissionError
+  // before any probe runs; the CLI's runCli catch renders it as
+  // STORAGE_SCHEMA_UNSUPPORTED/78. A supported maximum with a malformed known
+  // history does not throw: the db.migrations probe reports the actual finding
+  // as its stable blocking diagnostic. A failed readonly read or open caches
+  // the failure and every DB-dependent check reports honestly unavailable
+  // without a writable fallback; independent non-DB diagnostics continue.
+  type Admission =
+    | { kind: "admitted" }
+    | { kind: "unsupported"; error: AppError }
+    | { kind: "known-history-finding"; message: string }
+    | { kind: "unavailable"; message: string };
+  let admission: Admission | null = null;
+  function establishAdmission(): Admission {
+    if (admission !== null) return admission;
+    if (store.readText() === null) {
+      // Before initialization there is no doctor DB contract to guard.
+      admission = { kind: "admitted" };
+      return admission;
+    }
+    let verdict: ReturnType<typeof admitAppliedHistory>;
+    try {
+      const rows = inspectAppliedHistory(databasePath);
+      verdict = admitAppliedHistory(rows ?? [], KNOWN_SCHEMA_HISTORY);
+    } catch (error) {
+      admission = {
+        kind: "unavailable",
+        message: `The database history could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+      };
+      return admission;
+    }
+    if (verdict.kind === "unsupported") {
+      admission = { kind: "unsupported", error: verdict.error };
+      throw new SchemaAdmissionError(verdict.error);
+    }
+    if (verdict.kind === "ok") {
+      admission = { kind: "admitted" };
+      return admission;
+    }
+    admission = { kind: "known-history-finding", message: verdict.error.message };
+    return admission;
+  }
+  establishAdmission();
+
+  /**
+   * The single DB-opening boundary every doctor probe and helper uses. A
+   * confirmed future refusal or an unreadable/uncertain history stops every
+   * writable open; a supported maximum whose known history has a malformed
+   * finding allows the other operational diagnostics to proceed and only the
+   * db.migrations probe reports the finding as its stable blocking message.
+   * Operational open failures (busy, permissions, WAL configuration) are
+   * returned as an ordinary `blocking` result so each probe's existing
+   * diagnostic catalog reports them, never as an admission exception.
+   */
+  function doctorOpenDatabase(): { ok: true; db: SorageSqlite } | { ok: false; blocking: string } {
+    const state = establishAdmission();
+    if (state.kind === "unsupported") {
+      return { ok: false, blocking: state.error.message };
+    }
+    if (state.kind === "unavailable") {
+      return { ok: false, blocking: state.message };
+    }
+    try {
+      return { ok: true, db: openSorageDatabase(databasePath) };
+    } catch (error) {
+      return {
+        ok: false,
+        blocking: `The database could not be opened: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
 
   function configuration(): Configuration | null {
     const text = store.readText();
@@ -118,10 +200,47 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     binding_kind: string;
   }
 
-  /** Reads the Project registry once per probe; null before any table exists. */
-  function bindingRegistry(): { projects: ProjectRow[]; bindings: BindingRow[] } | null {
+  /** Reads backup run history through the admission boundary; "unavailable" when the history cannot be established, empty only when genuinely no rows exist. */
+  function backupRunRows(): BackupRunRow[] | "unavailable" {
+    const opened = doctorOpenDatabase();
+    if (!opened.ok) {
+      if (admission !== null && admission.kind === "unavailable") return "unavailable";
+      return [];
+    }
     try {
-      const db = openSorageDatabase(databasePath);
+      const db = opened.db;
+      try {
+        const rows = db.prepare("SELECT * FROM backup_runs").all() as unknown as Array<Record<string, unknown>>;
+        return rows.map((row) => ({
+          id: String(row.id ?? ""),
+          triggeredBy: (row.triggered_by ?? "manual") as BackupRunRow["triggeredBy"],
+          startedAt: String(row.started_at ?? ""),
+          finishedAt: row.finished_at === null ? null : String(row.finished_at ?? ""),
+          outcome: (row.outcome ?? "failure") as BackupRunRow["outcome"],
+          snapshotOutcome: (row.snapshot_outcome ?? "failure") as BackupRunRow["snapshotOutcome"],
+          commitOutcome: (row.commit_outcome ?? "failure") as BackupRunRow["commitOutcome"],
+          pushOutcome: (row.push_outcome ?? "disabled") as BackupRunRow["pushOutcome"],
+          commitSha: row.commit_sha === null ? null : String(row.commit_sha),
+          failureCode: row.failure_code === null ? null : String(row.failure_code),
+          failureMessage: row.failure_message === null ? null : String(row.failure_message ?? ""),
+        }));
+      } finally {
+        db.close();
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  /** Reads the Project registry once per probe; null only when genuinely absent. When admission is unavailable, returns a marker the bindings checks report as an honest warning instead of a vacuous ok. */
+  function bindingRegistry(): { projects: ProjectRow[]; bindings: BindingRow[] } | null | "unavailable" {
+    const opened = doctorOpenDatabase();
+    if (!opened.ok) {
+      if (admission !== null && admission.kind === "unavailable") return "unavailable";
+      return null;
+    }
+    try {
+      const db = opened.db;
       try {
         // bun:sqlite returns null for a no-row get and node:sqlite returns
         // undefined; both mean the registry tables are not there yet.
@@ -214,16 +333,19 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       case "vault.gitattributes": {
         const vault = vaultPath(configuration());
         if (vault === null) return warning("The Vault policy files cannot be checked without a valid configuration.");
-        let attributes = false;
-        let ignore = false;
+        let gitattributes: string | null = null;
+        let gitignore: string | null = null;
         try {
-          attributes = readFileSync(join(vault, ".gitattributes"), "utf8") === GITATTRIBUTES;
-          ignore = readFileSync(join(vault, ".gitignore"), "utf8") === GITIGNORE;
+          gitattributes = readFileSync(join(vault, ".gitattributes"), "utf8");
+          gitignore = readFileSync(join(vault, ".gitignore"), "utf8");
         } catch {
           return warning("The Vault policy files are missing.");
         }
-        if (!attributes || !ignore) return warning("The Vault policy files do not match section 6 verbatim.");
-        return ok("The Vault policy files match the documented bytes.");
+        // The required lines and their stated order, exactly as `vault verify`
+        // and `backup verify` assert them (VLT-024, BKP-022, section 6).
+        const problems = verifyVaultPolicyFiles(gitattributes, gitignore);
+        if (problems.length > 0) return warning(problems.join(" "));
+        return ok("The Vault policy files carry every required line in its stated order.");
       }
 
       case "vault.writable": {
@@ -240,8 +362,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "db.integrity": {
+        const opened = doctorOpenDatabase();
+        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = openSorageDatabase(databasePath);
+          const db = opened.db;
           try {
             const integrity = db.prepare("PRAGMA integrity_check").get() as unknown;
             const row = integrity as Record<string, unknown> | undefined;
@@ -265,8 +389,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "db.pendingIntents": {
+        const opened = doctorOpenDatabase();
+        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = openSorageDatabase(databasePath);
+          const db = opened.db;
           try {
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_fs_ops'")
@@ -296,13 +422,23 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "db.migrations": {
+        // A supported maximum whose known history has a malformed finding gets
+        // reported here as the stable blocking diagnostic — not as a typed
+        // integrity refusal of the whole command — while the other supported
+        // diagnostics continue through their own opens.
+        const admissionState = establishAdmission();
+        if (admissionState.kind === "known-history-finding") {
+          return blocking(admissionState.message);
+        }
+        const opened = doctorOpenDatabase();
+        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = openSorageDatabase(databasePath);
+          const db = opened.db;
           try {
             const row = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
               | Record<string, unknown>
               | undefined;
-            const expected = Math.max(...MIGRATIONS.map((migration) => migration.version));
+            const expected = KNOWN_SCHEMA_HISTORY[KNOWN_SCHEMA_HISTORY.length - 1]?.version ?? 0;
             if (row?.version !== expected) {
               return blocking(`schema_migrations is at ${String(row?.version)}, expected ${expected}.`);
             }
@@ -314,6 +450,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             `schema_migrations could not be read: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
+        // The transactional runner never acquires the legacy run/migration.lock
+        // file (NFR-009 as resolved by M9, architecture section 19): a live-looking
+        // owner means an older executable may still be running against this home,
+        // and stale evidence is preserved for manual removal, never deleted here.
         let lockBody: string;
         try {
           lockBody = readFileSync(home.lockFile("migration"), "utf8");
@@ -321,8 +461,51 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           return ok("schema_migrations is at the version this build expects.");
         }
         const verdict = evaluateStaleness("migration", parseLockRecord(lockBody), new Date(), isPidAlive);
-        if (verdict.stale) return blocking(`migration.lock is stale (${verdict.reason}).`);
-        return ok("schema_migrations is at the version this build expects.");
+        if (verdict.stale) {
+          return blocking(
+            `migration.lock is stale (${verdict.reason}); this build's runner does not acquire the legacy file, so remove it manually once no old sorage process is running.`,
+          );
+        }
+        return blocking(
+          "migration.lock records a live owner; this build's migration runner does not acquire the legacy file, so an old sorage executable may be running against this installation. Stop it before further work.",
+        );
+      }
+
+      case "content.checksums": {
+        const config = configuration();
+        const vault = vaultPath(config);
+        if (config === null || vault === null) {
+          return blocking("Content checksums cannot be checked without a valid configuration.");
+        }
+        const opened = doctorOpenDatabase();
+        if (!opened.ok) return blocking(opened.blocking);
+        try {
+          const db = opened.db;
+          let records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }> = [];
+          try {
+            const table = db
+              .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+              .get() as { name: string } | null | undefined;
+            if (table) {
+              records = db
+                .prepare("SELECT storage_key, inline_text, sha256 FROM content_records WHERE materialized = 1")
+                .all() as unknown as Array<{ storage_key: string | null; inline_text: string | null; sha256: string }>;
+            }
+          } finally {
+            db.close();
+          }
+          if (records.length === 0) return ok("No content records are recorded yet on this installation.");
+          const findings = verifyContentRecords({ vault }, records);
+          if (!findings.ok) return blocking(findings.error.message);
+          if (findings.value.length > 0) {
+            return blocking(findings.value.join(" "));
+          }
+          return ok("Every recorded content record exists and matches its recorded SHA-256.");
+        } catch (error) {
+          return blocking(
+            `Content checksums could not be verified: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
 
       case "artifacts.checksums": {
@@ -331,8 +514,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (config === null || vault === null) {
           return blocking("Artifact checksums cannot be checked without a valid configuration.");
         }
+        const opened = doctorOpenDatabase();
+        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = openSorageDatabase(databasePath);
+          const db = opened.db;
           let records: Array<{ storage_key: string; sha256: string }> = [];
           try {
             // The artifacts registry arrives with the TASK-027 migration; until
@@ -369,6 +554,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
 
       case "bindings.exist": {
         const registry = bindingRegistry();
+        if (registry === "unavailable")
+          return warning("Project bindings cannot be verified because the database history could not be inspected.");
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
         const problems: string[] = [];
@@ -396,6 +583,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
 
       case "bindings.nested": {
         const registry = bindingRegistry();
+        if (registry === "unavailable")
+          return warning("Project bindings cannot be verified because the database history could not be inspected.");
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
         const nested: string[] = [];
@@ -416,6 +605,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
 
       case "bindings.ambiguous": {
         const registry = bindingRegistry();
+        if (registry === "unavailable")
+          return warning("Project bindings cannot be verified because the database history could not be inspected.");
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
         const aliases: string[] = [];
@@ -606,7 +797,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (due === null) {
           return warning("The next due time is not computable; check the schedule configuration.");
         }
-        const history = backupRunRows(home);
+        const history = backupRunRows();
+        if (history === "unavailable") {
+          return warning("The backup schedule cannot be verified because the database history could not be inspected.");
+        }
         const lastFailure = history.findLast((row) => row.outcome === "failure");
         if (lastFailure !== undefined) {
           return warning(`The last backup run failed with ${String(lastFailure.failureCode)}.`);
@@ -682,30 +876,54 @@ function attachRecovery(id: DoctorCheckId, outcome: CheckOutcome): CheckOutcome 
   return { ...outcome, recovery: { suggestedCommand: RECOVERIES[id] } };
 }
 
-/** Reads `run/daemon.json`; null when absent or malformed. */
-function backupRunRows(home: { stateDir: string }): BackupRunRow[] {
+/**
+ * The `content.checksums` census (SHR-011, section 35): every live content
+ * record's bytes match its recorded SHA-256 — an inline record by recomputing
+ * the digest over its stored text, a file-backed record by recomputing it over
+ * the bytes at the managed key. Read-only, never repairing.
+ */
+function verifyContentRecords(
+  ports: { vault: string },
+  records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }>,
+): Result<string[], AppError> {
+  const findings: string[] = [];
   try {
-    const db = openSorageDatabase(join(home.stateDir, "sorage.sqlite3"));
-    try {
-      const rows = db.prepare("SELECT * FROM backup_runs").all() as unknown as Array<Record<string, unknown>>;
-      return rows.map((row) => ({
-        id: String(row.id ?? ""),
-        triggeredBy: (row.triggered_by ?? "manual") as BackupRunRow["triggeredBy"],
-        startedAt: String(row.started_at ?? ""),
-        finishedAt: row.finished_at === null ? null : String(row.finished_at ?? ""),
-        outcome: (row.outcome ?? "failure") as BackupRunRow["outcome"],
-        snapshotOutcome: (row.snapshot_outcome ?? "failure") as BackupRunRow["snapshotOutcome"],
-        commitOutcome: (row.commit_outcome ?? "failure") as BackupRunRow["commitOutcome"],
-        pushOutcome: (row.push_outcome ?? "disabled") as BackupRunRow["pushOutcome"],
-        commitSha: row.commit_sha === null ? null : String(row.commit_sha),
-        failureCode: row.failure_code === null ? null : String(row.failure_code),
-        failureMessage: row.failure_message === null ? null : String(row.failure_message),
-      }));
-    } finally {
-      db.close();
+    for (const record of records) {
+      if (record.storage_key === null) {
+        const recomputed = createHash("sha256")
+          .update(Buffer.from(record.inline_text ?? "", "utf8"))
+          .digest("hex");
+        if (recomputed !== record.sha256) {
+          findings.push(
+            `An inline content record records SHA-256 ${record.sha256} but its stored text digests to ${recomputed}.`,
+          );
+        }
+        continue;
+      }
+      if (!isManagedContentStorageKey(record.storage_key) && !isManagedStorageKey(record.storage_key)) {
+        findings.push(`A content record names the non-managed storage key ${record.storage_key}.`);
+        continue;
+      }
+      try {
+        const recomputed = digestManagedFile(ports.vault, record.storage_key).sha256;
+        if (recomputed.toLowerCase() !== record.sha256.toLowerCase()) {
+          findings.push(
+            `The content bytes at ${record.storage_key} do not match their recorded SHA-256 ${record.sha256}.`,
+          );
+        }
+      } catch {
+        findings.push(`Content is missing, unsafe, or unreadable at the managed key ${record.storage_key}.`);
+      }
     }
-  } catch {
-    return [];
+    return { ok: true, value: findings };
+  } catch (error) {
+    return {
+      ok: false,
+      error: appError(
+        "INTERNAL_ERROR",
+        `Verifying content records failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    };
   }
 }
 

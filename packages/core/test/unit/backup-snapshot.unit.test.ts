@@ -228,10 +228,15 @@ describe("snapshotFiles", () => {
     const manifestFile = files.find((file) => file.path === "manifest.json");
     expect(manifestFile).toBeDefined();
     expect((manifestFile as { content: string }).content).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    // Every file this builder emits is canonical JSON text; the union narrows
+    // through one known-text decode rather than a contract-hiding assertion.
+    const textOf = (content: string | Uint8Array): string =>
+      typeof content === "string" ? content : Buffer.from(content).toString("utf8");
     for (const file of files) {
-      expect(file.content.toLowerCase()).not.toContain("hostname");
-      expect(file.content.toLowerCase()).not.toContain("durationms");
-      expect(file.content).not.toContain(String(process.pid));
+      const text = textOf(file.content);
+      expect(text.toLowerCase()).not.toContain("hostname");
+      expect(text.toLowerCase()).not.toContain("durationms");
+      expect(text).not.toContain(String(process.pid));
     }
   });
 });

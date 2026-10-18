@@ -1,14 +1,4 @@
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-} from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type AppError,
@@ -24,10 +14,13 @@ import {
   type Result,
   SYSTEM_ACTOR,
 } from "@sorage/core";
-import type { SqliteEventLedger } from "./events";
+import { createSqliteEventLedger, type SqliteEventLedger } from "./events";
+import { completeCommonIntentTx, executeCommonIntent } from "./content-store";
+import { classifyContentIntentOwnership, contentIntentIntegrityError } from "@sorage/core";
 import { vaultMoveLockHeld } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
 import { openVault } from "./vault";
+import { managedDirectory, managedFile } from "./managed-paths";
 
 export interface SqliteIntentLogOptions {
   db: SorageSqlite;
@@ -48,6 +41,9 @@ interface PendingRow {
   from_path: string | null;
   to_path: string;
   artifact_id: string | null;
+  owner_domain: string | null;
+  owner_id: string | null;
+  content_id: string | null;
   created_at: string;
   attempts: number;
 }
@@ -72,19 +68,44 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
       fromPath: row.from_path,
       toPath: row.to_path,
       artifactId: row.artifact_id,
+      ownerDomain: row.owner_domain as PendingFsOp["ownerDomain"],
+      ownerId: row.owner_id,
+      contentId: row.content_id,
       createdAt: row.created_at,
       attempts: row.attempts,
     };
   }
 
-  function listPending(): PendingFsOp[] {
-    return (db.prepare<PendingRow>("SELECT * FROM pending_fs_ops ORDER BY created_at, id").all() as PendingRow[]).map(
-      toPending,
-    );
+  function listPending(): Result<PendingFsOp[], AppError> {
+    const rows = db.prepare<PendingRow>("SELECT * FROM pending_fs_ops ORDER BY created_at, id").all();
+    for (const row of rows) {
+      if (
+        classifyContentIntentOwnership({
+          id: row.id,
+          artifactId: row.artifact_id,
+          ownerDomain: row.owner_domain,
+          ownerId: row.owner_id,
+          contentId: row.content_id,
+        }) === "invalid"
+      ) {
+        return err(contentIntentIntegrityError(row.id));
+      }
+    }
+    return ok(rows.map(toPending));
   }
 
   return {
     record(intents: NewPendingFsOp[]): Result<{ recorded: number }, AppError> {
+      for (const intent of intents) {
+        if (classifyContentIntentOwnership(intent) === "invalid") {
+          return err(
+            appError(
+              "INTERNAL_ERROR",
+              `Filesystem intent ${intent.id} must carry either legacy ownership or a complete common-content owner triple.`,
+            ),
+          );
+        }
+      }
       // A committed intent is a promise about the current Vault, so it may not
       // be committed around a relocation that would relocate the promise's
       // filesystem underneath it (RUN-014).
@@ -119,10 +140,20 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
             );
           }
           const insert = db.prepare(
-            "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
+            "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, owner_domain, owner_id, content_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
           );
           for (const intent of intents) {
-            insert.run(intent.id, intent.op, intent.fromPath, intent.toPath, intent.artifactId, intent.createdAt);
+            insert.run(
+              intent.id,
+              intent.op,
+              intent.fromPath,
+              intent.toPath,
+              intent.artifactId,
+              intent.ownerDomain ?? null,
+              intent.ownerId ?? null,
+              intent.contentId ?? null,
+              intent.createdAt,
+            );
           }
           db.exec("COMMIT");
           return ok({ recorded: intents.length });
@@ -145,7 +176,7 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
 
     pending(): Result<PendingFsOp[], AppError> {
       try {
-        return ok(listPending());
+        return listPending();
       } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Reading pending filesystem intents failed: ${messageOf(error)}.`, {
@@ -169,24 +200,97 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
       if (paused()) return err(pauseError());
       const opened = openVault(vaultPath, installationId);
       if (!opened.ok) return err(opened.error);
-      const report: DrainReport = { resolved: [], integrityFailed: [] };
+      const report: DrainReport = { resolved: [], integrityFailed: [], commonFailures: [] };
       try {
-        for (const intent of listPending()) {
+        const pending = listPending();
+        if (!pending.ok) return pending;
+        for (const intent of pending.value) {
           if (paused()) return err(pauseError());
+          if (intent.ownerDomain !== null && intent.ownerId !== null && intent.contentId !== null) {
+            // The common content-intent arm of the M9 drain (SHR-005, section
+            // 10.1): execution follows the common semantics — a both-present
+            // destination conflict retains both files, a source-absent retry
+            // completes only after size and hash verification — and completion
+            // runs through the same shared transaction the ordinary mutation
+            // path uses, so a competing drain appends no duplicate success.
+            const outcome = executeCommonIntent(db, intent, vaultPath);
+            const ledger = options.events ?? createSqliteEventLedger(db);
+            const completion = completeCommonIntentTx(db, ledger, intent.id, outcome, {
+              eventIds: options.eventIds,
+              now: options.now,
+            });
+            if (!completion.ok) return err(completion.error);
+            if (completion.value.status === "failed") {
+              report.commonFailures.push({
+                intentId: intent.id,
+                contentId: intent.contentId as string,
+                ownerDomain: intent.ownerDomain as "memo" | "channel",
+                ownerId: intent.ownerId as string,
+                reason: completion.value.reason,
+              });
+            } else {
+              report.resolved.push(intent.id);
+            }
+            continue;
+          }
           const outcome = executeIntent(intent, vaultPath);
-          // The completion commit: one short transaction per intent that bumps
-          // attempts and deletes the row only when the effect is complete. An
-          // integrity failure appends ARTIFACT_INTEGRITY_FAILED inside this same
-          // transaction, so the ledger and the surviving intent row agree (SEC-012).
+          // The completion commit: one short transaction per intent that rechecks
+          // the row, bumps attempts, and deletes it only when the effect is
+          // complete. A done assessment appends ARTIFACT_ACTIVATED or
+          // ARTIFACT_UNLINKED inside this same transaction when its own DELETE
+          // actually cleared the row, so a competing drain cannot double-append;
+          // an integrity failure appends ARTIFACT_INTEGRITY_FAILED the same way,
+          // so the ledger and the surviving intent row agree (SEC-012,
+          // security section 10: the completion transaction that removes the
+          // intent records what actually happened on disk).
           db.exec("BEGIN IMMEDIATE");
           try {
+            // Recheck before any attempt, state, or event: a competing drain may
+            // have completed this intent while this process waited, and a stale
+            // row must change no state and append no false failure.
+            const live = db.prepare("SELECT id FROM pending_fs_ops WHERE id = ?").get(intent.id) as
+              | { id: string }
+              | null
+              | undefined;
+            if (live === null || live === undefined) {
+              db.exec("COMMIT");
+              continue;
+            }
             db.prepare("UPDATE pending_fs_ops SET attempts = attempts + 1 WHERE id = ?").run(intent.id);
             if (outcome === "done") {
-              db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(intent.id);
+              const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(intent.id) as {
+                changes: number;
+              };
               if (intent.op === "activate" && intent.artifactId !== null) {
                 // The activation reached its storageKey, so the Artifact is
                 // materialized exactly when the completion commit lands (VLT-021).
                 db.prepare("UPDATE artifacts SET materialized = 1 WHERE id = ?").run(intent.artifactId);
+              }
+              if (cleared.changes === 1 && options.events !== undefined) {
+                // Associations and hashes come only from an authoritative
+                // Artifact row read inside this transaction; when the row is
+                // gone the association stays null and the unavailable sha256 is
+                // omitted rather than invented, and never derived from a
+                // pathname. storageKey itself is the persisted intent's own.
+                const artifact =
+                  intent.artifactId === null
+                    ? null
+                    : ((db.prepare("SELECT handoff_id, sha256 FROM artifacts WHERE id = ?").get(intent.artifactId) as
+                        | { handoff_id: string; sha256: string }
+                        | null
+                        | undefined) ?? null);
+                const metadata: Record<string, unknown> = { storageKey: intent.toPath };
+                if (intent.op === "activate" && artifact !== null) {
+                  metadata.sha256 = artifact.sha256;
+                }
+                options.events.appendNow({
+                  eventType: intent.op === "unlink" ? "ARTIFACT_UNLINKED" : "ARTIFACT_ACTIVATED",
+                  actor: SYSTEM_ACTOR,
+                  metadata,
+                  handoffId: artifact === null ? null : artifact.handoff_id,
+                  id: options.eventIds !== undefined ? options.eventIds() : crypto.randomUUID(),
+                  createdAt: options.now !== undefined ? options.now() : new Date().toISOString(),
+                });
               }
             } else if (options.events !== undefined) {
               const handoffId =
@@ -416,37 +520,57 @@ export function collectVaultGarbage(
   const cutoffMs = options.now.getTime() - options.graceHours * 3_600_000;
   const guarded = new Set<string>();
   for (const key of options.liveStorageKeys) guarded.add(join(vaultPath, key));
+  for (const key of options.liveContentKeys ?? []) guarded.add(join(vaultPath, key));
+  for (const key of options.receiptReferencedKeys ?? []) guarded.add(join(vaultPath, key));
   for (const intent of pendingIntents) {
     guarded.add(join(vaultPath, intent.toPath));
     if (intent.fromPath !== null) guarded.add(join(vaultPath, intent.fromPath));
   }
-  const report: GarbageCollectionReport = { sweptStaging: [], sweptUnreferenced: [] };
+  const report: GarbageCollectionReport = { sweptStaging: [], sweptUnreferenced: [], sweptContent: [] };
   try {
-    const staging = join(vaultPath, "staging");
-    if (existsSync(staging)) {
-      for (const entry of readdirSync(staging)) {
-        const path = join(staging, entry);
-        // A staged source a pending intent still names is never a candidate,
-        // whatever its age: sweeping it would turn a recoverable conflict into
-        // a durable both-gone integrity failure.
-        if (guarded.has(path)) continue;
-        if (isSweepable(path, cutoffMs)) {
-          unlinkSync(path);
-          report.sweptStaging.push(path);
-        }
+    // Each managed root is independently checked, including the legacy roots
+    // visited by this same collector. An unsafe root is never traversed.
+    for (const root of ["staging", "artifacts", "content"] as const) {
+      if (
+        root === "artifacts" &&
+        options.liveStorageKeys.length === 0 &&
+        options.sweepArtifactsWithoutRegistry !== true
+      )
+        continue;
+      if (
+        root === "content" &&
+        (options.liveContentKeys ?? []).length === 0 &&
+        options.sweepContentWithoutRegistry !== true
+      )
+        continue;
+      let directory: string | undefined;
+      try {
+        directory = managedDirectory(vaultPath, root);
+      } catch {
+        continue;
       }
-    }
-    const artifacts = join(vaultPath, "artifacts");
-    const registryAuthorizesSweep =
-      options.liveStorageKeys.length > 0 || options.sweepArtifactsWithoutRegistry === true;
-    if (registryAuthorizesSweep && existsSync(artifacts)) {
-      for (const path of filesUnder(artifacts)) {
-        if (guarded.has(path)) continue;
-        if (isSweepable(path, cutoffMs)) {
-          unlinkSync(path);
-          report.sweptUnreferenced.push(path);
+      if (directory === undefined) continue;
+      const visit = (key: string): void => {
+        const current = managedDirectory(vaultPath, key);
+        if (current === undefined) return;
+        for (const entry of readdirSync(current, { withFileTypes: true })) {
+          const child = `${key}/${entry.name}`;
+          if (entry.isDirectory() && root !== "staging") {
+            visit(child);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          const file = managedFile(vaultPath, child);
+          if (file.stat === undefined || guarded.has(join(vaultPath, child)) || guarded.has(file.path)) continue;
+          if (file.stat.mtimeMs >= cutoffMs) continue;
+          // Recheck the parent and regular leaf at the actual deletion boundary.
+          unlinkSync(managedFile(vaultPath, child).path);
+          if (root === "staging") report.sweptStaging.push(file.path);
+          else if (root === "artifacts") report.sweptUnreferenced.push(file.path);
+          else report.sweptContent.push(file.path);
         }
-      }
+      };
+      visit(root);
     }
     return ok(report);
   } catch (error) {
@@ -454,28 +578,12 @@ export function collectVaultGarbage(
   }
 }
 
-function isSweepable(path: string, cutoffMs: number): boolean {
-  let stats: ReturnType<typeof statSync>;
-  try {
-    stats = statSync(path);
-  } catch {
-    return false;
-  }
-  return stats.isFile() && stats.mtimeMs < cutoffMs;
-}
-
-function* filesUnder(root: string): Generator<string> {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) {
-      yield* filesUnder(path);
-    } else if (entry.isFile()) {
-      yield path;
-    }
-  }
-}
-
 function isSafeVaultRelative(path: string): boolean {
+  return isSafeVaultRelativePath(path);
+}
+
+/** True when a path is a safe non-empty Vault-relative path with no traversal segments. */
+export function isSafeVaultRelativePath(path: string): boolean {
   if (path === "" || path.startsWith("/")) return false;
   const segments = path.split("/");
   return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");

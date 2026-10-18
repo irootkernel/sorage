@@ -108,12 +108,15 @@ describe("Memo format-2 export and recovery", () => {
     const before = ["projects.json", "events.jsonl", "manifest.json", memoPath].map((path) =>
       readFileSync(snapshot(source, path)),
     );
-    expect(JSON.parse(bytes.toString())).toEqual(memo);
-    expect(bytes.toString()).toBe(canonicalJson(memo));
+    // The format-3 shard carries every Memo field with the body as inline bodyContent.
+    const { body: _body, ...memoRecord } = memo;
+    expect(JSON.parse(bytes.toString())).toEqual({ ...memoRecord, bodyContent: { inline: memo.body } });
+    expect(bytes.toString()).toBe(canonicalJson({ ...memoRecord, bodyContent: { inline: memo.body } }));
     expect(manifest(source)).toEqual({
-      formatVersion: 2,
-      counts: { projects: 1, handoffs: 0, artifacts: 0, events: 3, memos: 1 },
+      formatVersion: 3,
+      counts: { projects: 1, handoffs: 0, artifacts: 0, events: 3, memos: 1, channels: 0 },
       memoDigests: { [memoPath]: createHash("sha256").update(bytes).digest("hex") },
+      contentDigests: {},
     });
     unwrap(exportOnce(source));
     expect(
@@ -168,13 +171,14 @@ describe("Memo format-2 export and recovery", () => {
     db.close();
   });
 
-  it("always exports an empty format-2 inventory and restores it without Memo shards", () => {
+  it("always exports an empty format-3 inventory and restores it without Memo shards", () => {
     const source = installation();
     unwrap(exportOnce(source));
     expect(manifest(source)).toEqual({
-      formatVersion: 2,
-      counts: { projects: 0, handoffs: 0, artifacts: 0, events: 0, memos: 0 },
+      formatVersion: 3,
+      counts: { projects: 0, handoffs: 0, artifacts: 0, events: 0, memos: 0, channels: 0 },
       memoDigests: {},
+      contentDigests: {},
     });
     const target = installation();
     unwrap(restore(target, source, true));
@@ -437,7 +441,7 @@ const corruptions: Array<[string, (source: Installation) => void]> = [
     "future format",
     (s) => {
       const m = manifest(s);
-      m.formatVersion = 3;
+      m.formatVersion = 4;
       writeManifest(s, m);
     },
   ],

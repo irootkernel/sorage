@@ -67,6 +67,7 @@ function pushPorts(script: Array<(args: string[]) => GitRunOutcome | null>, opti
       ok({ files: 4, counts: { projects: 1, handoffs: 1, events: 1, artifacts: 1 }, redactedWorkspacePaths: true }),
     verifyCurrentArtifacts: () => ok({ verified: 1 }),
     ensureRepository: () => ok({ initialized: false, existingReported: true }),
+    prepareWritableContent: () => ok(undefined),
     git: client,
     gitState: () => ok({ mergeInProgress: false, rebaseInProgress: false }),
     recordRun: () => ok(undefined),

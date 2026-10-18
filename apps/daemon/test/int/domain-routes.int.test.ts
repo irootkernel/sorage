@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -565,5 +566,40 @@ describe("no route exposes filesystem browsing", () => {
   it("treats traversal-shaped ids as unknown Handoffs", async () => {
     const response = await call("/api/v1/handoffs/..%2F..%2Fetc?asUser=true", { bearer: apiToken });
     expect(response.status).toBe(404);
+  });
+});
+
+describe("diagnostics schema admission", () => {
+  it("preserves supported reports and maps a forward refusal through authenticated HTTP", async () => {
+    const supported = await call("/api/v1/diagnostics", { bearer: apiToken });
+    expect(supported.status).toBe(200);
+    expect(json(supported).data.checks).toHaveLength(21);
+    const database = join(home, "state/sorage.sqlite3");
+    const writer = new DatabaseSync(database);
+    try {
+      writer.exec("INSERT INTO schema_migrations VALUES(9, 'future', '2026-01-01')");
+    } finally {
+      writer.close();
+    }
+    const before = readFileSync(database);
+    try {
+      const unauthorized = await call("/api/v1/diagnostics", { bearer: null });
+      expect(unauthorized.status).toBe(401);
+      const refused = await call("/api/v1/diagnostics", {
+        bearer: apiToken,
+        extra: { "x-request-id": "diagnostics-future" },
+      });
+      expect(refused.status).toBe(422);
+      expect(json(refused)).toMatchObject({ ok: false, error: { code: "STORAGE_SCHEMA_UNSUPPORTED" } });
+      expect(json(refused).meta.requestId).toBe(refused.headers["x-request-id"]);
+      expect(readFileSync(database)).toEqual(before);
+    } finally {
+      const cleanup = new DatabaseSync(database);
+      try {
+        cleanup.exec("DELETE FROM schema_migrations WHERE version=9");
+      } finally {
+        cleanup.close();
+      }
+    }
   });
 });

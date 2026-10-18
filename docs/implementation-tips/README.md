@@ -8,6 +8,8 @@ The [Project Memo qualification map](memo-qualification.md) connects requirement
 
 The [preflight qualification map](preflight-qualification.md) connects PFL-001 through PFL-008 and AJ-24 to production paths, owning tests, the compiled native matrix, and unperformed platform checks.
 
+The [M9 shared content qualification map](m9-shared-content-qualification.md) connects the TASK-106 common content store, migration 8 and the guarded rebuild path, the generalized operational seams, and the snapshot format-3 turn to their production paths, contract classification, migration impact, and owning tests.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:

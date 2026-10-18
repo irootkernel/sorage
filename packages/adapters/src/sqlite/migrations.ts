@@ -292,6 +292,44 @@ CREATE TRIGGER events_memo_association
 `,
 };
 
+/**
+ * The TASK-106 shared-content infrastructure migration (SHR-004, SHR-009,
+ * SHR-011, interface section 38.7): additive DDL only, rebuilding no domain
+ * table, so every existing transport keeps working at this commit. The
+ * immutable content registry enforces the XOR representation at the table
+ * level — exactly one of inline content and a managed storage key, a nonempty
+ * key, a nonnegative size, a lowercase 64-hex digest, and inline rows pinned
+ * materialized — and the sha256 index is deliberately nonunique, because
+ * immutable records are never deduplicated by digest. `pending_fs_ops` gains
+ * the common-intent owner columns: SQLite `ALTER TABLE ... ADD COLUMN` cannot
+ * add a multi-column table CHECK and rebuilding the intent log is out of scope,
+ * so all-null legacy rows versus the all-present owner triple is application
+ * validation plus tests, with the single-column enum CHECK as the database
+ * bound; legacy `artifact_id` semantics stay unchanged.
+ */
+export const SHARED_CONTENT_MIGRATION: Migration = {
+  version: 8,
+  name: "shared-content-v1",
+  sql: `
+CREATE TABLE content_records (
+  id TEXT PRIMARY KEY,
+  inline_text TEXT,
+  storage_key TEXT,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  sha256 TEXT NOT NULL CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+  materialized INTEGER NOT NULL DEFAULT 0 CHECK (materialized IN (0, 1)),
+  created_at TEXT NOT NULL,
+  CHECK ((inline_text IS NULL) != (storage_key IS NULL)),
+  CHECK (storage_key IS NULL OR storage_key != ''),
+  CHECK (inline_text IS NULL OR materialized = 1)
+);
+CREATE INDEX idx_content_records_sha256 ON content_records(sha256);
+ALTER TABLE pending_fs_ops ADD COLUMN owner_domain TEXT CHECK (owner_domain IS NULL OR owner_domain IN ('memo', 'channel'));
+ALTER TABLE pending_fs_ops ADD COLUMN owner_id TEXT;
+ALTER TABLE pending_fs_ops ADD COLUMN content_id TEXT;
+`,
+};
+
 export const MIGRATIONS: Migration[] = [
   FIRST_RELEASED_SCHEMA,
   PROJECT_REGISTRY_MIGRATION,
@@ -300,4 +338,5 @@ export const MIGRATIONS: Migration[] = [
   VAULT_MOVE_FENCE_MIGRATION,
   BACKUP_RUNS_MIGRATION,
   PROJECT_MEMOS_MIGRATION,
+  SHARED_CONTENT_MIGRATION,
 ];

@@ -61,57 +61,57 @@ function seedSource(home: string, vault: string): void {
   db.exec("BEGIN");
   db.prepare(
     `INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at)
-    VALUES ('p-1', 'beta', 'Beta', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    VALUES ('11111111-1111-4111-8111-111111111111', 'beta', 'Beta', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
   ).run();
   db.prepare(
     `INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at)
-    VALUES ('b-1', 'p-1', 'source-installation', ?, 'directory', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    VALUES ('33333333-3333-4333-8333-333333333333', '11111111-1111-4111-8111-111111111111', '77777777-7777-4777-8777-777777777777', ?, 'directory', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
   ).run(workspacePath);
   const artifactBytes = "# The brief\n";
-  mkdirSync(join(vault, "artifacts", HANDOFF_ID, "a-1"), { recursive: true });
-  const artifactPath = join(vault, "artifacts", HANDOFF_ID, "a-1", "brief.md");
+  mkdirSync(join(vault, "artifacts", HANDOFF_ID, "22222222-2222-4222-8222-222222222222"), { recursive: true });
+  const artifactPath = join(vault, "artifacts", HANDOFF_ID, "22222222-2222-4222-8222-222222222222", "brief.md");
   writeFileSync(artifactPath, artifactBytes);
   chmodSync(artifactPath, 0o444);
   db.prepare(
     `INSERT INTO handoffs (id, sender_kind, sender_workspace_key, sender_path_snapshot, recipient_project_id,
       current_artifact_id, title, revision, row_version, review_state, first_fetched_at, created_at, updated_at)
-    VALUES (?, 'unregistered_workspace', ?, ?, 'p-1', 'a-1', 'Brief', 2, 3, 'changes_requested',
+    VALUES (?, 'unregistered_workspace', ?, ?, '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 'Brief', 2, 3, 'changes_requested',
       '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
   ).run(HANDOFF_ID, WORKSPACE_KEY, workspacePath);
   db.prepare(
     `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes,
       sha256, imported_from_path, materialized, created_at)
-    VALUES ('a-1', ?, ?, 'brief.md', 'brief.md', 'text/markdown', ?, ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
+    VALUES ('22222222-2222-4222-8222-222222222222', ?, ?, 'brief.md', 'brief.md', 'text/markdown', ?, ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
   ).run(
     HANDOFF_ID,
-    `artifacts/${HANDOFF_ID}/a-1/brief.md`,
+    `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`,
     artifactBytes.length,
     createHash("sha256").update(artifactBytes).digest("hex"),
     join(workspacePath, "brief.md"),
   );
   db.prepare(
     `INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at)
-    VALUES (?, 'registered_project', 'p-1', 2, 'Tighten the title', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')`,
+    VALUES (?, 'registered_project', '11111111-1111-4111-8111-111111111111', 2, 'Tighten the title', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')`,
   ).run(HANDOFF_ID);
   db.prepare(
     `INSERT INTO deletion_requests (id, handoff_id, requested_by_kind, requested_by_id, reason, status,
       requested_at, resolved_at, resolved_by_user, resolution_note)
-    VALUES ('d-1', ?, 'registered_project', 'p-1', 'Done', 'rejected', '2026-01-04T00:00:00.000Z',
+    VALUES ('66666666-6666-4666-8666-666666666666', ?, 'registered_project', '11111111-1111-4111-8111-111111111111', 'Done', 'rejected', '2026-01-04T00:00:00.000Z',
       '2026-01-05T00:00:00.000Z', 'root', 'kept for the audit')`,
   ).run(HANDOFF_ID);
   db.prepare(
     `INSERT INTO handoffs (id, sender_kind, recipient_project_id, title, revision, row_version, review_state,
       consecutive_no_change_resolutions, pinned, deleted_at, created_at, updated_at)
-    VALUES (?, 'user', 'p-1', 'Gone', 1, 1, 'accepted', 0, 0, '2026-01-06T00:00:00.000Z',
+    VALUES (?, 'user', '11111111-1111-4111-8111-111111111111', 'Gone', 1, 1, 'accepted', 0, 0, '2026-01-06T00:00:00.000Z',
       '2026-01-06T00:00:00.000Z', '2026-01-06T00:00:00.000Z')`,
   ).run(TOMBSTONE_ID);
   db.prepare(
     `INSERT INTO events (id, handoff_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
-    VALUES ('e-1', ?, 'HANDOFF_CREATED', 'unregistered_workspace', ?, 1, ?, '2026-01-02T00:00:01.000Z')`,
+    VALUES ('44444444-4444-4444-8444-444444444444', ?, 'HANDOFF_CREATED', 'unregistered_workspace', ?, 1, ?, '2026-01-02T00:00:01.000Z')`,
   ).run(HANDOFF_ID, WORKSPACE_KEY, JSON.stringify({ title: "Brief", fromPath: "/somewhere" }));
   db.prepare(
     `INSERT INTO events (id, handoff_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
-    VALUES ('e-2', ?, 'REVIEW_NOTE_CREATED', 'registered_project', 'p-1', 3, ?, '2026-01-03T00:00:00.000Z')`,
+    VALUES ('55555555-5555-4555-8555-555555555555', ?, 'REVIEW_NOTE_CREATED', 'registered_project', '11111111-1111-4111-8111-111111111111', 3, ?, '2026-01-03T00:00:00.000Z')`,
   ).run(HANDOFF_ID, JSON.stringify({ targetRevision: 2 }));
   db.exec("COMMIT");
   db.close();
@@ -246,7 +246,9 @@ describe("backupRestore across two installations", () => {
     };
     expect(note.body).toBe("Tighten the title");
     expect(note.target_revision).toBe(2);
-    const request = db.prepare("SELECT status FROM deletion_requests WHERE id = 'd-1'").get() as { status: string };
+    const request = db
+      .prepare("SELECT status FROM deletion_requests WHERE id = '66666666-6666-4666-8666-666666666666'")
+      .get() as { status: string };
     expect(request.status).toBe("rejected");
     const events = db.prepare("SELECT id, metadata_json FROM events ORDER BY created_at").all() as Array<{
       id: string;
@@ -254,13 +256,17 @@ describe("backupRestore across two installations", () => {
     }>;
     const ids = events.map((event) => event.id);
     expect(ids).toHaveLength(4);
-    expect(ids).toEqual(expect.arrayContaining(["e-1", "e-2"]));
-    const restoredFirst = events.find((event) => event.id === "e-1");
+    expect(ids).toEqual(
+      expect.arrayContaining(["44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555"]),
+    );
+    const restoredFirst = events.find((event) => event.id === "44444444-4444-4444-8444-444444444444");
     expect(restoredFirst).toBeDefined();
     const exportedFirst = JSON.parse(exportedEvents.split("\n")[0] as string) as { metadata: Record<string, unknown> };
     expect(JSON.parse((restoredFirst as { metadata_json: string }).metadata_json)).toEqual(exportedFirst.metadata);
     const types = db
-      .prepare("SELECT event_type FROM events WHERE id NOT IN ('e-1', 'e-2') ORDER BY created_at")
+      .prepare(
+        "SELECT event_type FROM events WHERE id NOT IN ('44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555') ORDER BY created_at",
+      )
       .all() as Array<{ event_type: string }>;
     expect(types.map((row) => row.event_type)).toEqual(["VAULT_ADOPTED", "RESTORE_COMPLETED"]);
     db.close();
@@ -271,7 +277,10 @@ describe("backupRestore across two installations", () => {
       installationId: string;
     };
     expect(marker.installationId).toBe(sourceId);
-    const restored = readFileSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1/brief.md`), "utf8");
+    const restored = readFileSync(
+      join(target.vault, `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`),
+      "utf8",
+    );
     expect(restored).toBe("# The brief\n");
 
     // Only the API token is regenerated; it exists and is well-formed.
@@ -286,12 +295,17 @@ describe("backupRestore across two installations", () => {
     const target = initializedHome("sorage-restore-converge-dst-");
     // The first attempt crashed after copying one artifact but before the
     // rebuild; its file is still in place and the retry must overwrite it.
-    mkdirSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1`), { recursive: true });
-    writeFileSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1/brief.md`), "leftover bytes\n");
+    mkdirSync(join(target.vault, `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222`), { recursive: true });
+    writeFileSync(
+      join(target.vault, `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`),
+      "leftover bytes\n",
+    );
 
     const result = restoreInto(target.home, copy, { dryRun: false });
     expect(result.ok).toBe(true);
-    expect(readFileSync(join(target.vault, `artifacts/${HANDOFF_ID}/a-1/brief.md`), "utf8")).toBe("# The brief\n");
+    expect(
+      readFileSync(join(target.vault, `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`), "utf8"),
+    ).toBe("# The brief\n");
   });
 
   it("refuses a populated target with RESTORE_TARGET_NOT_EMPTY", () => {
@@ -311,7 +325,7 @@ describe("backupRestore across two installations", () => {
     const source = initializedHome("sorage-restore-altered-src-");
     seedSource(source.home, source.vault);
     const copy = vaultCopy(source.vault);
-    const artifact = join(copy, `artifacts/${HANDOFF_ID}/a-1/brief.md`);
+    const artifact = join(copy, `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`);
     chmodSync(artifact, 0o644);
     writeFileSync(artifact, "# The brief, altered\n");
     const target = initializedHome("sorage-restore-altered-dst-");

@@ -1,8 +1,10 @@
 /**
  * The doctor check catalog (INIT-014, INIT-017, NFR-010): the M1 snapshot held
  * exactly fourteen check identifiers, and the catalog grows only as later
- * milestones land; milestone M2 adds `daemon.port`, and milestone M3 adds
- * `service.installed`, `backup.schedule`, and `git.state`.
+ * milestones land; milestone M2 adds `daemon.port`, milestone M3 adds
+ * `service.installed`, `backup.schedule`, and `git.state`, and milestone M9
+ * adds `content.checksums`, emitted only by builds that carry the shared
+ * content store.
  * Each check carries a dotted id, a severity of ok, warning, or blocking, a message, and
  * an optional recovery. The catalog is a versioned part of the CLI JSON contract;
  * adding, renaming, or re-scoping a check is a contract change. Before
@@ -34,6 +36,7 @@ export const DOCTOR_CATALOG_0_1 = [
   "db.pendingIntents",
   "db.migrations",
   "artifacts.checksums",
+  "content.checksums",
   "bindings.exist",
   "bindings.nested",
   "bindings.ambiguous",
@@ -60,6 +63,7 @@ export const DOCTOR_CATALOG_SEVERITY: Record<DoctorCheckId, DoctorSeverity> = {
   "db.pendingIntents": "warning",
   "db.migrations": "blocking",
   "artifacts.checksums": "blocking",
+  "content.checksums": "blocking",
   "bindings.exist": "warning",
   "bindings.nested": "warning",
   "bindings.ambiguous": "warning",

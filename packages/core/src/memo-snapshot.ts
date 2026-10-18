@@ -9,7 +9,7 @@ import {
   type SnapshotEvent,
 } from "./backup-snapshot";
 import { appError, err, ok, type Result } from "./errors";
-import { isActorKind, isEventType, isMemoEventType, type MemoEventType } from "./events";
+import { isActorKind, isMemoEventType, snapshotEventTypeAllowed, type MemoEventType } from "./events";
 import { memoObject, parseMemoDetail } from "./memo-protocol";
 import { type Memo, isMemoUuid, isMemoRowVersion, isMemoTimestamp } from "./memos";
 
@@ -23,7 +23,25 @@ export interface LegacySnapshotManifest {
   formatVersion: 1;
   counts: { projects: number; handoffs: number; events: number; artifacts: number };
 }
-export type VersionedSnapshotManifest = LegacySnapshotManifest | MemoSnapshotManifest;
+/**
+ * Format 3, the M9 global snapshot generation (SHR-010): the format-2 counts and
+ * Memo digests plus the Channel count and the shared-content file inventory this
+ * build exports as empty, with later generations growing both additively.
+ */
+export interface ContentSnapshotManifest {
+  formatVersion: 3;
+  counts: {
+    projects: number;
+    handoffs: number;
+    events: number;
+    artifacts: number;
+    memos: number;
+    channels: number;
+  };
+  memoDigests: Record<string, string>;
+  contentDigests: Record<string, string>;
+}
+export type VersionedSnapshotManifest = LegacySnapshotManifest | MemoSnapshotManifest | ContentSnapshotManifest;
 export interface MemoSnapshotEvent extends SnapshotEvent {
   memoId: string | null;
 }
@@ -88,19 +106,37 @@ export function parseVersionedSnapshotManifest(text: string): Result<VersionedSn
   const parsed = parseUniqueSnapshotJson(text);
   if (!parsed.ok) return parsed;
   const value = parsed.value;
-  if (!memoObject(value, ["formatVersion"], ["counts", "memoDigests"])) return corrupt("Snapshot manifest is invalid");
-  if (value.formatVersion !== 1 && value.formatVersion !== 2)
+  if (!memoObject(value, ["formatVersion"], ["counts", "memoDigests", "contentDigests"]))
+    return corrupt("Snapshot manifest is invalid");
+  if (value.formatVersion !== 1 && value.formatVersion !== 2 && value.formatVersion !== 3)
     return err(appError("VAULT_SCHEMA_UNSUPPORTED", "Snapshot format is not supported"));
   const version2 = value.formatVersion === 2;
-  if (!memoObject(value, version2 ? ["formatVersion", "counts", "memoDigests"] : ["formatVersion", "counts"]))
+  const version3 = value.formatVersion === 3;
+  if (
+    !memoObject(
+      value,
+      version3
+        ? ["formatVersion", "counts", "memoDigests", "contentDigests"]
+        : version2
+          ? ["formatVersion", "counts", "memoDigests"]
+          : ["formatVersion", "counts"],
+    )
+  )
     return corrupt("Snapshot manifest fields are invalid");
-  const countFields = ["projects", "handoffs", "events", "artifacts", ...(version2 ? ["memos"] : [])];
+  const countFields = [
+    "projects",
+    "handoffs",
+    "events",
+    "artifacts",
+    ...(version2 || version3 ? ["memos"] : []),
+    ...(version3 ? ["channels"] : []),
+  ];
   if (
     !memoObject(value.counts, countFields) ||
     !Object.values(value.counts).every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0)
   )
     return corrupt("Snapshot counts are invalid");
-  if (version2) {
+  if (version2 || version3) {
     if (value.memoDigests === null || typeof value.memoDigests !== "object" || Array.isArray(value.memoDigests))
       return corrupt("Memo digests must be an object");
     const digests = Object.entries(value.memoDigests);
@@ -109,9 +145,31 @@ export function parseVersionedSnapshotManifest(text: string): Result<VersionedSn
       if (!memoIdFromSnapshotPath(key).ok || typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))
         return corrupt("Memo digest entry is invalid");
     }
+  }
+  if (version3) {
+    if (
+      value.contentDigests === null ||
+      typeof value.contentDigests !== "object" ||
+      Array.isArray(value.contentDigests)
+    )
+      return corrupt("Content digests must be an object");
+    for (const [key, digest] of Object.entries(value.contentDigests)) {
+      if (!isCanonicalContentFilePath(key) || typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))
+        return corrupt("Content digest entry is invalid");
+    }
+    if (canonicalJson(value) !== text) return corrupt("Format-3 manifest bytes are not canonical");
+  } else if (version2) {
     if (canonicalJson(value) !== text) return corrupt("Format-2 manifest bytes are not canonical");
   }
   return ok(value as unknown as VersionedSnapshotManifest);
+}
+
+/** True when a path is a canonical `snapshots/`-relative shared-content file path of section 38.8. */
+export function isCanonicalContentFilePath(path: string): boolean {
+  if (!path.startsWith("content/")) return false;
+  const segments = path.split("/").slice(1);
+  if (segments.length === 0) return false;
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== ".." && !segment.includes("\\"));
 }
 
 export function serializeMemoSnapshot(memo: Memo): Result<MemoSnapshotShard> {
@@ -144,20 +202,20 @@ export function parseMemoSnapshot(path: string, bytes: Uint8Array, digest: strin
   return memo;
 }
 
-/** Legacy rows have no Memo association; format 2 requires an explicit nullable field. */
+/** Legacy rows have no Memo association; formats 2 and 3 require an explicit nullable field. */
 export function parseMemoEventAssociation(
   value: unknown,
-  formatVersion: 1 | 2,
+  formatVersion: 1 | 2 | 3,
   memos: ReadonlyMap<string, Memo>,
 ): Result<MemoSnapshotEvent> {
   const fields = ["id", "handoffId", "eventType", "actorKind", "actorId", "rowVersion", "metadata", "createdAt"];
-  if (!memoObject(value, [...fields, ...(formatVersion === 2 ? ["memoId"] : [])]))
+  if (!memoObject(value, [...fields, ...(formatVersion >= 2 ? ["memoId"] : [])]))
     return corrupt("Snapshot event fields are invalid");
   if (
     !isMemoUuid(value.id) ||
     (value.handoffId !== null && !isMemoUuid(value.handoffId)) ||
     typeof value.eventType !== "string" ||
-    !isEventType(value.eventType) ||
+    !snapshotEventTypeAllowed(formatVersion, value.eventType) ||
     typeof value.actorKind !== "string" ||
     !isActorKind(value.actorKind) ||
     (value.actorId !== null && typeof value.actorId !== "string") ||
@@ -263,9 +321,11 @@ export function snapshotFilesV2(data: SnapshotData): Result<{ files: SnapshotFil
 /** Reconcile the whole Memo inventory and version-ordered history before any import. */
 export function validateMemoInventory(data: SnapshotData, manifest: VersionedSnapshotManifest): Result<void> {
   const memos = data.memos ?? [];
-  if (manifest.formatVersion === 1 && memos.length !== 0) return corrupt("Format 1 cannot contain Memos");
-  if (manifest.formatVersion === 2 && memos.length !== manifest.counts.memos)
+  if (manifest.formatVersion === 1) {
+    if (memos.length !== 0) return corrupt("Format 1 cannot contain Memos");
+  } else if (memos.length !== manifest.counts.memos) {
     return corrupt("Memo count does not match inventory");
+  }
   const projects = new Set(data.projects.map((project) => project.id));
   const owners = new Map<string, Memo>();
   for (const memo of memos) {
@@ -273,7 +333,7 @@ export function validateMemoInventory(data: SnapshotData, manifest: VersionedSna
       return corrupt("Memo identity, fields or owning Project are invalid");
     owners.set(memo.id, memo);
   }
-  if (manifest.formatVersion === 2) {
+  if (manifest.formatVersion !== 1) {
     const paths = memos.map((memo) => `memos/${memo.id.slice(0, 2)}/${memo.id}.json`);
     if (
       Object.keys(manifest.memoDigests).length !== paths.length ||
@@ -287,7 +347,7 @@ export function validateMemoInventory(data: SnapshotData, manifest: VersionedSna
     if (ids.has(event.id)) return corrupt("Duplicate snapshot event ID");
     ids.add(event.id);
     if (!isMemoEventType(event.eventType)) {
-      // Legacy event value validation is unchanged; only the new association is versioned.
+      // Legacy event value validation is unchanged; only the association is versioned.
       if (manifest.formatVersion === 1 ? Object.hasOwn(event, "memoId") : event.memoId !== null)
         return corrupt("Non-Memo event association is invalid for this format");
       continue;

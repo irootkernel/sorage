@@ -1041,3 +1041,40 @@ Before this acceptance, the proposal required reconciling the required specifica
 ### Consequences
 
 Sorage gains a third broker domain and a shared body storage boundary, with additional file-reference, migration and recovery obligations. Existing SQLite transactions and Vault durability remain the implementation foundation. Reports retain source attribution but remain untrusted data; orchestration judgment and external effect reconciliation remain consumer-owned. Product implementation, independent review, consumer activation, installation, commits and publication retain their respective authorization and acceptance boundaries.
+
+## ADR-0031: Legacy short Artifact identifiers and format-3 acceptance
+
+- **Status:** Accepted (2026-10-18)
+- **Date:** 2026-10-18
+- **Scope:** TASK-106 compatibility correction under [EPIC-016](../roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage).
+
+### Problem
+
+The existing `revise` producer generated Artifact IDs as `a` plus the first eight lowercase hexadecimal characters of SHA-1 over the Handoff ID, next revision and timestamp, while `send` used the UUID generator. Architecture sections 3.3 and 3.4 described both Artifact identity fields only as UUIDs. A UUID-only format-3 validator therefore rejects ordinary existing revisions, violating SHR-014 and TASK-106's baseline backup round-trip obligation. NFR-008 specifies the format of UUIDs; it does not require every historical identifier to be a UUID.
+
+### Decision
+
+New revisions use the existing UUID generator, as new sends already do. Readers preserve existing Artifact IDs and their `currentArtifactId` references when they are canonical UUIDs or exactly `a` followed by eight lowercase hexadecimal characters. Only these two fields gain the legacy exception; all other UUID-typed fields, workspace and User strings, legacy intent IDs, closed record shapes, identity-derived managed keys, sizes and hashes keep their existing rules. Validate unknown input as a string before testing either form. Do not rewrite existing IDs, references, storage keys, file bytes, receipts or pending intents.
+
+### Alternatives considered
+
+- Relax every identifier to a safe path segment | rejected: path safety does not establish domain identity and would admit unsupported values into unrelated UUID fields.
+- Rewrite old Artifact IDs during migration or restore | rejected: it changes retained identity, storage keys, receipts and filesystem promises, contrary to SHR-014.
+- Keep the UUID-only reader until TASK-107 | rejected: TASK-106 must independently round-trip the supported file-backed baseline without requiring later adoption.
+- Continue generating hash-prefix revision IDs | rejected: the existing UUID port supplies the required new identity without another generator or collision policy.
+
+### Compatibility impact
+
+The format-3 reader accepts the proven legacy form in the two Artifact identity fields. Existing DTO shapes remain unchanged by this correction; newly generated opaque Artifact IDs and their storage-key segments become UUIDs. Formats 1 and 2 retain their frozen readers. This correction does not change ADR-0030's separately classified nullable-storageKey migration.
+
+### Migration impact
+
+No new migration is added beyond TASK-106's additive migration 8, and no legacy row or file is repacked. Compare existing domain rows, receipt response strings and pending-intent fields immediately before and after migration; the new owner columns are null on legacy intents. Inspection without startup drain leaves those operational rows unchanged. Normal startup recovery still completes pending filesystem operations under their existing contracts. Restore preserves exported domain identity and body bytes and continues to exclude operational receipts and pending intents.
+
+### Required Source of Truth edits and roadmap impact
+
+Clarify the Artifact ID and current-Artifact reference types in [architecture sections 3.3 and 3.4](../architecture/README.md#33-handoff), and the format-3 acceptance rule in [interface section 38.8](../specs/interfaces-and-operations.md#388-public-contract-classification-and-format-3-serialization). NFR-008 remains unchanged. Task identities, dependency order, milestone and release allocation remain unchanged; TASK-105 is not reopened. TASK-107 must preserve both Artifact-ID forms through its rebuild, keep the corresponding format-3 acceptance rule for inline bodies, and treat the new content-record UUID as independent from an existing Artifact ID.
+
+### Consequences
+
+Existing revisions remain readable and restorable while new revisions conform to UUID generation. Qualification covers a populated schema-7 legacy revision through the real schema-8 upgrade and format-3 export, verification, dry-run and restore, plus native UUID-producing revisions and frozen legacy restore inputs. No historical completion events are inferred or backfilled by this identity correction.

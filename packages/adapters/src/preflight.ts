@@ -29,6 +29,7 @@ import {
   type PreflightReport,
   type PreflightResidueEntry,
   type PreflightVaultFact,
+  KNOWN_SCHEMA_HISTORY,
   parseConfigurationFile,
 } from "@sorage/core";
 import { parseDocument } from "yaml";
@@ -650,9 +651,12 @@ function classifyDatabase(db: PrivateDatabase): PreflightDatabaseFact {
     version: number;
     name: string;
   }>;
-  if (rows.some((row) => row.version > MIGRATIONS.length)) return { kind: "newer" };
+  // The central ordered known-schema inventory owns the per-build maximum
+  // (SHR-009, interface section 38.7); an applied history above it classifies
+  // as `newer`, which preflight reports as `unsupported` without mutating.
+  if (rows.some((row) => row.version > KNOWN_SCHEMA_HISTORY.length)) return { kind: "newer" };
   for (let index = 0; index < rows.length; index += 1) {
-    const expected = MIGRATIONS[index];
+    const expected = KNOWN_SCHEMA_HISTORY[index];
     const row = rows[index];
     if (expected === undefined || row === undefined || row.version !== expected.version || row.name !== expected.name) {
       return { kind: "invalid-structure" };
@@ -660,7 +664,7 @@ function classifyDatabase(db: PrivateDatabase): PreflightDatabaseFact {
   }
   if (rows.length >= 5 && !hasMoveFenceColumn(db)) return { kind: "invalid-structure" };
   if (!catalogCovers(db, rows.length)) return { kind: "invalid-structure" };
-  if (rows.length === MIGRATIONS.length) return { kind: "current-ordered" };
+  if (rows.length === KNOWN_SCHEMA_HISTORY.length) return { kind: "current-ordered" };
   if (rows.length === 0) return { kind: "invalid-structure" };
   return { kind: "known-older-ordered", preMemo: !rows.some((row) => row.name === "project-memos-v1") };
 }

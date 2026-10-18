@@ -18,12 +18,39 @@ export interface PendingFsOp {
   /** Vault-relative destination: the storageKey path of an `activate`, the removal target of an `unlink`. */
   toPath: string;
   artifactId: string | null;
+  /**
+   * The common content-intent owner triple of M9 (section 10.1): present exactly
+   * together for Memo/Channel-owned file content, all null for legacy Artifact
+   * intents whose fields and fallback semantics stay verbatim.
+   */
+  ownerDomain: "memo" | "channel" | null;
+  ownerId: string | null;
+  contentId: string | null;
   createdAt: string;
   attempts: number;
 }
 
-/** An intent before its first drain evaluation; `attempts` starts at zero. */
-export type NewPendingFsOp = Omit<PendingFsOp, "attempts">;
+/**
+ * An intent before its first drain evaluation; `attempts` starts at zero. The
+ * owner triple is optional so legacy Artifact intent records keep their shape.
+ */
+export type NewPendingFsOp = Omit<PendingFsOp, "attempts" | "ownerDomain" | "ownerId" | "contentId"> &
+  Partial<Pick<PendingFsOp, "ownerDomain" | "ownerId" | "contentId">>;
+
+/** One common intent the drain assessed as failed: recorded durably, never fabricated over. */
+export interface CommonIntentFailure {
+  intentId: string;
+  contentId: string;
+  ownerDomain: "memo" | "channel";
+  ownerId: string;
+  reason:
+    | "missing_content"
+    | "checksum_mismatch"
+    | "size_mismatch"
+    | "unsafe_path"
+    | "io_error"
+    | "destination_conflict";
+}
 
 /** An intent the drain cannot resolve: recorded durably, never fabricated over. */
 export interface IntentIntegrityFailure {
@@ -40,8 +67,10 @@ export interface IntentIntegrityFailure {
 export interface DrainReport {
   /** Intent ids the drain resolved and cleared. */
   resolved: string[];
-  /** Intents that remain recorded because their bytes are gone on both ends. */
+  /** Legacy Artifact intents that remain recorded because their bytes are gone on both ends. */
   integrityFailed: IntentIntegrityFailure[];
+  /** Common content intents that remain recorded with a committed failure assessment. */
+  commonFailures: CommonIntentFailure[];
 }
 
 export interface IntentLog {
@@ -64,6 +93,16 @@ export interface IntentLog {
 export interface GarbageCollectionOptions {
   /** Storage keys current Artifact rows name; their files are never candidates. */
   liveStorageKeys: string[];
+  /**
+   * Managed `content/` keys live content records name; their files are never
+   * candidates, and a nonempty registry authorizes the content/ sweep (SHR-011).
+   */
+  liveContentKeys?: string[];
+  /**
+   * Managed keys unexpired retained responses reference; the sweep never removes
+   * bytes a receipt may still resolve (SHR-008, SHR-011).
+   */
+  receiptReferencedKeys?: string[];
   /** The configured `gc.graceHours`; younger files are never candidates. */
   graceHours: number;
   now: Date;
@@ -74,6 +113,11 @@ export interface GarbageCollectionOptions {
    * staging/ is swept.
    */
   sweepArtifactsWithoutRegistry?: boolean;
+  /**
+   * The same authorization for the managed `content/` subtree: without live
+   * content keys no content file can be proven unreferenced, so none is swept.
+   */
+  sweepContentWithoutRegistry?: boolean;
 }
 
 export interface GarbageCollectionReport {
@@ -81,6 +125,8 @@ export interface GarbageCollectionReport {
   sweptStaging: string[];
   /** Files under artifacts/ that no row names, swept past the grace window. */
   sweptUnreferenced: string[];
+  /** Files under content/ that no live record or unexpired receipt names, swept past the grace window. */
+  sweptContent: string[];
 }
 
 /**

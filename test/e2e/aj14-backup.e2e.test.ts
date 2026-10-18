@@ -100,7 +100,19 @@ describe("AJ-14 the daily Git backup", () => {
     writeFileSync(revised, "# The AJ-14 brief, revised\n");
     const handoffId = (JSON.parse(send.stdout) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
       ?.handoffId;
-    sorage(["revise", handoffId as string, "--as", "alpha", "--file", revised, "--json"], { home, cwd: work });
+    const reviseOutcome = sorage(["revise", handoffId as string, "--as", "alpha", "--file", revised, "--json"], {
+      home,
+      cwd: work,
+    });
+    // ADR-0031: a new revision succeeds and its Artifact identity is a UUID
+    // from the generator port, no longer the retired a-plus-eight-hex form.
+    expect(reviseOutcome.status, reviseOutcome.stderr).toBe(0);
+    const detail = sorage(["get", handoffId as string, "--as", "alpha", "--json"], { home, cwd: work });
+    expect(detail.status, detail.stderr).toBe(0);
+    const detailEnvelope = JSON.parse(detail.stdout) as { data: { currentArtifact: { id: string } } };
+    expect(detailEnvelope.data.currentArtifact.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     const conflict = sorage(["backup", "run", "--json"], { home });
     expect(conflict.status).toBe(75);
     const conflictEnvelope = JSON.parse(conflict.stderr) as { error: { code: string } };
@@ -111,7 +123,7 @@ describe("AJ-14 the daily Git backup", () => {
 
     // 8. The backup configuration verifies clean.
     const verify = sorage(["backup", "verify", "--json"], { home });
-    expect(verify.status).toBe(0);
+    expect(verify.status, verify.stderr || verify.stdout).toBe(0);
     expect(existsSync(BINARY)).toBe(true);
     expect(readFileSync(join(vault, ".gitattributes"), "utf8")).toContain("artifacts/** -text -diff");
   }, 60000);

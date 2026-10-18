@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import { join } from "node:path";
 import { appError, backupTickDecision, runBackupOnce, setConfigurationValue, showConfiguration } from "@sorage/core";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
+import { schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import type { Configuration } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import {
@@ -75,13 +76,31 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
     );
   }
 
+  // The database open is the first operational step that can throw after the
+  // lock is held — a refused schema admission surfaces here — so it runs
+  // before the token, session service, listener, daemon record, or any timer
+  // exists, and its failure releases only this process's own lock and closes
+  // its own failed connection. Nothing of a foreign daemon is touched.
   const stateDir = ports.home.stateDir;
-  const database = openNodeDaemonDatabase(stateDir);
+  let database: ReturnType<typeof openNodeDaemonDatabase>;
+  try {
+    database = openNodeDaemonDatabase(stateDir);
+  } catch (error) {
+    lock.release?.();
+    const admission = schemaAdmissionOf(error);
+    return Promise.reject(
+      admission ?? appError("INTERNAL_ERROR", `the daemon database could not be opened: ${String(error)}`),
+    );
+  }
   let databaseClosed = false;
   const closeDatabase = () => {
     if (databaseClosed) return;
     databaseClosed = true;
-    database.close();
+    try {
+      database.close();
+    } catch {
+      // A failed connection is closed on refusal below; nothing to double-close.
+    }
   };
   const token = createNodeApiTokenStore({ stateDir });
   token.ensure();

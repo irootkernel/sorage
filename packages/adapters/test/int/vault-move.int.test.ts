@@ -140,6 +140,68 @@ describe("moveVault", () => {
     expect(statusPathOf(home)).toBe(vault);
   });
 
+  it("drains a pending intent under the move lock as a first-class completion path (SEC-012)", () => {
+    const { home, vault } = initializedHome("sorage-move-drain-");
+    const target = join(home, "moved-vault");
+    const handoffId = "0b111111-1111-4111-8111-1111111111ba";
+    const artifactId = "0b111111-2222-4111-8111-1111111111bb";
+    const projectId = "0b111111-3333-4111-8111-1111111111bc";
+    const key = `artifacts/${handoffId}/${artifactId}/doc.md`;
+    const sha = "2c".repeat(32);
+    // A crash between a revise's commit and its completion leaves the staged
+    // file, an unmaterialized Artifact row, and the pending activation.
+    mkdirSync(join(vault, "staging"), { recursive: true });
+    writeFileSync(join(vault, "staging", "staged-move-doc"), "move doc");
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    db.exec("BEGIN");
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, 'move-drain', 'Move Drain', NULL, 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run(projectId);
+    db.prepare(
+      `INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version,
+        review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at)
+      VALUES (?, 'Move drain probe', 'user', ?, ?, 1, 1, 'awaiting_recipient', 0, 0, '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`,
+    ).run(handoffId, projectId, artifactId);
+    db.prepare(
+      `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256,
+        imported_from_path, materialized, created_at) VALUES (?, ?, ?, 'doc.md', 'doc.md', 'text/markdown', 8, ?, NULL, 0, '2026-05-01T00:00:00.000Z')`,
+    ).run(artifactId, handoffId, key, sha);
+    db.prepare(
+      "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('mi-1', 'activate', 'staging/staged-move-doc', ?, ?, '2026-05-01T00:00:00.000Z', 0)",
+    ).run(key, artifactId);
+    db.exec("COMMIT");
+    db.close();
+
+    const ports = createNodeVaultCommandPorts({ env: { SORAGE_HOME: home }, userHome: home, targetPath: target });
+    const movePorts = ports.movePorts();
+    if (!movePorts.ok) throw new Error("move ports must build");
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(true);
+    if (!moved.ok) return;
+
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      // The mover's drain completed the activation before the copy and its
+      // success event landed in the ledger beside VAULT_MOVED.
+      const events = database
+        .prepare("SELECT event_type, handoff_id, actor_kind, metadata_json FROM events ORDER BY created_at")
+        .all() as Array<{ event_type: string; handoff_id: string | null; actor_kind: string; metadata_json: string }>;
+      expect(events.map((event) => event.event_type)).toEqual(["ARTIFACT_ACTIVATED", "VAULT_MOVED"]);
+      expect(events[0]?.handoff_id).toBe(handoffId);
+      expect(events[0]?.actor_kind).toBe("system");
+      expect(JSON.parse(events[0]?.metadata_json ?? "{}")).toEqual({ storageKey: key, sha256: sha });
+      expect(database.prepare("SELECT COUNT(*) AS n FROM pending_fs_ops").get()).toMatchObject({ n: 0 });
+      expect(database.prepare("SELECT materialized FROM artifacts WHERE id = ?").get(artifactId)).toMatchObject({
+        materialized: 1,
+      });
+    } finally {
+      database.close();
+    }
+    // The activated bytes relocated with the managed tree.
+    expect(readFileSync(join(target, key), "utf8")).toBe("move doc");
+    expect(statusPathOf(home)).toBe(target);
+  });
+
   it("preserves pre-existing artifacts and staging trees without an owned scratch marker", () => {
     const { home, vault } = initializedHome("sorage-move-managed-names-");
     const target = join(home, "foreign-target");

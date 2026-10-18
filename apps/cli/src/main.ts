@@ -1,3 +1,4 @@
+import { schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
@@ -2182,6 +2183,8 @@ export function runCli(
   try {
     program.parse(argv, { from: "user" });
   } catch (error) {
+    const admission = schemaAdmissionOf(error);
+    if (admission !== null) return renderAppError(admission, ports, program.opts().json === true);
     const commanderError = error as { code?: string; exitCode?: number; message?: string };
     if (commanderError.code === "commander.invalidArgument") {
       const memoContext = memoNumericErrorContext(program, argv);
@@ -2684,16 +2687,29 @@ export function main(argv: string[] = process.argv.slice(2)): number {
   // rather than fitting the synchronous command pipeline.
   if (argv[0] === "daemon" && argv[1] === "serve") {
     const { serveDaemon } = daemonRuntime();
-    serveDaemon({
-      armSignals: (drain) => {
-        process.on("SIGTERM", drain);
-        process.on("SIGINT", drain);
-      },
-    })
+    Promise.resolve()
+      .then(() =>
+        serveDaemon({
+          armSignals: (drain) => {
+            process.on("SIGTERM", drain);
+            process.on("SIGINT", drain);
+          },
+        }),
+      )
       .then(() => {
         process.stdout.write(`sorage daemon serving\n`);
       })
       .catch((error: unknown) => {
+        const admission = schemaAdmissionOf(error);
+        if (admission !== null) {
+          process.exitCode = renderAppError(admission, defaultPorts, argv.includes("--json"));
+          return;
+        }
+        const typed = error as AppError | null;
+        if (typed?.code === "STORAGE_SCHEMA_UNSUPPORTED" || typed?.code === "STORAGE_INTEGRITY_ERROR") {
+          process.exitCode = renderAppError(typed, defaultPorts, argv.includes("--json"));
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         process.stderr.write(`the daemon could not start: ${message}\n`);
         // PORT_IN_USE and SERVICE_PAUSED carry their documented exit codes; an

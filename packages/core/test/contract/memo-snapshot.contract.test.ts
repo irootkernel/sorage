@@ -171,7 +171,7 @@ describe("versioned manifest and Memo event association", () => {
       .toString()
       .replace(`"${identity.path}":`, `"${identity.path}": "${identity.sha256}", "${identity.path}":`);
     expect(parseVersionedSnapshotManifest(duplicate).ok).toBe(false);
-    expect(parseVersionedSnapshotManifest('{"formatVersion":3}')).toMatchObject({
+    expect(parseVersionedSnapshotManifest('{"formatVersion":4}')).toMatchObject({
       ok: false,
       error: { code: "VAULT_SCHEMA_UNSUPPORTED" },
     });

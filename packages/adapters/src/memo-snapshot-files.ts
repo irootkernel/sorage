@@ -82,7 +82,7 @@ export function readMemoSnapshotFiles(
         }
       }
     }
-    const digests = manifest.formatVersion === 2 ? manifest.memoDigests : {};
+    const digests = manifest.formatVersion === 1 ? {} : manifest.memoDigests;
     if (paths.length !== Object.keys(digests).length || paths.some((path) => !Object.hasOwn(digests, path)))
       throw new Error("Memo files and digest inventory disagree");
     const files = [];

@@ -41,11 +41,18 @@ export interface RevisionMutationPort {
       | { key: string; scope: string; requestHash: string; responseJson: string; expiresAt: string }
       | undefined;
   }): Result<{ rowVersion: number }, AppError>;
-  /** Marks the activation complete and appends ARTIFACT_ACTIVATED (ADR-0013 step 4). */
+  /**
+   * Marks the activation complete and appends ARTIFACT_ACTIVATED (ADR-0013
+   * step 4). `completed` counts actual winners only: a completion whose intent
+   * row a competing drain already cleared appends nothing and is not counted.
+   */
   completeActivations(
     completions: Array<{ intentId: string; artifactId: string; event: NewDomainEvent }>,
   ): Result<{ completed: number }, AppError>;
-  /** Marks the unlink complete and appends ARTIFACT_UNLINKED. */
+  /**
+   * Marks the unlink complete and appends ARTIFACT_UNLINKED, gated on the
+   * completion's own row clear; `completed` counts actual winners only.
+   */
   completeUnlinks(
     completions: Array<{ intentId: string; event: NewDomainEvent }>,
   ): Result<{ completed: number }, AppError>;
@@ -309,10 +316,11 @@ function reviseContent(
     workspace.value.kind === "registered_project"
       ? workspaceRootOf(workspace.value.binding)
       : workspace.value.directory;
-  const artifactId = `a${createHash("sha1")
-    .update(`${handoff.id}:${handoff.revision + 1}:${ports.clock.now().toISOString()}`)
-    .digest("hex")
-    .slice(0, 8)}`;
+  // ADR-0031: every new Artifact, revisions included, takes its identity from
+  // the existing UUID port, exactly as new sends already do. The legacy
+  // `a`-plus-eight-hex producer is retired; existing IDs of that form stay
+  // valid and are never rewritten.
+  const artifactId = ports.ids.next();
   const staged = prepareArtifactImport(
     { artifactStore: ports.artifactStore as unknown as Parameters<typeof prepareArtifactImport>[0]["artifactStore"] },
     {
