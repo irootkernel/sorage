@@ -35,14 +35,6 @@
     },
     {
       "id": "<uuid>",
-      "eventType": "ARTIFACT_ACTIVATED",
-      "actorKind": "system",
-      "actorId": null,
-      "rowVersion": null,
-      "createdAt": "<ts>"
-    },
-    {
-      "id": "<uuid>",
       "eventType": "HANDOFF_CREATED",
       "actorKind": "registered_project",
       "actorId": "<uuid>",

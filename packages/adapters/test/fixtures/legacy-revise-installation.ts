@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeInstallation, sendRequestHash, type SendOutcome } from "@sorage/core";
 import { createNodeInitPorts } from "../../src/init-ports";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { openSorageDatabase } from "../../src/sqlite/connection";
 import { FakeClock } from "../../src/testkit/fakes";
@@ -69,6 +69,10 @@ export interface LegacyReviseInstallation {
   operationalSnapshot: () => string;
   /** The schema-7 rows of the exported domain tables, for before/after comparison. */
   domainSnapshot: () => string;
+  /** The physical Artifact projection as the frozen schema-7 rows carry it. */
+  legacyArtifactSnapshot: () => string;
+  /** The same physical Artifact projection through the normalized schema-9 join. */
+  normalizedArtifactProjection: () => string;
   cleanup: () => void;
 }
 
@@ -120,7 +124,15 @@ export function legacyReviseInstallation(): LegacyReviseInstallation {
     upgradeToCurrent() {
       const upgraded = openSorageDatabase(database);
       try {
-        migrate(upgraded, MIGRATIONS, () => "2026-10-18T00:00:00.000Z");
+        // The current build's full catalog is the real production plan: the
+        // ordinary 1..8 prefix plus the guarded schema-9 Handoff rebuild on its
+        // dedicated file-backed connection, exactly as a current opener
+        // upgrades this installation.
+        const plan = productionMigrationPlan();
+        migrate(upgraded, plan.migrations, () => "2026-10-18T00:00:00.000Z", {
+          databasePath: database,
+          rebuilds: plan.rebuilds,
+        });
       } finally {
         upgraded.close();
       }
@@ -138,12 +150,36 @@ export function legacyReviseInstallation(): LegacyReviseInstallation {
       );
     },
     domainSnapshot() {
+      // The non-Artifact domain tables compare verbatim across the upgrade;
+      // the Artifacts compare through their physical projection separately,
+      // because the normalization moves the physical columns onto the
+      // immutable content records. The events projection names all nine
+      // columns explicitly so the rebuilt table's different physical column
+      // order (memo_id moved from ALTER-appended last to DDL-declared third)
+      // cannot masquerade as a data change; every metadata_json value stays
+      // the exact stored string.
       return (
         rowsOf(database, "SELECT * FROM installation") +
         rowsOf(database, "SELECT * FROM handoffs ORDER BY id") +
-        rowsOf(database, "SELECT * FROM artifacts ORDER BY id") +
-        rowsOf(database, "SELECT * FROM deletion_requests ORDER BY id") +
-        rowsOf(database, "SELECT * FROM events ORDER BY id")
+        rowsOf(
+          database,
+          "SELECT id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at FROM events ORDER BY id",
+        ) +
+        rowsOf(database, "SELECT * FROM deletion_requests ORDER BY id")
+      );
+    },
+    /** The physical Artifact projection as the frozen schema-7 rows carry it. */
+    legacyArtifactSnapshot() {
+      return rowsOf(
+        database,
+        "SELECT id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at FROM artifacts ORDER BY id",
+      );
+    },
+    /** The same physical Artifact projection through the normalized schema-9 join. */
+    normalizedArtifactProjection() {
+      return rowsOf(
+        database,
+        "SELECT a.id, a.handoff_id, c.storage_key, a.original_name, a.stored_name, a.mime_type, c.size_bytes, c.sha256, a.imported_from_path, c.materialized, a.created_at FROM artifacts a JOIN content_records c ON c.id = a.content_record_id ORDER BY a.id",
       );
     },
     cleanup: () => rmSync(home, { recursive: true, force: true }),

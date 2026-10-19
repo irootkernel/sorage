@@ -14,7 +14,18 @@ function vaultPathOf(home: string): string {
 describe("AJ-09 vault relocation", () => {
   it("moves the Vault, pauses concurrent mutations while the lock is held, and preserves integrity", () => {
     const fixture = twoProjectFixture("aj09");
-    const _id = fixture.sendTo("a", "b", "Before the move");
+    const inlineId = fixture.sendTo("a", "b", "Before the move");
+    // Relocation must still move real managed bytes alongside inline records.
+    const physical = join(fixture.workA, "physical.bin");
+    const physicalBytes = Buffer.from([0, 255, 1, 254]);
+    writeFileSync(physical, physicalBytes);
+    const sentFile = sorage(["send", "--to", "beta", "--title", "Physical", "--file", physical, "--json"], {
+      home: fixture.home,
+      cwd: fixture.workA,
+    });
+    expect(sentFile.status, sentFile.stderr).toBe(0);
+    const fileId = (envelopeOf(sentFile) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
+      ?.handoffId as string;
     // The declared default renders with `~`, so the original location is derived from the home.
     const originalVault = join(fixture.home, "vault");
     const target = join(fixture.home, "moved-vault");
@@ -49,6 +60,16 @@ describe("AJ-09 vault relocation", () => {
     expect(existsSync(join(originalVault, ".sorage-vault.json"))).toBe(true);
     const marker = JSON.parse(readFileSync(join(target, ".sorage-vault.json"), "utf8")) as { installationId: string };
     expect(marker.installationId).toBeTruthy();
+
+    for (const [id, expected] of [
+      [inlineId, readFileSync(fixture.document)],
+      [fileId, physicalBytes],
+    ] as const) {
+      const fetched = sorage(["fetch", id, "--json"], { home: fixture.home, cwd: fixture.workB });
+      expect(fetched.status, fetched.stderr).toBe(0);
+      const path = (envelopeOf(fetched) as { data: { localPath: string } }).data.localPath;
+      expect(readFileSync(path)).toEqual(expected);
+    }
 
     const verify = sorage(["vault", "verify", "--json"], { home: fixture.home, cwd: fixture.workA });
     expect(verify.status).toBe(0);

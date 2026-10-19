@@ -14,7 +14,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createNodeSendPorts } from "../../src/handoff-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { createNodeProjectPorts } from "../../src/project-command-ports";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { openAndMigrate } from "../../src/sqlite/migrator";
 
 const roots: string[] = [];
@@ -31,7 +31,7 @@ describe("send sender registration race", () => {
     { archived: true, nested: true, allow: false, configAllow: true, error: "SENDER_IDENTITY_DOWNGRADE" },
     { archived: false, nested: true, allow: true, error: null },
   ])(
-    "applies registration and downgrade rules to a staged Workspace send (archived=$archived, nested=$nested, allow=$allow, configAllow=$configAllow)",
+    "applies registration and downgrade rules to a prepared Workspace send (archived=$archived, nested=$nested, allow=$allow, configAllow=$configAllow)",
     ({ archived, nested, allow, configAllow, error }) => {
       const root = mkdtempSync(join(tmpdir(), "sorage-send-registration-"));
       roots.push(root);
@@ -50,9 +50,9 @@ describe("send sender registration race", () => {
       expect(beta.ok).toBe(true);
       const ports = createNodeSendPorts({ env, userHome });
       ports.config.allowUnregisteredSenders = configAllow ?? false;
-      const stage = ports.artifactStore.stage.bind(ports.artifactStore);
+      const stage = ports.content.prepareArtifactBody.bind(ports.content);
       let injected = false;
-      ports.artifactStore.stage = (input) => {
+      ports.content.prepareArtifactBody = (input) => {
         const staged = stage(input);
         if (staged.ok && !injected) {
           injected = true;
@@ -79,7 +79,9 @@ describe("send sender registration race", () => {
       expect(injected).toBe(true);
       expect(result.ok).toBe(error === null);
       if (error !== null) expect(!result.ok && result.error.code).toBe(error);
-      const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+      const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), productionMigrationPlan().migrations, {
+        rebuilds: productionMigrationPlan().rebuilds,
+      }).db;
       const rows = db.prepare("SELECT id FROM handoffs").all();
       expect(rows).toHaveLength(error === null ? 1 : 0);
       db.close();
@@ -116,7 +118,9 @@ describe("send sender registration race", () => {
     const refused = sendHandoffs(ports, { ...input, allowUnregistered: false });
     expect(refused.ok).toBe(false);
     expect(!refused.ok && refused.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
-    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), productionMigrationPlan().migrations, {
+      rebuilds: productionMigrationPlan().rebuilds,
+    }).db;
     expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(0);
     const allowed = sendHandoffs(ports, { ...input, allowUnregistered: true });
     expect(allowed.ok).toBe(true);
@@ -125,7 +129,7 @@ describe("send sender registration race", () => {
   });
 });
 
-describe("send binding changes during staging", () => {
+describe("send binding changes during preparation", () => {
   it("rejects a registered sender after its path is rebound to another Project", () => {
     const root = mkdtempSync(join(tmpdir(), "sorage-send-rebind-race-"));
     roots.push(root);
@@ -143,9 +147,9 @@ describe("send binding changes during staging", () => {
     expect(addProject(projects, { name: "Alpha", dir: sender, userHome, actor: USER_ACTOR }).ok).toBe(true);
     expect(addProject(projects, { name: "Beta", dir: recipient, userHome, actor: USER_ACTOR }).ok).toBe(true);
     const ports = createNodeSendPorts({ env, userHome });
-    const stage = ports.artifactStore.stage.bind(ports.artifactStore);
+    const stage = ports.content.prepareArtifactBody.bind(ports.content);
     let injected = false;
-    ports.artifactStore.stage = (input) => {
+    ports.content.prepareArtifactBody = (input) => {
       const staged = stage(input);
       if (staged.ok && !injected) {
         injected = true;
@@ -168,7 +172,9 @@ describe("send binding changes during staging", () => {
     expect(injected).toBe(true);
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
-    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), productionMigrationPlan().migrations, {
+      rebuilds: productionMigrationPlan().rebuilds,
+    }).db;
     expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(0);
     db.close();
   });
@@ -189,9 +195,9 @@ describe("send binding changes during staging", () => {
     expect(addProject(projects, { name: "Alpha", dir: sender, userHome, actor: USER_ACTOR }).ok).toBe(true);
     expect(addProject(projects, { name: "Beta", dir: recipient, userHome, actor: USER_ACTOR }).ok).toBe(true);
     const ports = createNodeSendPorts({ env, userHome });
-    const stage = ports.artifactStore.stage.bind(ports.artifactStore);
+    const stage = ports.content.prepareArtifactBody.bind(ports.content);
     let injected = false;
-    ports.artifactStore.stage = (input) => {
+    ports.content.prepareArtifactBody = (input) => {
       const staged = stage(input);
       if (staged.ok && !injected) {
         injected = true;
@@ -213,7 +219,9 @@ describe("send binding changes during staging", () => {
     expect(injected).toBe(true);
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.code).toBe("PROJECT_UNBOUND");
-    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+    const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), productionMigrationPlan().migrations, {
+      rebuilds: productionMigrationPlan().rebuilds,
+    }).db;
     expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(0);
     db.close();
   });
@@ -249,9 +257,9 @@ describe("send idempotency race", () => {
         path: sender,
         userHome,
       };
-      const stage = ports.artifactStore.stage.bind(ports.artifactStore);
+      const stage = ports.content.prepareArtifactBody.bind(ports.content);
       let winnerId: string | undefined;
-      ports.artifactStore.stage = (source) => {
+      ports.content.prepareArtifactBody = (source) => {
         const staged = stage(source);
         if (staged.ok && winnerId === undefined) {
           const winner = sendHandoffs(createNodeSendPorts({ env, userHome }), {
@@ -277,7 +285,9 @@ describe("send idempotency race", () => {
         expect(result.ok).toBe(false);
         expect(!result.ok && result.error.code).toBe("IDEMPOTENCY_CONFLICT");
       }
-      const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), MIGRATIONS).db;
+      const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), productionMigrationPlan().migrations, {
+        rebuilds: productionMigrationPlan().rebuilds,
+      }).db;
       expect(db.prepare("SELECT id FROM handoffs").all()).toHaveLength(1);
       db.close();
     },

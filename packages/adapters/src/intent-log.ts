@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type AppError,
@@ -8,6 +8,7 @@ import {
   type GarbageCollectionOptions,
   type GarbageCollectionReport,
   type IntentLog,
+  isManagedStorageKey,
   type NewPendingFsOp,
   ok,
   type PendingFsOp,
@@ -20,7 +21,7 @@ import { classifyContentIntentOwnership, contentIntentIntegrityError } from "@so
 import { vaultMoveLockHeld } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
 import { openVault } from "./vault";
-import { managedDirectory, managedFile } from "./managed-paths";
+import { UnsafeManagedPathError, managedDirectory, managedFile, type managedLstat } from "./managed-paths";
 
 export interface SqliteIntentLogOptions {
   db: SorageSqlite;
@@ -201,72 +202,60 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
       const opened = openVault(vaultPath, installationId);
       if (!opened.ok) return err(opened.error);
       const report: DrainReport = { resolved: [], integrityFailed: [], commonFailures: [] };
-      try {
-        const pending = listPending();
-        if (!pending.ok) return pending;
-        for (const intent of pending.value) {
-          if (paused()) return err(pauseError());
-          if (intent.ownerDomain !== null && intent.ownerId !== null && intent.contentId !== null) {
-            // The common content-intent arm of the M9 drain (SHR-005, section
-            // 10.1): execution follows the common semantics — a both-present
-            // destination conflict retains both files, a source-absent retry
-            // completes only after size and hash verification — and completion
-            // runs through the same shared transaction the ordinary mutation
-            // path uses, so a competing drain appends no duplicate success.
-            const outcome = executeCommonIntent(db, intent, vaultPath);
-            const ledger = options.events ?? createSqliteEventLedger(db);
-            const completion = completeCommonIntentTx(db, ledger, intent.id, outcome, {
-              eventIds: options.eventIds,
-              now: options.now,
-            });
-            if (!completion.ok) return err(completion.error);
-            if (completion.value.status === "failed") {
-              report.commonFailures.push({
-                intentId: intent.id,
-                contentId: intent.contentId as string,
-                ownerDomain: intent.ownerDomain as "memo" | "channel",
-                ownerId: intent.ownerId as string,
-                reason: completion.value.reason,
-              });
-            } else {
-              report.resolved.push(intent.id);
-            }
-            continue;
+
+      /**
+       * The completion commit: one short transaction per intent that rechecks
+       * the row, bumps attempts, and deletes it only when the effect is
+       * complete. A done assessment appends ARTIFACT_ACTIVATED or
+       * ARTIFACT_UNLINKED inside this same transaction when its own DELETE
+       * actually cleared the row, so a competing drain cannot double-append;
+       * an integrity failure appends ARTIFACT_INTEGRITY_FAILED the same way,
+       * so the ledger and the surviving intent row agree (SEC-012,
+       * security section 10: the completion transaction that removes the
+       * intent records what actually happened on disk). The classification
+       * separates a real clear — this invocation's own DELETE winner, or a
+       * competitor's clear observed at the live recheck — from a retained
+       * failure assessment whose row survives: only a real clear is progress
+       * that may release deferred work, never an attempt increment or an
+       * appended event.
+       */
+      const settle = (
+        intent: PendingFsOp,
+        outcome: "done" | "both-gone" | "destination-conflict" | "unsafe-path",
+      ): Result<"own-clear" | "observed-clear" | "retained", AppError> => {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          // Recheck before any attempt, state, or event: a competing drain may
+          // have completed this intent while this process waited, and a stale
+          // row must change no state and append no false failure — the
+          // competitor's clear is still real progress for deferred work.
+          const live = db.prepare("SELECT id FROM pending_fs_ops WHERE id = ?").get(intent.id) as
+            | { id: string }
+            | null
+            | undefined;
+          if (live === null || live === undefined) {
+            db.exec("COMMIT");
+            return ok("observed-clear");
           }
-          const outcome = executeIntent(intent, vaultPath);
-          // The completion commit: one short transaction per intent that rechecks
-          // the row, bumps attempts, and deletes it only when the effect is
-          // complete. A done assessment appends ARTIFACT_ACTIVATED or
-          // ARTIFACT_UNLINKED inside this same transaction when its own DELETE
-          // actually cleared the row, so a competing drain cannot double-append;
-          // an integrity failure appends ARTIFACT_INTEGRITY_FAILED the same way,
-          // so the ledger and the surviving intent row agree (SEC-012,
-          // security section 10: the completion transaction that removes the
-          // intent records what actually happened on disk).
-          db.exec("BEGIN IMMEDIATE");
-          try {
-            // Recheck before any attempt, state, or event: a competing drain may
-            // have completed this intent while this process waited, and a stale
-            // row must change no state and append no false failure.
-            const live = db.prepare("SELECT id FROM pending_fs_ops WHERE id = ?").get(intent.id) as
-              | { id: string }
-              | null
-              | undefined;
-            if (live === null || live === undefined) {
-              db.exec("COMMIT");
-              continue;
-            }
-            db.prepare("UPDATE pending_fs_ops SET attempts = attempts + 1 WHERE id = ?").run(intent.id);
-            if (outcome === "done") {
-              const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(intent.id) as {
-                changes: number;
-              };
+          db.prepare("UPDATE pending_fs_ops SET attempts = attempts + 1 WHERE id = ?").run(intent.id);
+          if (outcome === "done") {
+            const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(intent.id) as {
+              changes: number;
+            };
+            if (cleared.changes === 1) {
+              // The authoritative record state belongs to the winning
+              // completion transaction exactly as the event does: a stale
+              // executor that lost the row mutates nothing (SHR-004). The
+              // physical target is pinned to the persisted intent's exact
+              // stored key on both arms — the current-Artifact join and the
+              // retained-record fallback — so a mismatched record is never
+              // flipped (section 3).
               if (intent.op === "activate" && intent.artifactId !== null) {
-                // The activation reached its storageKey, so the Artifact is
-                // materialized exactly when the completion commit lands (VLT-021).
-                db.prepare("UPDATE artifacts SET materialized = 1 WHERE id = ?").run(intent.artifactId);
+                db.prepare(
+                  "UPDATE content_records SET materialized = 1 WHERE storage_key = ? AND inline_text IS NULL AND (id = (SELECT content_record_id FROM artifacts WHERE id = ?) OR materialized = 0)",
+                ).run(intent.toPath, intent.artifactId);
               }
-              if (cleared.changes === 1 && options.events !== undefined) {
+              if (options.events !== undefined) {
                 // Associations and hashes come only from an authoritative
                 // Artifact row read inside this transaction; when the row is
                 // gone the association stays null and the unavailable sha256 is
@@ -275,10 +264,11 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
                 const artifact =
                   intent.artifactId === null
                     ? null
-                    : ((db.prepare("SELECT handoff_id, sha256 FROM artifacts WHERE id = ?").get(intent.artifactId) as
-                        | { handoff_id: string; sha256: string }
-                        | null
-                        | undefined) ?? null);
+                    : ((db
+                        .prepare(
+                          "SELECT a.handoff_id, cr.sha256 FROM artifacts a JOIN content_records cr ON cr.id = a.content_record_id WHERE a.id = ?",
+                        )
+                        .get(intent.artifactId) as { handoff_id: string; sha256: string } | null | undefined) ?? null);
                 const metadata: Record<string, unknown> = { storageKey: intent.toPath };
                 if (intent.op === "activate" && artifact !== null) {
                   metadata.sha256 = artifact.sha256;
@@ -292,52 +282,162 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
                   createdAt: options.now !== undefined ? options.now() : new Date().toISOString(),
                 });
               }
-            } else if (options.events !== undefined) {
-              const handoffId =
-                intent.artifactId === null
-                  ? null
-                  : ((
-                      db.prepare("SELECT handoff_id FROM artifacts WHERE id = ?").get(intent.artifactId) as
-                        | { handoff_id: string }
-                        | null
-                        | undefined
-                    )?.handoff_id ?? null);
-              options.events.appendNow({
-                eventType: "ARTIFACT_INTEGRITY_FAILED",
-                actor: SYSTEM_ACTOR,
-                metadata: {
-                  intentId: intent.id,
-                  op: intent.op,
-                  toPath: intent.toPath,
-                  artifactId: intent.artifactId,
-                  reason: outcome,
-                },
-                handoffId,
-                id: options.eventIds !== undefined ? options.eventIds() : crypto.randomUUID(),
-                createdAt: options.now !== undefined ? options.now() : new Date().toISOString(),
-              });
             }
-            db.exec("COMMIT");
-          } catch (error) {
-            db.exec("ROLLBACK");
-            return err(
-              appError("INTERNAL_ERROR", `Completing intent ${intent.id} failed: ${messageOf(error)}.`, {
+          } else if (options.events !== undefined) {
+            const handoffId =
+              intent.artifactId === null
+                ? null
+                : ((
+                    db.prepare("SELECT handoff_id FROM artifacts WHERE id = ?").get(intent.artifactId) as
+                      | { handoff_id: string }
+                      | null
+                      | undefined
+                  )?.handoff_id ?? null);
+            options.events.appendNow({
+              eventType: "ARTIFACT_INTEGRITY_FAILED",
+              actor: SYSTEM_ACTOR,
+              metadata: {
                 intentId: intent.id,
-                cause: String(error),
-              }),
-            );
-          }
-          if (outcome === "done") {
-            report.resolved.push(intent.id);
-          } else {
-            report.integrityFailed.push({
-              id: intent.id,
-              op: intent.op,
-              toPath: intent.toPath,
-              artifactId: intent.artifactId,
-              event: "ARTIFACT_INTEGRITY_FAILED",
-              reason: outcome,
+                op: intent.op,
+                toPath: intent.toPath,
+                artifactId: intent.artifactId,
+                reason: outcome,
+              },
+              handoffId,
+              id: options.eventIds !== undefined ? options.eventIds() : crypto.randomUUID(),
+              createdAt: options.now !== undefined ? options.now() : new Date().toISOString(),
             });
+          }
+          db.exec("COMMIT");
+        } catch (error) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction was never opened or was already rolled back.
+          }
+          return err(
+            appError("INTERNAL_ERROR", `Completing intent ${intent.id} failed: ${messageOf(error)}.`, {
+              intentId: intent.id,
+              cause: String(error),
+            }),
+          );
+        }
+        if (outcome === "done") {
+          report.resolved.push(intent.id);
+          return ok("own-clear");
+        }
+        report.integrityFailed.push({
+          id: intent.id,
+          op: intent.op,
+          toPath: intent.toPath,
+          artifactId: intent.artifactId,
+          event: "ARTIFACT_INTEGRITY_FAILED",
+          reason: outcome,
+        });
+        // The failure assessment settled without clearing the row: the intent
+        // stays durable and is never progress for deferred work.
+        return ok("retained");
+      };
+
+      /**
+       * One real attempt through the shared execution boundary. The common
+       * Memo/Channel arm keeps its own executor and contract; the legacy arm
+       * runs the dependency-aware executor whose deferral performs no
+       * filesystem effect, clear, attempt increment, event, or failure report.
+       * Thrown physical I/O settles against the live row: when a competitor
+       * already cleared it, this stale executor appends no false failure and
+       * rethrows nothing (section 3).
+       */
+      const attempt = (
+        intent: PendingFsOp,
+      ): Result<"own-clear" | "observed-clear" | "retained" | "deferred", AppError> => {
+        if (intent.ownerDomain !== null && intent.ownerId !== null && intent.contentId !== null) {
+          // The common content-intent arm of the M9 drain (SHR-005, section
+          // 10.1): execution follows the common semantics — a both-present
+          // destination conflict retains both files, a source-absent retry
+          // completes only after size and hash verification — and completion
+          // runs through the same shared transaction the ordinary mutation
+          // path uses, so a competing drain appends no duplicate success. A
+          // completion is a real clear (own or already-observed competitor);
+          // a retained common failure is not progress.
+          const outcome = executeCommonIntent(db, intent, vaultPath);
+          const ledger = options.events ?? createSqliteEventLedger(db);
+          const completion = completeCommonIntentTx(db, ledger, intent.id, outcome, {
+            eventIds: options.eventIds,
+            now: options.now,
+          });
+          if (!completion.ok) return err(completion.error);
+          if (completion.value.status === "failed") {
+            report.commonFailures.push({
+              intentId: intent.id,
+              contentId: intent.contentId as string,
+              ownerDomain: intent.ownerDomain as "memo" | "channel",
+              ownerId: intent.ownerId as string,
+              reason: completion.value.reason,
+            });
+            return ok("retained");
+          }
+          report.resolved.push(intent.id);
+          return ok(completion.value.status === "already-completed" ? "observed-clear" : "own-clear");
+        }
+        let outcome: "done" | "both-gone" | "destination-conflict" | "unsafe-path";
+        try {
+          const executed = executeLegacyIntent(db, intent, vaultPath);
+          if (!executed.ok) return err(executed.error);
+          if (executed.value === "deferred") return ok("deferred");
+          outcome = executed.value;
+        } catch (ioError) {
+          // A thrown physical assessment is not a failure until the exact row
+          // is still live: a competitor that already completed this intent
+          // means the throw is a stale executor's late observation, recorded as
+          // nothing at all — and that competitor's clear is real progress.
+          const live = db.prepare("SELECT id FROM pending_fs_ops WHERE id = ?").get(intent.id) as
+            | { id: string }
+            | null
+            | undefined;
+          if (live === null || live === undefined) return ok("observed-clear");
+          throw ioError;
+        }
+        const settled = settle(intent, outcome);
+        if (!settled.ok) return settled;
+        return ok(settled.value);
+      };
+
+      try {
+        // The finite initial set: each intent receives exactly one real
+        // physical attempt in this invocation, whatever unrelated intents do,
+        // so unrelated successes never retry a failed activation (section 3).
+        const pending = listPending();
+        if (!pending.ok) return pending;
+        const deferred: PendingFsOp[] = [];
+        let progressed = false;
+        for (const intent of pending.value) {
+          if (paused()) return err(pauseError());
+          const attempted = attempt(intent);
+          if (!attempted.ok) return attempted;
+          if (attempted.value === "deferred") deferred.push(intent);
+          // Only an actually cleared row is progress: an own winner's DELETE or
+          // a competitor's clear observed at a live recheck. A retained failure
+          // assessment, an attempt increment, or an appended event never
+          // releases deferred work and never fakes an empty queue.
+          if (attempted.value === "own-clear" || attempted.value === "observed-clear") progressed = true;
+        }
+        // Deferred work is reconsidered exactly once more, and only after this
+        // invocation's own actual progress: an activation resolved above can
+        // release its dependent unlink now, while a still-blocked or failed
+        // intent is never handed a second physical attempt here.
+        if (progressed && deferred.length > 0) {
+          const requeued = listPending();
+          if (!requeued.ok) return requeued;
+          const stillPending = new Map(requeued.value.map((row) => [row.id, row]));
+          for (const intent of deferred) {
+            const current = stillPending.get(intent.id);
+            if (current === undefined) continue;
+            if (paused()) return err(pauseError());
+            const attempted = attempt(current);
+            if (!attempted.ok) return attempted;
+            // A second deferral stays durable for the next drain; there is no
+            // further reconsideration within this invocation.
           }
         }
         return ok(report);
@@ -459,49 +559,172 @@ export function clearMoveFence(db: SorageSqlite): Result<void, AppError> {
   }
 }
 
+/**
+ * The eligibility primitive of section 3: a legacy unlink may take no physical
+ * effect, clear, attempt, event, or failure report while any pending
+ * activation targets the exact same persisted `to_path` — the recorded
+ * activation is the dependency, and a timestamp/id ordering alone cannot
+ * prevent the retired-file counterexample. SQL only; no filesystem I/O.
+ */
+export function pendingActivationTargets(db: SorageSqlite, toPath: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS pending FROM pending_fs_ops WHERE op = 'activate' AND to_path = ? LIMIT 1")
+    .get(toPath) as { pending: number } | null | undefined;
+  return row !== null && row !== undefined;
+}
+
+/** The internal execution outcomes of the shared legacy intent executor. */
+export type LegacyIntentOutcome = "done" | "both-gone" | "destination-conflict" | "unsafe-path" | "deferred";
+
+/**
+ * The one shared dependency-aware legacy execution boundary of section 3
+ * (SHR-004): eligibility runs against the exact persisted activation target
+ * BEFORE any legacy unlink filesystem effect, then the managed physical
+ * activate/unlink logic runs — never inside a SQL transaction. The startup
+ * drain AND the ordinary production send/revise/delete physical wrappers call
+ * this same function, so ordinary mutation cannot bypass the dependency check
+ * with a direct remove. The optional precondition carries the ArtifactStore's
+ * own marker/live-fence mutation guard for ordinary callers; the drain keeps
+ * its per-intent lock re-checks and passes none.
+ */
+export function executeLegacyIntent(
+  db: SorageSqlite,
+  intent: Pick<PendingFsOp, "op" | "fromPath" | "toPath">,
+  vaultPath: string,
+  precondition?: () => Result<unknown, AppError>,
+): Result<LegacyIntentOutcome, AppError> {
+  if (precondition !== undefined) {
+    const guarded = precondition();
+    if (!guarded.ok) return err(guarded.error);
+  }
+  if (intent.op === "unlink" && pendingActivationTargets(db, intent.toPath)) {
+    return ok("deferred");
+  }
+  return ok(executeIntent(intent, vaultPath));
+}
+
 export function executeIntent(
-  intent: PendingFsOp,
+  intent: Pick<PendingFsOp, "op" | "fromPath" | "toPath">,
   vaultPath: string,
 ): "done" | "both-gone" | "destination-conflict" | "unsafe-path" {
   if (!isSafeVaultRelative(intent.toPath) || (intent.fromPath !== null && !isSafeVaultRelative(intent.fromPath))) {
     // A hostile path never touches the filesystem; it stays recorded as failed.
     return "unsafe-path";
   }
+  // The legacy managed-key contract the ArtifactStore always enforced: a
+  // legacy activation places exactly an artifacts/ managed key from a staging/
+  // source, and a legacy unlink removes exactly an artifacts/ managed key. A
+  // corrupted relative intent naming the Vault marker or the snapshot tree is
+  // unsafe and never touches the filesystem.
+  if (!isManagedStorageKey(intent.toPath)) {
+    return "unsafe-path";
+  }
+  if (intent.op === "activate" && intent.fromPath !== null && !intent.fromPath.startsWith("staging/")) {
+    return "unsafe-path";
+  }
   if (intent.op === "activate") {
-    const source = intent.fromPath === null ? null : join(vaultPath, intent.fromPath);
-    const destination = join(vaultPath, intent.toPath);
-    if (source !== null && existsSync(source)) {
-      if (existsSync(destination)) {
+    let sourceStat: ReturnType<typeof managedLstat>;
+    let destinationStat: ReturnType<typeof managedLstat>;
+    try {
+      // Managed resolution rejects symlinked or special parents and leaves
+      // before anything is touched: a link in the managed chain is unsafe, not
+      // content to rename over or follow.
+      const source = intent.fromPath === null ? null : managedFile(vaultPath, intent.fromPath);
+      const destination = managedFile(vaultPath, intent.toPath);
+      sourceStat = source === null ? undefined : source.stat;
+      destinationStat = destination.stat;
+    } catch (error) {
+      // Only the managed-path classification is an unsafe path; a genuine I/O
+      // failure keeps its original error semantics for the thrown-I/O
+      // liveness gate.
+      if (error instanceof UnsafeManagedPathError) return "unsafe-path";
+      throw error;
+    }
+    const destinationPath = join(vaultPath, intent.toPath);
+    const parentKey = intent.toPath.slice(0, intent.toPath.lastIndexOf("/"));
+    if (sourceStat?.isFile()) {
+      if (destinationStat !== undefined) {
         // Both ends present: overwriting the destination would violate the
         // no-overwrite invariant the store enforces, so the row stays recorded
         // as a failure instead of silently replacing bytes a record may name.
         return "destination-conflict";
       }
       try {
-        mkdirSync(dirname(destination), { recursive: true });
-        renameSync(source, destination);
-        fsyncDirectory(dirname(destination));
-        return "done";
+        managedDirectory(vaultPath, parentKey, true);
       } catch (error) {
-        // A concurrent drain may have renamed the source first: re-evaluate
-        // from current state instead of failing the whole drain (CP-7).
-        if (!existsSync(source) && existsSync(destination)) return "done";
+        if (error instanceof UnsafeManagedPathError) return "unsafe-path";
         throw error;
       }
+      try {
+        renameSync(join(vaultPath, intent.fromPath as string), destinationPath);
+      } catch (error) {
+        // Only a rename error reaches this re-evaluation: a concurrent drain
+        // may have renamed the source first (CP-7), and the managed validated
+        // destination then carries the competitor's effect. The re-evaluation
+        // itself keeps the managed classification: unsafe entries stay
+        // unsafe-path and genuine I/O keeps its original semantics.
+        let sourceGone: boolean;
+        let destinationPresent: boolean;
+        try {
+          sourceGone = managedFile(vaultPath, intent.fromPath as string).stat === undefined;
+          destinationPresent = managedFile(vaultPath, intent.toPath).stat !== undefined;
+        } catch (recheckError) {
+          if (recheckError instanceof UnsafeManagedPathError) return "unsafe-path";
+          throw recheckError;
+        }
+        if (!sourceGone || !destinationPresent) throw error;
+      }
+      // Whether this executor's own rename or the competitor's just-raced one
+      // placed the file, the parent directory entry must fsync successfully
+      // before this activation may settle: an fsync failure is never
+      // converted into done by existence (VLT-022).
+      fsyncDirectory(dirname(destinationPath));
+      // Managed Artifact files are read-only after import where the
+      // filesystem supports it (VLT-008); the placement stands even when the
+      // mark cannot be applied.
+      try {
+        chmodSync(destinationPath, 0o444);
+      } catch {
+        // Read-only is best effort on exotic filesystems; vault verify reports it.
+      }
+      return "done";
     }
-    if (existsSync(destination)) return "done";
+    if (destinationStat?.isFile()) {
+      // The idempotent source-absent/destination-present completion still
+      // requires a successful parent fsync before done: verified existence of
+      // the bytes never proves the directory entry is durable. The repair arm
+      // of an earlier fsync failure reaches done here, so the same best-effort
+      // read-only mark the fresh placement applies follows the required fsync.
+      fsyncDirectory(dirname(destinationPath));
+      try {
+        chmodSync(destinationPath, 0o444);
+      } catch {
+        // Read-only is best effort on exotic filesystems; vault verify reports it.
+      }
+      return "done";
+    }
     return "both-gone";
   }
-  const target = join(vaultPath, intent.toPath);
-  if (existsSync(target)) {
+  let targetStat: ReturnType<typeof managedLstat>;
+  try {
+    targetStat = managedFile(vaultPath, intent.toPath).stat;
+  } catch (error) {
+    // A symlink or special entry at the managed leaf is never followed or
+    // unlinked, and only the managed-path classification maps to unsafe-path;
+    // genuine I/O keeps its original semantics.
+    if (error instanceof UnsafeManagedPathError) return "unsafe-path";
+    throw error;
+  }
+  if (targetStat !== undefined) {
+    const targetPath = join(vaultPath, intent.toPath);
     try {
-      unlinkSync(target);
+      unlinkSync(targetPath);
     } catch (error) {
       // A concurrent drain may have unlinked first; a vanished target is done.
-      if (!existsSync(target)) return "done";
+      if (!existsSync(targetPath)) return "done";
       throw error;
     }
-    fsyncDirectory(dirname(target));
+    fsyncDirectory(dirname(targetPath));
   }
   return "done";
 }

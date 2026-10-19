@@ -41,7 +41,7 @@ function capture() {
   };
 }
 
-function fixture(): { home: string; workA: string; workB: string } {
+function fixture(physical = false): { home: string; workA: string; workB: string } {
   const home = tempHome("sorage-terminal-cli-");
   expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
   const workA = join(home, "work-a");
@@ -50,7 +50,7 @@ function fixture(): { home: string; workA: string; workB: string } {
   mkdirSync(workB, { recursive: true });
   expect(runCli(["project", "add", "--name", "Alpha", "--dir", workA], capture().ports)).toBe(0);
   expect(runCli(["project", "add", "--name", "Beta", "--dir", workB], capture().ports)).toBe(0);
-  const document = join(home, "brief.md");
+  const document = join(home, physical ? "brief.bin" : "brief.md");
   writeFileSync(document, "# Shared\n");
   const send = capture();
   const exit = runCli(
@@ -294,8 +294,8 @@ describe("the AJ-04 loop and the terminal guards", () => {
 
   it("guards accept with the Note, materialization, and stale expectations", () => {
     const original = process.cwd();
-    const { home, workA, workB } = fixture();
-    const document = join(home, "brief.md");
+    const { home, workA, workB } = fixture(true);
+    const document = join(home, "brief.bin");
     process.chdir(workA);
     const send = capture();
     expect(
@@ -317,6 +317,16 @@ describe("the AJ-04 loop and the terminal guards", () => {
       ),
     ).toBe(0);
     const handoffId = handoffIdOf(send.outText());
+    const setMaterialized = (value: 0 | 1): void => {
+      const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        db.prepare(
+          "UPDATE content_records SET materialized=? WHERE id IN (SELECT content_record_id FROM artifacts WHERE handoff_id=?)",
+        ).run(value, handoffId);
+      } finally {
+        db.close();
+      }
+    };
 
     process.chdir(workB);
     const withNote = capture();
@@ -329,6 +339,19 @@ describe("the AJ-04 loop and the terminal guards", () => {
       ),
     ).toBe(75);
     expect((JSON.parse(noteBlocked.errText()) as { error: { code: string } }).error.code).toBe("REVIEW_NOTE_PRESENT");
+
+    // A real present file keeps Note -> materialization -> expectations order;
+    // the missing-authority remapping must not fabricate materialized facts.
+    setMaterialized(0);
+    const noteBeforeMaterializing = capture();
+    expect(
+      runCli(
+        ["accept", handoffId, "--expected-revision", "99", "--expected-row-version", "99", "--json"],
+        noteBeforeMaterializing.ports,
+      ),
+    ).toBe(75);
+    expect(JSON.parse(noteBeforeMaterializing.errText()).error.code).toBe("REVIEW_NOTE_PRESENT");
+    setMaterialized(1);
 
     // Withdraw the note, then prove the stale guards.
     expect(runCli(["review", "withdraw", handoffId, "--json"], capture().ports)).toBe(0);
@@ -354,7 +377,9 @@ describe("the AJ-04 loop and the terminal guards", () => {
     const unmaterialized = capture();
     const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     try {
-      database.prepare("UPDATE artifacts SET materialized = 0").run();
+      database
+        .prepare("UPDATE content_records SET materialized = 0 WHERE id IN (SELECT content_record_id FROM artifacts)")
+        .run();
     } finally {
       database.close();
     }
@@ -368,10 +393,21 @@ describe("the AJ-04 loop and the terminal guards", () => {
       "ARTIFACT_MATERIALIZING",
     );
 
+    const materializingBeforeStale = capture();
+    expect(
+      runCli(
+        ["accept", handoffId, "--expected-revision", "99", "--expected-row-version", "99", "--json"],
+        materializingBeforeStale.ports,
+      ),
+    ).toBe(75);
+    expect(JSON.parse(materializingBeforeStale.errText()).error.code).toBe("ARTIFACT_MATERIALIZING");
+
     // Restore materialization and accept for real.
     const restore = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     try {
-      restore.prepare("UPDATE artifacts SET materialized = 1").run();
+      restore
+        .prepare("UPDATE content_records SET materialized = 1 WHERE id IN (SELECT content_record_id FROM artifacts)")
+        .run();
     } finally {
       restore.close();
     }

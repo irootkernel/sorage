@@ -1,5 +1,5 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
@@ -42,6 +42,30 @@ function freePort(): Promise<number> {
       probe.close(() => resolve(free));
     });
     probe.on("error", reject);
+  });
+}
+
+function contentOf(id: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        path: `/api/v1/handoffs/${id}/artifact/content?asUser=true`,
+        headers: { authorization: `Bearer ${sessionToken}` },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () => {
+          expect(response.statusCode).toBe(200);
+          resolve(Buffer.concat(chunks));
+        });
+      },
+    );
+    outgoing.on("error", reject);
+    outgoing.end();
   });
 }
 
@@ -203,8 +227,8 @@ describe("browser upload (API-003, NFR-005)", () => {
     const outcome = json(created);
     expect(outcome.data.handoffs).toHaveLength(1);
     // A single recipient carries no dispatch group; the fan-out below does.
-    const storageKey = outcome.data.handoffs[0].storageKey as string;
-    const stored = readFileSync(join(home, "vault", storageKey));
+    expect(outcome.data.handoffs[0].storageKey).toBeNull();
+    const stored = await contentOf(outcome.data.handoffs[0].handoffId);
     expect(stored.toString("utf8")).toBe(content);
     // The browser's filename survives as the recorded original name, so the
     // Artifact metadata matches a CLI import of the same file (VLT-007).
@@ -278,11 +302,13 @@ describe("browser upload (API-003, NFR-005)", () => {
     const group = outcome.data.dispatchGroupId;
     expect(group).toBeTypeOf("string");
     // Every recipient's copy is independent: distinct Handoff ids and distinct
-    // storage keys under the one dispatch group (HND-009).
+    // Artifact identities under the one dispatch group (HND-009).
     const ids = outcome.data.handoffs.map((entry: { handoffId: string }) => entry.handoffId);
     expect(new Set(ids).size).toBe(2);
-    const keys = outcome.data.handoffs.map((entry: { storageKey: string }) => entry.storageKey);
-    expect(new Set(keys).size).toBe(2);
+    const keys = outcome.data.handoffs.map((entry: { storageKey: string | null }) => entry.storageKey);
+    expect(keys).toEqual([null, null]);
+    const artifactIds = outcome.data.handoffs.map((entry: { artifactId: string }) => entry.artifactId);
+    expect(new Set(artifactIds).size).toBe(2);
   });
 
   it("aborts mid-stream over artifact.maxBytes with ARTIFACT_TOO_LARGE and leaves nothing behind", async () => {
@@ -349,8 +375,8 @@ describe("browser upload (API-003, NFR-005)", () => {
     expect(created.status).toBe(201);
     const outcome = json(created);
     expect(outcome.data.handoffs).toHaveLength(1);
-    const storageKey = outcome.data.handoffs[0].storageKey as string;
-    expect(readFileSync(join(home, "vault", storageKey)).toString("utf8")).toBe(markdown);
+    expect(outcome.data.handoffs[0].storageKey).toBeNull();
+    expect((await contentOf(outcome.data.handoffs[0].handoffId)).toString("utf8")).toBe(markdown);
     const detail = await new Promise<string>((resolve, reject) => {
       const outgoing = httpRequest(
         {

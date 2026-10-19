@@ -136,14 +136,12 @@ function exportedHandoff() {
       "2026-01-01T00:00:00.000Z",
       "2026-01-01T00:00:00.000Z",
     );
-    db.prepare(`INSERT INTO artifacts (id,handoff_id,storage_key,original_name,stored_name,mime_type,size_bytes,sha256,materialized,created_at)
-      VALUES (?,?,?,'body.md','body.md','text/markdown',?,?,1,'2026-01-01T00:00:00.000Z')`).run(
-      artifactId,
-      id,
-      storageKey,
-      bytes.length,
-      createHash("sha256").update(bytes).digest("hex"),
-    );
+    db.prepare(
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, ?, ?, 1, '2026-01-01T00:00:00.000Z')",
+    ).run(randomUUID(), storageKey, bytes.length, createHash("sha256").update(bytes).digest("hex"));
+    db.prepare(`INSERT INTO artifacts (id,handoff_id,original_name,stored_name,mime_type,imported_from_path,created_at,content_record_id)
+      VALUES (?,?,'body.md','body.md','text/markdown',NULL,'2026-01-01T00:00:00.000Z',
+        (SELECT id FROM content_records WHERE storage_key = ?))`).run(artifactId, id, storageKey);
     db.exec("COMMIT");
   } finally {
     db.close();
@@ -460,6 +458,99 @@ describe("format-3 filesystem and representation boundaries", () => {
               : canonicalJson(record);
     writeFileSync(path, altered);
     refusesBeforeImport(source, "VAULT_INTEGRITY_ERROR");
+  });
+
+  it.each(["dual", "missing", "size", "sha", "over-threshold", "surrogate", "unmaterialized"])(
+    "refuses malformed inline Artifact %s before any partial restore",
+    (defect) => {
+      const fixture = exportedHandoff();
+      const record = JSON.parse(readFileSync(fixture.path, "utf8"));
+      const body =
+        defect === "surrogate"
+          ? "\uD800"
+          : defect === "over-threshold"
+            ? "x".repeat(65_537)
+            : "\uFEFFExact\r\nno-final-newline";
+      const artifact = record.artifact;
+      artifact.inlineBody = body;
+      artifact.storageKey = null;
+      artifact.sizeBytes = Buffer.byteLength(body);
+      artifact.sha256 = createHash("sha256").update(body).digest("hex");
+      artifact.materialized = true;
+      if (defect === "dual") artifact.storageKey = `artifacts/${record.id}/${artifact.id}/body.md`;
+      if (defect === "missing") artifact.inlineBody = null;
+      if (defect === "size") artifact.sizeBytes += 1;
+      if (defect === "sha") artifact.sha256 = "0".repeat(64);
+      if (defect === "unmaterialized") artifact.materialized = false;
+      writeFileSync(fixture.path, canonicalJson(record));
+      refusesBeforeImport(fixture.source, "VAULT_INTEGRITY_ERROR");
+    },
+  );
+
+  it("preserves a real inline Artifact's exact bytes through native export, restore and fetch", () => {
+    const source = installation();
+    const target = installation();
+    const body = "\uFEFF# Unicode 한글\r\nno-final-newline";
+    const core = fileURLToPath(new URL("../../../core/src/index.ts", import.meta.url));
+    const backup = fileURLToPath(new URL("../../src/backup-command-ports.ts", import.meta.url));
+    const projects = fileURLToPath(new URL("../../src/project-command-ports.ts", import.meta.url));
+    const handoffs = fileURLToPath(new URL("../../src/handoff-command-ports.ts", import.meta.url));
+    const connection = fileURLToPath(new URL("../../src/sqlite/connection.ts", import.meta.url));
+    const script = `
+      import { mkdirSync, readFileSync, readdirSync } from "node:fs";
+      import { join } from "node:path";
+      import { createHash } from "node:crypto";
+      import { isDeepStrictEqual } from "node:util";
+      const { addProject, USER_ACTOR, sendHandoffs, exportSnapshot, backupRestore, fetchHandoff } = await import(${JSON.stringify(core)});
+      const { createNodeBackupCommandPorts } = await import(${JSON.stringify(backup)});
+      const { createNodeProjectPorts } = await import(${JSON.stringify(projects)});
+      const { createNodeSendPorts, createNodeHandoffReadPorts } = await import(${JSON.stringify(handoffs)});
+      const { openSorageDatabase } = await import(${JSON.stringify(connection)});
+      const source = ${JSON.stringify({ home: source.home, vault: source.vault, database: source.database })};
+      const target = ${JSON.stringify({ home: target.home, vault: target.vault, database: target.database })};
+      const body = ${JSON.stringify(body)};
+      const exact = Buffer.from(body, "utf8");
+      function unwrap(result) { if (!result.ok) throw Error(JSON.stringify(result)); return result.value; }
+      const env = { SORAGE_HOME: source.home };
+      const dir = join(source.home, "inline-recipient"); mkdirSync(dir);
+      unwrap(addProject(createNodeProjectPorts({ env, userHome: source.home }), { name: "Inline Recipient", dir, userHome: source.home, actor: USER_ACTOR }));
+      const sent = unwrap(sendHandoffs(createNodeSendPorts({ env, userHome: source.home }), {
+        to: ["inline-recipient"], title: "Inline bytes", body, asUser: true, path: source.home, userHome: source.home,
+        idempotencyKey: "cddcba01-1111-4111-8111-111111111111"
+      }));
+      const item = sent.handoffs[0]; if (item.storageKey !== null) throw Error("Expected an inline producer");
+      const readRow = (database) => {
+        const db = openSorageDatabase(database);
+        try { return db.prepare("SELECT a.id AS artifact_id, a.handoff_id, c.* FROM artifacts a JOIN content_records c ON c.id=a.content_record_id WHERE a.id=?").get(item.artifactId); }
+        finally { db.close(); }
+      };
+      const original = readRow(source.database);
+      unwrap(exportSnapshot(unwrap(createNodeBackupCommandPorts({ env, userHome: source.home }).exportPorts())));
+      const shard = JSON.parse(readFileSync(join(source.vault, "snapshots/handoffs", item.handoffId.slice(0,2), item.handoffId+".json"), "utf8"));
+      if (shard.artifact.inlineBody !== body || shard.artifact.storageKey !== null) throw Error("Export changed inline bytes");
+      const restored = unwrap(backupRestore(unwrap(createNodeBackupCommandPorts({ env: { SORAGE_HOME: target.home }, userHome: target.home, sourcePath: source.vault }).restorePorts()), { dryRun: false }));
+      for (let reopened=0; reopened<2; reopened++) {
+        const row = readRow(target.database);
+        if (row.id === original.id || row.id === item.artifactId || row.artifact_id !== item.artifactId || row.handoff_id !== item.handoffId || row.inline_text !== body || row.storage_key !== null || row.materialized !== 1 || Number(row.size_bytes) !== exact.length || row.sha256 !== createHash("sha256").update(exact).digest("hex")) throw Error("Native restore changed Artifact identity or bytes: "+JSON.stringify(row));
+      }
+      const db = openSorageDatabase(target.database);
+      try {
+        if (db.prepare("SELECT COUNT(*) AS n FROM idempotency_keys").get().n !== 0) throw Error("Receipts must not restore");
+        const sourceDb = openSorageDatabase(source.database);
+        try {
+          const history = (d) => d.prepare("SELECT * FROM events WHERE handoff_id=? ORDER BY created_at,id").all(item.handoffId).map(row => ({ ...row, metadata_json: JSON.parse(row.metadata_json) }));
+          if (!isDeepStrictEqual(history(db), history(sourceDb))) throw Error("Restore changed original Handoff history");
+        } finally { sourceDb.close(); }
+      } finally { db.close(); }
+      if (readdirSync(join(target.vault, "artifacts")).length !== 0) throw Error("Inline restore fabricated an Artifact file");
+      const fetched = unwrap(fetchHandoff(createNodeHandoffReadPorts({ env: { SORAGE_HOME: target.home }, userHome: target.home }), { asUser:true, as:undefined, path:target.home, userHome:target.home }, item.handoffId));
+      if (!readFileSync(fetched.localPath).equals(exact)) throw Error("Restored inline fetch changed bytes");
+      console.log(JSON.stringify({ nativeBun:Bun.version, restored:restored.restored.handoffs, reopened:2, receipts:0 }));
+    `;
+    const child = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 10_000 });
+    expect(child.error).toBeUndefined();
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ nativeBun: "1.4.2", restored: 1, reopened: 2, receipts: 0 });
   });
 
   it("preserves native Review Note BOM/CRLF bytes through restore and reopened TEXT reads", () => {

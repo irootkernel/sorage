@@ -48,7 +48,7 @@ interface SendEnvelope {
     handoffs: Array<{
       handoffId: string;
       recipientSlug: string;
-      storageKey: string;
+      storageKey: string | null;
       revision: number;
       rowVersion: number;
     }>;
@@ -97,7 +97,7 @@ describe("sorage send", () => {
     for (const handoff of envelope.data.handoffs) {
       expect(handoff.revision).toBe(1);
       expect(handoff.rowVersion).toBe(1);
-      expect(handoff.storageKey).toContain(handoff.handoffId);
+      expect(handoff.storageKey).toBeNull();
     }
     expect(send.errText()).toBe("");
   });

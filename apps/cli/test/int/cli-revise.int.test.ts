@@ -40,7 +40,7 @@ function capture() {
   };
 }
 
-function setup(): { home: string; workA: string; workB: string; handoffId: string } {
+function setup(physical = false): { home: string; workA: string; workB: string; handoffId: string } {
   const home = tempHome("sorage-revise-cli-");
   expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
   const workA = join(home, "work-a");
@@ -49,7 +49,7 @@ function setup(): { home: string; workA: string; workB: string; handoffId: strin
   mkdirSync(workB, { recursive: true });
   expect(runCli(["project", "add", "--name", "Alpha", "--dir", workA], capture().ports)).toBe(0);
   expect(runCli(["project", "add", "--name", "Beta", "--dir", workB], capture().ports)).toBe(0);
-  const document = join(home, "brief.md");
+  const document = join(home, physical ? "brief.bin" : "brief.md");
   writeFileSync(document, "# Shared\n");
   const send = capture();
   const exit = runCli(
@@ -77,12 +77,12 @@ function setup(): { home: string; workA: string; workB: string; handoffId: strin
 describe("sorage revise", () => {
   it("revises content with atomic Note resolution and durable current Artifact", () => {
     const original = process.cwd();
-    const { home, workA, workB, handoffId } = setup();
+    const { home, workA, workB, handoffId } = setup(true);
 
     process.chdir(workB);
     expect(runCli(["review", "set", handoffId, "--text", "tighten the intro", "--json"], capture().ports)).toBe(0);
 
-    const replacement = join(home, "brief-v2.md");
+    const replacement = join(home, "brief-v2.bin");
     writeFileSync(replacement, "# Shared, revised\n");
     process.chdir(workA);
     const revised = capture();
@@ -106,7 +106,11 @@ describe("sorage revise", () => {
         .get(handoffId) as { revision: number; row_version: number; review_state: string; current_artifact_id: string };
       expect(handoff.revision).toBe(2);
       expect(handoff.review_state).toBe("awaiting_recipient");
-      const artifacts = database.prepare("SELECT * FROM artifacts WHERE handoff_id = ?").all(handoffId) as Array<{
+      const artifacts = database
+        .prepare(
+          "SELECT a.id AS id, c.materialized AS materialized, c.storage_key AS storage_key FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE a.handoff_id = ?",
+        )
+        .all(handoffId) as Array<{
         id: string;
         materialized: number;
         storage_key: string;
@@ -141,7 +145,7 @@ describe("sorage revise", () => {
     expect(refused.error.code).toBe("NO_CONTENT_CHANGE");
 
     // Proactive correction keeps the state and increments the Revision.
-    const replacement2 = join(home, "brief-v3.md");
+    const replacement2 = join(home, "brief-v3.bin");
     writeFileSync(replacement2, "# Shared, proactively fixed\n");
     const proactive = capture();
     expect(

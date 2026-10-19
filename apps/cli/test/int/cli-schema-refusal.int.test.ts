@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/main";
-import { MIGRATIONS } from "@sorage/adapters/src/sqlite/migrations";
-import { errorSpec } from "@sorage/core";
+import { errorSpec, knownSchemaMaximum } from "@sorage/core";
 
 /**
  * The SHR-009 forward-refusal boundary at the CLI surface: a database whose
@@ -58,7 +57,7 @@ function poisonWithFutureVersion(home: string): void {
   const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
   try {
     db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future', ?)").run(
-      MIGRATIONS.length + 1,
+      knownSchemaMaximum() + 1,
       "2026-01-01T00:00:00.000Z",
     );
   } finally {

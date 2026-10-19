@@ -27,7 +27,7 @@
       "deletedAt": null,
       "currentArtifact": {
         "id": "<uuid>",
-        "storageKey": "artifacts/<uuid>/<uuid>/golden-brief-1.md",
+        "storageKey": null,
         "originalName": "golden-brief-1.md",
         "mimeType": "text/markdown",
         "sizeBytes": 18,
@@ -42,14 +42,14 @@
     },
     "artifact": {
       "id": "<uuid>",
-      "storageKey": "artifacts/<uuid>/<uuid>/golden-brief-1.md",
+      "storageKey": null,
       "originalName": "golden-brief-1.md",
       "mimeType": "text/markdown",
       "sizeBytes": 18,
       "sha256": "<digest>",
       "materialized": true
     },
-    "localPath": "<home>/vault/artifacts/<uuid>/<uuid>/golden-brief-1.md"
+    "localPath": "<home>/state/fetch-cache/<digest>"
   },
   "meta": {
     "requestId": "<uuid>"

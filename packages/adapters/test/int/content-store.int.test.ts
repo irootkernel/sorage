@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
@@ -313,7 +323,8 @@ describe("destination conflicts and verification", () => {
     const drained = log.drain(f.vaultPath);
     expect(drained.ok).toBe(true);
     if (drained.ok) expect(drained.value.resolved).toContain("0123abcd-0000-4000-8000-0000000000e2");
-    // A tampered destination fails closed instead of completing.
+    // Deliberately tamper with this owned read-only fixture to verify refusal.
+    chmodSync(join(f.vaultPath, key), 0o644);
     writeFileSync(join(f.vaultPath, key), Buffer.alloc(bytes.length, 0x78));
     f.db
       .prepare(
@@ -361,7 +372,9 @@ describe("destination conflicts and verification", () => {
       events: createSqliteEventLedger(f.db),
     });
     for (let attempt = 0; attempt < 2; attempt++) {
-      expect(f.store.cleanup(references, new Date())).toEqual(ok({ removedInlineIds: [], scheduledUnlinkIds: [] }));
+      expect(f.store.cleanup(references, new Date())).toEqual(
+        ok({ removedInlineIds: [], scheduledUnlinkIds: [], removedFileOnlyIds: [] }),
+      );
       expect(f.store.readRecord(contentId)).not.toEqual(ok(null));
       expect(readFileSync(staged.value.stagingPath, "utf8")).toBe(bytes);
       expect(readFileSync(join(f.vaultPath, key), "utf8")).toBe("conflicting bytes");
@@ -379,7 +392,7 @@ describe("destination conflicts and verification", () => {
     expect(existsSync(staged.value.stagingPath)).toBe(false);
     expect(readFileSync(join(f.vaultPath, key), "utf8")).toBe(bytes);
     expect(f.store.cleanup(references, new Date())).toEqual(
-      ok({ removedInlineIds: [], scheduledUnlinkIds: [contentId] }),
+      ok({ removedInlineIds: [], scheduledUnlinkIds: [contentId], removedFileOnlyIds: [] }),
     );
     expect(log.drain(f.vaultPath).ok).toBe(true);
     expect(log.drain(f.vaultPath).ok).toBe(true);
@@ -730,7 +743,7 @@ describe("reference-aware cleanup", () => {
       },
     };
     const protectedResult = f.store.cleanup(references, now);
-    expect(protectedResult).toEqual(ok({ removedInlineIds: [], scheduledUnlinkIds: [] }));
+    expect(protectedResult).toEqual(ok({ removedInlineIds: [], scheduledUnlinkIds: [], removedFileOnlyIds: [] }));
     const keys = receiptReferencedContentKeys(f.db, now, references);
     expect(keys.ok).toBe(true);
     if (!keys.ok) return;
@@ -753,7 +766,9 @@ describe("reference-aware cleanup", () => {
     expect(existsSync(join(f.vaultPath, fileKey))).toBe(true);
 
     const released = f.store.cleanup(references, expires);
-    expect(released).toEqual(ok({ removedInlineIds: [inlineId], scheduledUnlinkIds: [fileId] }));
+    expect(released).toEqual(
+      ok({ removedInlineIds: [inlineId], scheduledUnlinkIds: [fileId], removedFileOnlyIds: [] }),
+    );
     const drained = createSqliteIntentLog({ db: f.db, installationId: INSTALLATION }).drain(f.vaultPath);
     expect(drained.ok).toBe(true);
     expect(existsSync(join(f.vaultPath, fileKey))).toBe(false);
@@ -969,7 +984,7 @@ describe("legacy Artifact intents keep their family verbatim", () => {
     const f = fixture();
     f.db
       .prepare(
-        "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, owner_domain, owner_id, content_id, created_at, attempts) VALUES (?, 'activate', NULL, 'artifacts/gone/x', NULL, NULL, NULL, NULL, ?, 0)",
+        "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, owner_domain, owner_id, content_id, created_at, attempts) VALUES (?, 'activate', NULL, 'artifacts/gone/retired/x', NULL, NULL, NULL, NULL, ?, 0)",
       )
       .run("0123abcd-0000-4000-8000-0000000000l1", "2026-01-01T00:00:00.000Z");
     const log = createSqliteIntentLog({

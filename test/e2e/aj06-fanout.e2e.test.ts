@@ -52,14 +52,15 @@ describe("AJ-06 fan-out", () => {
     expect(run.status).toBe(0);
     const created = envelopeOf(run) as {
       data: {
-        handoffs: Array<{ handoffId: string; recipientSlug: string; storageKey: string }>;
+        handoffs: Array<{ handoffId: string; recipientSlug: string; storageKey: string | null; artifactId: string }>;
         dispatchGroupId: string;
       };
     };
     expect(created.data.handoffs).toHaveLength(3);
     expect(created.data.dispatchGroupId).not.toBeNull();
     expect(new Set(created.data.handoffs.map((handoff) => handoff.recipientSlug))).toEqual(new Set(fixture.slugs));
-    expect(new Set(created.data.handoffs.map((handoff) => handoff.storageKey)).size).toBe(3);
+    expect(created.data.handoffs.map((handoff) => handoff.storageKey)).toEqual([null, null, null]);
+    expect(new Set(created.data.handoffs.map((handoff) => handoff.artifactId)).size).toBe(3);
 
     const ids = created.data.handoffs.map((handoff) => handoff.handoffId);
     const [h0, h1, h2] = [ids[0], ids[1], ids[2]] as [string, string, string];

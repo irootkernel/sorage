@@ -75,22 +75,20 @@ export function insertHandoffSeed(db: SorageSqlite, count = 10_000): number {
     const insertHandoff = db.prepare(
       "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES (?, NULL, NULL, ?, 'unregistered_workspace', NULL, ?, ?, ?, ?, 1, 1, ?, 0, 0, ?, ?)",
     );
+    // Schema 9: every seeded Artifact carries one materialized file-backed
+    // content record whose independent UUID never reuses the Artifact id.
+    const insertContentRecord = db.prepare(
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 1, ?, 1, ?)",
+    );
     const insertArtifact = db.prepare(
-      "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, ?, ?, 'text/markdown', ?, ?, NULL, 1, ?)",
+      "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, ?, ?, 'text/markdown', NULL, ?, ?)",
     );
     for (const [index, row] of rows.entries()) {
       const artifactId = stableUuidFrom(`artifact-${index}`);
       const storageKey = `artifacts/${row.handoffId}/${artifactId}/seed.md`;
-      insertArtifact.run(
-        artifactId,
-        row.handoffId,
-        storageKey,
-        "seed.md",
-        "seed.md",
-        1,
-        row.contentSha256,
-        row.createdAt,
-      );
+      const contentRecordId = stableUuidFrom(`content-${index}`);
+      insertContentRecord.run(contentRecordId, storageKey, row.contentSha256, row.createdAt);
+      insertArtifact.run(artifactId, row.handoffId, "seed.md", "seed.md", row.createdAt, contentRecordId);
       insertHandoff.run(
         row.handoffId,
         row.title,

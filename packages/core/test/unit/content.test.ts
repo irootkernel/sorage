@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildContentStorageKey,
+  classifyPreparedBody,
   classifyTextRouting,
   commonContentFailureMetadata,
   commonContentSuccessMetadata,
@@ -12,16 +13,23 @@ import {
   isManagedContentStorageKey,
   isUtf8ExactText,
   mapLegacyDrainOutcome,
+  planContentRecordRemoval,
+  planLegacyUnlinkEligibility,
+  sha256OfBytes,
   sha256OfText,
   utf8ByteLength,
   validateCommonContentEventMetadata,
   validateContentRecord,
+  type ContentRecord,
 } from "../../src/content";
 import { ok } from "../../src/errors";
+import { buildStorageKey } from "../../src/artifacts";
 
 const UUID = "0123abcd-0000-4000-8000-000000000001";
 const OWNER = "0123abcd-0000-4000-8000-0000000000ff";
 const INTENT = "0123abcd-0000-4000-8000-0000000000ee";
+const HANDOFF = "0123abcd-0000-4000-8000-0000000000aa";
+const ARTIFACT = "0123abcd-0000-4000-8000-0000000000ab";
 
 describe("decodeStrictUtf8 and byte-exact text", () => {
   it("preserves a byte-order mark instead of stripping it as a decoder directive", () => {
@@ -289,5 +297,183 @@ describe("error catalogue rows", () => {
     const { errorSpec } = await import("../../src/errors");
     expect(errorSpec("CONTENT_MATERIALIZING")).toMatchObject({ httpStatus: 409, exitCode: 75 });
     expect(errorSpec("CONTENT_CORRUPTED")).toMatchObject({ httpStatus: 409, exitCode: 73 });
+  });
+});
+
+describe("Handoff prepare routing (section 4, SHR-002)", () => {
+  const context = (overrides: Partial<Parameters<typeof classifyPreparedBody>[0]> = {}) => ({
+    logicalName: "brief.md",
+    storedName: "brief.md",
+    classification: "mime-first" as const,
+    handoffId: HANDOFF,
+    artifactId: ARTIFACT,
+    maxBytes: 1024 * 1024,
+    ...overrides,
+  });
+
+  it("routes small decodable text inline with exact BOM, CRLF, and no-final-newline bytes", () => {
+    const text = "\uFEFFtitle\r\n한국어 body-no-final";
+    const bytes = Buffer.from(text, "utf8");
+    const routing = classifyPreparedBody(context(), bytes);
+    expect(routing).toEqual(
+      ok({
+        kind: "inline",
+        text,
+        sizeBytes: bytes.byteLength,
+        sha256: sha256OfBytes(bytes),
+        mimeType: "text/markdown",
+        storageKey: null,
+      }),
+    );
+  });
+
+  it("routes the exact threshold inline and one byte over it to the Vault, with multibyte boundaries", () => {
+    const atThreshold = Buffer.from(`${"한".repeat(21845)}a`, "utf8"); // 3 * 21845 + 1 = 65,536
+    expect(atThreshold.byteLength).toBe(CONTENT_INLINE_MAX_UTF8_BYTES);
+    expect(classifyPreparedBody(context(), atThreshold)).toMatchObject({ ok: true, value: { kind: "inline" } });
+    const overThreshold = Buffer.from(`${"한".repeat(21845)}ab`, "utf8");
+    expect(classifyPreparedBody(context(), overThreshold)).toMatchObject({
+      ok: true,
+      value: { kind: "vault", storageKey: `artifacts/${HANDOFF}/${ARTIFACT}/brief.md` },
+    });
+  });
+
+  it("keeps a binary-classified body Vault-backed even when its bytes decode as valid UTF-8", () => {
+    const routing = classifyPreparedBody(
+      context({ logicalName: "logo.png", storedName: "logo.png" }),
+      Buffer.from("plain ascii", "utf8"),
+    );
+    expect(routing).toMatchObject({ ok: true, value: { kind: "vault", mimeType: "application/octet-stream" } });
+  });
+
+  it("falls an undecodable text-classified body back to the Vault instead of rejecting the import", () => {
+    const routing = classifyPreparedBody(
+      context({ logicalName: "notes.txt", storedName: "notes.txt" }),
+      Buffer.from([0x74, 0x78, 0x74, 0xff]),
+    );
+    expect(routing).toMatchObject({ ok: true, value: { kind: "vault", mimeType: "text/plain; charset=utf-8" } });
+  });
+
+  it("builds the Vault key from the supplied identities and the stored name", () => {
+    const storedName = "report 1.md";
+    const key = buildStorageKey({ handoffId: HANDOFF, artifactId: ARTIFACT, storedName });
+    expect(key.ok).toBe(true);
+    const routing = classifyPreparedBody(
+      context({ logicalName: storedName, storedName }),
+      Buffer.alloc(CONTENT_INLINE_MAX_UTF8_BYTES + 1, 0x78),
+    );
+    expect(routing.ok && routing.value.kind === "vault" ? routing.value.storageKey : null).toBe(
+      key.ok ? key.value : null,
+    );
+  });
+
+  it("rejects a body over the shared accepted bound with the surface's symbolic code", () => {
+    const routing = classifyPreparedBody(
+      context({ maxBytes: 10, tooLargeCode: "MEMO_TOO_LARGE" }),
+      Buffer.from("this is far longer than ten bytes", "utf8"),
+    );
+    expect(routing.ok).toBe(false);
+    if (!routing.ok) expect(routing.error.code).toBe("MEMO_TOO_LARGE");
+  });
+});
+
+describe("causal legacy-unlink eligibility (section 3)", () => {
+  it("defers an unlink while any pending activation names the same persisted path", () => {
+    const verdict = planLegacyUnlinkEligibility(["artifacts/h1/a1/old.md", "content/memo/o1/c1"], {
+      toPath: "artifacts/h1/a1/old.md",
+    });
+    expect(verdict).toEqual({ eligible: false, blockingActivateToPath: "artifacts/h1/a1/old.md" });
+  });
+
+  it("finds an unlink eligible when no pending activation names its path, and other paths never block", () => {
+    expect(planLegacyUnlinkEligibility(["artifacts/h2/a2/other.md"], { toPath: "artifacts/h1/a1/old.md" })).toEqual({
+      eligible: true,
+      blockingActivateToPath: null,
+    });
+    expect(planLegacyUnlinkEligibility([], { toPath: "artifacts/h1/a1/old.md" })).toEqual({
+      eligible: true,
+      blockingActivateToPath: null,
+    });
+  });
+});
+
+describe("reference-proof record removal planning (SHR-004, SHR-008, sections 1 and 3)", () => {
+  const inlineRecord: ContentRecord = {
+    id: UUID,
+    inlineText: "body",
+    storageKey: null,
+    sizeBytes: 4,
+    sha256: "a".repeat(64),
+    materialized: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const commonFileRecord: ContentRecord = {
+    ...inlineRecord,
+    id: "0123abcd-0000-4000-8000-0000000000c1",
+    inlineText: null,
+    storageKey: `content/memo/${OWNER}/0123abcd-0000-4000-8000-0000000000c1`,
+    materialized: false,
+  };
+  const artifactFileRecord: ContentRecord = {
+    ...commonFileRecord,
+    id: "0123abcd-0000-4000-8000-0000000000c2",
+    storageKey: `artifacts/${HANDOFF}/a1b2c3d4e/report.md`,
+  };
+  const emptyProof = {
+    domainReferencedRecordIds: new Set<string>(),
+    receiptReferencedRecordIds: new Set<string>(),
+    pendingCommonActivationContentIds: new Set<string>(),
+    pendingPhysicalToPaths: new Set<string>(),
+    moveFencePaused: false,
+  };
+
+  it("removes an unreferenced inline record by the reference rule alone", () => {
+    expect(planContentRecordRemoval(inlineRecord, emptyProof)).toEqual(ok({ action: "remove-inline" }));
+  });
+
+  it("schedules a content-keyed file row's unlink as a common intent and an artifact-keyed row's elsewhere", () => {
+    expect(planContentRecordRemoval(commonFileRecord, emptyProof)).toEqual(
+      ok({ action: "remove-record", physicalUnlink: "common-intent" }),
+    );
+    expect(planContentRecordRemoval(artifactFileRecord, emptyProof)).toEqual(
+      ok({ action: "remove-record", physicalUnlink: "owed-elsewhere" }),
+    );
+  });
+
+  it("refuses a file-backed record whose key is neither a managed content/ nor a managed artifacts/ key", () => {
+    for (const storageKey of ["/outside/x.md", "../outside/x.md", "content//leaf"]) {
+      const malformed: ContentRecord = {
+        ...artifactFileRecord,
+        id: "0123abcd-0000-4000-8000-0000000000d1",
+        storageKey,
+      };
+      const refused = planContentRecordRemoval(malformed, emptyProof);
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error.code).toBe("STORAGE_INTEGRITY_ERROR");
+    }
+  });
+
+  it("retains a record on every proof reason, in a deterministic precedence", () => {
+    expect(planContentRecordRemoval(inlineRecord, { ...emptyProof, moveFencePaused: true })).toEqual(
+      ok({ action: "retain", reason: "move-fence" }),
+    );
+    expect(
+      planContentRecordRemoval(inlineRecord, { ...emptyProof, domainReferencedRecordIds: new Set([UUID]) }),
+    ).toEqual(ok({ action: "retain", reason: "domain-reference" }));
+    expect(
+      planContentRecordRemoval(inlineRecord, { ...emptyProof, receiptReferencedRecordIds: new Set([UUID]) }),
+    ).toEqual(ok({ action: "retain", reason: "receipt-reference" }));
+    expect(
+      planContentRecordRemoval(inlineRecord, {
+        ...emptyProof,
+        pendingCommonActivationContentIds: new Set([UUID]),
+      }),
+    ).toEqual(ok({ action: "retain", reason: "pending-common-activation" }));
+    expect(
+      planContentRecordRemoval(artifactFileRecord, {
+        ...emptyProof,
+        pendingPhysicalToPaths: new Set([`artifacts/${HANDOFF}/a1b2c3d4e/report.md`]),
+      }),
+    ).toEqual(ok({ action: "retain", reason: "pending-physical-op" }));
   });
 });

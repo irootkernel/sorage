@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { isManagedStorageKey, isValidStorageKeySegment } from "./artifacts";
+import { buildStorageKey, isManagedStorageKey, isValidStorageKeySegment } from "./artifacts";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import type { CommonContentEventType } from "./events";
+import { classifyMimeType } from "./import-policy";
 
 /**
  * The shared content model and port of M9 (SHR-001 to SHR-006, SHR-008, SHR-011,
@@ -515,6 +516,11 @@ export interface ContentCleanupReport {
   removedInlineIds: string[];
   /** File-backed rows whose unlink intent committed; the drain executes and completes them. */
   scheduledUnlinkIds: string[];
+  /**
+   * File-backed rows removed without scheduling a common unlink: artifact-keyed records whose
+   * physical removal is owed to the legacy Artifact unlink intent, never to the common store.
+   */
+  removedFileOnlyIds: string[];
 }
 
 /**
@@ -557,4 +563,288 @@ export interface ContentStore {
    * response references it (SHR-004, SHR-008).
    */
   cleanup(references: ContentReferences, now: Date): Result<ContentCleanupReport, AppError>;
+  /**
+   * The uniform bounded read of TASK-107 (section 2 of the adopted plan): one
+   * backend-independent handle over the exact accepted bytes with recorded
+   * size/hash, bounded positional reads, explicit disposal, and an explicit
+   * digest-verification policy. Inline bytes are always verified when opened
+   * because they are bounded by the routing threshold; file-backed bodies are
+   * hashed at open only when the policy demands it, so no hot fetch gains an
+   * unconditional whole-file read.
+   */
+  openBody(recordId: string, policy: ContentBodyOpenPolicy): Result<ContentBodyHandle, AppError>;
+  /**
+   * The uniform local-path surface of SHR-006 and section 2: an inline record
+   * lazily materializes its read-only checksum-addressed `state/fetch-cache/`
+   * file, a file-backed record resolves its managed in-Vault path, and the
+   * caller never chooses the physical backend. Path resolution alone is not a
+   * checksum-verification claim.
+   */
+  materializeLocalPath(recordId: string, policy: ContentLocalPathPolicy): Result<string, AppError>;
+  /**
+   * The Handoff prepare seam of section 4: one routing implementation that
+   * classifies by the logical original name's MIME allowlist, decodes text
+   * fatally, and routes at the fixed threshold — inline for decodable text at
+   * or below it, the Vault for binary at every size and for larger or
+   * undecodable text — building the Artifact storage key from the supplied
+   * identities. The adapter owns the bounded pre-read, the streamed staging of
+   * Vault-routed bodies, and the `artifact.maxBytes` mid-stream bound.
+   */
+  prepareArtifactBody(request: ArtifactBodyPrepareRequest): Result<PreparedArtifactBody, AppError>;
+}
+
+/**
+ * The closed prepare context of section 4: every source or text caller supplies
+ * the logical name the MIME allowlist classifies, the sanitized stored name the
+ * key is built from, the Handoff/Artifact identities, and the shared bound. The
+ * MIME classification reads only this logical name — never a spool path's
+ * extension and never a client-declared type.
+ */
+export interface BodyPrepareContext {
+  /** The original or rule-produced name (for example `<title-slug>-<revision>.md`) the allowlist classifies. */
+  logicalName: string;
+  /** The sanitized segment-safe stored name used to build the Artifact storage key. */
+  storedName: string;
+  classification: "mime-first";
+  handoffId: string;
+  artifactId: string;
+  maxBytes: number;
+  tooLargeCode?: StageContentRequest["tooLargeCode"];
+}
+
+/** One routing decision over exact bytes: inline authoritative text, or the Vault for everything else. */
+export type PreparedBodyRouting =
+  | {
+      kind: "inline";
+      text: string;
+      sizeBytes: number;
+      sha256: string;
+      mimeType: string;
+      storageKey: null;
+    }
+  | {
+      kind: "vault";
+      mimeType: string;
+      storageKey: string;
+      text: null;
+    };
+
+/**
+ * The one Handoff routing implementation (SHR-002, section 11 of
+ * interfaces-and-operations): classification is by the logical name's MIME
+ * allowlist first, so a binary-classified body stays Vault-backed at every size
+ * even when its bytes decode as valid UTF-8; a text-classified body routes
+ * inline only when it decodes fatally and fits the fixed threshold, and an
+ * undecodable text-classified body falls back to the Vault because the Handoff
+ * surface accepts binary documents. The caller supplies bytes already bounded
+ * to at most the threshold; the adapter's staging pass owns the mid-stream
+ * `artifact.maxBytes` enforcement for Vault-routed bodies.
+ */
+export function classifyPreparedBody(
+  context: BodyPrepareContext,
+  bytes: Uint8Array,
+): Result<PreparedBodyRouting, AppError> {
+  const tooLarge = context.tooLargeCode ?? "ARTIFACT_TOO_LARGE";
+  if (bytes.byteLength > context.maxBytes) {
+    return err(
+      appError(
+        tooLarge,
+        `The accepted body crossed the shared bound artifact.maxBytes ${String(context.maxBytes)} bytes.`,
+        {
+          maxBytes: context.maxBytes,
+          sizeBytes: bytes.byteLength,
+        },
+      ),
+    );
+  }
+  const key = buildStorageKey({
+    handoffId: context.handoffId,
+    artifactId: context.artifactId,
+    storedName: context.storedName,
+  });
+  if (!key.ok) return key;
+  const mimeType = classifyMimeType(context.logicalName);
+  if (mimeType === "application/octet-stream") {
+    return ok({ kind: "vault", mimeType, storageKey: key.value, text: null });
+  }
+  const text = decodeStrictUtf8(bytes);
+  if (text === null) {
+    return ok({ kind: "vault", mimeType, storageKey: key.value, text: null });
+  }
+  const sizeBytes = utf8ByteLength(text);
+  if (sizeBytes > CONTENT_INLINE_MAX_UTF8_BYTES) {
+    return ok({ kind: "vault", mimeType, storageKey: key.value, text: null });
+  }
+  return ok({ kind: "inline", text, sizeBytes, sha256: sha256OfBytes(bytes), mimeType, storageKey: null });
+}
+
+/** The file-or-text body a Handoff surface hands prepare, with its logical identity (section 4). */
+export type ArtifactBodySource =
+  | { kind: "text"; text: string; logicalName: string }
+  | {
+      kind: "file";
+      physicalPath: string;
+      logicalOriginalName: string;
+      sourceKind: "workspace-path" | "authenticated-spool";
+    };
+
+/** The closed prepare request every Handoff source or text caller supplies (section 4). */
+export interface ArtifactBodyPrepareRequest {
+  body: ArtifactBodySource;
+  classification: "mime-first";
+  identities: { handoffId: string; artifactId: string };
+  bounds: { maxBytes: number; tooLargeCode?: StageContentRequest["tooLargeCode"] };
+  provenance: { importedFromPath: string | null };
+}
+
+/** The prepared body a domain composition then records inline or activates through its legacy Artifact intent. */
+export type PreparedArtifactBody =
+  | {
+      kind: "inline";
+      text: string;
+      sizeBytes: number;
+      sha256: string;
+      mimeType: string;
+      storageKey: null;
+      logicalName: string;
+      importedFromPath: string | null;
+    }
+  | {
+      kind: "file";
+      stagingPath: string;
+      sizeBytes: number;
+      sha256: string;
+      mimeType: string;
+      storageKey: string;
+      logicalName: string;
+      importedFromPath: string | null;
+    };
+
+/** When a file-backed body is digest-verified at open: never for pure resolution, always at mandatory gates. */
+export type ContentDigestVerification = "never" | "if-configured" | "always";
+
+/** The explicit integrity policy of one bounded read (section 2): hot surfaces keep `verifyChecksumOnFetch` default-false. */
+export interface ContentBodyOpenPolicy {
+  verifyFileDigest: ContentDigestVerification;
+  /** The existing `artifact.verifyChecksumOnFetch` setting, honored only under `if-configured`. */
+  verifyChecksumOnFetch?: boolean;
+}
+
+/**
+ * The uniform backend-independent read handle (section 2, section 11.3): the
+ * opened body's authoritative byte length for both representations — the
+ * fstat of the actually opened file for a file-backed row, the verified
+ * inline length for an inline row — plus the recorded digest, bounded
+ * positional reads, and explicit disposal. A read returns at most the
+ * requested length and never buffers a whole large body; `position` at or
+ * beyond the size reads empty.
+ */
+export interface ContentBodyHandle {
+  readonly recordId: string;
+  readonly representation: "inline" | "file";
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly storageKey: string | null;
+  /** One bounded read of at most `maxLength` exact bytes starting at `position`; empty at end-of-body. */
+  read(position: number, maxLength: number): Result<Uint8Array, AppError>;
+  /** Releases every opened resource; safe to call more than once. */
+  close(): void;
+}
+
+/** The local-path materialization policy: which resolved home's `state` tree carries the fetch cache. */
+export interface ContentLocalPathPolicy {
+  stateDir: string;
+}
+
+/** The eligibility verdict for one legacy unlink intent under the causal rule of section 3. */
+export interface LegacyUnlinkEligibility {
+  eligible: boolean;
+  /** The persisted `to_path` of a still-pending activation that blocks this unlink, when one exists. */
+  blockingActivateToPath: string | null;
+}
+
+/**
+ * The causal eligibility primitive of section 3: a legacy unlink may take its
+ * physical effect and clear only while no pending activation names the same
+ * persisted `to_path`, because a later activation of that one-shot key would
+ * otherwise recreate the retired file after the unlink completed. A failed
+ * activation is still a pending activation — failure never releases its
+ * dependent unlink.
+ */
+export function planLegacyUnlinkEligibility(
+  pendingActivateToPaths: readonly string[],
+  unlink: { toPath: string },
+): LegacyUnlinkEligibility {
+  const blocking = pendingActivateToPaths.find((toPath) => toPath === unlink.toPath) ?? null;
+  return { eligible: blocking === null, blockingActivateToPath: blocking };
+}
+
+/** The reference/pending proof snapshot the shared removal planner decides on, read inside one transaction. */
+export interface ContentRemovalProof {
+  domainReferencedRecordIds: ReadonlySet<string>;
+  receiptReferencedRecordIds: ReadonlySet<string>;
+  /** Record ids named by still-pending common activation intents. */
+  pendingCommonActivationContentIds: ReadonlySet<string>;
+  /** Every persisted `to_path` a pending intent still names, the physical-key protection of section 3. */
+  pendingPhysicalToPaths: ReadonlySet<string>;
+  moveFencePaused: boolean;
+}
+
+/** What reference-aware cleanup may do with one record; `retain` always carries its reason. */
+export type ContentRecordRemovalPlan =
+  | { action: "remove-inline" }
+  | { action: "remove-record"; physicalUnlink: "common-intent" | "owed-elsewhere" }
+  | {
+      action: "retain";
+      reason:
+        | "move-fence"
+        | "domain-reference"
+        | "receipt-reference"
+        | "pending-common-activation"
+        | "pending-physical-op";
+    };
+
+/**
+ * The shared reference-proof removal decision of SHR-004, SHR-008, and sections
+ * 1 and 3: a record is removable exactly when no current domain row, no
+ * unexpired retained response, and no pending activation names it, and no
+ * pending intent names its physical key. Inline rows are removed by the
+ * reference rule alone; a `content/`-keyed file row's physical unlink is the
+ * common intent; an `artifacts/`-keyed file row's physical removal is owed to
+ * the legacy Artifact unlink intent elsewhere, never to a fabricated common
+ * owner. A file-backed row whose key is neither a valid managed `content/` key
+ * nor a valid managed `artifacts/` key is stored corruption: the decision fails
+ * closed with `STORAGE_INTEGRITY_ERROR`, the row is preserved, and the caller
+ * aborts its transaction — a malformed key is never silently deleted, mapped to
+ * the legacy family, or given an inferred owner. Every caller — the memo/channel
+ * cleanup and a Handoff domain transaction — decides through this one function.
+ */
+export function planContentRecordRemoval(
+  record: ContentRecord,
+  proof: ContentRemovalProof,
+): Result<ContentRecordRemovalPlan, AppError> {
+  if (proof.moveFencePaused) return ok({ action: "retain", reason: "move-fence" });
+  if (proof.domainReferencedRecordIds.has(record.id)) return ok({ action: "retain", reason: "domain-reference" });
+  if (proof.receiptReferencedRecordIds.has(record.id)) return ok({ action: "retain", reason: "receipt-reference" });
+  if (proof.pendingCommonActivationContentIds.has(record.id)) {
+    return ok({ action: "retain", reason: "pending-common-activation" });
+  }
+  if (record.storageKey !== null && proof.pendingPhysicalToPaths.has(record.storageKey)) {
+    return ok({ action: "retain", reason: "pending-physical-op" });
+  }
+  if (record.inlineText !== null) return ok({ action: "remove-inline" });
+  const key = record.storageKey as string;
+  if (isManagedContentStorageKey(key)) {
+    return ok({ action: "remove-record", physicalUnlink: "common-intent" });
+  }
+  if (isManagedStorageKey(key)) {
+    return ok({ action: "remove-record", physicalUnlink: "owed-elsewhere" });
+  }
+  return err(
+    appError(
+      "STORAGE_INTEGRITY_ERROR",
+      `Content record ${record.id} carries the storage key '${key}', which is neither a managed content/ key nor a managed artifacts/ key; preserve the record and files and diagnose the stored key before retrying.`,
+      { contentId: record.id, storageKey: key },
+    ),
+  );
 }

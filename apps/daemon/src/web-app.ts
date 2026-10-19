@@ -534,9 +534,14 @@ export const WEB_APP_JS = `(function () {
         var am = el("dl", { class: "meta" });
         // storageKey ships instead of the artifact DTO's absent revision; the
         // Handoff revision already shows in the metadata card above (WEB-004).
+        // An inline Artifact carries null: its stored text is the body, so the
+        // detail shows the representation instead of an empty key (SHR-013).
         ["originalName", "mimeType", "sizeBytes", "sha256", "storageKey"].forEach(function (key) {
           am.appendChild(el("dt", { text: key }));
-          var value = String(artifact[key] === null || artifact[key] === undefined ? "" : artifact[key]);
+          var value =
+            key === "storageKey" && (artifact[key] === null || artifact[key] === undefined)
+              ? "inline (no Vault file)"
+              : String(artifact[key] === null || artifact[key] === undefined ? "" : artifact[key]);
           am.appendChild(key === "sha256" || key === "storageKey" ? el("dd", {}, [el("span", { class: "mono", text: value })]) : el("dd", { text: value }));
         });
         card.appendChild(am);

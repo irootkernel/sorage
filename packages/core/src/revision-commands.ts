@@ -4,18 +4,21 @@ import { type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceA
 import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash } from "./handoff-commands";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
-import { prepareArtifactImport } from "./import-policy";
+import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
+import type { ArtifactBodyPrepareRequest, PreparedArtifactBody } from "./content";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
 
 /**
  * Sender revision of sections 9 and 10 (REV-008 to REV-013, REV-017, HND-015, VLT-011,
- * VLT-012, CLI-012, CLI-021): the new content is staged into a fresh artifact-id slot
- * before any transaction, one transaction then swaps the current reference, resolves
- * the Note, replaces the Artifact row, records the activate and unlink intents, and
- * appends the events, and the committed intents execute and complete afterwards. The
- * bounded no-change resolution resolves the Note without touching content.
+ * VLT-012, CLI-012, CLI-021): the new content is routed through the shared body
+ * preparation — inline text or a staged artifact-id slot — before any transaction,
+ * one transaction then swaps the current reference, resolves the Note, replaces the
+ * Artifact row, records only the intents the representations owe, and appends the
+ * events, and the committed file intents execute and complete afterwards. The
+ * bounded no-change resolution resolves the Note without touching content, and the
+ * mandatory current-body verification of VLT-023 precedes every success.
  */
 
 export interface RevisionMutationPort {
@@ -25,7 +28,8 @@ export interface RevisionMutationPort {
     handoffId: string;
     expectedRowVersion: number;
     newArtifact: NewArtifactRecord;
-    activateIntent: NewPendingFsOp;
+    /** Null exactly for an inline replacement body, which owes no activation. */
+    activateIntent: NewPendingFsOp | null;
     unlinkIntent: NewPendingFsOp | null;
     events: NewDomainEvent[];
     idempotency?:
@@ -51,22 +55,27 @@ export interface RevisionMutationPort {
   ): Result<{ completed: number }, AppError>;
   /**
    * Marks the unlink complete and appends ARTIFACT_UNLINKED, gated on the
-   * completion's own row clear; `completed` counts actual winners only.
+   * completion's own row clear; `completed` counts actual winners only. The
+   * explicit `artifactId` is the authorized retired Artifact this completion
+   * may settle — it must exactly match the persisted intent's artifact row
+   * before anything is cleared, and it preserves the ordinary command's
+   * Handoff association when the Artifact row was already superseded
+   * (section 3).
    */
   completeUnlinks(
-    completions: Array<{ intentId: string; event: NewDomainEvent }>,
+    completions: Array<{ intentId: string; artifactId: string | null; event: NewDomainEvent }>,
   ): Result<{ completed: number }, AppError>;
 }
 
 export interface RevisionPorts extends HandoffReadPorts {
   revisions: RevisionMutationPort;
   artifactStore: {
-    stage(request: {
-      sourcePath: string;
-      maxBytes: number;
-    }): Result<{ stagingPath: string; sizeBytes: number; sha256: string }, AppError>;
     activate(request: { stagingPath: string; storageKey: string }): Result<{ path: string }, AppError>;
     remove(storageKey: string): Result<void, AppError>;
+  };
+  /** The one shared body-prepare implementation behind every producer (SHR-002, section 38.2). */
+  content: {
+    prepareArtifactBody(request: ArtifactBodyPrepareRequest): Result<PreparedArtifactBody, AppError>;
   };
   config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
   /** Resolved binding directories for the Vault containment half of the import policy. */
@@ -83,6 +92,8 @@ export interface ReviseInput extends ReadActorInput {
   idempotencyKey?: string | undefined;
   resolvedSourcePath?: string | undefined;
   originalName?: string | undefined;
+  /** Marks `file` as an authenticated multipart upload spool (API-003, VLT-007). */
+  fileSourceKind?: "authenticated-spool" | undefined;
   /** The explicit override for a replacement file outside the resolved workspace. */
   allowExternalSource?: boolean | undefined;
   /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
@@ -151,14 +162,14 @@ function senderActorOf(handoff: {
 }
 
 export function reviseHandoff(ports: RevisionPorts, input: ReviseInput): Result<ReviseOutcome, AppError> {
-  const found = ports.handoffs.findHandoffView(input.handoffId);
+  const found = ports.handoffs.loadHandoff(input.handoffId);
   if (!found.ok) return err(found.error);
   if (found.value === null) {
     return err(
       appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${input.handoffId}'`, { handoffId: input.handoffId }),
     );
   }
-  const handoff = found.value;
+  const handoff = found.value.view;
   const role = roleOf(ports, input, handoff);
   if (!role.ok) return err(role.error);
   if (input.noChange === true && input.file !== undefined) {
@@ -181,7 +192,7 @@ export function reviseHandoff(ports: RevisionPorts, input: ReviseInput): Result<
     pendingDeletionRequest: handoff.pendingDeletionRequest,
   };
 
-  return reviseContent(ports, input, handoff, role.value, facts);
+  return reviseContent(ports, input, handoff, found.value.contentIntegrity, role.value, facts);
 }
 
 /** The HandoffView slice the revision flow reads; hasReviewNote comes from the view. */
@@ -195,18 +206,55 @@ interface RevisionHandoff {
   senderKind: string;
   senderProjectId: string | null;
   senderWorkspaceKey: string | null;
-  currentArtifact: { id: string; storageKey: string; sha256: string } | null;
+  currentArtifact: { id: string; storageKey: string | null; sha256: string } | null;
   hasReviewNote: boolean;
   deletedAt: string | null;
+}
+
+/**
+ * Resolves the missing-authority marker after the evaluator's earlier
+ * state, tombstone, and role refusals have answered (SHR-004, SHR-014):
+ * a stale observed Row Version reports its conflict first, then the missing
+ * record surfaces as the honest corruption refusal.
+ */
+function missingRecordAfterVersion(
+  input: { expectedRowVersion?: number | undefined },
+  handoff: RevisionHandoff,
+): AppError {
+  const staleRowVersion = expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion) === false;
+  if (staleRowVersion) {
+    return appError(
+      "ROW_VERSION_CONFLICT",
+      "the Handoff changed since it was last read; re-read it and retry with the new Row Version",
+    );
+  }
+  return appError(
+    "ARTIFACT_CORRUPTED",
+    "the current Artifact is missing, unreadable, or wrongly associated; run sorage vault verify and restore from backup",
+  );
 }
 
 function reviseContent(
   ports: RevisionPorts,
   input: ReviseInput,
   handoff: RevisionHandoff,
+  contentIntegrity: "ok" | "artifact-record-missing",
   role: "sender" | "recipient" | "user",
   facts: HandoffFacts,
 ): Result<ReviseOutcome, AppError> {
+  // The mandatory current-body verification of VLT-023 runs for both revision
+  // variants after the earlier replay, state, and Note guards and before any
+  // success is claimed: a missing authoritative row or record is refused
+  // independently of the optional public artifact summary, and a present body
+  // is verified through the common bounded reader. Either failure leaves the
+  // domain, Row Version, events, and receipts unchanged.
+  const verifyCurrentBody = (): Result<void, AppError> | null => {
+    if (contentIntegrity === "artifact-record-missing") {
+      return err(missingRecordAfterVersion(input, handoff));
+    }
+    if (handoff.currentArtifact === null) return null;
+    return ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
+  };
   // The no-change resolution resolves the Note without staging anything.
   if (input.noChange === true) {
     const requestHash = sendRequestHash({
@@ -231,6 +279,8 @@ function reviseContent(
       },
     );
     if (!outcome.ok) return err(outcome.error);
+    const verifiedNoChange = verifyCurrentBody();
+    if (verifiedNoChange !== null && !verifiedNoChange.ok) return err(verifiedNoChange.error);
     const now = ports.clock.now().toISOString();
     const response: ReviseOutcome = {
       handoffId: handoff.id,
@@ -268,9 +318,12 @@ function reviseContent(
   }
 
   // Content revision, in the section 19 coordination order: the source is digested
-  // first with a bounded read, the idempotency replay, the state evaluation, and the
-  // same-content comparison all answer against that digest, and only a mutation that
-  // will proceed copies bytes into Vault staging through the shared import policy.
+  // first with a bounded read, the idempotency replay, the state evaluation, the
+  // same-content comparison, and the mandatory current-body verification all
+  // answer before any mutation, and only a revision that will proceed routes
+  // its body through the shared preparation — inline text or a staged Vault
+  // copy — under the workspace import policy for path imports and the
+  // authenticated-spool rule for multipart uploads.
   const file = input.file as string;
   const sourcePath = input.resolvedSourcePath ?? file;
   const digested = ports.digestSource(sourcePath);
@@ -293,6 +346,14 @@ function reviseContent(
     expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
   });
   if (!outcome.ok) return err(outcome.error);
+  // The missing-authority gate precedes every body-dependent comparison and
+  // step — including the same-content refusal, which reads the recorded
+  // digest — and is independent of the optional public artifact summary: a
+  // missing Artifact row or record row can neither be compared against nor
+  // revised past (SHR-004, SHR-014, VLT-023).
+  if (contentIntegrity === "artifact-record-missing") {
+    return err(missingRecordAfterVersion(input, handoff));
+  }
   // The same content refuses before anything mutates or stages (HND-015).
   if (
     handoff.currentArtifact !== null &&
@@ -306,55 +367,80 @@ function reviseContent(
       ),
     );
   }
-  const workspace = resolveWorkspaceActor(ports.projectPorts, {
-    path: input.path,
-    userHome: input.userHome,
-    as: input.as,
+  // The mandatory current-body gate (VLT-023): a present body is verified
+  // through the common bounded reader before any staging or mutation.
+  if (handoff.currentArtifact !== null) {
+    const verified = ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
+    if (!verified.ok) return err(verified.error);
+  }
+  const spoolUpload = input.fileSourceKind === "authenticated-spool";
+  const contained = checkVaultContainment({
+    resolvedVaultPath: ports.config.vaultPath,
+    resolvedBindingDirectories: ports.bindingDirectories,
   });
-  if (!workspace.ok) return err(workspace.error);
-  const workspaceRoot =
-    workspace.value.kind === "registered_project"
-      ? workspaceRootOf(workspace.value.binding)
-      : workspace.value.directory;
+  if (!contained.ok) return err(contained.error);
+  if (!spoolUpload) {
+    const workspace = resolveWorkspaceActor(ports.projectPorts, {
+      path: input.path,
+      userHome: input.userHome,
+      as: input.as,
+    });
+    if (!workspace.ok) return err(workspace.error);
+    const workspaceRoot =
+      workspace.value.kind === "registered_project"
+        ? workspaceRootOf(workspace.value.binding)
+        : workspace.value.directory;
+    const external = checkExternalSource({
+      resolvedSourcePath: sourcePath,
+      workspaceRoot,
+      policy: "workspace_or_explicit",
+      allowExternalSource: input.allowExternalSource === true,
+    });
+    if (!external.ok) return err(external.error);
+  }
   // ADR-0031: every new Artifact, revisions included, takes its identity from
   // the existing UUID port, exactly as new sends already do. The legacy
   // `a`-plus-eight-hex producer is retired; existing IDs of that form stay
   // valid and are never rewritten.
   const artifactId = ports.ids.next();
-  const staged = prepareArtifactImport(
-    { artifactStore: ports.artifactStore as unknown as Parameters<typeof prepareArtifactImport>[0]["artifactStore"] },
-    {
-      sourcePath: file,
-      resolvedSourcePath: sourcePath,
-      originalName: input.originalName ?? "document",
-      workspaceRoot,
-      externalPolicy: "workspace_or_explicit",
-      allowExternalSource: input.allowExternalSource === true,
-      maxBytes: ports.config.maxBytes,
-      handoffId: handoff.id,
-      artifactId,
-      resolvedVaultPath: ports.config.vaultPath,
-      resolvedBindingDirectories: ports.bindingDirectories,
+  const prepared = ports.content.prepareArtifactBody({
+    body: {
+      kind: "file",
+      physicalPath: sourcePath,
+      logicalOriginalName: input.originalName ?? "document",
+      sourceKind: spoolUpload ? "authenticated-spool" : "workspace-path",
     },
-  );
-  if (!staged.ok) return err(staged.error);
+    classification: "mime-first",
+    identities: { handoffId: handoff.id, artifactId },
+    bounds: { maxBytes: ports.config.maxBytes },
+    provenance: { importedFromPath: spoolUpload ? null : file },
+  });
+  if (!prepared.ok) return err(prepared.error);
 
   const now = ports.clock.now().toISOString();
-  const storedName = staged.value.storedName;
-  const storageKey = staged.value.storageKey;
+  const storedName = sanitizeStoredName(prepared.value.logicalName);
+  const storageKey = prepared.value.storageKey;
   const vaultPrefix = `${ports.config.vaultPath.replace(/\/+$/, "")}/`;
-  const activateIntent: NewPendingFsOp = {
-    id: createHash("sha1").update(`activate:${storageKey}`).digest("hex"),
-    op: "activate",
-    fromPath: staged.value.stagingPath.startsWith(vaultPrefix)
-      ? staged.value.stagingPath.slice(vaultPrefix.length)
-      : staged.value.stagingPath,
-    toPath: storageKey,
-    artifactId,
-    createdAt: now,
-  };
+  // An inline replacement body owes no activation; a file-backed one keeps
+  // the causal legacy intent exactly as a new send does (SHR-005).
+  const activateIntent: NewPendingFsOp | null =
+    prepared.value.kind === "file"
+      ? {
+          id: createHash("sha1").update(`activate:${storageKey}`).digest("hex"),
+          op: "activate",
+          fromPath: prepared.value.stagingPath.startsWith(vaultPrefix)
+            ? prepared.value.stagingPath.slice(vaultPrefix.length)
+            : prepared.value.stagingPath,
+          toPath: prepared.value.storageKey,
+          artifactId,
+          createdAt: now,
+        }
+      : null;
+  // Only a retired file-backed Artifact owes a physical unlink; a retired
+  // inline body leaves through the same transaction's reference-proof removal
+  // with no manufactured intent (SHR-004, section 38.2).
   const unlinkIntent: NewPendingFsOp | null =
-    handoff.currentArtifact !== null
+    handoff.currentArtifact !== null && handoff.currentArtifact.storageKey !== null
       ? {
           id: createHash("sha1").update(`unlink:${handoff.currentArtifact.storageKey}`).digest("hex"),
           op: "unlink",
@@ -379,12 +465,13 @@ function reviseContent(
       id: artifactId,
       handoffId: handoff.id,
       storageKey,
-      originalName: staged.value.originalName,
+      inlineBody: prepared.value.kind === "inline" ? prepared.value.text : null,
+      originalName: prepared.value.logicalName,
       storedName,
-      mimeType: staged.value.mimeType,
-      sizeBytes: staged.value.sizeBytes,
-      sha256: staged.value.sha256,
-      importedFromPath: staged.value.importedFromPath,
+      mimeType: prepared.value.mimeType,
+      sizeBytes: prepared.value.sizeBytes,
+      sha256: prepared.value.sha256,
+      importedFromPath: prepared.value.importedFromPath,
       createdAt: now,
     },
     activateIntent,
@@ -411,39 +498,48 @@ function reviseContent(
   });
   if (!applied.ok) return err(applied.error);
 
-  // Execute the committed intents, then complete each with its system event.
-  const activated = ports.artifactStore.activate({ stagingPath: staged.value.stagingPath, storageKey });
-  if (activated.ok) {
-    const completed = ports.revisions.completeActivations([
-      {
-        intentId: activateIntent.id,
-        artifactId,
-        event: {
-          id: ports.ids.next(),
-          handoffId: handoff.id,
-          eventType: "ARTIFACT_ACTIVATED",
-          actor: SYSTEM_ACTOR,
-          rowVersion: null,
-          metadata: { storageKey, sha256: staged.value.sha256 },
-          createdAt: now,
+  // Execute the committed file intents, then complete each with its system
+  // event; an inline replacement has nothing physical to execute.
+  if (activateIntent !== null && prepared.value.kind === "file") {
+    const activated = ports.artifactStore.activate({
+      stagingPath: prepared.value.stagingPath,
+      storageKey: prepared.value.storageKey,
+    });
+    if (activated.ok) {
+      const completed = ports.revisions.completeActivations([
+        {
+          intentId: activateIntent.id,
+          artifactId,
+          event: {
+            id: ports.ids.next(),
+            handoffId: handoff.id,
+            eventType: "ARTIFACT_ACTIVATED",
+            actor: SYSTEM_ACTOR,
+            rowVersion: null,
+            metadata: { storageKey, sha256: prepared.value.sha256 },
+            createdAt: now,
+          },
         },
-      },
-    ]);
-    if (!completed.ok) return err(completed.error);
+      ]);
+      if (!completed.ok) return err(completed.error);
+    }
   }
-  if (unlinkIntent !== null) {
-    const removed = ports.artifactStore.remove(handoff.currentArtifact?.storageKey ?? "");
+  if (unlinkIntent !== null && handoff.currentArtifact !== null && handoff.currentArtifact.storageKey !== null) {
+    const removed = ports.artifactStore.remove(handoff.currentArtifact.storageKey);
     if (removed.ok) {
       const completed = ports.revisions.completeUnlinks([
         {
           intentId: unlinkIntent.id,
+          // The authorized retired Artifact this completion may settle,
+          // captured from the same loaded Handoff that built the intent.
+          artifactId: handoff.currentArtifact.id,
           event: {
             id: ports.ids.next(),
             handoffId: handoff.id,
             eventType: "ARTIFACT_UNLINKED",
             actor: SYSTEM_ACTOR,
             rowVersion: null,
-            metadata: { storageKey: handoff.currentArtifact?.storageKey ?? null },
+            metadata: { storageKey: handoff.currentArtifact.storageKey },
             createdAt: now,
           },
         },

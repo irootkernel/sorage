@@ -78,8 +78,9 @@ function handoffIdOf(output: string): string {
     ?.handoffId as string;
 }
 
-function sendOne(home: string): string {
-  const document = join(home, "brief.md");
+function sendOne(home: string, physical = false): string {
+  const document = join(home, physical ? "brief.bin" : "brief.md");
+  if (physical) writeFileSync(document, "# Shared\n");
   const send = capture();
   const exit = runCli(
     [
@@ -116,7 +117,8 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
   it("requests, refuses, rejects, and finally approves a deletion into a tombstone", () => {
     const original = process.cwd();
     const { home, workA, workB } = setup();
-    const handoffId = sendOne(home);
+    // This journey checks physical unlink as well as the tombstone.
+    const handoffId = sendOne(home, true);
 
     // Step 1: a Project requests deletion while awaiting_recipient.
     process.chdir(workA);
@@ -150,9 +152,11 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     let storageKey = "";
     try {
       storageKey = (
-        database.prepare("SELECT storage_key FROM artifacts WHERE handoff_id = ?").get(handoffId) as {
-          storage_key: string;
-        }
+        database
+          .prepare(
+            "SELECT c.storage_key AS storage_key FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE a.handoff_id = ?",
+          )
+          .get(handoffId) as { storage_key: string }
       ).storage_key;
     } finally {
       database.close();
@@ -350,7 +354,7 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     try {
       database
         .prepare(
-          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('i-stale', 'unlink', NULL, 'artifacts/gone/none', NULL, '2026-01-01T00:00:00.000Z', 0)",
+          "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('i-stale', 'unlink', NULL, 'artifacts/gone/retired/none', NULL, '2026-01-01T00:00:00.000Z', 0)",
         )
         .run();
     } finally {

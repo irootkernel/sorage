@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 import { insertHandoffSeed } from "../../src/testkit/seed";
@@ -12,7 +12,13 @@ afterAll(() => {
 function migratedDb() {
   const temp = makeTempDatabase();
   tempCleanups.push(temp.cleanup);
-  migrate(temp.db, MIGRATIONS);
+  // The current domain contract is schema 9: the guarded rebuild runs through
+  // the real production plan on this file-backed database.
+  const plan = productionMigrationPlan();
+  migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: temp.databasePath,
+    rebuilds: plan.rebuilds,
+  });
   return temp.db;
 }
 
@@ -63,21 +69,20 @@ function insertHandoff(
   db.exec("BEGIN");
   try {
     if (columns.current_artifact_id !== null) {
+      // Schema 9: the physical columns live on the Artifact's immutable content
+      // record; the registry row references it.
+      const contentRecordId = `record-${artifactId}`;
       db.prepare(
-        "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 1, ?, 1, ?)",
       ).run(
-        artifactId,
-        id,
+        contentRecordId,
         `artifacts/${id}/${artifactId}/doc.md`,
-        "doc.md",
-        "doc.md",
-        "text/markdown",
-        1,
         "0f4128ee0a3f5b5c1c4d1a1e1a0e1c3ce6e28c9a1a221db0e6f4c9a2b41cd801",
-        null,
-        1,
         NOW,
       );
+      db.prepare(
+        "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, 'doc.md', 'doc.md', 'text/markdown', NULL, ?, ?)",
+      ).run(artifactId, id, NOW, contentRecordId);
     }
     const names = Object.keys(columns);
     const placeholders = names.map(() => "?").join(", ");
@@ -213,8 +218,11 @@ describe("handoff domain schema", () => {
       "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES ('h-cycle', NULL, NULL, 'Cycle', 'registered_project', NULL, NULL, NULL, 'project-g', 'a-cycle', 1, 1, 'awaiting_recipient', 0, 0, ?, ?)",
     ).run(NOW, NOW);
     db.prepare(
-      "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES ('a-cycle', 'h-cycle', 'artifacts/h-cycle/a-cycle/doc.md', 'doc.md', 'doc.md', 'text/markdown', 1, ?, NULL, 0, ?)",
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES ('record-a-cycle', NULL, 'artifacts/h-cycle/a-cycle/doc.md', 1, ?, 0, ?)",
     ).run("0f4128ee0a3f5b5c1c4d1a1e1a0e1c3ce6e28c9a1a221db0e6f4c9a2b41cd801", NOW);
+    db.prepare(
+      "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES ('a-cycle', 'h-cycle', 'doc.md', 'doc.md', 'text/markdown', NULL, ?, 'record-a-cycle')",
+    ).run(NOW);
     db.exec("COMMIT");
     const handoff = db.prepare("SELECT current_artifact_id FROM handoffs WHERE id = 'h-cycle'").get() as {
       current_artifact_id: string;

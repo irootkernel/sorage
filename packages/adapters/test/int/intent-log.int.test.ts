@@ -10,13 +10,14 @@ import {
   createSqliteRetentionStore,
 } from "../../src/handoffs";
 import { openSorageDatabase } from "../../src/sqlite/connection";
-import { createVaultInitializer } from "../../src/vault";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { makeArtifactContentBindings } from "../../src/testkit/artifact-content";
 import { FakeClock } from "../../src/testkit/fakes";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 import { makeTempHome } from "../../src/testkit/temp-home";
 import { makeTempVault } from "../../src/testkit/temp-vault";
+import { createVaultInitializer } from "../../src/vault";
 
 const INSTALLATION = "11111111-1111-4111-8111-111111111111";
 const OLD = new Date("2026-01-01T00:00:00.000Z");
@@ -28,7 +29,18 @@ function intentFixture(prefix: string) {
     throw new Error("fixture init must succeed");
   }
   const database = makeTempDatabase(`${prefix}db-`);
-  migrate(database.db, MIGRATIONS);
+  // The intent log runs against the normalized schema in production: the
+  // drain's authoritative-row attribution reads artifacts through its content
+  // record, so the fixture migrates through the real guarded schema-9 rebuild
+  // on this file-backed database.
+  const plan = productionMigrationPlan();
+  const outcome = migrate(database.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: database.databasePath,
+    rebuilds: plan.rebuilds,
+  });
+  if (outcome.alreadyUpToDate || !outcome.appliedVersions.includes(9)) {
+    throw new Error("fixture must migrate through the schema-9 rebuild");
+  }
   const log = createSqliteIntentLog({ db: database.db, installationId: INSTALLATION });
   return {
     vaultPath: vault.vaultPath,
@@ -325,7 +337,13 @@ describe("record fencing and conservative garbage collection (epic audit round 2
     const home = makeTempHome("sorage-record-paused-");
     try {
       const database = makeTempDatabase("sorage-record-paused-db-");
-      migrate(database.db, MIGRATIONS);
+      // The intent log is an operational surface: its fixture migrates through
+      // the real production plan like every other database in this file.
+      const plan = productionMigrationPlan();
+      migrate(database.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+        databasePath: database.databasePath,
+        rebuilds: plan.rebuilds,
+      });
       mkdirSync(join(home.home, "run"), { recursive: true });
       writeFileSync(
         join(home.home, "run", "vault-move.lock"),
@@ -422,7 +440,9 @@ describe("legacy completion events in the drain (SEC-012)", () => {
     const fixture = intentFixture(prefix);
     const ledger = createSqliteEventLedger(fixture.db);
     // One live Artifact row: the authoritative association and digest source.
-    // Insert the deferred Handoff/Artifact reference cycle in one transaction.
+    // Insert the deferred Handoff/Artifact reference cycle and the Artifact's
+    // own content record in one transaction (schema 9).
+    const contentRecordId = "0a111111-6666-4111-8111-1111111111af";
     fixture.db.exec("BEGIN");
     fixture.db
       .prepare(
@@ -438,10 +458,15 @@ describe("legacy completion events in the drain (SEC-012)", () => {
       .run(HANDOFF, PROJECT, ARTIFACT);
     fixture.db
       .prepare(
-        `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256,
-          imported_from_path, materialized, created_at) VALUES (?, ?, ?, 'doc.md', 'doc.md', 'text/markdown', 6, ?, NULL, 0, '2026-05-01T00:00:00.000Z')`,
+        "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 6, ?, 0, '2026-05-01T00:00:00.000Z')",
       )
-      .run(ARTIFACT, HANDOFF, KEY, SHA);
+      .run(contentRecordId, KEY, SHA);
+    fixture.db
+      .prepare(
+        `INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
+        VALUES (?, ?, 'doc.md', 'doc.md', 'text/markdown', NULL, '2026-05-01T00:00:00.000Z', ?)`,
+      )
+      .run(ARTIFACT, HANDOFF, contentRecordId);
     fixture.db.exec("COMMIT");
     mkdirSync(join(fixture.vaultPath, "staging"), { recursive: true });
     writeFileSync(join(fixture.vaultPath, "staging", "staged-doc"), "doc by");
@@ -493,8 +518,16 @@ describe("legacy completion events in the drain (SEC-012)", () => {
         const fixture = intentFixture(`sorage-unlink-${kind}-`);
         try {
           const ledger = createSqliteEventLedger(fixture.db);
+          const bindings = () =>
+            makeArtifactContentBindings({
+              db: fixture.db,
+              ledger,
+              vaultPath: fixture.vaultPath,
+              installationId: INSTALLATION,
+            });
           const input = {
             intentId: "unlink-race",
+            artifactId: ARTIFACT,
             event: {
               id: "0a111111-3333-4111-8111-1111111111ac",
               eventType: "ARTIFACT_UNLINKED" as const,
@@ -518,8 +551,8 @@ describe("legacy completion events in the drain (SEC-012)", () => {
           const log = createSqliteIntentLog({ db: fixture.db, installationId: INSTALLATION, events: ledger });
           const complete = () =>
             kind === "revision"
-              ? createSqliteRevisionStore(fixture.db, ledger).completeUnlinks([input])
-              : createSqliteRetentionStore(fixture.db, ledger).completeUnlink(input);
+              ? createSqliteRevisionStore(fixture.db, ledger, {}, bindings()).completeUnlinks([input])
+              : createSqliteRetentionStore(fixture.db, ledger, {}, bindings()).completeUnlink(input);
           if (drainFirst) expect(log.drain(fixture.vaultPath).ok).toBe(true);
           const outcome = complete();
           expect(outcome).toMatchObject({ ok: true, value: { completed: drainFirst ? 0 : 1 } });
@@ -560,7 +593,13 @@ describe("legacy completion events in the drain (SEC-012)", () => {
       expect(activated[0]?.handoff_id).toBe(HANDOFF);
       expect(activated[0]?.actor_kind).toBe("system");
       expect(JSON.parse(activated[0]?.metadata_json ?? "{}")).toEqual({ storageKey: KEY, sha256: SHA });
-      expect(fixture.db.prepare("SELECT materialized FROM artifacts WHERE id = ?").get(ARTIFACT)).toMatchObject({
+      expect(
+        fixture.db
+          .prepare(
+            "SELECT c.materialized AS materialized FROM content_records c JOIN artifacts a ON a.content_record_id = c.id WHERE a.id = ?",
+          )
+          .get(ARTIFACT),
+      ).toMatchObject({
         materialized: 1,
       });
       // No pathname-derived association ever appears in the metadata.
@@ -649,7 +688,17 @@ describe("legacy completion events in the drain (SEC-012)", () => {
         },
       ]);
       expect(log.drain(drainFirst.vaultPath).ok).toBe(true);
-      const store = createSqliteHandoffWriteStore(drainFirst.db, drainFirst.ledger);
+      const store = createSqliteHandoffWriteStore(
+        drainFirst.db,
+        drainFirst.ledger,
+        {},
+        makeArtifactContentBindings({
+          db: drainFirst.db,
+          ledger: drainFirst.ledger,
+          vaultPath: drainFirst.vaultPath,
+          installationId: INSTALLATION,
+        }),
+      );
       const stale = store.completeActivations([
         {
           intentId: "ci-4",
@@ -685,7 +734,18 @@ describe("legacy completion events in the drain (SEC-012)", () => {
           createdAt: "2026-05-01T00:00:00.000Z",
         },
       ]);
-      const store = createSqliteHandoffWriteStore(competing, createSqliteEventLedger(competing));
+      const competingLedger = createSqliteEventLedger(competing);
+      const store = createSqliteHandoffWriteStore(
+        competing,
+        competingLedger,
+        {},
+        makeArtifactContentBindings({
+          db: competing,
+          ledger: competingLedger,
+          vaultPath: ordinaryFirst.vaultPath,
+          installationId: INSTALLATION,
+        }),
+      );
       let interleaved = false;
       const win = () => {
         const pending = ordinaryFirst.log.pending();
@@ -779,7 +839,13 @@ describe("legacy completion events in the drain (SEC-012)", () => {
         | { attempts: number }
         | undefined;
       expect(pending?.attempts).toBe(0);
-      expect(fixture.db.prepare("SELECT materialized FROM artifacts WHERE id = ?").get(ARTIFACT)).toMatchObject({
+      expect(
+        fixture.db
+          .prepare(
+            "SELECT c.materialized AS materialized FROM content_records c JOIN artifacts a ON a.content_record_id = c.id WHERE a.id = ?",
+          )
+          .get(ARTIFACT),
+      ).toMatchObject({
         materialized: 0,
       });
       expect(artifactEvents(fixture.db, "ARTIFACT_ACTIVATED")).toHaveLength(0);

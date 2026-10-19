@@ -1,4 +1,5 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,7 +7,7 @@ import { runCli } from "../../src/main";
 
 /**
  * The read-only-Vault row of the section 4 failure matrix (TASK-061): the whole
- * Vault goes read-only for the operating-system user, mutations fail with a
+ * Vault goes read-only for the operating-system user, file-backed mutations fail with a
  * recoverable error and no partial state, reads keep working, and doctor reports
  * `vault.writable` as blocking while the Vault rejects writes.
  */
@@ -64,7 +65,7 @@ describe("a whole read-only Vault", () => {
 
     // A mutation into the Vault fails with a recoverable error and leaves no
     // partial state: the send never reaches an intent commit.
-    const source = join(home, "doc.md");
+    const source = join(home, "doc.bin");
     writeFileSync(source, "# doc\n");
     const send = capture();
     const sendExit = runCli(
@@ -72,7 +73,17 @@ describe("a whole read-only Vault", () => {
       send.ports,
     );
     expect(sendExit).not.toBe(0);
-    expect(send.errText()).toContain("staged copy");
+    const refusal = JSON.parse(send.errText()) as { error: { code: string; recovery: { suggestedCommand: string } } };
+    expect(refusal.error.code).toBe("INTERNAL_ERROR");
+    expect(refusal.error.recovery.suggestedCommand.length).toBeGreaterThan(0);
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      for (const table of ["handoffs", "artifacts", "content_records", "pending_fs_ops"]) {
+        expect(database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+      }
+    } finally {
+      database.close();
+    }
 
     // Reads keep working: configuration and doctor answer, and doctor names the
     // read-only Vault as its blocking finding.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  type SnapshotDataV3,
   classifySnapshotArtifactBody,
   classifySnapshotEvent,
   parseMemoSnapshotV3,
@@ -86,13 +87,19 @@ describe("format-3 kept Handoff record schemas", () => {
     },
   );
 
-  it("keeps valid later inline Artifact shape available for unsupported classification", () => {
+  it("accepts exact inline Artifact bytes", () => {
     const value = sampleHandoffV3();
-    value.artifact = { ...(value.artifact as object), storageKey: null, inlineBody: "body" };
+    value.artifact = {
+      ...(value.artifact as object),
+      storageKey: null,
+      inlineBody: "body",
+      sizeBytes: 4,
+      sha256: createHash("sha256").update("body").digest("hex"),
+    };
     expect(validateSnapshotHandoffV3(value).ok).toBe(true);
     expect(classifySnapshotArtifactBody(value.artifact as Record<string, unknown>)).toMatchObject({
       ok: true,
-      value: "inline-later",
+      value: "inline-supported",
     });
   });
 
@@ -356,7 +363,7 @@ describe("classifySnapshotArtifactBody", () => {
       value: "file-backed-baseline",
     } as const);
     const inline = classifySnapshotArtifactBody({ storageKey: null, inlineBody: "text" });
-    expect(inline).toEqual({ ok: true, value: "inline-later" } as const);
+    expect(inline).toEqual({ ok: true, value: "inline-supported" } as const);
   });
 
   it("rejects both-null, both-present, a missing field, and a bodyContent key on an Artifact", () => {
@@ -420,9 +427,20 @@ describe("format-3 Memo shards", () => {
   });
 });
 
+function sampleDataV3(): SnapshotDataV3 {
+  const data = sampleData();
+  return {
+    ...data,
+    handoffs: data.handoffs.map((handoff) => ({
+      ...handoff,
+      artifact: handoff.artifact === null ? null : { ...handoff.artifact, inlineBody: null },
+    })),
+  };
+}
+
 describe("snapshotFilesV3", () => {
   it("writes the format-3 manifest with zero Channels and an empty contentDigests map", () => {
-    const built = snapshotFilesV3(sampleData());
+    const built = snapshotFilesV3(sampleDataV3());
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     expect(built.value.manifest.formatVersion).toBe(3);
@@ -439,7 +457,7 @@ describe("snapshotFilesV3", () => {
   });
 
   it("carries an explicit null inlineBody on every Artifact record", () => {
-    const built = snapshotFilesV3(sampleData());
+    const built = snapshotFilesV3(sampleDataV3());
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const shard = built.value.files.find((file) => file.path.startsWith("handoffs/"));
@@ -451,8 +469,8 @@ describe("snapshotFilesV3", () => {
   });
 
   it("keeps determinism with the format-2 conventions", () => {
-    const first = snapshotFilesV3(sampleData());
-    const second = snapshotFilesV3(sampleData());
+    const first = snapshotFilesV3(sampleDataV3());
+    const second = snapshotFilesV3(sampleDataV3());
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(first.value.files).toEqual(second.value.files);
@@ -460,21 +478,21 @@ describe("snapshotFilesV3", () => {
 });
 
 /** Replays the writer's Handoff shards as the restore adapter does. */
-function format3Data(data: SnapshotData): SnapshotData {
+function format3Data(data: SnapshotDataV3): SnapshotDataV3 {
   const built = snapshotFilesV3(data);
   if (!built.ok) throw new Error(built.error.message);
   const handoffs = built.value.files
     .filter((file) => file.path.startsWith("handoffs/"))
     .map((file) => {
       if (typeof file.content !== "string") throw new Error("expected JSON shard");
-      return JSON.parse(file.content) as SnapshotData["handoffs"][number];
+      return JSON.parse(file.content) as SnapshotDataV3["handoffs"][number];
     });
   return { ...data, handoffs };
 }
 
 describe("validateSnapshot format-3 classification", () => {
   it("accepts the baseline format-3 export", () => {
-    const data = sampleData();
+    const data = sampleDataV3();
     const built = snapshotFilesV3(data);
     expect(built.ok).toBe(true);
     if (!built.ok) return;
@@ -482,29 +500,30 @@ describe("validateSnapshot format-3 classification", () => {
     expect(verified.ok).toBe(true);
   });
 
-  it("refuses an inline Artifact record as a valid later representation before import", () => {
-    const data = sampleData();
+  it("accepts an exact inline Artifact record before import", () => {
+    const data = sampleDataV3();
     const handoff = data.handoffs[0];
     if (handoff === undefined || handoff.artifact === null) throw new Error("fixture");
     const later = {
-      ...(handoff.artifact as unknown as Record<string, unknown>),
+      ...handoff.artifact,
       storageKey: null,
       inlineBody: "inline text",
-    } as unknown as typeof handoff.artifact;
+      sizeBytes: Buffer.byteLength("inline text"),
+      sha256: createHash("sha256").update("inline text").digest("hex"),
+    };
     const mutated = { ...data, handoffs: [{ ...handoff, artifact: later }] };
     const built = snapshotFilesV3(mutated);
     expect(built.ok).toBe(true);
     if (!built.ok) return;
-    const refused = validateSnapshot(mutated, built.value.manifest);
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe("VAULT_SCHEMA_UNSUPPORTED");
+    const accepted = validateSnapshot(format3Data(mutated), built.value.manifest);
+    expect(accepted.ok).toBe(true);
   });
 
   it("refuses a recognized Channel domain event even with zero Channel records", () => {
     const data = {
-      ...sampleData(),
+      ...sampleDataV3(),
       events: [
-        ...sampleData().events,
+        ...sampleDataV3().events,
         {
           id: "0123abcd-0000-4000-8000-0000000000ab",
           handoffId: null,
@@ -529,7 +548,7 @@ describe("validateSnapshot format-3 classification", () => {
   it.each(["handoff", "memo"])(
     "classifies a recognized later Channel family before legacy %s associations",
     (association) => {
-      const data = sampleData();
+      const data = sampleDataV3();
       data.events.push({
         id: "0123abcd-0000-4000-8000-0000000000ab",
         handoffId: association === "handoff" ? "0123abcd-0000-4000-8000-0000000000ee" : null,
@@ -559,9 +578,9 @@ describe("validateSnapshot format-3 classification", () => {
       operation: "activate" as const,
     };
     const data = {
-      ...sampleData(),
+      ...sampleDataV3(),
       events: [
-        ...sampleData().events,
+        ...sampleDataV3().events,
         {
           id: "0123abcd-0000-4000-8000-0000000000ab",
           handoffId: null,
@@ -589,7 +608,7 @@ describe("validateSnapshot format-3 classification", () => {
   });
 
   it("refuses a nonempty contentDigests map as a later representation", () => {
-    const data = sampleData();
+    const data = sampleDataV3();
     const built = snapshotFilesV3(data);
     expect(built.ok).toBe(true);
     if (!built.ok) return;

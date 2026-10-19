@@ -2,15 +2,24 @@ import { createHash } from "node:crypto";
 import {
   canonicalJson,
   canonicalJsonLine,
+  compareSnapshotStrings,
+  handoffShardPath,
+  redactEventMetadata,
+  snapshotCounts,
   snapshotFiles,
-  snapshotManifest,
   type SnapshotData,
   type SnapshotFile,
   type SnapshotHandoff,
 } from "./backup-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { isChannelDomainEventType, isCommonContentEventType, snapshotEventTypeAllowed } from "./events";
-import { validateCommonContentEventMetadata } from "./content";
+import {
+  CONTENT_INLINE_MAX_UTF8_BYTES,
+  isUtf8ExactText,
+  sha256OfText,
+  utf8ByteLength,
+  validateCommonContentEventMetadata,
+} from "./content";
 import { memoObject, parseMemoDetail } from "./memo-protocol";
 import {
   isCanonicalContentFilePath,
@@ -89,15 +98,14 @@ export function parseSnapshotBodyContent(value: unknown): Result<ParsedBodyConte
   return corrupt("A bodyContent value does not match its closed union");
 }
 
-export type SnapshotArtifactBodyClassification = "file-backed-baseline" | "inline-later" | "integrity";
+export type SnapshotArtifactBodyClassification = "file-backed-baseline" | "inline-supported" | "integrity";
 
 /**
  * Classifies one format-3 Artifact record's body fields against the explicit
  * containing contract of section 38.8: `inlineBody` is always present and
  * exactly one of `storageKey` and `inlineBody` is non-null. A file-backed
- * record (`inlineBody: null`, managed `storageKey`) is this build's baseline;
- * an inline record (`inlineBody: string`, `storageKey: null`) is the valid
- * later representation TASK-107 adds and fails closed before import here; any
+ * record (`inlineBody: null`, managed `storageKey`) and an inline record
+ * (`inlineBody: string`, `storageKey: null`) are supported representations; any
  * other shape, a `bodyContent` key on an Artifact, or a missing field is an
  * integrity failure.
  */
@@ -109,7 +117,7 @@ export function classifySnapshotArtifactBody(
   const inlineBody = raw.inlineBody;
   const storageKey = raw.storageKey;
   if (inlineBody === null && typeof storageKey === "string") return ok("file-backed-baseline");
-  if (typeof inlineBody === "string" && storageKey === null) return ok("inline-later");
+  if (typeof inlineBody === "string" && storageKey === null) return ok("inline-supported");
   return corrupt("A format-3 Artifact record does not carry exactly one of storageKey and inlineBody");
 }
 
@@ -298,6 +306,30 @@ export function validateSnapshotHandoffV3(value: unknown): Result<void, AppError
       !timestamp(artifact.createdAt)
     )
       return corrupt("Format-3 Artifact fields or values are invalid");
+    // The closed containing pair of section 38.8: exactly one of the inline
+    // body and the managed key is present, an inline body's exact UTF-8 bytes
+    // match the recorded size and digest — byte-order mark, line endings, and
+    // the presence or absence of a final newline included — and an inline row
+    // is always materialized (SHR-001, SHR-003, SHR-004).
+    if ((artifact.inlineBody === null) === (artifact.storageKey === null))
+      return corrupt("A format-3 Artifact record does not carry exactly one of storageKey and inlineBody");
+    if (artifact.inlineBody !== null) {
+      if (artifact.materialized !== true) return corrupt("An inline format-3 Artifact record must be materialized");
+      // A string that cannot round-trip UTF-8 — a lone surrogate — encodes to
+      // replacement bytes, so a forged size and digest over those bytes must
+      // never admit it as byte-exact accepted content (SHR-003); the routing
+      // threshold that bounds every inline record applies unchanged
+      // (SHR-002).
+      if (!isUtf8ExactText(artifact.inlineBody))
+        return corrupt("An inline format-3 Artifact body cannot be stored byte-exactly");
+      if (utf8ByteLength(artifact.inlineBody) > CONTENT_INLINE_MAX_UTF8_BYTES)
+        return corrupt("An inline format-3 Artifact body exceeds the inline routing threshold");
+      if (
+        utf8ByteLength(artifact.inlineBody) !== artifact.sizeBytes ||
+        sha256OfText(artifact.inlineBody) !== artifact.sha256
+      )
+        return corrupt("An inline format-3 Artifact body does not match its recorded size and SHA-256");
+    }
   }
   if (value.reviewNote !== null) {
     const note = value.reviewNote;
@@ -424,44 +456,72 @@ export function parseMemoSnapshotV3(path: string, bytes: Uint8Array, digest: str
   return ok(detailed.value);
 }
 
-/** The format-3 Artifact record this build writes: every existing field plus an explicit `inlineBody: null`. */
-function artifactRecordV3(artifact: NonNullable<SnapshotHandoff["artifact"]>): Record<string, unknown> {
-  return { ...artifact, inlineBody: null };
+/**
+ * The format-3-only Artifact record (SHR-010, section 38.8): every legacy
+ * field plus the explicit containing pair — `inlineBody: string` XOR
+ * `storageKey: string` — where null marks absence. The legacy
+ * `SnapshotArtifact` of formats 1 and 2 stays frozen with its non-null key;
+ * this distinct type carries inline bodies without widening any legacy
+ * interpretation.
+ */
+export interface SnapshotArtifactV3 {
+  id: string;
+  handoffId: string;
+  storageKey: string | null;
+  inlineBody: string | null;
+  originalName: string;
+  storedName: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  importedFromPath: string | null;
+  materialized: boolean;
+  createdAt: string;
+}
+
+/** The format-3-only Handoff record: the legacy shape over the V3 Artifact. */
+export type SnapshotHandoffV3 = Omit<SnapshotHandoff, "artifact"> & { artifact: SnapshotArtifactV3 | null };
+
+/** The format-3 export input: the legacy snapshot data over the V3 Handoff records. */
+export type SnapshotDataV3 = Omit<SnapshotData, "handoffs"> & { handoffs: SnapshotHandoffV3[] };
+
+/** The workspace-path redaction over the V3 shape: the same fields, honestly typed. */
+export function redactSnapshotDataV3(data: SnapshotDataV3): SnapshotDataV3 {
+  return {
+    ...(data.memos === undefined ? {} : { memos: data.memos }),
+    projects: data.projects.map((project) => ({
+      ...project,
+      bindings: project.bindings.map(({ directory: _directory, ...binding }) => binding),
+    })),
+    handoffs: data.handoffs.map(({ senderPathSnapshot: _senderPathSnapshot, ...handoff }) => handoff),
+    events: data.events.map((event) => ({ ...event, metadata: redactEventMetadata(event.metadata) })),
+  };
 }
 
 /**
- * Builds the complete format-3 export (SHR-010): the format-2 file set with
- * Handoff Artifact records carrying their explicit null `inlineBody`, Memo
- * shards carrying `bodyContent` inline bodies, and a manifest whose Channel
- * count is zero and whose shared-content digest map is empty, because this
- * schema exports no Channel records and no file-backed shared content. A
+ * Builds the complete format-3 export (SHR-010): the legacy serializer's
+ * projects shard bytes, Handoff shards serialized directly from their V3
+ * records — each Artifact carrying its closed `inlineBody` XOR `storageKey`
+ * pair, an inline body's exact stored text being the authoritative bytes —
+ * Memo shards carrying `bodyContent` inline bodies, and a manifest whose
+ * Channel count is zero and whose shared-content digest map is empty, because
+ * this schema exports no Channel records and no file-backed shared content. A
  * file-backed Artifact's bytes keep arriving through the committed
  * `artifacts/` tree outside `contentDigests`, which never covers Handoff
  * Artifact files at any M9 build.
  */
 export function snapshotFilesV3(
-  data: SnapshotData,
+  data: SnapshotDataV3,
 ): Result<{ files: SnapshotFile[]; manifest: ContentSnapshotManifest }, AppError> {
-  const base = snapshotFiles({ projects: data.projects, handoffs: data.handoffs, events: [] }).filter(
-    (file) => file.path !== "manifest.json" && file.path !== "events.jsonl",
+  // The projects shard reuses the legacy serializer over an empty Handoff set,
+  // so its exact bytes stay shared without pretending a V3 Handoff satisfies
+  // the file-only legacy shape.
+  const files: SnapshotFile[] = snapshotFiles({ projects: data.projects, handoffs: [], events: [] }).filter(
+    (file) => file.path === "projects.json",
   );
-  const files: SnapshotFile[] = [];
-  for (const file of base) {
-    if (file.path === "projects.json") {
-      files.push(file);
-      continue;
-    }
-    const shardId = file.path
-      .split("/")
-      .at(-1)
-      ?.replace(/\.json$/, "");
-    const handoff = data.handoffs.find((candidate) => candidate.id === shardId);
-    if (handoff === undefined || file.path !== `handoffs/${handoff.id.slice(0, 2)}/${handoff.id}.json`) {
-      return corrupt("The handoff shard tree does not match the snapshot handoffs");
-    }
-    const record: Record<string, unknown> = { ...handoff };
-    if (handoff.artifact !== null) record.artifact = artifactRecordV3(handoff.artifact);
-    files.push({ path: file.path, content: canonicalJson(record) });
+  const byId = [...data.handoffs].sort((a, b) => compareSnapshotStrings(a.id, b.id));
+  for (const handoff of byId) {
+    files.push({ path: handoffShardPath(handoff.id), content: canonicalJson(handoff) });
   }
   const memoDigests: Record<string, string> = {};
   for (const memo of [...(data.memos ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
@@ -474,7 +534,7 @@ export function snapshotFilesV3(
   const events = data.events.map((event) => ({ ...event, memoId: event.memoId ?? null }));
   const manifest: ContentSnapshotManifest = {
     formatVersion: 3,
-    counts: { ...snapshotManifest(data).counts, memos: data.memos?.length ?? 0, channels: 0 },
+    counts: { ...snapshotCounts(data), memos: data.memos?.length ?? 0, channels: 0 },
     memoDigests,
     contentDigests: {},
   };

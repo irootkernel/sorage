@@ -74,15 +74,13 @@ function seedInstallation(home: string, vault: string, options: { workspacePath:
   });
   writeFileSync(artifactPath, artifactBytes);
   db.prepare(
-    `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes,
-      sha256, imported_from_path, materialized, created_at)
-    VALUES ('22222222-2222-4222-8222-222222222222', '1a111111-1111-4111-8111-111111111111', 'artifacts/1a111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/brief.md', 'brief.md', 'brief.md', 'text/markdown', ?,
-      ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
-  ).run(
-    artifactBytes.length,
-    createHash("sha256").update(artifactBytes).digest("hex"),
-    join(options.workspacePath, "brief.md"),
-  );
+    `INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+    VALUES ('55555555-5555-4555-8555-555555555555', NULL, 'artifacts/1a111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/brief.md', ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
+  ).run(artifactBytes.length, createHash("sha256").update(artifactBytes).digest("hex"));
+  db.prepare(
+    `INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
+    VALUES ('22222222-2222-4222-8222-222222222222', '1a111111-1111-4111-8111-111111111111', 'brief.md', 'brief.md', 'text/markdown', ?, '2026-01-02T00:00:00.000Z', '55555555-5555-4555-8555-555555555555')`,
+  ).run(join(options.workspacePath, "brief.md"));
   db.prepare(
     `INSERT INTO events (id, handoff_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
     VALUES ('44444444-4444-4444-8444-444444444444', '1a111111-1111-4111-8111-111111111111', 'HANDOFF_CREATED', 'unregistered_workspace', 'workspace-key', 1, ?, '2026-01-02T00:00:00.000Z')`,

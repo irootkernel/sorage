@@ -9,7 +9,7 @@
             "handoffId": "<uuid>",
             "recipientSlug": "web-app",
             "artifactId": "<uuid>",
-            "storageKey": "artifacts/<uuid>/<uuid>/source.md",
+            "storageKey": null,
             "revision": 1,
             "rowVersion": 1,
             "reviewState": "awaiting_recipient"
@@ -33,7 +33,7 @@
             "handoffId": "<uuid>",
             "recipientSlug": "web-app",
             "artifactId": "<uuid>",
-            "storageKey": "artifacts/<uuid>/<uuid>/compose-body-1.md",
+            "storageKey": null,
             "revision": 1,
             "rowVersion": 1,
             "reviewState": "awaiting_recipient"

@@ -15,7 +15,7 @@
       "id": "<uuid>",
       "projectId": "<uuid>",
       "installationId": "<uuid>",
-      "directory": "/private<home>/work-a",
+      "directory": "<home>/work-a",
       "bindingKind": "directory",
       "createdAt": "<ts>",
       "updatedAt": "<ts>"

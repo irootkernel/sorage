@@ -141,8 +141,9 @@ describe("two concurrent writers on one Handoff", () => {
 
   it("lets exactly one of two concurrent sender revises win", async () => {
     const { home, handoffId } = setup();
-    const first = join(home, "first.md");
-    const second = join(home, "second.md");
+    // The CAS loser must leave a sweepable staged file in this physical race.
+    const first = join(home, "first.bin");
+    const second = join(home, "second.bin");
     writeFileSync(first, "# first revision\n");
     writeFileSync(second, "# second revision\n");
     const [a, b] = await Promise.all([

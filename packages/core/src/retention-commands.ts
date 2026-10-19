@@ -26,6 +26,13 @@ export interface RetentionMutationPort {
       | { op: "resolve"; status: "approved" | "rejected"; resolvedByUser: string; resolutionNote: string | null }
       | undefined;
     unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
+    /**
+     * The honest logical-deletion signal: current content — its Artifact rows
+     * and records — is removed in this transaction whether or not a physical
+     * unlink intent exists, so an approved inline Artifact leaves no orphaned
+     * record and no fake intent is manufactured (SHR-004, SHR-008).
+     */
+    removeContent?: boolean | undefined;
     idempotency?:
       | { key: string; scope: string; requestHash: string; responseJson: string; expiresAt: string }
       | undefined;
@@ -37,15 +44,22 @@ export interface RetentionMutationPort {
   /**
    * Marks the executed unlink complete and appends ARTIFACT_UNLINKED, gated on
    * the completion's own row clear; `completed` counts the actual winner only.
+   * The explicit `artifactId` is the authorized retired Artifact this
+   * completion may settle — it must exactly match the persisted intent's
+   * artifact row before anything is cleared, and it preserves the ordinary
+   * command's Handoff association when the Artifact row was already deleted
+   * (section 3).
    */
-  completeUnlink(input: { intentId: string; event: NewDomainEvent }): Result<{ completed: number }, AppError>;
+  completeUnlink(input: {
+    intentId: string;
+    artifactId: string | null;
+    event: NewDomainEvent;
+  }): Result<{ completed: number }, AppError>;
 }
 
 export interface RetentionPorts extends HandoffReadPorts {
   retention: RetentionMutationPort;
-  artifact: {
-    checksum(storageKey: string): Result<string, AppError>;
-    pathOf(storageKey: string): Result<string, AppError>;
+  artifact: HandoffReadPorts["artifact"] & {
     remove(storageKey: string): Result<void, AppError>;
   };
 }
@@ -125,12 +139,12 @@ export interface RetentionOutcome {
 }
 
 function load(ports: RetentionPorts, handoffId: string) {
-  const found = ports.handoffs.findHandoffView(handoffId);
+  const found = ports.handoffs.loadHandoff(handoffId);
   if (!found.ok) return err(found.error);
   if (found.value === null) {
     return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${handoffId}'`, { handoffId }));
   }
-  return ok({ handoff: found.value });
+  return ok({ handoff: found.value.view, integrity: found.value.contentIntegrity });
 }
 
 function apply(
@@ -141,6 +155,7 @@ function apply(
   extras: {
     deletionRequest?: Parameters<RetentionMutationPort["applyRetentionMutation"]>[0]["deletionRequest"];
     unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
+    removeContent?: boolean | undefined;
     idempotency?: Parameters<RetentionMutationPort["applyRetentionMutation"]>[0]["idempotency"];
   } = {},
 ): Result<{ rowVersion: number }, AppError> {
@@ -151,6 +166,7 @@ function apply(
     events,
     deletionRequest: extras.deletionRequest === undefined ? undefined : extras.deletionRequest,
     unlinkIntent: extras.unlinkIntent === undefined ? undefined : extras.unlinkIntent,
+    removeContent: extras.removeContent,
     idempotency: extras.idempotency === undefined ? undefined : extras.idempotency,
   });
 }
@@ -414,22 +430,25 @@ export function approveDeletion(
     },
   );
   if (!outcome.ok) return err(outcome.error);
-  // The checksum runs before any mutation: a Missing or Mismatched Artifact never
-  // reaches the tombstone (VLT-023, LIFE-012).
+  // A missing authoritative Artifact row or record is the honest corruption
+  // refusal after the evaluator's earlier refusals, independent of the
+  // optional public artifact summary — a deletion can never proceed past a
+  // body it cannot see (SHR-004, SHR-014). A present body is verified
+  // through the common bounded reader before any tombstone is written, so a
+  // Missing or Mismatched Artifact never reaches deletion (VLT-023,
+  // LIFE-012).
+  if (loaded.value.integrity === "artifact-record-missing") {
+    return err(
+      appError(
+        "ARTIFACT_CORRUPTED",
+        "the current Artifact is missing or mismatched; run sorage vault verify and restore from backup before deletion",
+        { handoffId: handoff.id },
+      ),
+    );
+  }
   if (handoff.currentArtifact !== null) {
-    const checksum = ports.artifact.checksum(handoff.currentArtifact.storageKey);
-    if (!checksum.ok) return err(checksum.error);
-    if (checksum.value.toLowerCase() !== handoff.currentArtifact.sha256.toLowerCase()) {
-      return err(
-        appError(
-          "ARTIFACT_CORRUPTED",
-          "the current Artifact is missing or mismatched; run sorage vault verify and restore from backup before deletion",
-          {
-            handoffId: handoff.id,
-          },
-        ),
-      );
-    }
+    const verified = ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
+    if (!verified.ok) return err(verified.error);
   }
   const now = ports.clock.now().toISOString();
   const intentId = ports.ids.next();
@@ -442,6 +461,8 @@ export function approveDeletion(
     deleted: true,
     warning: "prior Git commits may retain earlier content",
   };
+  const retiredFile =
+    handoff.currentArtifact !== null && handoff.currentArtifact.storageKey !== null ? handoff.currentArtifact : null;
   const applied = apply(
     ports,
     handoff,
@@ -459,9 +480,14 @@ export function approveDeletion(
     ],
     {
       deletionRequest: { op: "resolve", status: "approved", resolvedByUser: "user", resolutionNote: null },
+      // Logical content removal always accompanies the approval; the physical
+      // unlink intent exists only for a retired file-backed Artifact, and an
+      // inline record leaves through the same transaction's reference-proof
+      // removal with no manufactured intent (SHR-004, SHR-008).
+      removeContent: handoff.currentArtifact !== null,
       unlinkIntent:
-        handoff.currentArtifact !== null
-          ? { id: intentId, toPath: handoff.currentArtifact.storageKey, artifactId: handoff.currentArtifact.id }
+        retiredFile !== null
+          ? { id: intentId, toPath: retiredFile.storageKey as string, artifactId: retiredFile.id }
           : undefined,
       idempotency:
         input.idempotencyKey !== undefined
@@ -477,18 +503,21 @@ export function approveDeletion(
   );
   if (!applied.ok) return err(applied.error);
   // Execute the committed unlink, then complete it with its system event (CP-6).
-  if (handoff.currentArtifact !== null) {
-    const removed = ports.artifact.remove(handoff.currentArtifact.storageKey);
+  if (retiredFile !== null) {
+    const removed = ports.artifact.remove(retiredFile.storageKey as string);
     if (removed.ok) {
       const completed = ports.retention.completeUnlink({
         intentId,
+        // The authorized retired Artifact this completion may settle, captured
+        // from the same loaded Handoff that built the unlink intent.
+        artifactId: retiredFile.id,
         event: {
           id: ports.ids.next(),
           handoffId: handoff.id,
           eventType: "ARTIFACT_UNLINKED",
           actor: SYSTEM_ACTOR,
           rowVersion: null,
-          metadata: { storageKey: handoff.currentArtifact.storageKey },
+          metadata: { storageKey: retiredFile.storageKey },
           createdAt: ports.clock.now().toISOString(),
         },
       });

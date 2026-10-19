@@ -9,6 +9,8 @@ const outcomes = JSON.parse(readFileSync(new URL("./golden/send-recovery.json", 
   SendOutcome,
 ];
 const single = outcomes[0].handoffs[0] as SentHandoff;
+if (typeof single.storageKey !== "string") throw new Error("The historical fixture must remain file-backed");
+const singleStorageKey = single.storageKey;
 
 describe("the additive send recovery contract", () => {
   it.each(outcomes)("checks the unchanged historical SendOutcome shape: %j", (outcome) => {
@@ -47,11 +49,11 @@ describe("the additive send recovery contract", () => {
     ["storageKey", "../outside"],
     ["storageKey", `${single.storageKey}/extra`],
     ["storageKey", `artifacts/${single.handoffId}/${single.artifactId}/..`],
-    ["storageKey", single.storageKey.replace("/original-1.md", "/bad\\name")],
-    ["storageKey", single.storageKey.replace("/original-1.md", "/bad\u0000name")],
-    ["storageKey", single.storageKey.replace("/original-1.md", "/")],
-    ["storageKey", single.storageKey.replace("000000000010", "000000000099")],
-    ["storageKey", single.storageKey.replace("000000000020", "000000000099")],
+    ["storageKey", singleStorageKey.replace("/original-1.md", "/bad\\name")],
+    ["storageKey", singleStorageKey.replace("/original-1.md", "/bad\u0000name")],
+    ["storageKey", singleStorageKey.replace("/original-1.md", "/")],
+    ["storageKey", singleStorageKey.replace("000000000010", "000000000099")],
+    ["storageKey", singleStorageKey.replace("000000000020", "000000000099")],
   ])("refuses malformed historical Handoff %s=%j", (field, value) => {
     const outcome = { ...outcomes[0], handoffs: [{ ...single, [field as string]: value }] };
     const result = parseSendRecoveryOutcome(JSON.stringify(outcome));

@@ -24,6 +24,7 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
+import { inspectArtifactStorageLayout, validateArtifactContentLinks } from "./content-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { launchAgentPlistPath, launchAgentsDirectory, launchAgentUid, plistPointsAtBinary } from "./launchagent-ports";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
@@ -518,27 +519,75 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (!opened.ok) return blocking(opened.blocking);
         try {
           const db = opened.db;
-          let records: Array<{ storage_key: string; sha256: string }> = [];
+          let records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }> = [];
           try {
-            // The artifacts registry arrives with the TASK-027 migration; until
-            // then no Artifact is recorded and the exhaustive pass is vacuously
-            // clean (INIT-017, SEC-014).
-            const table = db
-              .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'")
-              .get() as { name: string } | null | undefined;
-            if (table) {
-              records = db
-                .prepare("SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1")
-                .all() as unknown as Array<{ storage_key: string; sha256: string }>;
+            // The shared content-link guard runs before any census filter: an
+            // Artifact whose authoritative record row is missing must surface as
+            // a blocking finding, never as a false healthy empty census (SHR-004,
+            // SEC-014, section 35).
+            const links = validateArtifactContentLinks(db);
+            if (!links.ok) {
+              return blocking(links.error.message);
             }
+            // The census covers every current Artifact in the layout the applied
+            // history actually established (INIT-017, SEC-014, section 35): a
+            // legitimate pre-adoption database keeps the legacy Artifact columns
+            // and is censused through them — its file-backed bytes still verify
+            // healthy while db.migrations separately reports the ordinary
+            // 8-expected-9 finding — while an adoption-version database reads
+            // each Artifact through its normalized content record, file-backed
+            // bytes at their managed key and an inline record's stored text in
+            // place. A database at or above the adoption version whose required
+            // artifacts table or reference column is missing is inconsistent and
+            // reported as a visible blocking finding, never as the vacuous
+            // no-Artifacts pass or silently treated as legacy (SHR-004: a
+            // history-only admission check does not establish the required
+            // structure of an already-current database).
+            const layout = inspectArtifactStorageLayout(db);
+            if (layout === "content-records") {
+              records = db
+                .prepare(
+                  "SELECT c.storage_key AS storage_key, c.inline_text AS inline_text, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.materialized = 1",
+                )
+                .all() as unknown as Array<{
+                storage_key: string | null;
+                inline_text: string | null;
+                sha256: string;
+              }>;
+            } else if (layout === "legacy-columns") {
+              records = db
+                .prepare("SELECT storage_key, NULL AS inline_text, sha256 FROM artifacts WHERE materialized = 1")
+                .all() as unknown as Array<{
+                storage_key: string | null;
+                inline_text: string | null;
+                sha256: string;
+              }>;
+            }
+            // A pre-adoption database without the artifacts table keeps the
+            // honest vacuous pass: no Artifact can be recorded yet.
           } finally {
             db.close();
           }
           if (records.length === 0) return ok("No Artifacts are recorded yet on this installation.");
+          const inlineFindings: string[] = [];
+          const fileRecords: Array<{ storage_key: string; sha256: string }> = [];
+          for (const row of records) {
+            if (row.inline_text !== null) {
+              const recomputed = createHash("sha256").update(Buffer.from(row.inline_text, "utf8")).digest("hex");
+              if (recomputed !== row.sha256) {
+                inlineFindings.push(
+                  `An inline Artifact body records SHA-256 ${row.sha256} but its stored text digests to ${recomputed}.`,
+                );
+              }
+              continue;
+            }
+            if (row.storage_key !== null) fileRecords.push({ storage_key: row.storage_key, sha256: row.sha256 });
+          }
+          if (inlineFindings.length > 0) return blocking(inlineFindings.join(" "));
           const store = createNodeArtifactStore({ vaultPath: vault, installationId: config.installationId });
           const findings = verifyVaultArtifacts(
             { artifactStore: store },
-            records.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })),
+            fileRecords.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })),
           );
           if (!findings.ok) return blocking(findings.error.message);
           if (findings.value.length > 0) {

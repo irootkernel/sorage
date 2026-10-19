@@ -34,7 +34,7 @@ import {
 } from "@sorage/core";
 import { parseDocument } from "yaml";
 import type { SorageSqlite } from "./sqlite/connection";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { migrate } from "./sqlite/migrator";
 
 /**
@@ -688,9 +688,61 @@ function catalogCovers(db: PrivateDatabase, prefix: number): boolean {
 function referenceCatalog(prefix: number): Map<string, string> {
   const cached = referenceCatalogs.get(prefix);
   if (cached !== undefined) return cached;
+  const plan = productionMigrationPlan();
+  const ordinary = plan.migrations.slice(0, Math.min(prefix, plan.migrations.length));
   const db = new Database(":memory:") as unknown as PrivateDatabase;
   try {
-    migrate(db as unknown as SorageSqlite, MIGRATIONS.slice(0, prefix), () => "2026-01-01T00:00:00.000Z");
+    migrate(db as unknown as SorageSqlite, ordinary, () => "2026-01-01T00:00:00.000Z");
+    if (prefix > plan.migrations.length) {
+      // The rebuild steps of the production plan run on this SAME private
+      // `:memory:` connection with the migration's own foreign-key ceremony —
+      // verified ON, disabled and verified OFF outside the transaction, one
+      // `BEGIN IMMEDIATE`, committed DDL, enforcement restored and verified —
+      // because routing them through the guarded runner's dedicated connection
+      // would apply the rebuild to a different database and leave this one
+      // without the version-9 DDL (SHR-009, interface section 38.7).
+      const rebuilds = plan.rebuilds.filter((migration) => migration.version <= prefix);
+      for (const rebuild of rebuilds) {
+        db.exec("PRAGMA foreign_keys = ON");
+        if (pragmaNumber(db, "foreign_keys") !== 1) {
+          throw new Error("the private reference-catalog connection could not enable foreign-key enforcement");
+        }
+        db.exec("PRAGMA foreign_keys = OFF");
+        if (pragmaNumber(db, "foreign_keys") !== 0) {
+          throw new Error("the private reference-catalog connection could not disable foreign-key enforcement");
+        }
+        let rebuildError: unknown;
+        try {
+          db.exec("BEGIN IMMEDIATE");
+          db.exec(rebuild.sql);
+          db.exec("COMMIT");
+        } catch (error) {
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            // The transaction may already be gone; the DDL failure is the error.
+          }
+          rebuildError = error;
+        }
+        let restorationError: unknown;
+        try {
+          db.exec("PRAGMA foreign_keys = ON");
+          if (pragmaNumber(db, "foreign_keys") !== 1) {
+            throw new Error("the private reference-catalog connection could not restore foreign-key enforcement");
+          }
+        } catch (error) {
+          restorationError = error;
+        }
+        if (rebuildError !== undefined && restorationError !== undefined) {
+          throw new AggregateError(
+            [rebuildError, restorationError],
+            "the private reference-catalog rebuild failed and foreign-key restoration could not be verified",
+          );
+        }
+        if (rebuildError !== undefined) throw rebuildError;
+        if (restorationError !== undefined) throw restorationError;
+      }
+    }
     const catalog = readCatalog(db);
     referenceCatalogs.set(prefix, catalog);
     return catalog;

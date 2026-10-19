@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -20,6 +21,8 @@ import { fileURLToPath } from "node:url";
 import { setImmediate } from "node:timers/promises";
 import {
   type AppError,
+  initializeInstallation,
+  ok,
   type Result,
   recoverSend,
   type SendOutcome,
@@ -34,6 +37,7 @@ import {
   type PreflightInspectPorts,
   withInstallationInspection,
 } from "../../src/preflight";
+import { createNodeInitPorts } from "../../src/init-ports";
 import { createNodeSendRecoveryPorts } from "../../src/send-recovery";
 import type { SorageSqlite } from "../../src/sqlite/connection";
 import { MIGRATIONS } from "../../src/sqlite/migrations";
@@ -61,7 +65,7 @@ function inventory(root: string): string[] {
   walk(root);
   return rows;
 }
-function fixture(kind: "body" | "file" = "body", fanout = false, unregistered = false) {
+function fixture(kind: "body" | "file" | "binary" = "body", fanout = false, unregistered = false) {
   const temp = makeTempHome("sorage-recovery-");
   cleanups.push(temp.cleanup);
   const root = realpathSync(temp.home),
@@ -91,8 +95,8 @@ function fixture(kind: "body" | "file" = "body", fanout = false, unregistered = 
     run(["project", "add", "--name", slug as string, "--dir", dir as string]);
   }
   const body = "# Original\n";
-  const file = join(work, "original.md");
-  writeFileSync(file, body);
+  const file = join(work, kind === "binary" ? "original.png" : "original.md");
+  writeFileSync(file, kind === "binary" ? Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00]) : body);
   const key = `legacy-key-${randomUUID()}`;
   const input: SendRecoveryInput = {
     to: fanout ? ["recipient", "other"] : ["recipient"],
@@ -182,6 +186,26 @@ function legacy(f: ReturnType<typeof fixture>, through: number) {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('schema_migrations','migration_lock')",
       )
       .all() as Array<{ name: string }>) {
+      // The source installation is normalized at schema 9, so the legacy
+      // Artifact projection rematerializes the physical columns an old schema
+      // expects from the content records, and only records no Artifact row
+      // references enter a schema-8 content_records table — the pre-adoption
+      // truth, never a fabricated mixed layout.
+      if (name === "artifacts") {
+        target.exec(
+          "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) " +
+            "SELECT a.id, a.handoff_id, c.storage_key, a.original_name, a.stored_name, a.mime_type, c.size_bytes, c.sha256, a.imported_from_path, c.materialized, a.created_at " +
+            "FROM source.artifacts a JOIN source.content_records c ON c.id = a.content_record_id",
+        );
+        continue;
+      }
+      if (name === "content_records") {
+        target.exec(
+          "INSERT INTO content_records SELECT cr.* FROM source.content_records cr " +
+            "WHERE NOT EXISTS (SELECT 1 FROM source.artifacts a WHERE a.content_record_id = cr.id)",
+        );
+        continue;
+      }
       const columns = (target.prepare(`PRAGMA table_info(${name})`).all() as Array<{ name: string }>)
         .map((r) => r.name)
         .join(",");
@@ -195,6 +219,96 @@ function legacy(f: ReturnType<typeof fixture>, through: number) {
 }
 
 describe("native send receipt inspection", () => {
+  it("replays a frozen schema-8 body-origin file receipt through the native readonly path", () => {
+    // Captured from a real schema-8 CLI body send, independently of current
+    // inline routing. Keep the original receipt JSON, hash, identities, key,
+    // bytes and expiry; only the containing test Installation is recreated.
+    const frozen = JSON.parse(
+      readFileSync(new URL("../fixtures/legacy-body-receipt.json", import.meta.url), "utf8"),
+    ) as {
+      installationId: string;
+      body: string;
+      outcome: SendOutcome;
+      receiptSha256: string;
+      rows: Record<string, Array<Record<string, string | number | null>>>;
+    };
+    const temp = makeTempHome("sorage-frozen-body-receipt-");
+    cleanups.push(temp.cleanup);
+    const root = realpathSync(temp.home);
+    const home = join(root, "installation");
+    const vault = join(root, "vault");
+    const scratch = join(root, "scratch");
+    mkdirSync(scratch);
+    const databasePath = join(home, "state", "sorage.sqlite3");
+    const ports = createNodeInitPorts({ env: { SORAGE_HOME: home }, userHome: root });
+    ports.ids = { next: () => frozen.installationId };
+    ports.database.migrate = () => {
+      const db = new DatabaseSync(databasePath);
+      try {
+        db.exec("PRAGMA foreign_keys = ON");
+        return ok(migrate(db as unknown as SorageSqlite, MIGRATIONS.slice(0, 8)));
+      } finally {
+        db.close();
+      }
+    };
+    expect(initializeInstallation(ports, { vaultPath: vault }).ok).toBe(true);
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.exec("PRAGMA foreign_keys = ON; BEGIN");
+      for (const [table, rows] of Object.entries(frozen.rows)) {
+        for (const row of rows) {
+          const columns = Object.keys(row);
+          db.prepare(`INSERT INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")})`).run(
+            ...Object.values(row),
+          );
+        }
+      }
+      db.exec("COMMIT");
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 8 });
+    } finally {
+      db.close();
+    }
+    const artifact = frozen.rows.artifacts?.[0];
+    const receipt = frozen.rows.idempotency_keys?.[0];
+    if (!artifact || !receipt) throw new Error("Missing frozen legacy rows");
+    const leaf = join(vault, String(artifact.storage_key));
+    mkdirSync(join(leaf, ".."), { recursive: true });
+    writeFileSync(leaf, Buffer.from(frozen.body, "utf8"));
+    chmodSync(leaf, 0o444);
+    expect(createHash("sha256").update(String(receipt.response_json)).digest("hex")).toBe(frozen.receiptSha256);
+    expect(createHash("sha256").update(readFileSync(leaf)).digest("hex")).toBe(artifact.sha256);
+    const before = [inventory(home), inventory(vault)];
+    const source = fileURLToPath(new URL("../../src/send-recovery.ts", import.meta.url));
+    const core = fileURLToPath(new URL("../../../core/src/send-recovery.ts", import.meta.url));
+    const native = spawnSync(
+      "bun",
+      [
+        "-e",
+        `
+      import { recoverSend } from ${JSON.stringify(core)};
+      import { createNodeSendRecoveryPorts } from ${JSON.stringify(source)};
+      const ports = createNodeSendRecoveryPorts({
+        env: { SORAGE_HOME: ${JSON.stringify(home)} }, userHome: ${JSON.stringify(root)},
+        clock: { now: () => new Date(${JSON.stringify(String(receipt.created_at))}) },
+        inspection: { scratchParent: ${JSON.stringify(scratch)} }
+      });
+      const result = recoverSend(ports, {
+        to: ["recipient"], title: "Legacy body", body: ${JSON.stringify(frozen.body)},
+        asUser: true, path: ${JSON.stringify(root)}, userHome: ${JSON.stringify(root)},
+        idempotencyKey: ${JSON.stringify(String(receipt.key))}, allowExternalSource: false, allowUnregistered: false
+      });
+      process.stdout.write(JSON.stringify(result));
+    `,
+      ],
+      { encoding: "utf8", env: { ...process.env, SORAGE_HOME: home }, timeout: 10_000 },
+    );
+    expect(native.status, native.stderr).toBe(0);
+    expect(JSON.parse(native.stdout)).toEqual({ ok: true, value: { ...frozen.outcome, replayed: true } });
+    expect([inventory(home), inventory(vault)]).toEqual(before);
+    expect(readdirSync(scratch)).toEqual([]);
+  });
+
   it.each(["body", "file"] as const)(
     "replays original %s fan-out without writes, including absent markers and pending activation",
     (kind) => {
@@ -223,13 +337,15 @@ describe("native send receipt inspection", () => {
     },
   );
   it.each([4, 5, 6, 7, 8])("reads complete schema %s without migration", (version) => {
-    const f = fixture();
-    if (version !== 8) legacy(f, version);
+    const f = fixture("binary");
+    // Every legacy version is rebuilt through the truthful projection above —
+    // including 8, because the current fixture initializes at schema 9.
+    legacy(f, version);
     expect(code(f.recover())).toBe("OK");
     f.db((d) => expect(d.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get()).toEqual({ n: version }));
   });
   it.each([1, 2, 3])("refuses supported receipt-less schema %s", (version) => {
-    const f = fixture();
+    const f = fixture("binary");
     legacy(f, version);
     expect(code(f.recover())).toBe("STORAGE_SCHEMA_UNSUPPORTED");
   });
@@ -394,7 +510,7 @@ describe("native send receipt inspection", () => {
     if (scenario === "db-header") writeFileSync(f.databasePath, "garbage");
     if (scenario === "db-history") f.db((d) => d.exec("UPDATE schema_migrations SET name='invalid' WHERE version=4"));
     if (scenario === "db-newer")
-      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(9,'future','2026-01-01')"));
+      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(10,'future','2026-01-01')"));
     if (scenario === "db-identity")
       f.db((d) =>
         d
@@ -456,7 +572,7 @@ describe("native send receipt inspection", () => {
     );
   });
   it("honors version-4 file-only and observed legacy migration fences", () => {
-    const f = fixture();
+    const f = fixture("binary");
     legacy(f, 4);
     const lock = join(f.home, "run", "migration.lock");
     writeFileSync(lock, JSON.stringify({ pid: 711 }));

@@ -7,7 +7,7 @@ import {
   schemaSurfaceFloor,
   schemaSurfaceSupports,
 } from "../../src/known-schemas";
-import { MIGRATIONS } from "../../../adapters/src/sqlite/migrations";
+import { productionMigrationPlan } from "../../../adapters/src/sqlite/migrations";
 
 const ROWS = (versions: number[]) =>
   versions.map((version) => ({
@@ -16,11 +16,13 @@ const ROWS = (versions: number[]) =>
   }));
 
 describe("the central known-schema inventory", () => {
-  it("matches the production MIGRATIONS catalog exactly", () => {
-    expect(MIGRATIONS.map((migration) => ({ version: migration.version, name: migration.name }))).toEqual([
-      ...KNOWN_SCHEMA_HISTORY,
-    ]);
-    expect(knownSchemaMaximum()).toBe(8);
+  it("matches the combined production migration plan exactly", () => {
+    const plan = productionMigrationPlan();
+    expect([
+      ...plan.migrations.map((migration) => ({ version: migration.version, name: migration.name })),
+      ...plan.rebuilds.map((migration) => ({ version: migration.version, name: migration.name })),
+    ]).toEqual([...KNOWN_SCHEMA_HISTORY]);
+    expect(knownSchemaMaximum()).toBe(9);
   });
 
   it("admits a complete applied prefix", () => {
@@ -30,13 +32,13 @@ describe("the central known-schema inventory", () => {
   });
 
   it("refuses an unknown forward applied version as STORAGE_SCHEMA_UNSUPPORTED", () => {
-    const refused = admitKnownAppliedHistory([...ROWS([1, 2, 3, 4, 5, 6, 7, 8]), { version: 9, name: "future" }]);
+    const refused = admitKnownAppliedHistory([...ROWS([1, 2, 3, 4, 5, 6, 7, 8, 9]), { version: 10, name: "future" }]);
     expect(refused.kind).toBe("unsupported");
     if (refused.kind === "unsupported") expect(refused.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
   });
 
   it("refuses a hole below the applied maximum as an integrity failure", () => {
-    const hole = admitKnownAppliedHistory(ROWS([1, 2, 4, 5, 6, 7, 8]));
+    const hole = admitKnownAppliedHistory(ROWS([1, 2, 4, 5, 6, 7, 8, 9]));
     expect(hole.kind).toBe("integrity");
     if (hole.kind === "integrity") expect(hole.error.code).toBe("STORAGE_INTEGRITY_ERROR");
   });
@@ -58,7 +60,8 @@ describe("per-surface legacy prefix eligibility", () => {
     expect(schemaSurfaceSupports("send-replay", 3)).toBe(false);
     expect(schemaSurfaceSupports("send-replay", 4)).toBe(true);
     expect(schemaSurfaceSupports("send-replay", 8)).toBe(true);
-    expect(schemaSurfaceSupports("send-replay", 9)).toBe(false);
+    expect(schemaSurfaceSupports("send-replay", 9)).toBe(true);
+    expect(schemaSurfaceSupports("send-replay", 10)).toBe(false);
   });
 
   it("scopes Memo surfaces to histories that contain the Memo domain", () => {
@@ -66,6 +69,7 @@ describe("per-surface legacy prefix eligibility", () => {
     expect(schemaSurfaceSupports("memo", 6)).toBe(false);
     expect(schemaSurfaceSupports("memo", 7)).toBe(true);
     expect(schemaSurfaceSupports("memo", 8)).toBe(true);
+    expect(schemaSurfaceSupports("memo", 9)).toBe(true);
   });
 
   it("keeps Channel surfaces nonexistent before the Channel migration", () => {
@@ -78,6 +82,8 @@ describe("per-surface legacy prefix eligibility", () => {
     expect(schemaSurfaceSupports("operational", 1)).toBe(true);
     expect(schemaSurfaceSupports("operational", 8)).toBe(true);
     expect(schemaSurfaceSupports("preflight", 8)).toBe(true);
-    expect(schemaSurfaceSupports("operational", 9)).toBe(false);
+    expect(schemaSurfaceSupports("operational", 9)).toBe(true);
+    expect(schemaSurfaceSupports("preflight", 9)).toBe(true);
+    expect(schemaSurfaceSupports("operational", 10)).toBe(false);
   });
 });

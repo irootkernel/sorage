@@ -60,7 +60,8 @@ describe("AJ-17 sender reads the Review Note through the CLI before revising", (
     };
     expect(afterFetch.data.firstFetchedAt).toBeNull();
 
-    expect(fetchedData.data.localPath).toContain("artifacts");
+    expect(fetchedData.data.localPath).toContain(join(fixture.home, "state", "fetch-cache"));
+    expect(readFileSync(fetchedData.data.localPath)).toEqual(readFileSync(fixture.document));
     const workspaceCopy = join(fixture.workA, "brief-copy.md");
     writeFileSync(workspaceCopy, `${readFileSync(fixture.document, "utf8")}\nRevised intro.\n`, "utf8");
     const revise = sorage(["revise", id, "--file", workspaceCopy, "--json"], {

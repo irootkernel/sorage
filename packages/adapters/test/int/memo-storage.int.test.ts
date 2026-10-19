@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { appError, changeMemo, createMemo, err, parseMemoListFilter } from "@sorage/core";
 import { createSqliteMemoRepository } from "../../src/memos";
 import { createSqliteEventLedger } from "../../src/events";
-import { MIGRATIONS, PROJECT_MEMOS_MIGRATION } from "../../src/sqlite/migrations";
+import { MIGRATIONS, PROJECT_MEMOS_MIGRATION, productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 import { MEMO_ID, MEMO_PROJECT, MEMO_TIME, unwrap, required } from "../fixtures/memo-installation";
@@ -16,7 +16,20 @@ afterEach(() => {
 function fixture(legacy = false) {
   const temp = makeTempDatabase();
   cleanups.push(temp.cleanup);
-  migrate(temp.db, legacy ? MIGRATIONS.filter((migration) => migration.version <= 6) : MIGRATIONS);
+  if (legacy) {
+    migrate(
+      temp.db,
+      MIGRATIONS.filter((migration) => migration.version <= 6),
+    );
+  } else {
+    // The current Memo surface runs on the full production plan including the
+    // guarded schema-9 Handoff rebuild, on this file-backed database.
+    const plan = productionMigrationPlan();
+    migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: plan.rebuilds,
+    });
+  }
   temp.db
     .prepare(
       "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES (?, 'memo', 'Memo', 'active', ?, ?)",
@@ -244,7 +257,7 @@ describe("Memo migration and transactional repository", () => {
   });
   it("preserves an acknowledged repository write across an independent process restart", () => {
     const { databasePath } = fixture();
-    const imports = `const {openAndMigrate}=await import('./packages/adapters/src/sqlite/migrator.ts');const {MIGRATIONS}=await import('./packages/adapters/src/sqlite/migrations.ts');const {createSqliteMemoRepository}=await import('./packages/adapters/src/memos.ts');const {createMemo}=await import('./packages/core/src/memos.ts');const {db}=openAndMigrate(${JSON.stringify(databasePath)},MIGRATIONS);const repo=createSqliteMemoRepository(db);`;
+    const imports = `const {openAndMigrate}=await import('./packages/adapters/src/sqlite/migrator.ts');const {productionMigrationPlan}=await import('./packages/adapters/src/sqlite/migrations.ts');const {createSqliteMemoRepository}=await import('./packages/adapters/src/memos.ts');const {createMemo}=await import('./packages/core/src/memos.ts');const plan=productionMigrationPlan();const {db}=openAndMigrate(${JSON.stringify(databasePath)},plan.migrations,{rebuilds:plan.rebuilds});const repo=createSqliteMemoRepository(db);`;
     const write = spawnSync(
       "bun",
       [

@@ -270,12 +270,23 @@ describe("doctor severities after initialization", () => {
           "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES ('h-1', NULL, NULL, 'Checksum probe', 'registered_project', 'p-1', NULL, NULL, 'p-1', 'a-1', 1, 1, 'awaiting_recipient', 0, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
         )
         .run();
-      const insert = database.prepare(
-        "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, 'h-1', ?, 'doc.md', 'doc.md', 'text/markdown', 10, ?, NULL, 1, '2026-01-01T00:00:00.000Z')",
+      // Schema 9: each registry row references its own immutable content record
+      // that carries the physical columns.
+      const insertRecord = database.prepare(
+        "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 10, ?, 1, '2026-01-01T00:00:00.000Z')",
       );
-      insert.run("a-1", "artifacts/h-1/a-1/good.md", goodSha);
-      insert.run("a-2", "artifacts/h-1/a-2/tampered.md", goodSha);
-      insert.run("a-3", "artifacts/h-1/a-3/missing.md", goodSha);
+      const insertArtifact = database.prepare(
+        "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, 'h-1', 'doc.md', 'doc.md', 'text/markdown', NULL, '2026-01-01T00:00:00.000Z', ?)",
+      );
+      for (const [artifactId, storageKey] of [
+        ["a-1", "artifacts/h-1/a-1/good.md"],
+        ["a-2", "artifacts/h-1/a-2/tampered.md"],
+        ["a-3", "artifacts/h-1/a-3/missing.md"],
+      ] as const) {
+        const recordId = `c-${artifactId}`;
+        insertRecord.run(recordId, storageKey, goodSha);
+        insertArtifact.run(artifactId, recordId);
+      }
       database.exec("COMMIT");
     } finally {
       database.close();

@@ -13,19 +13,25 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   type AppError,
   appError,
+  type ArtifactBodyPrepareRequest,
   buildContentStorageKey,
   type Clock,
   type CommonContentFailureReason,
   type ContentCleanupReport,
+  type ContentBodyHandle,
+  type ContentBodyOpenPolicy,
+  type ContentLocalPathPolicy,
   type ContentOwnerDomain,
   type ContentRead,
   type ContentRecord,
+  type ContentRecordRemovalPlan,
   type ContentReferences,
   type ContentStore,
+  type PreparedArtifactBody,
   type StagedContentFile,
   type StageContentRequest,
   SYSTEM_ACTOR,
@@ -34,6 +40,7 @@ import {
   type WriteContentOutcome,
   type WriteInlineInput,
   type WriteInlineOutcome,
+  classifyPreparedBody,
   classifyTextRouting,
   commonContentFailureMetadata,
   commonContentSuccessMetadata,
@@ -44,7 +51,9 @@ import {
   isManagedContentStorageKey,
   isUtf8ExactText,
   ok,
+  planContentRecordRemoval,
   type Result,
+  sanitizeStoredName,
   sha256OfBytes,
   sha256OfText,
   UuidGenerator,
@@ -128,6 +137,22 @@ export interface SqliteContentStore extends ContentStore {
   }): void;
   /** The shared completion transaction the ordinary path and the start-up drain both use. */
   completeCommonIntent(intentId: string, outcome: CommonExecutionOutcome): Result<CommonCompletion, AppError>;
+  /**
+   * The in-transaction reference-proof removal of sections 1 and 3: reads the
+   * reference, receipt, fence, and pending-intent proof inside the caller's
+   * open transaction, decides through the shared core planner, deletes the
+   * record row only for a removable plan, and never inserts an intent, touches
+   * the filesystem, or appends an event — the caller owns the physical
+   * disposition the returned plan names. A malformed stored key refuses with
+   * `STORAGE_INTEGRITY_ERROR` and a common owner-identity mismatch refuses with
+   * its existing error, both before any deletion; every refusal must make the
+   * caller abort its enclosing transaction. A live move fence pauses with
+   * `SERVICE_PAUSED`; a SQL failure throws so the caller's transaction aborts.
+   */
+  removeContentRecordInTx(
+    recordId: string,
+    options: { references: ContentReferences; now: Date },
+  ): Result<ContentRecordRemovalPlan, AppError>;
   /** Reads one record row; null when no such record exists. */
   readRecord(recordId: string): Result<ContentRecord | null, AppError>;
   /** Lists every record row, the cleanup and census read. */
@@ -663,7 +688,7 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
 
     cleanup(references: ContentReferences, now: Date): Result<ContentCleanupReport, AppError> {
       if (pausedNow()) return err(pauseError());
-      const report: ContentCleanupReport = { removedInlineIds: [], scheduledUnlinkIds: [] };
+      const report: ContentCleanupReport = { removedInlineIds: [], scheduledUnlinkIds: [], removedFileOnlyIds: [] };
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
@@ -678,6 +703,18 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
               ),
             );
           }
+          // The strengthened metadata guard runs inside this writer
+          // transaction before any deletion: a living Handoff whose current
+          // Artifact row, association, or record is broken must refuse the
+          // reference proof and roll back here, because the artifact-keyed
+          // reference provider reads only surviving artifact rows and would
+          // otherwise free the orphaned record before any later census could
+          // see the damage (SHR-004, SHR-008, SHR-014).
+          const livingLinks = validateArtifactContentLinks(db);
+          if (!livingLinks.ok) {
+            db.exec("ROLLBACK");
+            return livingLinks;
+          }
           // Reference providers read inside the writer transaction, so the
           // reference snapshot and the deletions serialize on the write lock.
           const domainIds = references.domainReferencedRecordIds();
@@ -690,15 +727,15 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
             db.exec("ROLLBACK");
             return receiptIds;
           }
-          const domain = new Set(domainIds.value);
-          const receipts = new Set(receiptIds.value);
-          // The temporary recovery-safety guard, read inside the same writer
+          // The temporary recovery-safety guards, read inside the same writer
           // transaction: a record whose activation intent is still pending is
           // preserved until that intent resolves, because deleting it first
           // would strand the retained staged file and destination as a
           // permanent missing_content failure for work the database still
-          // promises. This is not permanent retention; once the activation
-          // intent is cleared, the ordinary reference rule owns the record again.
+          // promises; and a record whose physical key any pending intent still
+          // names stays until that intent settles. Neither is permanent
+          // retention; once the intent clears, the ordinary reference rule owns
+          // the record again.
           const pendingActivations = new Set(
             (
               db
@@ -708,10 +745,32 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
                 .all() as unknown as Array<{ content_id: string }>
             ).map((row) => row.content_id),
           );
+          const pendingToPaths = new Set(
+            (db.prepare("SELECT to_path FROM pending_fs_ops").all() as unknown as Array<{ to_path: string }>).map(
+              (row) => row.to_path,
+            ),
+          );
+          const proof = {
+            domainReferencedRecordIds: new Set(domainIds.value),
+            receiptReferencedRecordIds: new Set(receiptIds.value),
+            pendingCommonActivationContentIds: pendingActivations,
+            pendingPhysicalToPaths: pendingToPaths,
+            // The live fence above already pauses the whole run; the planner's
+            // fence branch serves read-only planning callers.
+            moveFencePaused: false,
+          };
           const rows = db.prepare("SELECT * FROM content_records ORDER BY id").all() as unknown as ContentRow[];
           for (const row of rows) {
-            if (domain.has(row.id) || receipts.has(row.id) || pendingActivations.has(row.id)) continue;
-            if (row.inline_text !== null) {
+            const plan = planContentRecordRemoval(toRecord(row), proof);
+            if (!plan.ok) {
+              // A malformed stored key is a storage-integrity refusal: roll back
+              // every earlier deletion of this batch, preserve the rows, and
+              // surface the error — never a partially deleted committed batch.
+              db.exec("ROLLBACK");
+              return plan;
+            }
+            if (plan.value.action === "retain") continue;
+            if (plan.value.action === "remove-inline") {
               // Inline bodies are removed by the reference rule alone: no file,
               // no intent, and no physical event (SHR-004).
               db.prepare("DELETE FROM content_records WHERE id = ?").run(row.id);
@@ -719,6 +778,14 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
               continue;
             }
             const key = row.storage_key as string;
+            if (plan.value.physicalUnlink === "owed-elsewhere") {
+              // An artifacts/-keyed record's physical removal is owed to the
+              // legacy Artifact unlink intent, never to a fabricated common
+              // owner (section 38.1, security section 10.1).
+              db.prepare("DELETE FROM content_records WHERE id = ?").run(row.id);
+              report.removedFileOnlyIds.push(row.id);
+              continue;
+            }
             const owner = contentOwnerFromStorageKey({ id: row.id, storageKey: key });
             if (!owner.ok) {
               db.exec("ROLLBACK");
@@ -756,6 +823,384 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
         );
       }
       return ok(report);
+    },
+
+    openBody(recordId: string, policy: ContentBodyOpenPolicy): Result<ContentBodyHandle, AppError> {
+      const row = readContentRow(recordId);
+      if (row === null) {
+        return err(appError("CONTENT_CORRUPTED", "The referenced content record is missing.", { recordId }));
+      }
+      const valid = validateContentRecord(toRecord(row));
+      if (!valid.ok) {
+        return err(appError("CONTENT_CORRUPTED", "The stored content representation is invalid.", { recordId }));
+      }
+      const sizeBytes = Number(row.size_bytes);
+      if (row.inline_text !== null) {
+        // Inline bodies are bounded by the routing threshold, so verifying the
+        // stored text at open is one bounded pass, never a large-file cost.
+        const bytes = Buffer.from(row.inline_text, "utf8");
+        if (bytes.byteLength !== sizeBytes || sha256OfBytes(bytes) !== row.sha256) {
+          return err(
+            appError("CONTENT_CORRUPTED", "The inline bytes do not match their recorded size and SHA-256.", {
+              recordId,
+            }),
+          );
+        }
+        return ok(inlineBodyHandle({ recordId: row.id, sizeBytes, sha256: row.sha256 }, bytes));
+      }
+      const key = row.storage_key as string;
+      if (row.materialized !== 1) {
+        return err(
+          appError("CONTENT_MATERIALIZING", "The content has not reached its storage key yet.", {
+            recordId,
+            storageKey: key,
+          }),
+        );
+      }
+      const verify =
+        policy.verifyFileDigest === "always" ||
+        (policy.verifyFileDigest === "if-configured" && policy.verifyChecksumOnFetch === true);
+      let fd: number;
+      try {
+        fd = openManagedFile(vaultPath, key);
+      } catch (error) {
+        return err(
+          appError("CONTENT_CORRUPTED", `The content at ${key} is missing, unsafe, or unreadable.`, {
+            recordId,
+            storageKey: key,
+            cause: String(error),
+          }),
+        );
+      }
+      // The actually-opened descriptor is the one authority for the body's
+      // byte extent (section 11.3): a file that grew or shrank on disk serves
+      // its true current length — never a silent recorded-length prefix of a
+      // grown file — and the strict recorded-size and hash gate below still
+      // refuses any divergence whenever the policy demands it. An fstat
+      // failure disposes best-effort and refuses typed with no engagement; a
+      // failed disposal never masks the body-integrity refusal (a raw close
+      // exception must not replace it, and the descriptor number may already
+      // be closed by the failing syscall, so no retry may close it again).
+      let actualSizeBytes: number;
+      try {
+        actualSizeBytes = fstatSync(fd).size;
+      } catch (error) {
+        disposeOpenedDescriptor(fd);
+        return err(
+          appError("CONTENT_CORRUPTED", `The content at ${key} could not be measured for serving.`, {
+            recordId,
+            storageKey: key,
+            cause: String(error),
+          }),
+        );
+      }
+      if (verify) {
+        // One bounded streamed digest over the opened descriptor: the handle
+        // hands over bytes from the same open it verified. The digest reads
+        // exactly the recorded size and probes one byte beyond, so a grown or
+        // shortened file fails this gate before any acquisition-dependent
+        // settlement (SHR-003). Disposal on refusal is one best-effort close
+        // for the same reason as the fstat exit.
+        const digest = digestOfFd(fd, sizeBytes);
+        if (!digest.ok) {
+          disposeOpenedDescriptor(fd);
+          return err(digest.error);
+        }
+        if (digest.value !== row.sha256.toLowerCase()) {
+          disposeOpenedDescriptor(fd);
+          return err(
+            appError("CONTENT_CORRUPTED", "The content bytes do not match their recorded SHA-256.", {
+              recordId,
+              storageKey: key,
+            }),
+          );
+        }
+      }
+      return ok(
+        fileBodyHandle({ recordId: row.id, sizeBytes: actualSizeBytes, sha256: row.sha256, storageKey: key }, fd),
+      );
+    },
+
+    materializeLocalPath(recordId: string, policy: ContentLocalPathPolicy): Result<string, AppError> {
+      const row = readContentRow(recordId);
+      if (row === null) {
+        return err(appError("CONTENT_CORRUPTED", "The referenced content record is missing.", { recordId }));
+      }
+      const valid = validateContentRecord(toRecord(row));
+      if (!valid.ok) {
+        return err(appError("CONTENT_CORRUPTED", "The stored content representation is invalid.", { recordId }));
+      }
+      if (row.inline_text !== null) {
+        const bytes = Buffer.from(row.inline_text, "utf8");
+        if (bytes.byteLength !== Number(row.size_bytes) || sha256OfBytes(bytes) !== row.sha256) {
+          return err(
+            appError("CONTENT_CORRUPTED", "The inline bytes do not match their recorded size and SHA-256.", {
+              recordId,
+            }),
+          );
+        }
+        const cached = materializeFetchCacheFile(policy.stateDir, row.sha256, bytes);
+        if (!cached.ok) return cached;
+        return ok(cached.value.path);
+      }
+      const key = row.storage_key as string;
+      if (row.materialized !== 1) {
+        return err(
+          appError("CONTENT_MATERIALIZING", "The content has not reached its storage key yet.", {
+            recordId,
+            storageKey: key,
+          }),
+        );
+      }
+      // The uniform port promises a readable local path: resolve through the
+      // managed no-follow guard, which refuses links and special entries, and
+      // treat an absent regular file as a visible missing-content failure. This
+      // resolution proves presence and safety only — never a checksum claim.
+      try {
+        const resolved = managedFile(vaultPath, key);
+        if (resolved.stat === undefined) {
+          return err(
+            appError("CONTENT_CORRUPTED", `The content at ${key} is missing at its storage key.`, {
+              recordId,
+              storageKey: key,
+            }),
+          );
+        }
+        const descriptor = openManagedFile(vaultPath, key);
+        closeSync(descriptor);
+        return ok(resolved.path);
+      } catch (error) {
+        return err(
+          appError("CONTENT_CORRUPTED", `The content path ${key} is not a safe managed regular file.`, {
+            recordId,
+            storageKey: key,
+            cause: String(error),
+          }),
+        );
+      }
+    },
+
+    prepareArtifactBody(request: ArtifactBodyPrepareRequest): Result<PreparedArtifactBody, AppError> {
+      const opened = guard();
+      if (!opened.ok) return err(opened.error);
+      const tooLarge = request.bounds.tooLargeCode ?? "ARTIFACT_TOO_LARGE";
+      const contextBase = {
+        classification: request.classification,
+        handoffId: request.identities.handoffId,
+        artifactId: request.identities.artifactId,
+        maxBytes: request.bounds.maxBytes,
+        ...(request.bounds.tooLargeCode === undefined ? {} : { tooLargeCode: request.bounds.tooLargeCode }),
+      };
+      const importedFromPath = request.provenance.importedFromPath;
+      if (request.body.kind === "text") {
+        // A text body's logical name already carries the naming rule; its exact
+        // UTF-8 bytes are the accepted bytes (SHR-002, SHR-003). Validate
+        // byte-exactness BEFORE encoding: Buffer.from silently replaces an
+        // unpaired surrogate with U+FFFD, which writeInline and write reject at
+        // this same boundary, so prepare refuses both a short and an
+        // over-threshold surrogate text with no staged file and no record.
+        if (!isUtf8ExactText(request.body.text)) {
+          return err(
+            appError(
+              "INTERNAL_ERROR",
+              "The accepted text cannot be stored byte-exactly; reject it at the surface before it reaches the shared store.",
+            ),
+          );
+        }
+        const bytes = Buffer.from(request.body.text, "utf8");
+        const routing = classifyPreparedBody(
+          {
+            ...contextBase,
+            logicalName: request.body.logicalName,
+            storedName: sanitizeStoredName(request.body.logicalName),
+          },
+          bytes,
+        );
+        if (!routing.ok) return routing;
+        if (routing.value.kind === "inline") {
+          return ok({
+            kind: "inline",
+            text: routing.value.text,
+            sizeBytes: routing.value.sizeBytes,
+            sha256: routing.value.sha256,
+            mimeType: routing.value.mimeType,
+            storageKey: null,
+            logicalName: request.body.logicalName,
+            importedFromPath,
+          });
+        }
+        const staged = stageBytes(bytes, request.bounds.maxBytes, tooLarge);
+        if (!staged.ok) return staged;
+        return ok({
+          kind: "file",
+          // Legacy Artifact intents derive their relative source from the
+          // selected Vault notation. Shared staging itself stays canonical;
+          // preserve a configured root alias at this Handoff-only boundary.
+          stagingPath: join(vaultPath, "staging", basename(staged.value.stagingPath)),
+          sizeBytes: staged.value.sizeBytes,
+          sha256: staged.value.sha256,
+          mimeType: routing.value.mimeType,
+          storageKey: routing.value.storageKey,
+          logicalName: request.body.logicalName,
+          importedFromPath,
+        });
+      }
+      // A file body is classified only by its logical original name: the spool
+      // path of an authenticated upload is opaque and extensionless, and a
+      // client-declared type is never trusted (section 4, section 11.2).
+      const source = request.body;
+      let sourceStat: ReturnType<typeof statSync>;
+      try {
+        sourceStat = statSync(source.physicalPath);
+      } catch (error) {
+        return err(unreadableSource(source.physicalPath, error));
+      }
+      if (!sourceStat.isFile()) {
+        return err(
+          appError(
+            "INTERNAL_ERROR",
+            `The source is not a regular file and cannot be imported: ${source.physicalPath}.`,
+            {
+              sourcePath: source.physicalPath,
+            },
+          ),
+        );
+      }
+      if (sourceStat.size > request.bounds.maxBytes) {
+        return err(
+          appError(
+            tooLarge,
+            `The source ${source.physicalPath} exceeds the shared bound artifact.maxBytes ${String(request.bounds.maxBytes)} bytes.`,
+            { sourcePath: source.physicalPath, maxBytes: request.bounds.maxBytes },
+          ),
+        );
+      }
+      // The bounded pre-read stops at the routing threshold plus one byte: an
+      // inline decision needs exactly the whole body, and anything longer is
+      // Vault-routed by the streamed staging pass that enforces the bound
+      // mid-stream rather than by buffering the whole body here.
+      const limit = Math.min(CONTENT_INLINE_MAX_UTF8_BYTES + 1, request.bounds.maxBytes + 1);
+      const preRead = preReadSource(source.physicalPath, limit);
+      if (!preRead.ok) return preRead;
+      const routing = classifyPreparedBody(
+        {
+          ...contextBase,
+          logicalName: source.logicalOriginalName,
+          storedName: sanitizeStoredName(source.logicalOriginalName),
+        },
+        preRead.value.bytes,
+      );
+      if (!routing.ok) return routing;
+      if (routing.value.kind === "inline") {
+        if (!preRead.value.complete) {
+          return err(
+            appError("INTERNAL_ERROR", "An inline routing decision requires a complete bounded pre-read.", {
+              sourcePath: source.physicalPath,
+            }),
+          );
+        }
+        return ok({
+          kind: "inline",
+          text: routing.value.text,
+          sizeBytes: routing.value.sizeBytes,
+          sha256: routing.value.sha256,
+          mimeType: routing.value.mimeType,
+          storageKey: null,
+          logicalName: source.logicalOriginalName,
+          importedFromPath,
+        });
+      }
+      const staged = this.stage({
+        sourcePath: source.physicalPath,
+        maxBytes: request.bounds.maxBytes,
+        ...(request.bounds.tooLargeCode === undefined ? {} : { tooLargeCode: request.bounds.tooLargeCode }),
+      });
+      if (!staged.ok) return staged;
+      return ok({
+        kind: "file",
+        // Legacy Artifact intents derive their relative source from the
+        // selected Vault notation. Shared staging itself stays canonical;
+        // preserve a configured root alias at this Handoff-only boundary.
+        stagingPath: join(vaultPath, "staging", basename(staged.value.stagingPath)),
+        sizeBytes: staged.value.sizeBytes,
+        sha256: staged.value.sha256,
+        mimeType: routing.value.mimeType,
+        storageKey: routing.value.storageKey,
+        logicalName: source.logicalOriginalName,
+        importedFromPath,
+      });
+    },
+
+    removeContentRecordInTx(
+      recordId: string,
+      options: { references: ContentReferences; now: Date },
+    ): Result<ContentRecordRemovalPlan, AppError> {
+      // The caller holds the open write transaction; every read below runs
+      // inside it, so the proof and the deletion serialize on one lock.
+      const paused = liveFencePaused(db);
+      if (paused) {
+        return err(
+          appError(
+            "SERVICE_PAUSED",
+            "A Vault move or restore is in progress; the content removal paused instead of racing it.",
+            { moveFencePid: paused.pid },
+          ),
+        );
+      }
+      // The strengthened metadata guard joins the reference proof inside the
+      // caller's open transaction: a broken living-Handoff link refuses the
+      // removal before any row changes, and the caller aborts the enclosing
+      // transaction on this Result (SHR-004, SHR-014). Legitimate revision and
+      // retention flows keep metadata coherent at proof time — the revision
+      // inserts its new Artifact before removing superseded records, and the
+      // tombstone already names no current Artifact — so only a real fault
+      // refuses here.
+      const livingLinks = validateArtifactContentLinks(db);
+      if (!livingLinks.ok) return livingLinks;
+      const domainIds = options.references.domainReferencedRecordIds();
+      if (!domainIds.ok) return domainIds;
+      const receiptIds = options.references.receiptReferencedRecordIds(options.now);
+      if (!receiptIds.ok) return receiptIds;
+      const pendingActivations = new Set(
+        (
+          db
+            .prepare("SELECT DISTINCT content_id FROM pending_fs_ops WHERE op = 'activate' AND content_id IS NOT NULL")
+            .all() as unknown as Array<{ content_id: string }>
+        ).map((row) => row.content_id),
+      );
+      const pendingToPaths = new Set(
+        (db.prepare("SELECT to_path FROM pending_fs_ops").all() as unknown as Array<{ to_path: string }>).map(
+          (row) => row.to_path,
+        ),
+      );
+      const row = readContentRow(recordId);
+      if (row === null) {
+        return err(appError("CONTENT_CORRUPTED", "The referenced content record is missing.", { recordId }));
+      }
+      const plan = planContentRecordRemoval(toRecord(row), {
+        domainReferencedRecordIds: new Set(domainIds.value),
+        receiptReferencedRecordIds: new Set(receiptIds.value),
+        pendingCommonActivationContentIds: pendingActivations,
+        pendingPhysicalToPaths: pendingToPaths,
+        moveFencePaused: false,
+      });
+      // A planner refusal (a malformed stored key) or a common-ownership proof
+      // failure propagates before any deletion: the row is preserved and the
+      // caller must abort its enclosing transaction on this Result.
+      if (!plan.ok) return plan;
+      if (plan.value.action === "remove-record" && plan.value.physicalUnlink === "common-intent") {
+        // The helper never bypasses the common owner proof the cleanup path
+        // runs: a content/-shaped key whose record segment mismatches its row
+        // refuses here exactly as it refuses there.
+        const owner = contentOwnerFromStorageKey({ id: row.id, storageKey: row.storage_key as string });
+        if (!owner.ok) return owner;
+      }
+      if (plan.value.action !== "retain") {
+        // No intent, no event, no filesystem effect: the physical disposition
+        // the plan names belongs to the caller's transaction.
+        db.prepare("DELETE FROM content_records WHERE id = ?").run(recordId);
+      }
+      return ok(plan.value);
     },
 
     insertContentRecord(record: ContentRecord): void {
@@ -1019,24 +1464,61 @@ export function activateCommonFile(input: {
       const target = managedPath(input.vaultPath, input.toPath, true);
       try {
         renameSync(source.path, target);
-        fsyncDirectory(dirname(target));
-        chmodSync(target, READ_ONLY_MODE);
-        return { status: "done" };
       } catch (error) {
-        // A concurrent executor may have completed the same physical effect.
+        // Only a rename error reaches this re-evaluation: a concurrent
+        // executor may have completed the same physical effect, and the
+        // managed validated destination then carries the competitor's result
+        // through the recorded size/hash verification. Anything else keeps its
+        // original error semantics.
         if (
           managedFile(input.vaultPath, input.fromPath).stat === undefined &&
           managedFile(input.vaultPath, input.toPath).stat !== undefined
-        )
-          return verifyDestination(input.vaultPath, input.toPath, input.expect);
+        ) {
+          return durableVerifiedDestination(input.vaultPath, input.toPath, input.expect);
+        }
         throw error;
       }
+      // The parent directory entry must fsync successfully before this
+      // activation may report done: an fsync failure is never converted into
+      // success by existence or content checks (VLT-022, SHR-005).
+      fsyncDirectory(dirname(target));
+      try {
+        chmodSync(target, READ_ONLY_MODE);
+      } catch {
+        // Read-only is best effort where the filesystem supports it (VLT-008);
+        // the content census reports the condition.
+      }
+      return { status: "done" };
     }
-    if (destination.stat !== undefined) return verifyDestination(input.vaultPath, input.toPath, input.expect);
+    if (destination.stat !== undefined) {
+      // The source-absent/destination-present retry completes only through the
+      // recorded size/hash verification AND a successful parent fsync:
+      // verified bytes do not prove the directory entry is durable.
+      return durableVerifiedDestination(input.vaultPath, input.toPath, input.expect);
+    }
     return { status: "failed", reason: "missing_content" };
   } catch (error) {
     return { status: "failed", reason: error instanceof UnsafeManagedPathError ? "unsafe_path" : "io_error" };
   }
+}
+
+/** The verified destination retry's durability half: the recorded bytes verify first, then the parent entry must fsync, and the same best-effort read-only mark as a fresh placement follows. */
+function durableVerifiedDestination(
+  vaultPath: string,
+  toPath: string,
+  expect: { sizeBytes: number; sha256: string },
+): CommonExecutionOutcome {
+  const verified = verifyDestination(vaultPath, toPath, expect);
+  if (verified.status !== "done") return verified;
+  const target = managedPath(vaultPath, toPath);
+  fsyncDirectory(dirname(target));
+  try {
+    chmodSync(target, READ_ONLY_MODE);
+  } catch {
+    // Read-only is best effort where the filesystem supports it (VLT-008);
+    // the content census reports the condition.
+  }
+  return verified;
 }
 
 /** Missing targets converge; unsafe entries retain the intent and are never followed. */
@@ -1160,6 +1642,194 @@ function unreadableSource(sourcePath: string, error: unknown): AppError {
 }
 
 /**
+ * The bounded prepare pre-read of section 4: at most `limit` bytes of a source
+ * file, with `complete` true only when the whole body fit inside the clamp, so
+ * an inline decision never rests on partial bytes and a Vault routing never
+ * buffers more than the routing threshold plus one byte in memory.
+ */
+function preReadSource(sourcePath: string, limit: number): Result<{ bytes: Buffer; complete: boolean }, AppError> {
+  let source: number | undefined;
+  try {
+    try {
+      source = openSync(sourcePath, "r");
+    } catch (error) {
+      return err(unreadableSource(sourcePath, error));
+    }
+    const bytes = Buffer.allocUnsafe(limit);
+    let length = 0;
+    while (length < limit) {
+      const count = readSync(source, bytes, length, limit - length, null);
+      if (count === 0) return ok({ bytes: bytes.subarray(0, length), complete: true });
+      length += count;
+    }
+    return ok({ bytes, complete: false });
+  } catch (error) {
+    return err(unreadableSource(sourcePath, error));
+  } finally {
+    if (source !== undefined) {
+      try {
+        closeSync(source);
+      } catch {
+        // Best effort on the abort path.
+      }
+    }
+  }
+}
+
+/** One bounded streamed SHA-256 over an already-opened regular-file descriptor. */
+function digestOfFd(fd: number, sizeBytes: number): Result<string, AppError> {
+  try {
+    const onDiskBytes = fstatSync(fd).size;
+    if (onDiskBytes !== sizeBytes) {
+      return err(
+        appError("CONTENT_CORRUPTED", "The content file does not match its recorded byte size.", {
+          sizeBytes,
+          onDiskBytes,
+        }),
+      );
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(STREAM_BUFFER_BYTES);
+    let position = 0;
+    while (position < sizeBytes) {
+      const count = readSync(fd, buffer, 0, Math.min(STREAM_BUFFER_BYTES, sizeBytes - position), position);
+      if (count <= 0) break;
+      hash.update(buffer.subarray(0, count));
+      position += count;
+    }
+    if (position !== sizeBytes) {
+      return err(
+        appError("CONTENT_CORRUPTED", "The content file is shorter than its recorded byte size.", { sizeBytes }),
+      );
+    }
+    // A byte beyond the recorded size means the file grew: appended bytes must
+    // not escape mandatory verification, exactly like readFileBounded's probe.
+    if (readSync(fd, Buffer.allocUnsafe(1), 0, 1, sizeBytes) !== 0) {
+      return err(
+        appError("CONTENT_CORRUPTED", "The content file is longer than its recorded byte size.", { sizeBytes }),
+      );
+    }
+    return ok(hash.digest("hex"));
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Digesting the opened content failed: ${messageOf(error)}.`, { cause: String(error) }),
+    );
+  }
+}
+
+function invalidBoundedRead(): AppError {
+  return appError("INTERNAL_ERROR", "A bounded body read needs a nonnegative position and a positive maxLength.");
+}
+
+/**
+ * One best-effort close of a descriptor an error path already owns: a failing
+ * OS close may still have closed the descriptor, and the swallowed disposal
+ * failure never masks the typed body-integrity refusal that follows it. Each
+ * error path calls this exactly once per descriptor; the success handle's own
+ * ownership is unchanged.
+ */
+function disposeOpenedDescriptor(fd: number): void {
+  try {
+    closeSync(fd);
+  } catch {
+    // Best effort only: the typed refusal is the answer the caller receives.
+  }
+}
+
+interface BodyHandleMeta {
+  recordId: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
+/** The inline handle: exact verified bytes already in memory, bounded by the routing threshold. */
+function inlineBodyHandle(meta: BodyHandleMeta, bytes: Buffer): ContentBodyHandle {
+  return {
+    recordId: meta.recordId,
+    representation: "inline",
+    sizeBytes: meta.sizeBytes,
+    sha256: meta.sha256,
+    storageKey: null,
+    read(position: number, maxLength: number): Result<Uint8Array, AppError> {
+      if (!Number.isSafeInteger(position) || !Number.isSafeInteger(maxLength) || position < 0 || maxLength <= 0) {
+        return err(invalidBoundedRead());
+      }
+      if (position >= bytes.byteLength) return ok(new Uint8Array(0));
+      const length = Math.min(maxLength, bytes.byteLength - position);
+      const out = new Uint8Array(length);
+      out.set(bytes.subarray(position, position + length));
+      return ok(out);
+    },
+    close(): void {
+      // The inline buffer holds no opened resource.
+    },
+  };
+}
+
+/**
+ * The file handle: one validated managed no-follow descriptor, the actually
+ * opened file's true byte extent as its size authority, bounded positional
+ * reads that never buffer the whole body, and explicit disposal. The recorded
+ * digest rides along for ETag and policy verification; the strict
+ * recorded-size and hash gate runs at open time whenever the digest policy
+ * demands it, so the default-false hot path never pays a hash while still
+ * serving only bytes the descriptor truly holds.
+ */
+function fileBodyHandle(meta: BodyHandleMeta & { storageKey: string }, fd: number): ContentBodyHandle {
+  let open: number | null = fd;
+  return {
+    recordId: meta.recordId,
+    representation: "file",
+    sizeBytes: meta.sizeBytes,
+    sha256: meta.sha256,
+    storageKey: meta.storageKey,
+    read(position: number, maxLength: number): Result<Uint8Array, AppError> {
+      if (open === null) return err(appError("INTERNAL_ERROR", "The body handle is already closed."));
+      if (!Number.isSafeInteger(position) || !Number.isSafeInteger(maxLength) || position < 0 || maxLength <= 0) {
+        return err(invalidBoundedRead());
+      }
+      if (position >= meta.sizeBytes) return ok(new Uint8Array(0));
+      // One read returns at most the fixed streaming buffer, so a caller's huge
+      // requested range never allocates a whole large body (section 2).
+      const length = Math.min(maxLength, STREAM_BUFFER_BYTES, meta.sizeBytes - position);
+      const out = Buffer.allocUnsafe(length);
+      let done = 0;
+      try {
+        while (done < length) {
+          const count = readSync(open, out, done, length - done, position + done);
+          if (count <= 0) break;
+          done += count;
+        }
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading the body at ${meta.storageKey} failed: ${messageOf(error)}.`, {
+            storageKey: meta.storageKey,
+            cause: String(error),
+          }),
+        );
+      }
+      if (done < length) {
+        // A short read inside the opened extent is structural truncation,
+        // visible without any digest-verification claim.
+        return err(
+          appError("CONTENT_CORRUPTED", "The content file is shorter than its opened byte extent.", {
+            storageKey: meta.storageKey,
+          }),
+        );
+      }
+      return ok(out);
+    },
+    close(): void {
+      if (open !== null) {
+        const closing = open;
+        open = null;
+        closeSync(closing);
+      }
+    },
+  };
+}
+
+/**
  * The derived inline fetch cache of SHR-006: `<state>/fetch-cache/<sha256>`,
  * created owner-only and lazily on first use, written read-only and fsynced
  * before its path is returned, the same checksum always mapping to the same
@@ -1263,28 +1933,261 @@ function cacheStateRoot(stateDir: string, create: boolean): string | undefined {
 }
 
 /**
- * The default reference providers of this build, honest about what schema-8
- * production data can express (SHR-008): no domain row references a content
- * record before the adoption Tasks of TASK-107 and TASK-108, and no schema-8
- * retained response references one either — Handoff and Memo receipts embed
- * legacy outcomes whose strings are their own copy, never record references.
- * Scanning receipt bodies for managed-key-shaped strings would classify a
- * legacy inline body that literally equals a key as a reference, so the
- * default returns no reference instead of guessing. The adoption Tasks
- * introduce the record-based reference format and its parser; a supported
- * parser must resolve what a receipt names and must never silently turn
- * malformed data into absence.
+ * The schema version at which `artifacts` gained its normalized
+ * `content_record_id` reference — the TASK-107 Handoff adoption rebuild
+ * (interface section 38.7). A database whose applied history is at or above
+ * this version must carry the reference column; one below it legitimately
+ * keeps the legacy mirrored columns and has no Artifact content references.
+ */
+const HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION = 9;
+
+/**
+ * The verified storage-layout distinction for read-only Artifact surfaces
+ * (SHR-014, section 35): which physical columns `artifacts` carries is decided
+ * from the table's actual shape together with the applied migration history —
+ * never from catching a missing-column SQL error and guessing. A database below
+ * the adoption version legitimately has no Artifact content references, whether
+ * its pre-adoption `artifacts` table carries the legacy mirrored columns or the
+ * table has not arrived yet; a database at or above the adoption version must
+ * carry both the table and its `content_record_id` reference, and either's
+ * absence is inconsistent (SHR-004: a history-only admission check does not
+ * establish the required structure of an already-current database).
+ */
+export type ArtifactStorageLayout = "content-records" | "legacy-columns" | "pre-adoption" | "inconsistent";
+
+function appliedSchemaMaximum(db: SorageSqlite): number {
+  const row = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
+    | { version: number | null }
+    | null
+    | undefined;
+  return row?.version ?? 0;
+}
+
+export function inspectArtifactStorageLayout(db: SorageSqlite): ArtifactStorageLayout {
+  const columns = db.prepare("PRAGMA table_info(artifacts)").all() as Array<{ name: string }>;
+  if (columns.length === 0) {
+    return appliedSchemaMaximum(db) >= HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION ? "inconsistent" : "pre-adoption";
+  }
+  if (columns.some((column) => column.name === "content_record_id")) return "content-records";
+  return appliedSchemaMaximum(db) >= HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION ? "inconsistent" : "legacy-columns";
+}
+
+/**
+ * The shared read guard for every checksum-census and physical-GC protection
+ * boundary (SHR-004, SHR-008, SHR-014): in the normalized layout every
+ * `artifacts` row must carry an authoritative content record — an INNER JOIN
+ * would silently drop an Artifact whose referenced record row is missing and
+ * report a false healthy empty census or an incomplete live-key proof. The
+ * guard is layout-aware (a legitimate pre-adoption database keeps its legacy
+ * census and vacuous passes; an adoption-version database missing the required
+ * table or column is inconsistent) and bounded: one LEFT JOIN metadata query,
+ * never a body read, never filesystem I/O, never a global schema validation.
+ * Callers must invoke it BEFORE any materialized, file, or cursor filters, and
+ * an unavailable proof is an error — never an empty list.
+ */
+export function validateArtifactContentLinks(db: SorageSqlite): Result<void, AppError> {
+  try {
+    const layout = inspectArtifactStorageLayout(db);
+    if (layout === "pre-adoption" || layout === "legacy-columns") return ok(undefined);
+    if (layout === "inconsistent") {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The applied schema is at or above version ${String(HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION)} but the artifacts table is missing or has no content_record_id column; the Artifact content links could not be verified.`,
+          { cause: "artifacts-storage-layout-inconsistent" },
+        ),
+      );
+    }
+    // The required normalized record table itself must exist: its absence at
+    // this layout is the same integrity classification, not an operational SQL
+    // failure, and must never fall through to an empty proof.
+    const recordTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+      .get() as { name: string } | null | undefined;
+    if (recordTable === null || recordTable === undefined) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The applied schema is at or above version ${String(HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION)} but the content_records table is missing; the Artifact content links could not be verified.`,
+          { cause: "content-records-table-missing" },
+        ),
+      );
+    }
+    // The normalized reference is required on every artifacts row, so no
+    // null-filter may hide a broken relationship: any row whose target record
+    // row is absent is a missing authoritative record, whatever its shape.
+    const dangling = db
+      .prepare(
+        "SELECT a.id AS artifact_id, a.content_record_id AS content_record_id FROM artifacts a LEFT JOIN content_records c ON c.id = a.content_record_id WHERE c.id IS NULL LIMIT 1",
+      )
+      .get() as { artifact_id: string; content_record_id: string } | null | undefined;
+    if (dangling !== null && dangling !== undefined) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The Artifact ${dangling.artifact_id} references content record ${dangling.content_record_id}, which is missing; the Artifact content links could not be verified.`,
+          { artifactId: dangling.artifact_id, contentRecordId: dangling.content_record_id },
+        ),
+      );
+    }
+    // Every living Handoff must resolve its named current Artifact to a row of
+    // its own that carries an authoritative record: a deleted Artifact row, a
+    // wrong-Handoff association, or a vanished record behind it is the same
+    // fail-closed integrity refusal. Tombstones legitimately name no current
+    // Artifact, and a present-but-unmaterialized file link is complete
+    // metadata, never corruption (SHR-004, SHR-014).
+    return validateLivingHandoffArtifactLinks(db);
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Verifying the Artifact content links failed: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+}
+
+/**
+ * The living-Handoff half of the normalized metadata guard (SHR-004,
+ * SHR-014): every non-tombstone Handoff that names a current Artifact must
+ * find that Artifact row, owned by the same Handoff, referencing an existing
+ * content record. The check is one bounded metadata query; it never reads a
+ * body, never touches the filesystem, and skips every legitimate shape —
+ * tombstones, empty installations, pre-adoption layouts, and
+ * present-but-unmaterialized files. The same function guards the reference
+ * proof inside cleanup and removal writer transactions, where a broken link
+ * must refuse the proof before any deletion.
+ */
+function validateLivingHandoffArtifactLinks(db: SorageSqlite): Result<void, AppError> {
+  try {
+    // The containing guard already established the normalized tables and
+    // Artifact-to-record links. Keep owner validation private and reuse that
+    // complete guard at every deletion-proof boundary.
+    // One bounded LEFT JOIN over every living Handoff: a row naming no current
+    // Artifact, a named row that is missing, a wrong-Handoff association, or a
+    // vanished record behind it are all caught naturally — including a
+    // NULL current id the schema CHECK should already prevent, which joins to
+    // a missing row and refuses rather than passing vacuously.
+    const broken = db
+      .prepare(
+        `SELECT h.id AS handoff_id, h.current_artifact_id AS artifact_id, a.handoff_id AS owner_handoff_id,
+           a.content_record_id AS content_record_id
+         FROM handoffs h LEFT JOIN artifacts a ON a.id = h.current_artifact_id
+         WHERE h.deleted_at IS NULL
+           AND (a.id IS NULL OR a.handoff_id != h.id OR NOT EXISTS (SELECT 1 FROM content_records c WHERE c.id = a.content_record_id))
+         LIMIT 1`,
+      )
+      .get() as
+      | {
+          handoff_id: string;
+          artifact_id: string | null;
+          owner_handoff_id: string | null;
+          content_record_id: string | null;
+        }
+      | null
+      | undefined;
+    if (broken === null || broken === undefined) return ok(undefined);
+    if (broken.owner_handoff_id === null) {
+      if (broken.artifact_id === null) {
+        return err(
+          appError(
+            "STORAGE_INTEGRITY_ERROR",
+            `The living Handoff ${broken.handoff_id} names no current Artifact; the Artifact content links could not be verified.`,
+            { handoffId: broken.handoff_id, cause: "current-artifact-id-missing" },
+          ),
+        );
+      }
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The living Handoff ${broken.handoff_id} names current Artifact ${broken.artifact_id}, whose row is missing; the Artifact content links could not be verified.`,
+          { handoffId: broken.handoff_id, artifactId: broken.artifact_id, cause: "current-artifact-row-missing" },
+        ),
+      );
+    }
+    if (broken.owner_handoff_id !== broken.handoff_id) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The current Artifact ${String(broken.artifact_id)} of living Handoff ${broken.handoff_id} belongs to Handoff ${broken.owner_handoff_id}; the Artifact content links could not be verified.`,
+          {
+            handoffId: broken.handoff_id,
+            artifactId: broken.artifact_id,
+            ownerHandoffId: broken.owner_handoff_id,
+            cause: "current-artifact-wrong-association",
+          },
+        ),
+      );
+    }
+    return err(
+      appError(
+        "STORAGE_INTEGRITY_ERROR",
+        `The current Artifact ${String(broken.artifact_id)} of living Handoff ${broken.handoff_id} references content record ${String(broken.content_record_id)}, which is missing; the Artifact content links could not be verified.`,
+        {
+          handoffId: broken.handoff_id,
+          artifactId: broken.artifact_id,
+          contentRecordId: broken.content_record_id,
+          cause: "current-artifact-record-missing",
+        },
+      ),
+    );
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Verifying the living Handoff Artifact links failed: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+}
+
+/**
+ * The default SQL reference provider. `domainReferencedRecordIds` reads the
+ * Artifact record references through the verified storage layout: empty on a
+ * legitimate pre-adoption database, the actual references on an adoption-version
+ * database, and a visible integrity refusal when the adoption version's required
+ * table or reference column is missing — an inconsistent current database must
+ * never pass as an empty proof, because the standalone cleanup would treat that
+ * as license to delete owned records. `receiptReferencedRecordIds` stays
+ * honestly empty because Handoff and Memo receipts embed legacy outcome strings
+ * that are their own copy, never record references. Scanning receipt bodies for
+ * managed-key-shaped strings would classify a legacy inline body that literally
+ * equals a key as a reference, so the default returns no reference instead of
+ * guessing; the adoption Task that introduces a record-based receipt format
+ * supplies its parser, and a supported parser must resolve what a receipt names
+ * and must never silently turn malformed data into absence.
  */
 export function sqliteContentReferences(db: SorageSqlite): ContentReferences {
-  void db;
   return {
     domainReferencedRecordIds() {
-      // No domain row references a content record at schema 8; TASK-107 and
-      // TASK-108 populate this provider when their adoptions land.
-      return ok([]);
+      try {
+        // The verified layout decides: a legitimate pre-adoption database has no
+        // Artifact record references, while an adoption-version database missing
+        // the required table or reference column is inconsistent and must
+        // surface, never pass as empty (SHR-004, SHR-014).
+        const layout = inspectArtifactStorageLayout(db);
+        if (layout === "inconsistent") {
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The applied schema is at or above version ${String(HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION)} but the artifacts table is missing or has no content_record_id column; the Artifact content references could not be read.`,
+              { cause: "artifacts-storage-layout-inconsistent" },
+            ),
+          );
+        }
+        if (layout === "legacy-columns" || layout === "pre-adoption") return ok([]);
+        const rows = db
+          .prepare("SELECT content_record_id FROM artifacts WHERE content_record_id IS NOT NULL")
+          .all() as unknown as Array<{ content_record_id: string }>;
+        return ok(rows.map((row) => row.content_record_id));
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading the Artifact content references failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
     },
     receiptReferencedRecordIds(_now: Date) {
-      // No schema-8 receipt format references a content record; see the
+      // No receipt format of this build references a content record; see the
       // function doc comment for why no heuristic may substitute for that.
       return ok([]);
     },

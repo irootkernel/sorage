@@ -91,22 +91,27 @@ export function parseSendRecoveryOutcome(responseJson: string): Result<SendOutco
       entry.revision !== 1 ||
       entry.rowVersion !== 1 ||
       entry.reviewState !== "awaiting_recipient" ||
-      typeof entry.storageKey !== "string"
+      // Always present and null exactly for an inline body (SHR-013): a
+      // retained string key keeps its exact managed-path validation, and a
+      // null key keeps every identity and duplicate check while owing no path.
+      (typeof entry.storageKey !== "string" && entry.storageKey !== null)
     ) {
       return integrity("the retained send outcome has an invalid Handoff entry");
     }
-    const segments = entry.storageKey.split("/");
-    if (
-      segments.length !== 4 ||
-      segments[0] !== "artifacts" ||
-      segments[1] !== entry.handoffId ||
-      segments[2] !== entry.artifactId ||
-      !isValidStorageKeySegment(segments[3] as string) ||
-      ids.has(entry.handoffId) ||
-      artifacts.has(entry.artifactId) ||
-      recipients.has(entry.recipientSlug)
-    ) {
+    if (ids.has(entry.handoffId) || artifacts.has(entry.artifactId) || recipients.has(entry.recipientSlug)) {
       return integrity("the retained send outcome has inconsistent paths or duplicate identities");
+    }
+    if (typeof entry.storageKey === "string") {
+      const segments = entry.storageKey.split("/");
+      if (
+        segments.length !== 4 ||
+        segments[0] !== "artifacts" ||
+        segments[1] !== entry.handoffId ||
+        segments[2] !== entry.artifactId ||
+        !isValidStorageKeySegment(segments[3] as string)
+      ) {
+        return integrity("the retained send outcome has inconsistent paths or duplicate identities");
+      }
     }
     ids.add(entry.handoffId);
     artifacts.add(entry.artifactId);

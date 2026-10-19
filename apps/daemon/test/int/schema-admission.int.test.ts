@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeDaemonPorts, daemonStartAdmissionRefusal } from "@sorage/adapters/src/daemon-command-ports";
 import { openSorageDatabase } from "@sorage/adapters/src/sqlite/connection";
-import { MIGRATIONS } from "@sorage/adapters/src/sqlite/migrations";
+import { knownSchemaMaximum } from "@sorage/core";
 import { memoInstallation } from "../../../../packages/adapters/test/fixtures/memo-installation";
 import { serveDaemon } from "../../src/runtime";
 
@@ -28,7 +28,7 @@ describe("daemon storage admission before operational startup", () => {
       try {
         if (kind === "future")
           db.prepare("INSERT INTO schema_migrations VALUES (?, 'future', '2026-01-01T00:00:00.000Z')").run(
-            MIGRATIONS.length + 1,
+            knownSchemaMaximum() + 1,
           );
         else db.exec("UPDATE schema_migrations SET name = 'invalid' WHERE version = 1");
       } finally {

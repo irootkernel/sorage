@@ -1,17 +1,32 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { request as httpRequest } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
+import * as handoffCommandPorts from "@sorage/adapters/src/handoff-command-ports";
+import * as sqliteConnections from "@sorage/adapters/src/sqlite/connection";
 import {
   createNodeApiTokenStore,
   createNodeTokenEntropy,
   createNodeWebSecretStore,
 } from "@sorage/adapters/src/token-store";
-import { initializeInstallation } from "@sorage/core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { appError, err, initializeInstallation } from "@sorage/core";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSessionService } from "../../src/auth";
 import { createDomainRoutes } from "../../src/domain-routes";
 import { createDaemonConfigService } from "../../src/runtime";
@@ -278,9 +293,9 @@ describe("the handoff lifecycle", () => {
     expect(served.headers["content-type"]).toBe("application/octet-stream");
     expect(String(served.headers["content-disposition"])).toContain('attachment; filename="render.png"');
 
-    // A non-participant read discloses nothing.
-    const outsider = await call(`/api/v1/handoffs/${handoffId}?asUser=true`, { bearer: apiToken });
-    expect(outsider.status).toBe(200); // the User participates in everything
+    // The User participates in every Handoff; this is an authorized control.
+    const user = await call(`/api/v1/handoffs/${handoffId}?asUser=true`, { bearer: apiToken });
+    expect(user.status).toBe(200);
   });
 
   it("runs the review loop through the routes with the documented conflicts", async () => {
@@ -576,13 +591,16 @@ describe("diagnostics schema admission", () => {
     expect(json(supported).data.checks).toHaveLength(21);
     const database = join(home, "state/sorage.sqlite3");
     const writer = new DatabaseSync(database);
+    const operationalOpen = vi.spyOn(sqliteConnections, "openSorageDatabase");
     try {
-      writer.exec("INSERT INTO schema_migrations VALUES(9, 'future', '2026-01-01')");
-    } finally {
-      writer.close();
-    }
-    const before = readFileSync(database);
-    try {
+      writer.exec("INSERT INTO schema_migrations VALUES(10, 'future', '2026-01-01')");
+      // Keep a known connection alive so finalizing earlier request connections
+      // cannot checkpoint their WAL inside the endpoint's byte-comparison window.
+      const before = readFileSync(database);
+      const walFile = `${database}-wal`;
+      expect(existsSync(walFile)).toBe(true);
+      const beforeWal = readFileSync(walFile);
+      expect(beforeWal.byteLength).toBeGreaterThan(0);
       const unauthorized = await call("/api/v1/diagnostics", { bearer: null });
       expect(unauthorized.status).toBe(401);
       const refused = await call("/api/v1/diagnostics", {
@@ -593,13 +611,800 @@ describe("diagnostics schema admission", () => {
       expect(json(refused)).toMatchObject({ ok: false, error: { code: "STORAGE_SCHEMA_UNSUPPORTED" } });
       expect(json(refused).meta.requestId).toBe(refused.headers["x-request-id"]);
       expect(readFileSync(database)).toEqual(before);
+      expect(existsSync(walFile)).toBe(true);
+      const afterWal = readFileSync(walFile);
+      expect(afterWal.byteLength).toBe(beforeWal.byteLength);
+      expect(afterWal).toEqual(beforeWal);
+      expect(operationalOpen.mock.calls.filter(([path]) => path === database)).toHaveLength(0);
     } finally {
-      const cleanup = new DatabaseSync(database);
       try {
-        cleanup.exec("DELETE FROM schema_migrations WHERE version=9");
+        writer.exec("DELETE FROM schema_migrations WHERE version=10");
       } finally {
-        cleanup.close();
+        operationalOpen.mockRestore();
+        writer.close();
       }
     }
   });
+});
+
+describe("the serving boundary over authenticated HTTP", () => {
+  function withDatabase<T>(body: (db: DatabaseSync) => T): T {
+    const db = new DatabaseSync(join(home, "state/sorage.sqlite3"));
+    try {
+      return body(db);
+    } finally {
+      db.close();
+    }
+  }
+
+  function firstFetchedAt(handoffId: string): string | null {
+    return withDatabase(
+      (db) =>
+        (
+          db.prepare("SELECT first_fetched_at FROM handoffs WHERE id = ?").get(handoffId) as {
+            first_fetched_at: string | null;
+          }
+        ).first_fetched_at,
+    );
+  }
+
+  function fetchEvents(handoffId: string): number {
+    return withDatabase(
+      (db) =>
+        (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM events WHERE handoff_id = ? AND event_type = 'ARTIFACT_FETCHED_FIRST_TIME'",
+            )
+            .get(handoffId) as { count: number }
+        ).count,
+    );
+  }
+
+  async function createFreshHandoff(title: string, fileName: string, content: string | Buffer): Promise<string> {
+    writeFileSync(join(senderDir, fileName), content);
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title, path: join(senderDir, fileName), asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+    expect(typeof id).toBe("string");
+    return id;
+  }
+
+  function leafOf(handoffId: string): string {
+    return withDatabase((db) => {
+      const row = db
+        .prepare(
+          "SELECT c.storage_key AS storage_key FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id JOIN content_records c ON c.id = a.content_record_id WHERE h.id = ?",
+        )
+        .get(handoffId) as { storage_key: string };
+      return join(home, "vault", row.storage_key);
+    });
+  }
+
+  it.each(["md", "bin"] as const)(
+    "preserves %s headers on a quiet 416, then settles on admission",
+    async (extension) => {
+      const name = `range-admission.${extension}`;
+      const id = await createFreshHandoff("Range admission", name, "# Range admission\n");
+      const detail = await call(`/api/v1/handoffs/${id}?as=web-app`, { bearer: apiToken });
+      expect(detail.status).toBe(200);
+      const digest = json(detail).data.currentArtifact.sha256 as string;
+      const refused = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, {
+        bearer: apiToken,
+        extra: { range: "bytes=999999-" },
+      });
+      expect(refused.status).toBe(416);
+      expect(String(refused.headers["content-range"])).toMatch(/^bytes \*\//);
+      expect(refused.headers.etag).toBe(`"${digest}"`);
+      expect(refused.headers["accept-ranges"]).toBe("bytes");
+      expect(refused.headers["x-content-type-options"]).toBe("nosniff");
+      expect(typeof refused.headers["x-request-id"]).toBe("string");
+      expect(refused.headers["content-type"]).toBe(
+        extension === "md" ? "text/plain; charset=utf-8" : "application/octet-stream",
+      );
+      expect(refused.headers["content-disposition"]).toBe(
+        extension === "md" ? undefined : `attachment; filename="${name}"`,
+      );
+      expect(refused.body).toBe("");
+      expect(firstFetchedAt(id)).toBeNull();
+      expect(fetchEvents(id)).toBe(0);
+      const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(served.status).toBe(200);
+      expect(firstFetchedAt(id)).not.toBeNull();
+      expect(fetchEvents(id)).toBe(1);
+    },
+  );
+
+  it("reveal returns the readable local path without settling a first fetch", async () => {
+    const id = await createFreshHandoff("Reveal silence", "reveal-silence.md", "# Reveal silence\n");
+    const revealed = await call(`/api/v1/handoffs/${id}/artifact/reveal?as=web-app`, {
+      method: "POST",
+      bearer: apiToken,
+      body: {},
+    });
+    expect(revealed.status).toBe(200);
+    const localPath = json(revealed).data.localPath as string;
+    expect(typeof localPath).toBe("string");
+    expect(readFileSync(localPath, "utf8")).toBe("# Reveal silence\n");
+    expect(firstFetchedAt(id)).toBeNull();
+    expect(fetchEvents(id)).toBe(0);
+  });
+
+  it("hides live and deleted Handoffs from an unrelated Project before any content work", async () => {
+    const outsiderDir = join(home, "unrelated-reader");
+    mkdirSync(outsiderDir);
+    const registered = await call("/api/v1/projects", {
+      method: "POST",
+      bearer: apiToken,
+      body: { name: "Unrelated Reader", dir: outsiderDir, asUser: true },
+    });
+    expect(registered.status).toBe(201);
+    const outsider = json(registered).data.project.slug as string;
+    const live = await createFreshHandoff("Private live", "private-live.md", "# Private live\n");
+    const deleted = await createFreshHandoff("Private tombstone", "private-tombstone.md", "# Private tombstone\n");
+    const declined = await call(`/api/v1/handoffs/${deleted}/decline`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app", reason: "Finish this fixture", expectedRowVersion: 1 },
+    });
+    expect(declined.status).toBe(200);
+    const requested = await call(`/api/v1/handoffs/${deleted}/deletion-request`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { asUser: true, expectedRowVersion: json(declined).data.rowVersion },
+    });
+    expect(requested.status).toBe(200);
+    const approved = await call(`/api/v1/handoffs/${deleted}/deletion-approve`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { asUser: true, confirm: true, expectedRowVersion: json(requested).data.rowVersion },
+    });
+    expect(approved.status).toBe(200);
+    expect(json(approved).data.deleted).toBe(true);
+    const original = handoffCommandPorts.createNodeHandoffReadPorts;
+    const calls = { checksum: 0, path: 0, open: 0, settle: 0 };
+    const factory = vi.spyOn(handoffCommandPorts, "createNodeHandoffReadPorts").mockImplementation((options) => {
+      const ports = original(options);
+      return {
+        ...ports,
+        // Even an enabled checksum policy must remain behind participant and
+        // authorized-tombstone checks. SQL, files and HTTP stay real.
+        config: { ...ports.config, verifyChecksumOnFetch: true },
+        handoffs: {
+          ...ports.handoffs,
+          recordFirstFetch: (id, event) => {
+            calls.settle += 1;
+            return ports.handoffs.recordFirstFetch(id, event);
+          },
+        },
+        artifact: {
+          verifyArtifactBody: (id, policy) => {
+            calls.checksum += 1;
+            return ports.artifact.verifyArtifactBody(id, policy);
+          },
+          localPathOfArtifact: (id) => {
+            calls.path += 1;
+            return ports.artifact.localPathOfArtifact(id);
+          },
+          openArtifactBody: (id, policy) => {
+            calls.open += 1;
+            return ports.artifact.openArtifactBody(id, policy);
+          },
+        },
+      };
+    });
+    try {
+      for (const surface of ["content", "reveal"] as const) {
+        const failures: Array<{ code: string; message: string }> = [];
+        for (const id of [live, deleted]) {
+          const refused = await call(`/api/v1/handoffs/${id}/artifact/${surface}?as=${outsider}`, {
+            method: surface === "content" ? "GET" : "POST",
+            bearer: apiToken,
+          });
+          expect(refused.status).toBe(404);
+          const error = json(refused).error as { code: string; message: string };
+          expect(error.code).toBe("HANDOFF_NOT_FOUND");
+          expect(refused.body).not.toContain("# Private");
+          failures.push({ code: error.code, message: error.message });
+        }
+        expect(failures[0]).toEqual(failures[1]);
+        for (const actor of ["as=web-app", "asUser=true"]) {
+          const tombstone = await call(`/api/v1/handoffs/${deleted}/artifact/${surface}?${actor}`, {
+            method: surface === "content" ? "GET" : "POST",
+            bearer: apiToken,
+          });
+          expect(tombstone.status).toBe(409);
+          expect(json(tombstone).error.code).toBe("HANDOFF_DELETED");
+        }
+      }
+      expect(calls).toEqual({ checksum: 0, path: 0, open: 0, settle: 0 });
+      for (const id of [live, deleted]) {
+        expect(firstFetchedAt(id)).toBeNull();
+        expect(fetchEvents(id)).toBe(0);
+      }
+    } finally {
+      factory.mockRestore();
+    }
+  });
+
+  it.each(["typed", "thrown"] as const)("closes the acquired body on a %s settlement failure", async (kind) => {
+    const id = await createFreshHandoff(`Settlement ${kind}`, `settlement-${kind}.md`, "# Not yet served\n");
+    const original = handoffCommandPorts.createNodeHandoffReadPorts;
+    let opens = 0;
+    let closes = 0;
+    let settlements = 0;
+    const factory = vi.spyOn(handoffCommandPorts, "createNodeHandoffReadPorts").mockImplementation((options) => {
+      const ports = original(options);
+      return {
+        ...ports,
+        handoffs: {
+          ...ports.handoffs,
+          recordFirstFetch: () => {
+            settlements += 1;
+            if (kind === "thrown") throw new Error("injected settlement failure");
+            return err(appError("INTERNAL_ERROR", "injected settlement failure"));
+          },
+        },
+        artifact: {
+          ...ports.artifact,
+          openArtifactBody: (id, policy) => {
+            const opened = ports.artifact.openArtifactBody(id, policy);
+            if (!opened.ok) return opened;
+            opens += 1;
+            let closed = false;
+            return {
+              ok: true,
+              value: {
+                ...opened.value,
+                close: () => {
+                  if (closed) return;
+                  closed = true;
+                  closes += 1;
+                  opened.value.close();
+                },
+              },
+            };
+          },
+        },
+      };
+    });
+    try {
+      const refused = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(refused.status).toBe(500);
+      expect(json(refused)).toMatchObject({ ok: false, error: { code: "INTERNAL_ERROR" } });
+      expect(opens).toBe(1);
+      expect(settlements).toBe(1);
+      expect(closes).toBe(1);
+      expect(firstFetchedAt(id)).toBeNull();
+      expect(fetchEvents(id)).toBe(0);
+    } finally {
+      factory.mockRestore();
+    }
+    const healthy = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(healthy.status).toBe(200);
+    expect(healthy.body).toBe("# Not yet served\n");
+    expect(fetchEvents(id)).toBe(1);
+  });
+
+  it.each(["leaf", "parent", "fifo", "missing"] as const)("refuses %s over HTTP before settling", async (kind) => {
+    const id = await createFreshHandoff("Symlink canary", "symlink-canary.bin", "# Symlink canary\n");
+    const leaf = leafOf(id);
+    const outsideDir = join(home, `owned-outside-${kind}`);
+    mkdirSync(outsideDir);
+    const outside = join(outsideDir, basename(leaf));
+    writeFileSync(outside, "owned bytes outside the Vault");
+    const outsideInventory = readdirSync(outsideDir);
+    rmSync(leaf);
+    if (kind === "leaf") symlinkSync(outside, leaf);
+    if (kind === "parent") {
+      rmSync(dirname(leaf), { recursive: true });
+      symlinkSync(outsideDir, dirname(leaf));
+    }
+    if (kind === "fifo") expect(spawnSync("mkfifo", [leaf]).status).toBe(0);
+    const refused = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(refused.status).not.toBe(200);
+    expect(json(refused)).toMatchObject({ ok: false, error: { code: "ARTIFACT_CORRUPTED" } });
+    expect(refused.body).not.toContain("owned bytes outside the Vault");
+    expect(readFileSync(outside, "utf8")).toBe("owned bytes outside the Vault");
+    expect(readdirSync(outsideDir)).toEqual(outsideInventory);
+    expect(firstFetchedAt(id)).toBeNull();
+    expect(fetchEvents(id)).toBe(0);
+  });
+
+  it("terminates a client-aborted stream within bounds and keeps the daemon serving", async () => {
+    const large = Buffer.alloc(3 * 1024 * 1024, 0x62);
+    const id = await createFreshHandoff("Abort mid stream", "abort-stream.bin", large);
+    const aborted = await new Promise<boolean>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: `/api/v1/handoffs/${id}/artifact/content?as=web-app`,
+          headers: { authorization: `Bearer ${apiToken}` },
+        },
+        (response) => {
+          response.once("data", () => outgoing.destroy());
+          response.on("aborted", () => resolve(true));
+          response.on("end", () => resolve(false));
+        },
+      );
+      outgoing.on("error", (error) => {
+        if ((error as NodeJS.ErrnoException).code === "ECONNRESET") resolve(true);
+        else reject(error);
+      });
+      outgoing.end();
+    });
+    expect(aborted).toBe(true);
+    // The aborted exchange was admitted, so its first fetch settled at
+    // admission; the daemon itself stays healthy and serves the whole body.
+    expect(firstFetchedAt(id)).not.toBeNull();
+    const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(served.status).toBe(200);
+    expect(Buffer.byteLength(served.body, "utf8")).toBe(large.byteLength);
+  });
+
+  // ---- Selected-read Artifact ownership (SHR-004) ---------------------------
+  function rowVersionOf(handoffId: string): number {
+    return withDatabase(
+      (db) =>
+        (db.prepare("SELECT row_version FROM handoffs WHERE id = ?").get(handoffId) as { row_version: number })
+          .row_version,
+    );
+  }
+
+  /** Full row dumps, not counts: refusals must leave every affected table byte-identical. */
+  function fullSqlState(): Record<string, unknown[]> {
+    return withDatabase((db) => ({
+      handoffs: db.prepare("SELECT * FROM handoffs ORDER BY rowid").all(),
+      artifacts: db.prepare("SELECT * FROM artifacts ORDER BY rowid").all(),
+      records: db.prepare("SELECT * FROM content_records ORDER BY rowid").all(),
+      notes: db.prepare("SELECT * FROM review_notes ORDER BY rowid").all(),
+      events: db.prepare("SELECT * FROM events ORDER BY rowid").all(),
+      intents: db.prepare("SELECT * FROM pending_fs_ops ORDER BY rowid").all(),
+      receipts: db.prepare("SELECT * FROM idempotency_keys ORDER BY rowid").all(),
+      deletionRequests: db.prepare("SELECT * FROM deletion_requests ORDER BY rowid").all(),
+    }));
+  }
+
+  function storageKeyOf(handoffId: string): string | null {
+    return withDatabase(
+      (db) =>
+        (
+          db
+            .prepare(
+              "SELECT c.storage_key AS storage_key FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id JOIN content_records c ON c.id = a.content_record_id WHERE h.id = ?",
+            )
+            .get(handoffId) as { storage_key: string | null }
+        ).storage_key,
+    );
+  }
+
+  function currentArtifactOf(handoffId: string): string {
+    return withDatabase(
+      (db) =>
+        (
+          db.prepare("SELECT current_artifact_id FROM handoffs WHERE id = ?").get(handoffId) as {
+            current_artifact_id: string;
+          }
+        ).current_artifact_id,
+    );
+  }
+
+  function repointCurrentArtifact(handoffId: string, artifactId: string): void {
+    withDatabase((db) =>
+      db.prepare("UPDATE handoffs SET current_artifact_id = ? WHERE id = ?").run(artifactId, handoffId),
+    );
+  }
+
+  it.each(["inline-md", "file-bin"] as const)(
+    "never projects another Handoff's %s Artifact body: reads refuse, mutations fail closed, the neighbor stays healthy",
+    async (representation) => {
+      const extension = representation === "inline-md" ? "md" : "bin";
+      const ownBody =
+        representation === "inline-md" ? "# Alpha private brief\n" : Buffer.from([0x0a, 0x0b, 0xfc, 0xfd]);
+      const otherBody =
+        representation === "inline-md" ? "# Beta private brief\n" : Buffer.from([0x7a, 0x7b, 0x7c, 0x7d]);
+      // A second recipient Project owns the Artifact whose id the fault will
+      // borrow: both bodies come from the real producer, and the dotted
+      // logical names prove each production representation before the fault.
+      const secondDir = join(home, `owner-second-${representation}`);
+      mkdirSync(secondDir);
+      const registered = await call("/api/v1/projects", {
+        method: "POST",
+        bearer: apiToken,
+        body: { name: `Owner Second ${representation}`, dir: secondDir, asUser: true },
+      });
+      expect(registered.status).toBe(201);
+      const secondSlug = json(registered).data.project.slug as string;
+      writeFileSync(join(senderDir, `owner-beta.${extension}`), otherBody);
+      const betaCreated = await call("/api/v1/handoffs/import-path", {
+        method: "POST",
+        bearer: apiToken,
+        body: {
+          to: [secondSlug],
+          title: `Owner beta ${representation}`,
+          path: join(senderDir, `owner-beta.${extension}`),
+          asUser: true,
+        },
+      });
+      expect(betaCreated.status).toBe(201);
+      const betaId = json(betaCreated).data.handoffs[0].handoffId as string;
+      expect(storageKeyOf(betaId)).toEqual(representation === "inline-md" ? null : expect.any(String));
+      const unrelated = await call(`/api/v1/handoffs/${betaId}?as=web-app`, { bearer: apiToken });
+      expect(unrelated.status).toBe(404);
+      expect(json(unrelated)).toMatchObject({ error: { code: "HANDOFF_NOT_FOUND" } });
+
+      // Three fault targets: a note-free awaiting Handoff isolates the accept
+      // gate, a noted twin carries revise and no-change, a terminal twin
+      // carries the deletion approval.
+      const alphaClean = await createFreshHandoff(
+        `Owner alpha clean ${representation}`,
+        `owner-alpha-clean.${extension}`,
+        ownBody,
+      );
+      const alphaId = await createFreshHandoff(`Owner alpha ${representation}`, `owner-alpha.${extension}`, ownBody);
+      expect(storageKeyOf(alphaId)).toEqual(representation === "inline-md" ? null : expect.any(String));
+      const noted = await call(`/api/v1/handoffs/${alphaId}/review-note`, {
+        method: "PUT",
+        bearer: apiToken,
+        body: { as: "web-app", text: "Clarify ownership", targetRevision: 1, expectedRowVersion: 1 },
+      });
+      expect(noted.status).toBe(200);
+      const alphaTerminal = await createFreshHandoff(
+        `Owner alpha terminal ${representation}`,
+        `owner-alpha-term.${extension}`,
+        ownBody,
+      );
+      const declined = await call(`/api/v1/handoffs/${alphaTerminal}/decline`, {
+        method: "POST",
+        bearer: apiToken,
+        body: { as: "web-app", reason: "ownership probe", expectedRowVersion: 1 },
+      });
+      expect(declined.status).toBe(200);
+      const requested = await call(`/api/v1/handoffs/${alphaTerminal}/deletion-request`, {
+        method: "POST",
+        bearer: apiToken,
+        body: { asUser: true, expectedRowVersion: json(declined).data.rowVersion },
+      });
+      expect(requested.status).toBe(200);
+
+      // The SQL fault: FK-legal keys, empty foreign_key_check, wrong owner.
+      // The full-state baseline is captured AFTER the fault and the
+      // preconditions, so only the refused operations' zero-effect is judged.
+      const betaArtifact = currentArtifactOf(betaId);
+      const originalArtifacts = [alphaClean, alphaId, alphaTerminal].map((id) => [id, currentArtifactOf(id)] as const);
+      try {
+        for (const id of [alphaClean, alphaId, alphaTerminal]) repointCurrentArtifact(id, betaArtifact);
+        expect(withDatabase((db) => (db.prepare("PRAGMA foreign_key_check").all() as unknown[]).length)).toBe(0);
+        const baseline = fullSqlState();
+        const cleanVersion = rowVersionOf(alphaClean);
+        const notedVersion = rowVersionOf(alphaId);
+        const terminalVersion = rowVersionOf(alphaTerminal);
+
+        // Reads refuse without ever carrying the beta bytes.
+        for (const id of [alphaClean, alphaId, alphaTerminal]) {
+          const detail = await call(`/api/v1/handoffs/${id}?as=web-app`, { bearer: apiToken });
+          expect(detail.status).toBe(409);
+          expect(json(detail)).toMatchObject({ ok: false, error: { code: "ARTIFACT_CORRUPTED" } });
+          expect(detail.body).not.toContain("Beta private");
+          const content = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+          expect(content.status).toBe(409);
+          expect(json(content)).toMatchObject({ ok: false, error: { code: "ARTIFACT_CORRUPTED" } });
+          expect(content.body).not.toContain("Beta private");
+          expect(firstFetchedAt(id)).toBeNull();
+          expect(fetchEvents(id)).toBe(0);
+        }
+        // A participant of the other Handoff learns nothing about either.
+        const outsider = await call(`/api/v1/handoffs/${alphaId}?as=${secondSlug}`, { bearer: apiToken });
+        expect(outsider.status).toBe(404);
+        expect(json(outsider)).toMatchObject({ error: { code: "HANDOFF_NOT_FOUND" } });
+
+        // The mutations all fail closed against the borrowed body.
+        const accepted = await call(`/api/v1/handoffs/${alphaClean}/accept`, {
+          method: "POST",
+          bearer: apiToken,
+          body: { as: "web-app", expectedRevision: 1, expectedRowVersion: cleanVersion },
+        });
+        expect(accepted.status).toBe(409);
+        expect(json(accepted)).toMatchObject({ error: { code: "ARTIFACT_CORRUPTED" } });
+        const replacement = join(senderDir, `owner-replacement.${extension}`);
+        writeFileSync(
+          replacement,
+          representation === "inline-md" ? "# Clean replacement\n" : Buffer.from([0x01, 0x02]),
+        );
+        const revised = await call(`/api/v1/handoffs/${alphaId}/revise`, {
+          method: "POST",
+          bearer: apiToken,
+          body: { path: replacement, asUser: true, allowExternalSource: true, expectedRowVersion: notedVersion },
+        });
+        expect(revised.status).toBe(409);
+        expect(json(revised)).toMatchObject({ error: { code: "ARTIFACT_CORRUPTED" } });
+        const noChange = await call(`/api/v1/handoffs/${alphaId}/revise`, {
+          method: "POST",
+          bearer: apiToken,
+          body: { noChange: true, reason: "ownership probe", asUser: true, expectedRowVersion: notedVersion },
+        });
+        expect(noChange.status).toBe(409);
+        expect(json(noChange)).toMatchObject({ error: { code: "ARTIFACT_CORRUPTED" } });
+        const approved = await call(`/api/v1/handoffs/${alphaTerminal}/deletion-approve`, {
+          method: "POST",
+          bearer: apiToken,
+          body: { asUser: true, confirm: true, expectedRowVersion: terminalVersion },
+        });
+        expect(approved.status).toBe(409);
+        expect(json(approved)).toMatchObject({ error: { code: "ARTIFACT_CORRUPTED" } });
+
+        // Nothing mutated, and the borrowed-from neighbor still serves exactly.
+        expect(fullSqlState()).toEqual(baseline);
+        const betaServed = await call(`/api/v1/handoffs/${betaId}/artifact/content?as=${secondSlug}`, {
+          bearer: apiToken,
+        });
+        expect(betaServed.status).toBe(200);
+        expect(betaServed.body).toContain(
+          representation === "inline-md" ? "# Beta private brief" : String.fromCharCode(0x7a, 0x7b, 0x7c, 0x7d),
+        );
+      } finally {
+        // Undo only this test's injected corruption. Later deletion controls
+        // need a complete global reference proof before removing any record.
+        for (const [id, artifactId] of originalArtifacts) repointCurrentArtifact(id, artifactId);
+      }
+    },
+  );
+
+  it("keeps a legitimate tombstone with a NULL current Artifact readable after its Artifact row is gone", async () => {
+    const id = await createFreshHandoff("Tombstone owner control", "tombstone-owner.md", "# Tombstone control\n");
+    const declined = await call(`/api/v1/handoffs/${id}/decline`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app", reason: "done", expectedRowVersion: 1 },
+    });
+    expect(declined.status).toBe(200);
+    const requested = await call(`/api/v1/handoffs/${id}/deletion-request`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { asUser: true, expectedRowVersion: json(declined).data.rowVersion },
+    });
+    expect(requested.status).toBe(200);
+    const approved = await call(`/api/v1/handoffs/${id}/deletion-approve`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { asUser: true, confirm: true, expectedRowVersion: json(requested).data.rowVersion },
+    });
+    expect(approved.status).toBe(200);
+    expect(json(approved).data.deleted).toBe(true);
+    // The legitimate tombstone keeps metadata readability with its NULL
+    // current Artifact: no wrong-owner pointer, no CHECK tampering.
+    const detail = await call(`/api/v1/handoffs/${id}?as=web-app`, { bearer: apiToken });
+    expect(detail.status).toBe(200);
+    expect(json(detail).data.currentArtifact).toBeNull();
+  });
+
+  // ---- Actual opened-descriptor extent (section 11.3) ------------------------
+  function growLeaf(id: string, extra: string): void {
+    const leaf = leafOf(id);
+    chmodSync(leaf, 0o644);
+    appendFileSync(leaf, extra);
+    chmodSync(leaf, 0o444);
+  }
+
+  function shrinkLeaf(id: string, shorter: Buffer): void {
+    const leaf = leafOf(id);
+    chmodSync(leaf, 0o644);
+    writeFileSync(leaf, shorter);
+    chmodSync(leaf, 0o444);
+  }
+
+  it("serves a file that grew on disk at its true extent and settles exactly once", async () => {
+    const original = Buffer.from([0x11, 0x22, 0x33, 0x44]);
+    const id = await createFreshHandoff("Grown file", "grown-file.bin", original);
+    const appended = "GROWN-TAIL";
+    growLeaf(id, appended);
+    const leaf = leafOf(id);
+    expect(statSync(leaf).size).toBe(original.byteLength + appended.length);
+    const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(served.status).toBe(200);
+    expect(Buffer.byteLength(served.body, "utf8")).toBe(original.byteLength + appended.length);
+    expect(served.headers["content-length"]).toBe(String(original.byteLength + appended.length));
+    expect(served.body.endsWith(appended)).toBe(true);
+    const metadata = await call(`/api/v1/handoffs/${id}?as=web-app`, { bearer: apiToken });
+    expect(json(metadata).data.currentArtifact.sizeBytes).toBe(original.byteLength);
+    expect(served.headers.etag).toBe(`"${json(metadata).data.currentArtifact.sha256}"`);
+    expect(firstFetchedAt(id)).not.toBeNull();
+    expect(fetchEvents(id)).toBe(1);
+    const suffix = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=-5" },
+    });
+    expect(suffix.status).toBe(206);
+    expect(suffix.body).toBe("-TAIL");
+    const tail = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=4-8" },
+    });
+    expect(tail.status).toBe(206);
+    expect(tail.headers["content-range"]).toBe(`bytes 4-8/${original.byteLength + appended.length}`);
+    expect(tail.body).toBe("GROWN");
+    expect(fetchEvents(id)).toBe(1);
+    expect(rowVersionOf(id)).toBe(1);
+    const beyond = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: `bytes=${original.byteLength + appended.length + 10}-` },
+    });
+    expect(beyond.status).toBe(416);
+  });
+
+  it("answers a fresh grown Handoff's beyond-extent range with a quiet 416", async () => {
+    const id = await createFreshHandoff("Grown quiet 416", "grown-quiet.bin", Buffer.from([0x51, 0x52]));
+    growLeaf(id, "!");
+    const refused = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=999999-" },
+    });
+    expect(refused.status).toBe(416);
+    expect(firstFetchedAt(id)).toBeNull();
+    expect(fetchEvents(id)).toBe(0);
+  });
+
+  it("serves a file already shrunk before open at its true short extent, and 416s beyond it before any settlement", async () => {
+    const id = await createFreshHandoff("Shrunk file", "shrunk-file.bin", Buffer.alloc(64, 0x64));
+    const shorter = Buffer.from([0x01, 0x02, 0x03]);
+    shrinkLeaf(id, shorter);
+    const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+    expect(served.status).toBe(200);
+    expect(Buffer.byteLength(served.body, "utf8")).toBe(shorter.byteLength);
+    expect(served.headers["content-length"]).toBe(String(shorter.byteLength));
+    expect(firstFetchedAt(id)).not.toBeNull();
+    expect(fetchEvents(id)).toBe(1);
+    const suffix = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=-2" },
+    });
+    expect(suffix.status).toBe(206);
+    expect(Buffer.from(suffix.body)).toEqual(shorter.subarray(1));
+
+    const fresh = await createFreshHandoff("Shrunk quiet 416", "shrunk-quiet.bin", Buffer.alloc(64, 0x65));
+    shrinkLeaf(fresh, Buffer.from([0x0a]));
+    const refused = await call(`/api/v1/handoffs/${fresh}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=50-" },
+    });
+    expect(refused.status).toBe(416);
+    expect(firstFetchedAt(fresh)).toBeNull();
+    expect(fetchEvents(fresh)).toBe(0);
+    // The true extent admits a real range of the short body.
+    const ranged = await call(`/api/v1/handoffs/${fresh}/artifact/content?as=web-app`, {
+      bearer: apiToken,
+      extra: { range: "bytes=0-0" },
+    });
+    expect(ranged.status).toBe(206);
+    expect(Buffer.from(ranged.body)[0]).toBe(0x0a);
+  });
+
+  it.each(["growth", "shrink"] as const)(
+    "refuses %s under the strict recorded-size and hash policy before any settlement",
+    async (fault) => {
+      const id = await createFreshHandoff(`Strict ${fault}`, `strict-${fault}.bin`, Buffer.from([0x71, 0x72, 0x73]));
+      if (fault === "growth") growLeaf(id, "DIVERGENT");
+      else shrinkLeaf(id, Buffer.from("x"));
+      const original = handoffCommandPorts.createNodeHandoffReadPorts;
+      const factory = vi.spyOn(handoffCommandPorts, "createNodeHandoffReadPorts").mockImplementation((options) => {
+        const ports = original(options);
+        return { ...ports, config: { ...ports.config, verifyChecksumOnFetch: true } };
+      });
+      try {
+        const refused = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+        expect(refused.status).not.toBe(200);
+        expect(json(refused)).toMatchObject({ ok: false, error: { code: "ARTIFACT_CORRUPTED" } });
+        expect(firstFetchedAt(id)).toBeNull();
+        expect(fetchEvents(id)).toBe(0);
+        // No handle can have been handed out past the strict gate, so a repeat
+        // request after the policy is dropped still serves coherently.
+      } finally {
+        factory.mockRestore();
+      }
+      const relaxed = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(relaxed.status).toBe(200);
+      expect(relaxed.body).toBe(fault === "growth" ? "qrsDIVERGENT" : "x");
+      expect(fetchEvents(id)).toBe(1);
+    },
+  );
+
+  it("closes the acquired body handle once a true-extent serve completes", async () => {
+    const id = await createFreshHandoff("Closure serve", "closure-serve.bin", Buffer.from([0x81, 0x82, 0x83, 0x84]));
+    const original = handoffCommandPorts.createNodeHandoffReadPorts;
+    let opens = 0;
+    let closes = 0;
+    const factory = vi.spyOn(handoffCommandPorts, "createNodeHandoffReadPorts").mockImplementation((options) => {
+      const ports = original(options);
+      return {
+        ...ports,
+        artifact: {
+          ...ports.artifact,
+          openArtifactBody: (artifactId: string, policy: unknown) => {
+            const opened = ports.artifact.openArtifactBody(artifactId, policy as never);
+            if (!opened.ok) return opened;
+            opens += 1;
+            let closed = false;
+            return {
+              ok: true as const,
+              value: {
+                ...opened.value,
+                close: () => {
+                  if (closed) return;
+                  closed = true;
+                  closes += 1;
+                  opened.value.close();
+                },
+              },
+            };
+          },
+        },
+      };
+    });
+    try {
+      const served = await call(`/api/v1/handoffs/${id}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(served.status).toBe(200);
+      expect(opens).toBe(1);
+      expect(closes).toBe(1);
+      expect(fetchEvents(id)).toBe(1);
+    } finally {
+      factory.mockRestore();
+    }
+  });
+
+  // ---- Inline tamper read surface over a real producer (SHR-003) -------------
+  // The four-gate mutation matrix for file/inline-text/inline-SHA tampering
+  // lives at the adapters layer over the real stores; this HTTP case proves
+  // only what the transport uniquely shows — the typed refusal carries no
+  // tampered bytes and settles nothing.
+  it.each(["text", "sha"] as const)(
+    "refuses an inline %s tamper at the content boundary without settling",
+    async (variant) => {
+      const alphaId = await createFreshHandoff(
+        `Inline tamper ${variant}`,
+        `inline-tamper-${variant}.md`,
+        "# Original inline brief\n",
+      );
+      const neighborId = await createFreshHandoff(
+        `Inline neighbor ${variant}`,
+        `inline-neighbor-${variant}.md`,
+        "# Neighbor intact\n",
+      );
+      expect(storageKeyOf(alphaId)).toBeNull();
+      const recordId = withDatabase((db) => {
+        const row = db
+          .prepare(
+            "SELECT c.id AS id FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id JOIN content_records c ON c.id = a.content_record_id WHERE h.id = ?",
+          )
+          .get(alphaId) as { id: string };
+        return row.id;
+      });
+      withDatabase((db) => {
+        if (variant === "text") {
+          db.prepare("UPDATE content_records SET inline_text = ? WHERE id = ?").run(
+            "# Tampered inline brief\n",
+            recordId,
+          );
+        } else {
+          db.prepare("UPDATE content_records SET sha256 = ? WHERE id = ?").run("ab".repeat(32), recordId);
+        }
+      });
+      const baseline = fullSqlState();
+      const refused = await call(`/api/v1/handoffs/${alphaId}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(refused.status).not.toBe(200);
+      expect(json(refused)).toMatchObject({ ok: false, error: { code: "ARTIFACT_CORRUPTED" } });
+      expect(refused.body).not.toContain("Tampered inline brief");
+      expect(refused.body).not.toContain("Original inline brief");
+      expect(firstFetchedAt(alphaId)).toBeNull();
+      expect(fetchEvents(alphaId)).toBe(0);
+      expect(fullSqlState()).toEqual(baseline);
+      const neighbor = await call(`/api/v1/handoffs/${neighborId}/artifact/content?as=web-app`, { bearer: apiToken });
+      expect(neighbor.status).toBe(200);
+      expect(neighbor.body).toBe("# Neighbor intact\n");
+    },
+  );
 });

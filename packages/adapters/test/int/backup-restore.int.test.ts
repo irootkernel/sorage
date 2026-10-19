@@ -79,16 +79,17 @@ function seedSource(home: string, vault: string): void {
       '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
   ).run(HANDOFF_ID, WORKSPACE_KEY, workspacePath);
   db.prepare(
-    `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes,
-      sha256, imported_from_path, materialized, created_at)
-    VALUES ('22222222-2222-4222-8222-222222222222', ?, ?, 'brief.md', 'brief.md', 'text/markdown', ?, ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
+    `INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+    VALUES ('88888888-8888-4888-8888-888888888888', NULL, ?, ?, ?, 1, '2026-01-02T00:00:00.000Z')`,
   ).run(
-    HANDOFF_ID,
     `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`,
     artifactBytes.length,
     createHash("sha256").update(artifactBytes).digest("hex"),
-    join(workspacePath, "brief.md"),
   );
+  db.prepare(
+    `INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
+    VALUES ('22222222-2222-4222-8222-222222222222', ?, 'brief.md', 'brief.md', 'text/markdown', ?, '2026-01-02T00:00:00.000Z', '88888888-8888-4888-8888-888888888888')`,
+  ).run(HANDOFF_ID, join(workspacePath, "brief.md"));
   db.prepare(
     `INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at)
     VALUES (?, 'registered_project', '11111111-1111-4111-8111-111111111111', 2, 'Tighten the title', '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z')`,

@@ -1,11 +1,42 @@
 import { dirname } from "node:path";
-import { type AppError, appError, err, type FanoutCommit, type HandoffWritePort, ok, type Result } from "@sorage/core";
+import {
+  type ActorRef,
+  type AppError,
+  appError,
+  type ContentRecord,
+  type ContentRecordRemovalPlan,
+  err,
+  type FanoutCommit,
+  type HandoffWritePort,
+  ok,
+  type Result,
+} from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
 import type { SorageSqlite } from "./sqlite/connection";
 
 export interface IdempotencyLookupOptions {
   now?: (() => Date) | undefined;
+}
+
+/**
+ * The normalized Artifact-content bindings of schema 9 (SHR-004, section 38.7):
+ * every Handoff mutation store receives the shared content store's
+ * transaction-composable primitives so the Artifact row, its immutable content
+ * record, and the domain change commit in one transaction. Record creation
+ * throws to abort the enclosing transaction; reference-proof removal returns
+ * its Result so the caller aborts on refusal and keeps a legitimately retained
+ * record (for example one whose activation is still pending) in place. Content
+ * UUIDs come from the shared id generator and are independent of the Artifact's
+ * own id, which is never reused.
+ */
+export interface ArtifactContentBindings {
+  /** Inserts one content record inside the caller's open transaction; throws so that transaction aborts. */
+  insertArtifactContentRecord(record: ContentRecord): void;
+  /** The shared reference-proof removal, executed inside the caller's open transaction. */
+  removeArtifactContentRecord(recordId: string): Result<ContentRecordRemovalPlan, AppError>;
+  /** One fresh immutable content-record UUID for a newly created Artifact. */
+  nextContentRecordId(): string;
 }
 
 function removeExpiredIdempotency(db: SorageSqlite, options: IdempotencyLookupOptions): void {
@@ -152,6 +183,7 @@ export function createSqliteHandoffWriteStore(
   db: SorageSqlite,
   ledger: SqliteEventLedger,
   options: IdempotencyLookupOptions = {},
+  content: ArtifactContentBindings,
 ): HandoffWritePort {
   const insertIntent = () =>
     db.prepare(
@@ -317,20 +349,33 @@ export function createSqliteHandoffWriteStore(
             );
           }
           const insertArtifact = db.prepare(
-            "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
           );
           for (const artifact of commit.artifacts) {
+            // The immutable content record is the single physical authority
+            // (SHR-004): an inline body commits materialized with no file and
+            // no physical event, while a file-backed Artifact commits with its
+            // activation still owed, exactly as the mirrored columns did
+            // before.
+            const contentRecordId = content.nextContentRecordId();
+            content.insertArtifactContentRecord({
+              id: contentRecordId,
+              inlineText: artifact.inlineBody,
+              storageKey: artifact.storageKey,
+              sizeBytes: artifact.sizeBytes,
+              sha256: artifact.sha256,
+              materialized: artifact.inlineBody !== null,
+              createdAt: artifact.createdAt,
+            });
             insertArtifact.run(
               artifact.id,
               artifact.handoffId,
-              artifact.storageKey,
               artifact.originalName,
               artifact.storedName,
               artifact.mimeType,
-              artifact.sizeBytes,
-              artifact.sha256,
               artifact.importedFromPath,
               artifact.createdAt,
+              contentRecordId,
             );
           }
           const intents = insertIntent();
@@ -378,16 +423,22 @@ export function createSqliteHandoffWriteStore(
         try {
           let winners = 0;
           for (const completion of completions) {
-            db.prepare("UPDATE artifacts SET materialized = 1 WHERE id = ?").run(completion.artifactId);
-            // The append is gated on this completion's own DELETE: a competing
-            // startup drain that already cleared the row means this stale
-            // ordinary completion appends nothing, and only actual winners
-            // count (SEC-012, exactly-once completions).
-            const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId) as {
-              changes: number;
-            };
-            if (cleared.changes === 1) {
-              ledger.append(completion.event);
+            // The persisted pending row — read and retained before this
+            // completion's own DELETE — is the authority for the physical
+            // target and the event attribution; only the own-DELETE winner
+            // settles the record state and appends (SHR-004, section 3).
+            if (
+              settleLegacyCompletion(db, ledger, {
+                intentId: completion.intentId,
+                expectOp: "activate",
+                expectedArtifactId: completion.artifactId,
+                eventHandoffId: completion.event.handoffId,
+                eventId: completion.event.id,
+                eventType: "ARTIFACT_ACTIVATED",
+                actor: completion.event.actor,
+                createdAt: completion.event.createdAt,
+              })
+            ) {
               winners += 1;
             }
           }
@@ -468,8 +519,9 @@ export function createSqliteRevisionStore(
   db: SorageSqlite,
   ledger: SqliteEventLedger,
   options: IdempotencyLookupOptions = {},
+  content: ArtifactContentBindings,
 ): import("@sorage/core").RevisionMutationPort {
-  const write = createSqliteHandoffWriteStore(db, ledger, options);
+  const write = createSqliteHandoffWriteStore(db, ledger, options, content);
   const insertIntent = () =>
     db.prepare(
       "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 0)",
@@ -510,33 +562,70 @@ export function createSqliteRevisionStore(
             return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
           }
           db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
+          // The replacement lands first, so the living Handoff's metadata is
+          // coherent at reference-proof time: the strengthened proof inside
+          // the shared removal would otherwise see the CAS'd current Artifact
+          // id with no row yet and refuse every legitimate revision. The new
+          // Artifact id is fresh, so it never collides with a superseded row.
+          const contentRecordId = content.nextContentRecordId();
+          content.insertArtifactContentRecord({
+            id: contentRecordId,
+            // An inline replacement body commits materialized with no file and
+            // no physical intent; a file-backed one owes its activation
+            // exactly as a new send does (SHR-004, section 38.2).
+            inlineText: input.newArtifact.inlineBody,
+            storageKey: input.newArtifact.storageKey,
+            sizeBytes: input.newArtifact.sizeBytes,
+            sha256: input.newArtifact.sha256,
+            materialized: input.newArtifact.inlineBody !== null,
+            createdAt: input.newArtifact.createdAt,
+          });
+          db.prepare(
+            "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          ).run(
+            input.newArtifact.id,
+            input.newArtifact.handoffId,
+            input.newArtifact.originalName,
+            input.newArtifact.storedName,
+            input.newArtifact.mimeType,
+            input.newArtifact.importedFromPath,
+            input.newArtifact.createdAt,
+            contentRecordId,
+          );
+          // The superseded Artifact rows vanish in this same transaction, and
+          // their content records leave through the shared reference-proof
+          // removal: the proof runs inside this transaction after the
+          // referencing rows are gone, a refusal aborts the whole revision, and
+          // a legitimately retained record — one whose activation is still
+          // pending — stays for the maintenance cleanup to reevaluate.
+          const supersededRecords = db
+            .prepare("SELECT content_record_id FROM artifacts WHERE handoff_id = ? AND id != ?")
+            .all(input.handoffId, input.newArtifact.id) as Array<{ content_record_id: string }>;
           db.prepare("DELETE FROM artifacts WHERE handoff_id = ? AND id != ?").run(
             input.handoffId,
             input.newArtifact.id,
           );
-          db.prepare(
-            "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-          ).run(
-            input.newArtifact.id,
-            input.newArtifact.handoffId,
-            input.newArtifact.storageKey,
-            input.newArtifact.originalName,
-            input.newArtifact.storedName,
-            input.newArtifact.mimeType,
-            input.newArtifact.sizeBytes,
-            input.newArtifact.sha256,
-            input.newArtifact.importedFromPath,
-            input.newArtifact.createdAt,
-          );
+          for (const superseded of supersededRecords) {
+            const removal = content.removeArtifactContentRecord(superseded.content_record_id);
+            if (!removal.ok) {
+              // A refusal aborts the whole revision inside this open
+              // transaction: roll back every earlier mutation of this call
+              // before propagating the existing error code.
+              db.exec("ROLLBACK");
+              return err(removal.error);
+            }
+          }
           const intents = insertIntent();
-          intents.run(
-            input.activateIntent.id,
-            input.activateIntent.op,
-            input.activateIntent.fromPath,
-            input.activateIntent.toPath,
-            input.activateIntent.artifactId,
-            input.activateIntent.createdAt,
-          );
+          if (input.activateIntent !== null) {
+            intents.run(
+              input.activateIntent.id,
+              input.activateIntent.op,
+              input.activateIntent.fromPath,
+              input.activateIntent.toPath,
+              input.activateIntent.artifactId,
+              input.activateIntent.createdAt,
+            );
+          }
           if (input.unlinkIntent !== null) {
             intents.run(
               input.unlinkIntent.id,
@@ -641,13 +730,26 @@ export function createSqliteRevisionStore(
         try {
           let winners = 0;
           for (const completion of completions) {
-            // Exactly-once: only this completion's own DELETE winner appends
-            // the ARTIFACT_UNLINKED event and counts as completed.
-            const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(completion.intentId) as {
-              changes: number;
-            };
-            if (cleared.changes === 1) {
-              ledger.append(completion.event);
+            // Exactly-once over the persisted row: the live pending intent's
+            // own to_path, ownership, and exactly-matching authorized
+            // ArtifactID are retained before this completion's DELETE, and
+            // only that winner appends — with the association and digest
+            // derived from the authoritative Artifact row first, preserving
+            // the ordinary command's Handoff association when that row was
+            // already superseded, never from the caller's event metadata or a
+            // pathname (VLT-014, VLT-022).
+            if (
+              settleLegacyCompletion(db, ledger, {
+                intentId: completion.intentId,
+                expectOp: "unlink",
+                expectedArtifactId: completion.artifactId,
+                eventHandoffId: completion.event.handoffId,
+                eventId: completion.event.id,
+                eventType: "ARTIFACT_UNLINKED",
+                actor: completion.event.actor,
+                createdAt: completion.event.createdAt,
+              })
+            ) {
               winners += 1;
             }
           }
@@ -668,6 +770,123 @@ export function createSqliteRevisionStore(
       }
     },
   };
+}
+
+/**
+ * The shared legacy settlement of the ordinary mutation paths (VLT-014,
+ * VLT-022): inside the caller's open BEGIN IMMEDIATE, the live pending
+ * row's persisted op, to_path, and artifact ownership are read and retained
+ * BEFORE this completion's own DELETE — only the own-DELETE winner settles.
+ * An unlink additionally requires the supplied expected ArtifactID to exactly
+ * match the persisted artifact_id before anything is cleared: a mismatch is
+ * not this completion's row and returns with the row, state, attempts, and
+ * events completely untouched. The winner pins the content-record state
+ * update to the persisted exact stored key, keeps the persisted to_path as
+ * the sole physical target and metadata storageKey authority, and resolves
+ * the event association from the authoritative Artifact row first; when that
+ * row is already gone — the ordinary supersede/delete shape, where the
+ * command's own earlier transaction removed it — the matched non-null
+ * expected ArtifactID plus a present string event.handoffId (trusted core
+ * context, never event.metadata or a parsed path) preserves the ordinary
+ * Handoff association, and a null===null context-free legacy row wins without
+ * any fabricated association. An activation keeps the authoritative-row
+ * association and digest rules with an omitted unavailable digest. The
+ * caller's event id, actor, and clock are always preserved.
+ */
+function settleLegacyCompletion(
+  db: SorageSqlite,
+  ledger: SqliteEventLedger,
+  input: {
+    intentId: string;
+    expectOp: "activate" | "unlink";
+    expectedArtifactId: string | null;
+    eventHandoffId: string | null | undefined;
+    eventId: string;
+    eventType: "ARTIFACT_ACTIVATED" | "ARTIFACT_UNLINKED";
+    actor: ActorRef;
+    createdAt: string;
+  },
+): boolean {
+  // The persisted row's operation AND ownership are validated inside the
+  // winning transaction: the shared pending table also carries Memo/Channel
+  // common intents (the complete owner triple), and an ordinary legacy
+  // completion must never clear a common-owned row or append an Artifact event
+  // to it. Legitimate legacy ownership is all-null owners with the artifact_id
+  // free to be null — the valid legacy shapes stay winners exactly as before.
+  const row = db
+    .prepare("SELECT op, to_path, artifact_id, owner_domain, owner_id, content_id FROM pending_fs_ops WHERE id = ?")
+    .get(input.intentId) as
+    | {
+        op: string;
+        to_path: string;
+        artifact_id: string | null;
+        owner_domain: string | null;
+        owner_id: string | null;
+        content_id: string | null;
+      }
+    | null
+    | undefined;
+  if (
+    row === null ||
+    row === undefined ||
+    row.op !== input.expectOp ||
+    row.owner_domain !== null ||
+    row.owner_id !== null ||
+    row.content_id !== null
+  ) {
+    return false;
+  }
+  // The unlink's authorized retired Artifact must exactly match the persisted
+  // intent's artifact row BEFORE any DELETE, state change, or event: a
+  // mismatched completion is not this row's winner and leaves everything
+  // untouched (null === null is the legitimate context-free legacy shape).
+  if (input.expectOp === "unlink" && row.artifact_id !== input.expectedArtifactId) {
+    return false;
+  }
+  const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(input.intentId) as { changes: number };
+  if (cleared.changes !== 1) return false;
+  if (input.expectOp === "activate" && row.artifact_id !== null) {
+    db.prepare(
+      "UPDATE content_records SET materialized = 1 WHERE storage_key = ? AND inline_text IS NULL AND (id = (SELECT content_record_id FROM artifacts WHERE id = ?) OR materialized = 0)",
+    ).run(row.to_path, row.artifact_id);
+  }
+  const artifact =
+    row.artifact_id === null
+      ? null
+      : ((db
+          .prepare(
+            "SELECT a.handoff_id, cr.sha256 FROM artifacts a JOIN content_records cr ON cr.id = a.content_record_id WHERE a.id = ?",
+          )
+          .get(row.artifact_id) as { handoff_id: string; sha256: string } | null | undefined) ?? null);
+  // The authoritative Artifact row is the primary association authority. When
+  // it is already gone — the ordinary supersede/delete shape — the matched
+  // non-null expected ArtifactID plus a present string event.handoffId carries
+  // the ordinary command's trusted association; an absent association is never
+  // inferred from the persisted path.
+  let association: string | null = artifact === null ? null : artifact.handoff_id;
+  if (
+    artifact === null &&
+    input.expectOp === "unlink" &&
+    row.artifact_id !== null &&
+    input.expectedArtifactId === row.artifact_id &&
+    typeof input.eventHandoffId === "string"
+  ) {
+    association = input.eventHandoffId;
+  }
+  const metadata: Record<string, unknown> = { storageKey: row.to_path };
+  if (input.expectOp === "activate" && artifact !== null) {
+    metadata.sha256 = artifact.sha256;
+  }
+  ledger.append({
+    id: input.eventId,
+    handoffId: association,
+    eventType: input.eventType,
+    actor: input.actor,
+    rowVersion: null,
+    metadata,
+    createdAt: input.createdAt,
+  });
+  return true;
 }
 
 function rollbackWithConflict(
@@ -753,17 +972,20 @@ export function createSqliteRetentionStore(
   db: SorageSqlite,
   ledger: SqliteEventLedger,
   options: IdempotencyLookupOptions = {},
+  content: ArtifactContentBindings,
 ): import("@sorage/core").RetentionMutationPort {
   return {
     applyRetentionMutation(input) {
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
-          // The vault-move fence pauses the intent-committing decisions: the
-          // deletion approval records an unlink intent, so it races the mover the
-          // same way a creation or revision does, while a pin or archive that
-          // records no intent may proceed (RUN-002).
-          const pausedRetention = input.unlinkIntent !== undefined ? liveFencePaused(db) : null;
+          // The vault-move fence pauses the content-committing decisions: a
+          // deletion approval removes current content — its file unlink intent
+          // or its inline record — so it races the mover the same way a
+          // creation or revision does, while a pin or archive that touches no
+          // content may proceed (RUN-002, SHR-011).
+          const contentRemoval = input.unlinkIntent !== undefined || input.removeContent === true;
+          const pausedRetention = contentRemoval ? liveFencePaused(db) : null;
           if (pausedRetention) {
             db.exec("ROLLBACK");
             return err(
@@ -807,17 +1029,40 @@ export function createSqliteRetentionStore(
               input.handoffId,
             );
           }
-          if (input.unlinkIntent !== undefined) {
+          // The honest logical-deletion signal removes current content in this
+          // same domain transaction whether or not a physical unlink intent
+          // exists: an approved inline Artifact leaves no file to unlink, and
+          // no fake key or intent is manufactured to trigger the cleanup
+          // (SHR-004, SHR-008).
+          if (input.unlinkIntent !== undefined || input.removeContent === true) {
             db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
+            // The tombstoned Handoff's Artifact rows vanish in this same
+            // transaction; their content records leave through the shared
+            // reference-proof removal inside it, with the same refusal and
+            // retained-record semantics as a revision.
+            const tombstonedRecords = db
+              .prepare("SELECT content_record_id FROM artifacts WHERE handoff_id = ?")
+              .all(input.handoffId) as Array<{ content_record_id: string }>;
             db.prepare("DELETE FROM artifacts WHERE handoff_id = ?").run(input.handoffId);
-            db.prepare(
-              "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, 'unlink', NULL, ?, ?, ?, 0)",
-            ).run(
-              input.unlinkIntent.id,
-              input.unlinkIntent.toPath,
-              input.unlinkIntent.artifactId,
-              input.events[0]?.createdAt ?? new Date().toISOString(),
-            );
+            for (const tombstoned of tombstonedRecords) {
+              const removal = content.removeArtifactContentRecord(tombstoned.content_record_id);
+              if (!removal.ok) {
+                // Same abort discipline as a revision: no partial retention
+                // mutation survives a removal refusal.
+                db.exec("ROLLBACK");
+                return err(removal.error);
+              }
+            }
+            if (input.unlinkIntent !== undefined) {
+              db.prepare(
+                "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, 'unlink', NULL, ?, ?, ?, 0)",
+              ).run(
+                input.unlinkIntent.id,
+                input.unlinkIntent.toPath,
+                input.unlinkIntent.artifactId,
+                input.events[0]?.createdAt ?? new Date().toISOString(),
+              );
+            }
           }
           for (const event of input.events) {
             ledger.append(event);
@@ -881,16 +1126,25 @@ export function createSqliteRetentionStore(
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
-          // Exactly-once: the retention completion appends its event only when
-          // its own DELETE cleared the row, and counts only that winner.
-          const cleared = db.prepare("DELETE FROM pending_fs_ops WHERE id = ?").run(input.intentId) as {
-            changes: number;
-          };
-          if (cleared.changes === 1) {
-            ledger.append(input.event);
-          }
+          // Exactly-once over the persisted row: the live pending intent's own
+          // to_path, ownership, and exactly-matching authorized ArtifactID are
+          // retained before this completion's DELETE, and only that winner
+          // appends — with the association derived from the authoritative
+          // Artifact row first, preserving the ordinary command's Handoff
+          // association when that row was already deleted, never from the
+          // caller's event metadata or a pathname (VLT-014, VLT-022).
+          const settled = settleLegacyCompletion(db, ledger, {
+            intentId: input.intentId,
+            expectOp: "unlink",
+            expectedArtifactId: input.artifactId,
+            eventHandoffId: input.event.handoffId,
+            eventId: input.event.id,
+            eventType: "ARTIFACT_UNLINKED",
+            actor: input.event.actor,
+            createdAt: input.event.createdAt,
+          });
           db.exec("COMMIT");
-          return ok({ completed: cleared.changes === 1 ? 1 : 0 });
+          return ok({ completed: settled ? 1 : 0 });
         } catch (transactionError) {
           try {
             db.exec("ROLLBACK");

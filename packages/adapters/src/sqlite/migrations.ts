@@ -330,6 +330,250 @@ ALTER TABLE pending_fs_ops ADD COLUMN content_id TEXT;
 `,
 };
 
+/**
+ * The TASK-107 Handoff adoption rebuild (SHR-004, SHR-009, SHR-014, interface
+ * section 38.7, ADR-0030/0031): the complete `handoffs`/`artifacts` FK cycle
+ * plus its dependents `review_notes`, `deletion_requests`, and `events` is
+ * rebuilt through the official SQLite generalized `ALTER TABLE` procedure on a
+ * dedicated non-operational connection. Artifacts lose the mirrored physical
+ * columns — `storage_key`, `size_bytes`, `sha256`, `materialized` — and keep
+ * domain metadata plus a NOT NULL reference to one immutable shared content
+ * record that becomes the single physical authority. The backfill mints one
+ * independent content-record UUID per Artifact row in SQL (`randomblob`-based
+ * canonical v4, distinct from the Artifact's own id, never reusing it) and
+ * reuses that same generated value for both the record row and the Artifact
+ * reference, so the mapping is created exactly once with no key-based join.
+ * Existing Artifact identities — including the legacy short `a[0-9a-f]{8}`
+ * form — storage keys, byte sizes, digests, materialization states, ledger
+ * associations, pending filesystem intents, and retained receipt rows are
+ * copied verbatim with no repacking; pre-existing version-8 content records
+ * are untouched. Executed in-transaction assertions — a CHECK-constrained
+ * assertion table whose every inserted row must carry equal expected/actual
+ * counts — prove per-table row counts, the one-to-one Artifact-to-record
+ * mapping, exact physical-column fidelity of every backfilled record, and the
+ * preservation of every original association compared per original row identity
+ * with NULL-safe equality: Handoff current-Artifact and supersedes references,
+ * Artifact handoff ownership, Review Note and Deletion Request handoff
+ * associations, and Event handoff and Memo associations alike. Any mismatch
+ * aborts the whole batch before a drop or commit. The unique index on
+ * `content_record_id` and the guarded runner's final whole-database
+ * `PRAGMA foreign_key_check` gate close the remaining structural obligations.
+ */
+export const HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION: Migration = {
+  version: 9,
+  name: "handoff-shared-content-v1",
+  sql: `
+CREATE TABLE handoffs_new (
+  id TEXT PRIMARY KEY,
+  dispatch_group_id TEXT,
+  supersedes_handoff_id TEXT REFERENCES handoffs(id),
+  title TEXT NOT NULL,
+  sender_kind TEXT NOT NULL CHECK (sender_kind IN ('registered_project', 'unregistered_workspace', 'user')),
+  sender_project_id TEXT REFERENCES projects(id),
+  sender_workspace_key TEXT,
+  sender_path_snapshot TEXT,
+  recipient_project_id TEXT NOT NULL REFERENCES projects(id),
+  current_artifact_id TEXT REFERENCES artifacts(id) DEFERRABLE INITIALLY DEFERRED,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  row_version INTEGER NOT NULL CHECK (row_version >= 1),
+  review_state TEXT NOT NULL CHECK (review_state IN ('awaiting_recipient', 'changes_requested', 'accepted', 'declined', 'withdrawn')),
+  accepted_revision INTEGER,
+  accepted_at TEXT,
+  declined_at TEXT,
+  decline_reason TEXT,
+  withdrawn_at TEXT,
+  consecutive_no_change_resolutions INTEGER NOT NULL DEFAULT 0 CHECK (consecutive_no_change_resolutions >= 0),
+  first_fetched_at TEXT,
+  review_engaged_at TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+  archived_at TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (deleted_at IS NOT NULL OR current_artifact_id IS NOT NULL)
+);
+
+CREATE TABLE artifacts_new (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT NOT NULL REFERENCES handoffs(id) DEFERRABLE INITIALLY DEFERRED,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  imported_from_path TEXT,
+  created_at TEXT NOT NULL,
+  content_record_id TEXT NOT NULL REFERENCES content_records(id)
+);
+
+CREATE TABLE review_notes_new (
+  handoff_id TEXT PRIMARY KEY REFERENCES handoffs(id),
+  author_kind TEXT NOT NULL CHECK (author_kind IN ('registered_project', 'user')),
+  author_project_id TEXT REFERENCES projects(id),
+  target_revision INTEGER NOT NULL CHECK (target_revision >= 1),
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE deletion_requests_new (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT NOT NULL REFERENCES handoffs(id),
+  requested_by_kind TEXT NOT NULL CHECK (requested_by_kind IN ('registered_project', 'unregistered_workspace', 'user')),
+  requested_by_id TEXT,
+  reason TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  requested_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by_user TEXT,
+  resolution_note TEXT
+);
+
+CREATE TABLE events_new (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT REFERENCES handoffs(id),
+  memo_id TEXT REFERENCES project_memos(id),
+  event_type TEXT NOT NULL,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('registered_project', 'unregistered_workspace', 'user', 'system')),
+  actor_id TEXT,
+  row_version INTEGER,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+INSERT INTO handoffs_new (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, accepted_revision, accepted_at, declined_at, decline_reason, withdrawn_at, consecutive_no_change_resolutions, first_fetched_at, review_engaged_at, pinned, archived_at, deleted_at, created_at, updated_at)
+  SELECT id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, accepted_revision, accepted_at, declined_at, decline_reason, withdrawn_at, consecutive_no_change_resolutions, first_fetched_at, review_engaged_at, pinned, archived_at, deleted_at, created_at, updated_at FROM handoffs;
+
+INSERT INTO artifacts_new (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
+  SELECT id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at,
+    lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-' || substr('89ab', 1 + abs(random()) % 4, 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))
+  FROM artifacts;
+
+INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+  SELECT n.content_record_id, NULL, a.storage_key, a.size_bytes, a.sha256, a.materialized, a.created_at
+  FROM artifacts_new n JOIN artifacts a ON a.id = n.id;
+
+INSERT INTO review_notes_new (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at)
+  SELECT handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at FROM review_notes;
+
+INSERT INTO deletion_requests_new (id, handoff_id, requested_by_kind, requested_by_id, reason, status, requested_at, resolved_at, resolved_by_user, resolution_note)
+  SELECT id, handoff_id, requested_by_kind, requested_by_id, reason, status, requested_at, resolved_at, resolved_by_user, resolution_note FROM deletion_requests;
+
+INSERT INTO events_new (id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
+  SELECT id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at FROM events;
+
+CREATE TABLE migration_v9_assertions (
+  name TEXT PRIMARY KEY,
+  expected INTEGER NOT NULL,
+  actual INTEGER NOT NULL,
+  CHECK (expected = actual)
+);
+
+INSERT INTO migration_v9_assertions (name, expected, actual) VALUES
+  ('handoff-count', (SELECT COUNT(*) FROM handoffs), (SELECT COUNT(*) FROM handoffs_new)),
+  ('artifact-count', (SELECT COUNT(*) FROM artifacts), (SELECT COUNT(*) FROM artifacts_new)),
+  ('review-note-count', (SELECT COUNT(*) FROM review_notes), (SELECT COUNT(*) FROM review_notes_new)),
+  ('deletion-request-count', (SELECT COUNT(*) FROM deletion_requests), (SELECT COUNT(*) FROM deletion_requests_new)),
+  ('event-count', (SELECT COUNT(*) FROM events), (SELECT COUNT(*) FROM events_new)),
+  ('artifact-record-mapping', (SELECT COUNT(*) FROM artifacts),
+    (SELECT COUNT(*) FROM content_records cr JOIN artifacts_new n ON cr.id = n.content_record_id)),
+  ('record-physical-fidelity', (SELECT COUNT(*) FROM artifacts),
+    (SELECT COUNT(*) FROM artifacts a
+      JOIN artifacts_new n ON n.id = a.id
+      JOIN content_records cr ON cr.id = n.content_record_id
+      WHERE cr.inline_text IS NULL
+        AND cr.storage_key = a.storage_key
+        AND cr.size_bytes = a.size_bytes
+        AND cr.sha256 = a.sha256
+        AND cr.materialized = a.materialized
+        AND cr.created_at = a.created_at)),
+  ('handoff-association-pairs', (SELECT COUNT(*) FROM handoffs),
+    (SELECT COUNT(*) FROM handoffs h
+      JOIN handoffs_new n ON n.id = h.id
+      WHERE n.current_artifact_id IS h.current_artifact_id
+        AND n.supersedes_handoff_id IS h.supersedes_handoff_id)),
+  ('artifact-ownership-pairs', (SELECT COUNT(*) FROM artifacts),
+    (SELECT COUNT(*) FROM artifacts a
+      JOIN artifacts_new n ON n.id = a.id
+      WHERE n.handoff_id IS a.handoff_id)),
+  ('review-note-association-pairs', (SELECT COUNT(*) FROM review_notes),
+    (SELECT COUNT(*) FROM review_notes_new rn JOIN handoffs h ON h.id = rn.handoff_id)),
+  ('deletion-request-association-pairs', (SELECT COUNT(*) FROM deletion_requests),
+    (SELECT COUNT(*) FROM deletion_requests d
+      JOIN deletion_requests_new dn ON dn.id = d.id
+      WHERE dn.handoff_id IS d.handoff_id)),
+  ('event-association-pairs', (SELECT COUNT(*) FROM events),
+    (SELECT COUNT(*) FROM events e
+      JOIN events_new en ON en.id = e.id
+      WHERE en.handoff_id IS e.handoff_id
+        AND en.memo_id IS e.memo_id));
+
+DROP TABLE migration_v9_assertions;
+
+DROP TABLE events;
+DROP TABLE deletion_requests;
+DROP TABLE review_notes;
+DROP TABLE artifacts;
+DROP TABLE handoffs;
+
+ALTER TABLE handoffs_new RENAME TO handoffs;
+ALTER TABLE artifacts_new RENAME TO artifacts;
+ALTER TABLE review_notes_new RENAME TO review_notes;
+ALTER TABLE deletion_requests_new RENAME TO deletion_requests;
+ALTER TABLE events_new RENAME TO events;
+
+CREATE INDEX idx_handoffs_inbox ON handoffs(recipient_project_id, review_state, updated_at);
+CREATE INDEX idx_handoffs_outbox_project ON handoffs(sender_project_id, review_state, updated_at);
+CREATE INDEX idx_handoffs_outbox_workspace ON handoffs(sender_workspace_key);
+CREATE INDEX idx_handoffs_dispatch_group ON handoffs(dispatch_group_id);
+CREATE INDEX idx_events_handoff_created ON events(handoff_id, created_at);
+CREATE INDEX idx_artifacts_handoff ON artifacts(handoff_id);
+CREATE UNIQUE INDEX idx_artifacts_content_record ON artifacts(content_record_id);
+CREATE UNIQUE INDEX idx_deletion_requests_pending ON deletion_requests(handoff_id) WHERE status = 'pending';
+CREATE INDEX idx_events_memo ON events(memo_id, created_at);
+CREATE UNIQUE INDEX idx_events_memo_version ON events(memo_id, row_version) WHERE memo_id IS NOT NULL;
+
+CREATE TRIGGER events_append_only_update
+  BEFORE UPDATE ON events
+  BEGIN
+    SELECT RAISE(ABORT, 'events is append-only');
+  END;
+
+CREATE TRIGGER events_append_only_delete
+  BEFORE DELETE ON events
+  BEGIN
+    SELECT RAISE(ABORT, 'events is append-only');
+  END;
+
+CREATE TRIGGER events_memo_association
+  BEFORE INSERT ON events
+  WHEN (NEW.event_type IN ('MEMO_CREATED', 'MEMO_UPDATED', 'MEMO_MARKED_DONE', 'MEMO_DISMISSED', 'MEMO_REOPENED')
+    AND (NEW.memo_id IS NULL OR NEW.handoff_id IS NOT NULL OR NEW.actor_kind != 'user'
+      OR NEW.actor_id IS NOT NULL OR NEW.row_version IS NULL))
+    OR (NEW.event_type NOT IN ('MEMO_CREATED', 'MEMO_UPDATED', 'MEMO_MARKED_DONE', 'MEMO_DISMISSED', 'MEMO_REOPENED')
+      AND NEW.memo_id IS NOT NULL)
+  BEGIN
+    SELECT RAISE(ABORT, 'invalid Memo event association');
+  END;
+`,
+};
+
+/**
+ * The single production migration plan of TASK-107 (SHR-009, interface section
+ * 38.7): the ordinary catalog stays exactly versions 1 to 8, and version 9 is
+ * registered exactly once as a rebuild-marked step the guarded whole-batch
+ * runner executes on its dedicated non-operational connection. Every production
+ * opener, the migrator's admission catalog, and preflight's reference catalog
+ * consume this one accessor so no surface can drift, never a second ordinary
+ * registration of 9, and never a silent bypass of the dedicated path.
+ */
+export interface ProductionMigrationPlan {
+  migrations: Migration[];
+  rebuilds: Migration[];
+}
+
+export function productionMigrationPlan(): ProductionMigrationPlan {
+  return { migrations: MIGRATIONS, rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION] };
+}
+
 export const MIGRATIONS: Migration[] = [
   FIRST_RELEASED_SCHEMA,
   PROJECT_REGISTRY_MIGRATION,

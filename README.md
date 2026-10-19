@@ -10,6 +10,10 @@ Copying a file into another repository, pasting it into chat, or passing around 
 
 [The M8 contracts](docs/README.md#m8-design-entrypoints) cover non-mutating installation preflight, non-executing recovery of uncertain sends, and stronger shipped agent guidance. This source candidate includes those CLI inspection paths and the revised skill; the published v0.1.2 executable and skill predate them. The intended release remains v0.1.3. Delivery status belongs only to [the roadmap](docs/roadmap/README.md); implementation acceptance, installation and publication remain separate.
 
+## Unversioned M9 source contract
+
+The shared Handoff storage contract deliberately changes affected JSON DTOs: `storageKey` is always present and is `null` for inline Artifacts. Consumers must use the `localPath` returned by `fetch` instead of constructing a path from `storageKey`. The response envelope, protocol version 1 and `/api/v1` prefix are unchanged. These M9 source changes have no release allocation; the published v0.1.2 distribution and the planned M8-only v0.1.3 scope above remain separate. See [the M9 contract](docs/specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9).
+
 ## Features
 
 - A CLI that works without a running daemon
@@ -20,7 +24,7 @@ Copying a file into another repository, pasting it into chat, or passing around 
 - A loopback-only daemon and local Web UI
 - Vault integrity checks, Git backup, restore, and macOS LaunchAgent support
 
-Documents remain ordinary files. Sorage tracks their custody and review, but it does not edit them or replace version control, chat, issue tracking, or multi-agent orchestration.
+Sorage preserves accepted document bytes and tracks their custody and review. In this source candidate, newly accepted Handoff text up to 65,536 UTF-8 bytes is stored inline in SQLite; larger text and binary documents use Vault files. Existing file-backed Artifacts keep their recorded files. `sorage fetch` returns a readable local path for either representation. Copy the fetched document into your workspace before editing it; the database, Vault and derived fetch cache are managed storage.
 
 ## Requirements
 
@@ -154,7 +158,7 @@ If the loopback-only daemon is not running, `sorage web` starts it before openin
 
 ## Data and safety
 
-Sorage stores installation state under `~/.sorage` by default. Set `SORAGE_HOME` to use another isolated home. The Artifact Vault is managed by Sorage and must not be edited manually; move it with `sorage vault move` and verify it with `sorage vault verify`.
+Sorage stores installation state under `~/.sorage` by default. Set `SORAGE_HOME` to use another isolated home. The database, Artifact Vault and derived `state/fetch-cache/` files are managed by Sorage and must not be edited manually. Move the Vault with `sorage vault move` and verify it with `sorage vault verify`.
 
 Deletion requires explicit user approval and retains a tombstone. `sorage uninstall --as-user --confirm` removes the installation while preserving the Vault.
 

@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
 import { buildStorageKey, isManagedStorageKey, isValidStorageKeySegment } from "./artifacts";
 import {
-  redactSnapshotData,
+  snapshotCounts,
+  type SnapshotArtifact,
   type SnapshotData,
   type SnapshotFile,
   type SnapshotManifest,
-  snapshotManifest,
 } from "./backup-snapshot";
 import {
   classifySnapshotArtifactBody,
   classifySnapshotEvent,
+  redactSnapshotDataV3,
   snapshotFilesV3,
+  type SnapshotArtifactV3,
+  type SnapshotDataV3,
   validateSnapshotCommonEvent,
   validateSnapshotHandoffV3,
   validateSnapshotProjectV3,
@@ -45,7 +48,7 @@ export interface BackupExportPorts {
   /** The `gitBackup.snapshot.redactWorkspacePaths` policy, default `true` (BKP-003). */
   redactWorkspacePaths: boolean;
   /** Reads every snapshot row inside one consistent SQLite read transaction (BKP-007). */
-  readSnapshotData(): Result<SnapshotData, AppError>;
+  readSnapshotData(): Result<SnapshotDataV3, AppError>;
   /** Writes the snapshot tree through temporary files and an atomic replacement (BKP-008). */
   writeSnapshotTree(files: SnapshotFile[]): Result<void, AppError>;
 }
@@ -59,17 +62,18 @@ export interface BackupExportReport {
 export function exportSnapshot(ports: BackupExportPorts): Result<BackupExportReport, AppError> {
   const read = ports.readSnapshotData();
   if (!read.ok) return err(read.error);
-  const data = ports.redactWorkspacePaths ? redactSnapshotData(read.value) : read.value;
+  const data = ports.redactWorkspacePaths ? redactSnapshotDataV3(read.value) : read.value;
   // The writer turned to snapshot format 3 at this Task (SHR-010): zero
   // Channels and an empty shared-content digest map, with the format-2 record
-  // families this schema exports faithfully.
+  // families this schema exports faithfully — and, from this Task, Artifact
+  // records carrying their closed inline-body-or-key pair.
   const built = snapshotFilesV3(data);
   if (!built.ok) return built;
   const written = ports.writeSnapshotTree(built.value.files);
   if (!written.ok) return err(written.error);
   return ok({
     files: built.value.files.length,
-    counts: snapshotManifest(data).counts,
+    counts: snapshotCounts(data),
     redactedWorkspacePaths: ports.redactWorkspacePaths,
   });
 }
@@ -104,7 +108,7 @@ export interface BackupRestorePorts {
   /** Parses the source Vault marker; a newer schemaVersion is VAULT_SCHEMA_UNSUPPORTED (VLT-019). */
   readSourceMarker(): Result<VaultMarker, AppError>;
   /** Reads and parses `snapshots/` from the source Vault into one snapshot set. */
-  readSourceSnapshot(): Result<SnapshotData, AppError>;
+  readSourceSnapshot(): Result<SnapshotData | SnapshotDataV3, AppError>;
   /** Cross-checks the manifest counts against the parsed snapshot (BKP-005). */
   readSourceManifest(): Result<VersionedSnapshotManifest, AppError>;
   /** False once any domain row or ledger row exists; the empty rule of section 32 (BKP-021). */
@@ -114,9 +118,9 @@ export interface BackupRestorePorts {
    * SHA-256; a missing file or one altered byte is ARTIFACT_CORRUPTED and
    * aborts the restore (SEC-014, VLT-023).
    */
-  verifyArtifacts(data: SnapshotData): Result<{ verified: number }, AppError>;
+  verifyArtifacts(data: SnapshotData | SnapshotDataV3): Result<{ verified: number }, AppError>;
   /** Copies Artifact bytes into the target Vault, re-verifying in pass and setting 0444. */
-  copyArtifacts(data: SnapshotData): Result<{ copied: number }, AppError>;
+  copyArtifacts(data: SnapshotData | SnapshotDataV3): Result<{ copied: number }, AppError>;
   /** Rewrites the target Vault marker with the adopted installationId (VLT-019). */
   adoptMarker(marker: VaultMarker): Result<void, AppError>;
   /** Adopts the installationId in config.yaml, fenced on the etag that was read. */
@@ -126,7 +130,7 @@ export interface BackupRestorePorts {
    * exported ledger verbatim in one write transaction, swaps the installation
    * identity, and appends VAULT_ADOPTED followed by RESTORE_COMPLETED.
    */
-  rebuildDatabase(data: SnapshotData, marker: VaultMarker): Result<void, AppError>;
+  rebuildDatabase(data: SnapshotData | SnapshotDataV3, marker: VaultMarker): Result<void, AppError>;
   /** Regenerates the API token; it is the only credential restore creates (BKP-021). */
   regenerateApiToken(): Result<void, AppError>;
 }
@@ -140,7 +144,7 @@ function snapshotProblem(message: string): Result<never, AppError> {
  * every Project reference resolves, the ledger only names known Handoffs, the
  * manifest counts match what was parsed, and the format-3 record families stay
  * inside what this schema can faithfully import — a recognized later
- * representation (an inline Artifact body, a Vault-backed Memo body, nonempty
+ * representation (a Vault-backed Memo body, nonempty
  * Channel structure, or a Channel domain event, ledger-only input included)
  * fails closed with `VAULT_SCHEMA_UNSUPPORTED` before import rather than as
  * corruption, partial restore, fallback, or silent omission — so a truncated or
@@ -148,7 +152,7 @@ function snapshotProblem(message: string): Result<never, AppError> {
  * foreign-key error halfway through the rebuild.
  */
 export function validateSnapshot(
-  data: SnapshotData,
+  data: SnapshotData | SnapshotDataV3,
   manifest: VersionedSnapshotManifest,
 ): Result<{ reviewNotes: number }, AppError> {
   if (manifest.formatVersion === 3 && manifest.counts.channels !== 0) {
@@ -205,7 +209,7 @@ export function validateSnapshot(
       return snapshotProblem(`Handoff ${String(handoff.id)} has an invalid identifier.`);
     }
     if (handoff.artifact !== null) {
-      const artifact = handoff.artifact;
+      const artifact = handoff.artifact as SnapshotArtifact | SnapshotArtifactV3;
       if (
         typeof artifact !== "object" ||
         !isValidStorageKeySegment(artifact.id) ||
@@ -220,16 +224,12 @@ export function validateSnapshot(
       }
       const raw = artifact as unknown as Record<string, unknown>;
       if (manifest.formatVersion === 3) {
+        // Format 3 accepts both closed representations of section 38.8: the
+        // file-backed baseline and this build's inline body, whose exact
+        // stored text the shape validator already matched against the
+        // recorded size and digest.
         const classified = classifySnapshotArtifactBody(raw);
         if (!classified.ok) return classified;
-        if (classified.value !== "file-backed-baseline") {
-          return err(
-            appError(
-              "VAULT_SCHEMA_UNSUPPORTED",
-              "The snapshot carries an inline Artifact body, a valid later representation this build cannot import",
-            ),
-          );
-        }
       } else if (Object.hasOwn(raw, "inlineBody")) {
         // Formats 1 and 2 keep their frozen closed Artifact shapes: the
         // explicit containing field of format 3 is an unknown field there.
@@ -237,18 +237,26 @@ export function validateSnapshot(
           `Handoff ${handoff.id} carries an Artifact record with a field this snapshot format does not define.`,
         );
       }
-      if (!isManagedStorageKey(artifact.storageKey)) {
-        return snapshotProblem(`Handoff ${handoff.id} carries a malformed Artifact record.`);
-      }
-      const canonical = buildStorageKey({
-        handoffId: handoff.id,
-        artifactId: artifact.id,
-        storedName: artifact.storedName,
-      });
-      if (!canonical.ok || artifact.storageKey !== canonical.value) {
-        return snapshotProblem(
-          `Artifact ${artifact.id} has storageKey ${artifact.storageKey}, which does not match its Handoff, Artifact, and stored-name identity.`,
-        );
+      if (artifact.storageKey === null) {
+        // A null key exists only as a format-3 inline record: earlier formats
+        // and an unclosed shape never reach this branch.
+        if (manifest.formatVersion !== 3) {
+          return snapshotProblem(`Handoff ${handoff.id} carries a malformed Artifact record.`);
+        }
+      } else {
+        if (!isManagedStorageKey(artifact.storageKey)) {
+          return snapshotProblem(`Handoff ${handoff.id} carries a malformed Artifact record.`);
+        }
+        const canonical = buildStorageKey({
+          handoffId: handoff.id,
+          artifactId: artifact.id,
+          storedName: artifact.storedName,
+        });
+        if (!canonical.ok || artifact.storageKey !== canonical.value) {
+          return snapshotProblem(
+            `Artifact ${artifact.id} has storageKey ${artifact.storageKey}, which does not match its Handoff, Artifact, and stored-name identity.`,
+          );
+        }
       }
       if (handoff.currentArtifactId !== artifact.id) {
         return snapshotProblem(
@@ -312,7 +320,7 @@ export function validateSnapshot(
     }
   }
   const artifactCount = data.handoffs.filter((handoff) => handoff.artifact !== null).length;
-  const counts = snapshotManifest(data).counts;
+  const counts = snapshotCounts(data);
   if (
     counts.projects !== manifest.counts.projects ||
     counts.handoffs !== manifest.counts.handoffs ||

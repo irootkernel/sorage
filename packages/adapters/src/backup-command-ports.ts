@@ -49,6 +49,10 @@ import {
   type Result,
   type SnapshotArtifact,
   type SnapshotData,
+  type SnapshotArtifactV3,
+  type SnapshotDataV3,
+  type SnapshotHandoffV3,
+  sha256OfText,
   type SnapshotDeletionRequest,
   type SnapshotEvent,
   type SnapshotFile,
@@ -62,7 +66,13 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
-import { receiptReferencedContentKeys, sweepFetchCache } from "./content-store";
+import {
+  createSqliteContentStore,
+  receiptReferencedContentKeys,
+  sqliteContentReferences,
+  sweepFetchCache,
+  validateArtifactContentLinks,
+} from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { memoFromRow, insertMemoRow } from "./memos";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
@@ -70,7 +80,7 @@ import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createNodeApiTokenStore } from "./token-store";
 import { createVaultInitializer, openVault } from "./vault";
@@ -174,7 +184,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     body: (db: ReturnType<typeof openAndMigrate>["db"]) => Result<T, AppError>,
   ): Result<T, AppError> {
     try {
-      const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+      const plan = productionMigrationPlan();
+      const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+        rebuilds: plan.rebuilds,
+      });
       try {
         return body(migrated.db);
       } finally {
@@ -192,19 +205,39 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /** Reads the complete snapshot set inside one consistent read transaction (BKP-007). */
-  function readSnapshotData(): Result<SnapshotData, AppError> {
+  function readSnapshotData(): Result<SnapshotDataV3, AppError> {
     return withDatabase((db) => {
       try {
         db.exec("BEGIN");
       } catch (error) {
         return err(appError("INTERNAL_ERROR", `Beginning the snapshot read failed: ${messageOf(error)}.`));
       }
-      let data: Result<SnapshotData, AppError>;
+      // The shared content-link guard runs inside this consistent read
+      // transaction, before any joined projection and before a snapshot tree
+      // can be written: an Artifact whose authoritative record row is missing
+      // fails the export here with an explicit rollback — a later checksum
+      // gate alone would be too late and the INNER JOIN would have silently
+      // omitted the broken Artifact from the snapshot (SHR-004, BKP-023).
+      const links = validateArtifactContentLinks(db);
+      if (!links.ok) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // The read transaction may already have been rolled back; the guard
+          // error is the primary report.
+        }
+        return links;
+      }
+      let data: Result<SnapshotDataV3, AppError>;
       try {
         const projects = db.prepare("SELECT * FROM projects ORDER BY id").all() as unknown as Row[];
         const bindings = db.prepare("SELECT * FROM project_bindings ORDER BY id").all() as unknown as Row[];
         const handoffs = db.prepare("SELECT * FROM handoffs ORDER BY id").all() as unknown as Row[];
-        const artifacts = db.prepare("SELECT * FROM artifacts ORDER BY id").all() as unknown as Row[];
+        const artifacts = db
+          .prepare(
+            "SELECT a.id AS id, a.handoff_id AS handoff_id, a.original_name AS original_name, a.stored_name AS stored_name, a.mime_type AS mime_type, a.imported_from_path AS imported_from_path, a.created_at AS created_at, c.inline_text AS inline_text, c.storage_key AS storage_key, c.size_bytes AS size_bytes, c.sha256 AS sha256, c.materialized AS materialized FROM artifacts a JOIN content_records c ON c.id = a.content_record_id ORDER BY a.id",
+          )
+          .all() as unknown as Row[];
         const reviewNotes = db.prepare("SELECT * FROM review_notes ORDER BY handoff_id").all() as unknown as Row[];
         const deletionRequests = db.prepare("SELECT * FROM deletion_requests ORDER BY id").all() as unknown as Row[];
         const events = db.prepare("SELECT * FROM events ORDER BY created_at, id").all() as unknown as Row[];
@@ -298,8 +331,33 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   /** The recorded current Artifacts the run verifies before it commits (VLT-023). */
   function recordedArtifactPairs(): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
     return withDatabase((db) => {
+      // The same relationship guard protects the pre-commit checksum gate: a
+      // missing authoritative record must fail verification, not vanish from
+      // the INNER JOIN (SHR-004, VLT-023).
+      const links = validateArtifactContentLinks(db);
+      if (!links.ok) return links;
+      // Inline rows join the same gate: their exact stored text must digest to
+      // the recorded SHA-256 before the backup commits (SHR-003, SHR-010).
+      const inline = db
+        .prepare(
+          "SELECT c.inline_text AS inline_text, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.inline_text IS NOT NULL",
+        )
+        .all() as unknown as Array<{ inline_text: string; sha256: string }>;
+      for (const row of inline) {
+        if (sha256OfText(row.inline_text) !== row.sha256.toLowerCase()) {
+          return err(
+            appError(
+              "ARTIFACT_CORRUPTED",
+              "An inline current Artifact body does not match its recorded checksum; the backup run refuses to commit.",
+              { recorded: row.sha256 },
+            ),
+          );
+        }
+      }
       const rows = db
-        .prepare("SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1")
+        .prepare(
+          "SELECT c.storage_key AS storage_key, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.materialized = 1 AND c.storage_key IS NOT NULL",
+        )
         .all() as unknown as Array<{ storage_key: string; sha256: string }>;
       return ok(rows.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })));
     });
@@ -355,7 +413,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function readSourceSnapshot(sourcePath: string) {
-    return (): Result<SnapshotData, AppError> => {
+    return (): Result<SnapshotData | SnapshotDataV3, AppError> => {
       const manifest = readSourceManifest(sourcePath)();
       if (!manifest.ok) return manifest;
       const channels = snapshotTreeFiles(join(sourcePath, "snapshots", "channels"));
@@ -422,6 +480,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
 
       const shardFiles: string[] = [];
       const shardsRoot = join(sourcePath, "snapshots/handoffs");
+      // Format 3 parses its distinct V3 records; formats 1 and 2 keep their
+      // frozen legacy shapes and readers.
+      const legacyHandoffs: SnapshotHandoff[] = [];
+      const v3Handoffs: SnapshotHandoffV3[] = [];
       if (manifest.value.formatVersion === 3) {
         const files = snapshotTreeFiles(shardsRoot);
         if (!files.ok) return files;
@@ -443,7 +505,6 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
       shardFiles.sort();
-      const handoffs: SnapshotHandoff[] = [];
       for (const shardFile of shardFiles) {
         const raw = readSourceFile(sourcePath, `snapshots/${shardFile}`);
         if (!raw.ok) return err(raw.error);
@@ -466,7 +527,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             appError("VAULT_INTEGRITY_ERROR", `The backup entry snapshots/${shardFile} is not a JSON object.`),
           );
         }
-        const handoff = value as unknown as SnapshotHandoff;
+        const handoff =
+          manifest.value.formatVersion === 3
+            ? (value as unknown as SnapshotHandoffV3)
+            : (value as unknown as SnapshotHandoff);
         if (manifest.value.formatVersion === 3 && !isMemoUuid(handoff.id)) {
           return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
         }
@@ -484,7 +548,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             ),
           );
         }
-        handoffs.push(handoff);
+        if (manifest.value.formatVersion === 3) v3Handoffs.push(value as unknown as SnapshotHandoffV3);
+        else legacyHandoffs.push(value as unknown as SnapshotHandoff);
       }
 
       const eventsRaw = readSourceFile(sourcePath, "snapshots/events.jsonl");
@@ -498,7 +563,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         if (!parsed.ok) return err(parsed.error);
         events.push(parsed.value as unknown as SnapshotEvent);
       }
-      const data = { projects: projects.value as unknown as SnapshotProject[], handoffs, events, memos };
+      const data: SnapshotData | SnapshotDataV3 =
+        manifest.value.formatVersion === 3
+          ? { projects: projects.value as unknown as SnapshotProject[], handoffs: v3Handoffs, events, memos }
+          : { projects: projects.value as unknown as SnapshotProject[], handoffs: legacyHandoffs, events, memos };
       const valid = validateSnapshot(data, manifest.value);
       if (!valid.ok) return valid;
       if (manifest.value.formatVersion === 3) {
@@ -591,7 +659,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             (SELECT COUNT(*) FROM artifacts) AS artifacts,
             (SELECT COUNT(*) FROM project_memos) AS memos,
             (SELECT COUNT(*) FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id
-              WHERE h.deleted_at IS NULL AND a.materialized = 0) AS materializing,
+              JOIN content_records c ON c.id = a.content_record_id
+              WHERE h.deleted_at IS NULL AND c.materialized = 0) AS materializing,
             (SELECT COUNT(*) FROM handoffs h WHERE h.deleted_at IS NOT NULL
               AND (h.current_artifact_id IS NOT NULL
                 OR EXISTS (SELECT 1 FROM artifacts a WHERE a.handoff_id = h.id))) AS deleted_with_artifact`,
@@ -612,8 +681,13 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     });
   }
 
-  function materializedArtifacts(data: SnapshotData): Array<{ handoff: SnapshotHandoff; artifact: SnapshotArtifact }> {
-    const entries: Array<{ handoff: SnapshotHandoff; artifact: SnapshotArtifact }> = [];
+  function materializedArtifacts(
+    data: SnapshotData | SnapshotDataV3,
+  ): Array<{ handoff: SnapshotHandoff | SnapshotHandoffV3; artifact: SnapshotArtifact | SnapshotArtifactV3 }> {
+    const entries: Array<{
+      handoff: SnapshotHandoff | SnapshotHandoffV3;
+      artifact: SnapshotArtifact | SnapshotArtifactV3;
+    }> = [];
     for (const handoff of data.handoffs) {
       if (handoff.artifact?.materialized) {
         entries.push({ handoff, artifact: handoff.artifact });
@@ -622,10 +696,40 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     return entries;
   }
 
+  /** The file-backed subset a backup tree actually carries; an inline body's bytes live in its shard. */
+  function fileBackedArtifacts(data: SnapshotData | SnapshotDataV3): Array<{ artifact: SnapshotArtifact }> {
+    const entries: Array<{ artifact: SnapshotArtifact }> = [];
+    for (const { artifact } of materializedArtifacts(data)) {
+      if (typeof artifact.storageKey === "string") {
+        entries.push({ artifact: artifact as SnapshotArtifact });
+      }
+    }
+    return entries;
+  }
+
   function verifyArtifacts(sourcePath: string) {
-    return (data: SnapshotData): Result<{ verified: number }, AppError> => {
+    return (data: SnapshotData | SnapshotDataV3): Result<{ verified: number }, AppError> => {
+      // An inline body's exact bytes live in its shard: the gate re-digests
+      // the stored text, the same success gate the shape validator applied
+      // (SHR-003, SHR-010).
+      let verified = 0;
       for (const { artifact } of materializedArtifacts(data)) {
-        const contained = containedSourceArtifact(sourcePath, artifact.storageKey);
+        if (typeof artifact.storageKey !== "string") {
+          const inline = artifact as SnapshotArtifactV3;
+          if (sha256OfText(inline.inlineBody as string) !== inline.sha256.toLowerCase()) {
+            return err(
+              appError(
+                "ARTIFACT_CORRUPTED",
+                `The inline Artifact body of ${inline.id} does not match the recorded checksum; a single altered byte aborts the restore.`,
+                { artifactId: inline.id, recorded: inline.sha256 },
+              ),
+            );
+          }
+          verified++;
+          continue;
+        }
+        const fileArtifact = artifact as SnapshotArtifact;
+        const contained = containedSourceArtifact(sourcePath, fileArtifact.storageKey);
         if (!contained.ok) return err(contained.error);
         const source = contained.value;
         let digest: string;
@@ -633,29 +737,36 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           digest = hashFile(source);
         } catch {
           return err(
-            appError("ARTIFACT_CORRUPTED", `The backup copy is missing the Artifact bytes at ${artifact.storageKey}.`, {
-              storageKey: artifact.storageKey,
-            }),
-          );
-        }
-        if (digest.toLowerCase() !== artifact.sha256.toLowerCase()) {
-          return err(
             appError(
               "ARTIFACT_CORRUPTED",
-              `The Artifact bytes at ${artifact.storageKey} do not match the recorded checksum; a single altered byte aborts the restore.`,
-              { storageKey: artifact.storageKey, recorded: artifact.sha256 },
+              `The backup copy is missing the Artifact bytes at ${fileArtifact.storageKey}.`,
+              {
+                storageKey: fileArtifact.storageKey,
+              },
             ),
           );
         }
+        if (digest.toLowerCase() !== fileArtifact.sha256.toLowerCase()) {
+          return err(
+            appError(
+              "ARTIFACT_CORRUPTED",
+              `The Artifact bytes at ${fileArtifact.storageKey} do not match the recorded checksum; a single altered byte aborts the restore.`,
+              { storageKey: fileArtifact.storageKey, recorded: fileArtifact.sha256 },
+            ),
+          );
+        }
+        verified++;
       }
-      return ok({ verified: materializedArtifacts(data).length });
+      return ok({ verified });
     };
   }
 
   function copyArtifacts(vaultPath: string, sourcePath: string) {
-    return (data: SnapshotData): Result<{ copied: number }, AppError> => {
+    return (data: SnapshotData | SnapshotDataV3): Result<{ copied: number }, AppError> => {
       let copied = 0;
-      for (const { artifact } of materializedArtifacts(data)) {
+      // Only the file representation has bytes in the backup tree to copy; an
+      // inline record restores through the database rebuild alone.
+      for (const { artifact } of fileBackedArtifacts(data)) {
         const containedSource = containedSourceArtifact(sourcePath, artifact.storageKey);
         if (!containedSource.ok) return err(containedSource.error);
         const containedDestination = containedRestoreDestination(vaultPath, artifact.storageKey);
@@ -734,7 +845,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     return ok(undefined);
   }
 
-  function rebuildDatabase(data: SnapshotData, marker: VaultMarker): Result<void, AppError> {
+  function rebuildDatabase(data: SnapshotData | SnapshotDataV3, marker: VaultMarker): Result<void, AppError> {
     return withDatabase((db) => {
       try {
         db.exec("BEGIN IMMEDIATE");
@@ -797,23 +908,45 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
         for (const handoff of data.handoffs) {
-          const artifact = handoff.artifact;
+          const artifact = handoff.artifact as SnapshotArtifact | SnapshotArtifactV3 | null;
           if (artifact !== null) {
+            // The restored Artifact keeps its exported identity and body bytes
+            // exactly, while its immutable record receives a fresh independent
+            // content UUID — snapshots never carry record ids, and restore
+            // never reuses an exported Artifact id as a record id (SHR-004,
+            // section 38.7). An inline record restores materialized with its
+            // exact stored text; a file-backed one keeps its key and bytes.
+            const inline = typeof artifact.storageKey !== "string";
+            const contentRecordId = randomUUID();
+            // The inline text binds as exact UTF-8 bytes with the SQL-side
+            // CAST, never as a raw JS string: the pinned native engine can
+            // strip a leading byte-order mark from a raw string binding, and
+            // the byte-binding shape is the one the shared content store's own
+            // inserts already use (SHR-003, section 38.8 exact-bytes rule).
             db.prepare(
-              `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes,
-              sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+              VALUES (?, CAST(? AS TEXT), ?, ?, ?, ?, ?)`,
+            ).run(
+              contentRecordId,
+              inline ? Buffer.from((artifact as SnapshotArtifactV3).inlineBody as string, "utf8") : null,
+              inline ? null : artifact.storageKey,
+              artifact.sizeBytes,
+              artifact.sha256,
+              inline ? 1 : artifact.materialized ? 1 : 0,
+              artifact.createdAt,
+            );
+            db.prepare(
+              `INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             ).run(
               artifact.id,
               artifact.handoffId,
-              artifact.storageKey,
               artifact.originalName,
               artifact.storedName,
               artifact.mimeType,
-              artifact.sizeBytes,
-              artifact.sha256,
               artifact.importedFromPath,
-              artifact.materialized ? 1 : 0,
               artifact.createdAt,
+              contentRecordId,
             );
           }
           const note = handoff.reviewNote;
@@ -1210,13 +1343,39 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         });
         const drained = log.drain(view.value.vaultPath);
         if (!drained.ok) return drained;
+        // The same pre-backup maintenance order as the Vault maintenance flow
+        // (SHR-004, SHR-011): drain, then the reference-proof cleanup in its own
+        // single BEGIN IMMEDIATE, then the freshly recomputed protection set,
+        // then the physical GC, then the cache sweep. A failed cleanup — a live
+        // fence aborting it atomically included — skips the physical GC for
+        // this run and surfaces the exact cleanup error.
+        const cleanup = createSqliteContentStore({
+          db,
+          vaultPath: view.value.vaultPath,
+          installationId: view.value.installationId,
+          // The same late-handoff entry guard as the Vault maintenance flow:
+          // a vault-move.lock acquired after the successful drain, before the
+          // cleanup transaction opens, must pause the pre-backup cleanup —
+          // the SQL fence alone is set only later at switch time (RUN-014).
+          runDir: home.runDir,
+        }).cleanup(sqliteContentReferences(db), clock.now());
+        if (!cleanup.ok) {
+          // The same pre-backup maintenance failure semantics: the exact
+          // cleanup error propagates and no GC or cache sweep runs after a
+          // failed proof (SHR-004, SHR-011).
+          return err(cleanup.error);
+        }
         const surviving = log.pending();
         const recorded = readRecordedStorageKeys(db);
         const contentKeys = readRecordedContentKeys(db);
         const receiptKeys = receiptReferencedContentKeys(db, clock.now());
-        if (surviving.ok && contentKeys.ok && receiptKeys.ok) {
+        // The physical GC runs only over a complete protection proof: a failed
+        // link guard, an unreadable key set, or any other unavailable proof
+        // skips the collector for this run rather than age-deleting files whose
+        // protection cannot be established (SHR-008, SHR-014).
+        if (surviving.ok && recorded.ok && contentKeys.ok && receiptKeys.ok) {
           void collectVaultGarbage(view.value.vaultPath, surviving.value, {
-            liveStorageKeys: recorded,
+            liveStorageKeys: recorded.value,
             liveContentKeys: contentKeys.value,
             receiptReferencedKeys: receiptKeys.value,
             graceHours: view.value.graceHours,
@@ -1260,7 +1419,7 @@ function mapSnapshotData(rows: {
   reviewNotes: Row[];
   deletionRequests: Row[];
   events: Row[];
-}): SnapshotData {
+}): SnapshotDataV3 {
   const bindingsByProject = new Map<string, SnapshotProject["bindings"]>();
   for (const row of rows.bindings) {
     const list = bindingsByProject.get(str(row.project_id)) ?? [];
@@ -1274,12 +1433,15 @@ function mapSnapshotData(rows: {
     });
     bindingsByProject.set(str(row.project_id), list);
   }
-  const artifactByHandoff = new Map<string, SnapshotArtifact>();
+  const artifactByHandoff = new Map<string, SnapshotArtifactV3>();
   for (const row of rows.artifacts) {
+    // The closed pair exactly as the record stores it: an inline row carries
+    // its text with a null key, a file row its key with null text (SHR-004).
     artifactByHandoff.set(str(row.handoff_id), {
       id: str(row.id),
       handoffId: str(row.handoff_id),
-      storageKey: str(row.storage_key),
+      storageKey: nullableStr(row.storage_key),
+      inlineBody: nullableStr(row.inline_text),
       originalName: str(row.original_name),
       storedName: str(row.stored_name),
       mimeType: str(row.mime_type),
@@ -1391,9 +1553,28 @@ function mapBackupRunRow(row: Record<string, unknown>): import("@sorage/core").B
   };
 }
 
-function readRecordedStorageKeys(db: ReturnType<typeof openAndMigrate>["db"]): string[] {
-  const rows = db.prepare("SELECT storage_key FROM artifacts").all() as unknown as Row[];
-  return rows.map((row) => str(row.storage_key));
+function readRecordedStorageKeys(db: ReturnType<typeof openAndMigrate>["db"]): Result<string[], AppError> {
+  // The GC live-key proof validates every Artifact's record link before
+  // collecting keys: an INNER JOIN would silently drop an Artifact whose
+  // record row is missing and hand the collector an incomplete protection set
+  // that can age-delete a live file (SHR-004, SHR-008). An unavailable proof
+  // is an error the drain gate consumes by skipping the physical GC.
+  const links = validateArtifactContentLinks(db);
+  if (!links.ok) return links;
+  try {
+    const rows = db
+      .prepare(
+        "SELECT c.storage_key AS storage_key FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.storage_key IS NOT NULL",
+      )
+      .all() as unknown as Row[];
+    return ok(rows.map((row) => str(row.storage_key)));
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Reading the recorded Artifact storage keys failed: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
 }
 
 function parseMetadata(raw: unknown): Record<string, unknown> {

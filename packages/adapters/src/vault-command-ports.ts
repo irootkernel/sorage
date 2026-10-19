@@ -41,7 +41,13 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { type ConfigStore, createConfigStore } from "./config-store";
-import { receiptReferencedContentKeys, sweepFetchCache } from "./content-store";
+import {
+  createSqliteContentStore,
+  receiptReferencedContentKeys,
+  sqliteContentReferences,
+  sweepFetchCache,
+  validateArtifactContentLinks,
+} from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import {
@@ -52,7 +58,7 @@ import {
   setMoveFenceAndCountPending,
 } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createVaultInitializer, openVault } from "./vault";
 
@@ -125,7 +131,10 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     body: (db: ReturnType<typeof openAndMigrate>["db"]) => Result<T, AppError>,
   ): Result<T, AppError> {
     try {
-      const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), MIGRATIONS);
+      const plan = productionMigrationPlan();
+      const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+        rebuilds: plan.rebuilds,
+      });
       try {
         return body(migrated.db);
       } finally {
@@ -154,13 +163,22 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
   /** The recorded current Artifacts; empty while the TASK-027 registry is absent. */
   function recordedArtifacts(): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
     return withDatabase((db) => {
+      // The shared content-link guard runs before the missing-table empty
+      // branch: a normalized database whose artifacts table or referenced
+      // record rows are missing must surface as an integrity error — the
+      // verify census and the GC live-key proof would otherwise silently omit
+      // Artifacts they could not resolve (SHR-004, SHR-008, SHR-014).
+      const links = validateArtifactContentLinks(db);
+      if (!links.ok) return links;
       const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'artifacts'").get() as
         | { name: string }
         | null
         | undefined;
       if (!table) return ok([]);
       const rows = db
-        .prepare("SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1")
+        .prepare(
+          "SELECT c.storage_key AS storage_key, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.materialized = 1 AND c.storage_key IS NOT NULL",
+        )
         .all() as unknown as Array<{ storage_key: string; sha256: string }>;
       return ok(rows.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })));
     });
@@ -525,6 +543,34 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         });
         const drained = log.drain(view.value.vaultPath);
         if (!drained.ok) return drained;
+        // The reference-proof cleanup runs in its own single BEGIN IMMEDIATE
+        // transaction after the drain and before the protection set is
+        // recomputed, so a record the shared proof legitimately removes can no
+        // longer keep protecting a dead file, while a record the proof still
+        // protects survives untouched (SHR-004, SHR-011). The cleanup is SQL
+        // only — file-backed Artifact rows leave through it while their bytes
+        // stay owed to the already-cleared or durable legacy unlink intents.
+        // A failed cleanup — including a live fence that aborts it atomically
+        // — skips the physical GC for this run: a failed proof can never
+        // authorize unsafe deletion; the exact cleanup error is returned.
+        const cleanup = createSqliteContentStore({
+          db,
+          vaultPath: view.value.vaultPath,
+          installationId: view.value.installationId,
+          // The cleanup's own entry guard must see a vault-move.lock acquired
+          // after the successful drain, before the cleanup transaction opens:
+          // the file lock precedes the mover's copy while the SQL fence is
+          // only set later at switch time, so the store's runDir is the only
+          // entry check that covers this handoff window (RUN-014).
+          runDir: home.runDir,
+        }).cleanup(sqliteContentReferences(db), clock.now());
+        if (!cleanup.ok) {
+          // A failed proof surfaces its exact error — a live fence aborting
+          // the cleanup atomically included — and neither the physical GC nor
+          // the cache sweep runs afterward: a failed proof can never
+          // authorize unsafe deletion (SHR-004, SHR-011).
+          return err(cleanup.error);
+        }
         // Garbage collection runs only after the drain, over the surviving
         // intents and the recorded storage keys (VLT-013, VLT-014); the M9
         // guard set gains the live content keys and the keys unexpired

@@ -54,9 +54,13 @@ describe("AJ-04 the review loop", () => {
 
     const fetched = sorage(["fetch", id, "--json"], { home: fixture.home, cwd: fixture.workB });
     expect(fetched.status).toBe(0);
-    const fetchedData = envelopeOf(fetched) as { data: { artifact: { originalName: string }; localPath: string } };
+    const fetchedData = envelopeOf(fetched) as {
+      data: { artifact: { originalName: string; storageKey: string | null }; localPath: string };
+    };
     expect(fetchedData.data.artifact.originalName).toBe("brief.md");
-    expect(fetchedData.data.localPath).toContain("artifacts");
+    expect(fetchedData.data.artifact.storageKey).toBeNull();
+    expect(fetchedData.data.localPath).toContain(join(fixture.home, "state", "fetch-cache"));
+    expect(readFileSync(fetchedData.data.localPath)).toEqual(readFileSync(fixture.document));
     expect(rowVersionOf(fixture.home, fixture.workB, id)).toBe(1);
 
     const note = sorage(["review", "set", id, "--text", "Tighten the intro", "--json"], {

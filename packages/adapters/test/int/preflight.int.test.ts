@@ -22,7 +22,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { preflightExitCode } from "@sorage/core";
 import { CAPTURE_ATTEMPTS, inspectPreflight } from "../../src/preflight";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
 import type { SorageSqlite } from "../../src/sqlite/connection";
 import { migrate } from "../../src/sqlite/migrator";
 import { makeTempHome } from "../../src/testkit/temp-home";
@@ -110,8 +110,21 @@ function writeCurrent(
   const db = new DatabaseSync(databasePath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA wal_autocheckpoint = 0");
+  // The current installation is schema 9: without an explicit legacy `through`,
+  // the fixture migrates through the real production plan so the guarded
+  // Handoff rebuild runs on its dedicated file-backed connection exactly as in
+  // production. An explicit `through` keeps building truthful legacy prefixes
+  // of the ordinary catalog for the upgrade-required classifications.
   const through = options.through ?? MIGRATIONS.length;
-  migrate(db as unknown as SorageSqlite, MIGRATIONS.slice(0, through), () => "2026-01-01T00:00:00.000Z");
+  if (options.through === undefined) {
+    const plan = productionMigrationPlan();
+    migrate(db as unknown as SorageSqlite, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+      databasePath,
+      rebuilds: plan.rebuilds,
+    });
+  } else {
+    migrate(db as unknown as SorageSqlite, MIGRATIONS.slice(0, through), () => "2026-01-01T00:00:00.000Z");
+  }
   if (options.installationRow !== false && through >= 1) {
     db.prepare("INSERT INTO installation (id, installation_id, schema_version, created_at) VALUES (1, ?, 1, ?)").run(
       INSTALLATION,
@@ -263,7 +276,7 @@ describe("installation preflight inspection", () => {
     writeCurrent(newer);
     const newerDb = new DatabaseSync(join(newer, "state", "sorage.sqlite3"));
     newerDb
-      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (9, 'future', ?)")
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (10, 'future', ?)")
       .run("2026-01-01T00:00:00.000Z");
     newerDb.close();
     const newerReport = inspectPreflight(newer);
@@ -1401,7 +1414,7 @@ describe("installation preflight inspection", () => {
     rmSync(join(newer, "vault", ".sorage-vault.json"));
     const newerDb = new DatabaseSync(join(newer, "state", "sorage.sqlite3"));
     newerDb
-      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (9, 'future', ?)")
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (10, 'future', ?)")
       .run("2026-01-01T00:00:00.000Z");
     newerDb.close();
     const newerReport = inspectPreflight(newer);

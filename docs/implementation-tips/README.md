@@ -201,12 +201,12 @@ The finalized upgrade policy of TASK-063 covers all three versioned surfaces. Th
 
 - Stream copies and hash while copying.
 - Use unique staging names under `<Vault>/staging/<uuid>`.
-- Treat `storageKey` as the sole authority for an Artifact's location, and never reconstruct a path from a Handoff id plus a file name; the `<artifact-id>` segment is what keeps two Revisions of the same file name apart.
+- For file-backed Artifacts, treat `storageKey` as the sole Vault location authority; never reconstruct a path from a Handoff id and filename. Inline Artifacts have a null key: use the backend-neutral Artifact body ports or the readable `fetch.localPath`, following [interface section 38](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9).
 - Sanitize stored names without changing the recorded original name.
 - Follow the durability order exactly: write, `fsync(file)`, rename, `fsync(parent directory)`, then the commit that sets `materialized = 1` (VLT-022).
 - Use a same-filesystem rename for activation, which is why staging lives inside the Vault.
 - Mark final files read-only after import, and re-apply that mode on restore, because git does not preserve it.
-- Verify path ownership against `storageKey` and the pending intents before any delete.
+- Verify the selected Handoff's Artifact ownership before body access and mutation. Verify file-path ownership against managed keys and pending intents before unlink, and remove inline or file records only through the same-transaction reference proof.
 - Never recursively delete a path derived only from user input.
 
 ## 10. Config Service

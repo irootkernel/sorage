@@ -56,7 +56,7 @@ export interface RunningDaemon {
   port: number;
   record: DaemonRunRecord;
   /** Performs one bounded sweep tick immediately. */
-  runSweepTick(): { checked: number; mismatches: string[]; bytes: number };
+  runSweepTick(): { checked: number; mismatches: string[]; bytes: number; failure?: { code: string; message: string } };
   /** Performs one backup scheduler tick immediately and reports what it decided. */
   runBackupTick(): { action: string; triggeredBy?: string; nextDueAt: string | null; run?: unknown };
   /** Drains: refuses mutations, waits for in-flight requests, then closes storage. */
@@ -153,6 +153,17 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
   let sweepCursor: string | null = null;
   const runSweepTick = () => {
     const batch = ports.nextArtifactBatch(sweepCursor, SWEEP_BYTE_BUDGET);
+    if (batch.failure !== undefined) {
+      // An unverifiable Artifact-record relationship is reported honestly: the
+      // tick hashes nothing, keeps its cursor so a repaired installation
+      // resumes at the same position, and stays alive — the timer keeps
+      // running and never surfaces this as an uncaught exception.
+      sweepLogger().warn("daemon.artifact_sweep_unverified", {
+        code: batch.failure.code,
+        message: batch.failure.message,
+      });
+      return { checked: 0, mismatches: [], bytes: 0, failure: batch.failure };
+    }
     sweepCursor = batch.nextCursor;
     const mismatches: string[] = [];
     let bytes = 0;

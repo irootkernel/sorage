@@ -199,6 +199,9 @@ function fakeStore(result: Result<StagedFile, AppError>): ArtifactStore {
     pathOf: () => {
       throw new Error("not used in this test");
     },
+    openReadable: () => {
+      throw new Error("not used in this test");
+    },
     exists: () => {
       throw new Error("not used in this test");
     },

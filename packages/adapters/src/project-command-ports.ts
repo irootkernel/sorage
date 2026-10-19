@@ -10,7 +10,7 @@ import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
 import type { SorageSqlite } from "./sqlite/connection";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { openAndMigrate } from "./sqlite/migrator";
 
 /**
@@ -89,7 +89,12 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = options.database ?? openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+  const plan = productionMigrationPlan();
+  const db =
+    options.database ??
+    openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+      rebuilds: plan.rebuilds,
+    }).db;
   const git = options.git ?? nativeGit;
   const isBare = options.gitIsBare ?? nativeIsBare;
   const fs = options.fs ?? { realpath: (path: string) => realpathSync(path) };

@@ -5,7 +5,7 @@ import { type HandoffListFilters, type ListingScope, ok } from "@sorage/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffReadStore } from "../../src/handoff-read-store";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { insertHandoffSeed } from "../../src/testkit/seed";
 import { makeTempDatabase, type TempDatabase } from "../../src/testkit/temp-database";
@@ -43,7 +43,14 @@ describe("the 10,000-Handoff scale checks", () => {
     const temp = makeTempDatabase();
     cleanups.push(temp.cleanup);
     db = temp.db;
-    migrate(db, MIGRATIONS);
+    // The current normalized seed requires the schema-9 layout: migrate through
+    // the real production plan so the guarded rebuild runs on this file-backed
+    // database before the 10,000-Handoff seed loads.
+    const plan = productionMigrationPlan();
+    migrate(db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: plan.rebuilds,
+    });
     insertHandoffSeed(db, 10_000);
   }, 60_000);
 
@@ -82,7 +89,7 @@ describe("the 10,000-Handoff scale checks", () => {
   });
 
   it("holds the documented budgets for the first listing page and a detail read", () => {
-    const store = createSqliteHandoffReadStore(db, createSqliteEventLedger(db));
+    const store = createSqliteHandoffReadStore(db, createSqliteEventLedger(db), { runDir: null });
     const projectId = (db.prepare("SELECT id FROM projects WHERE slug = ?").get("recipient-00") as { id: string }).id;
     const oneId = (
       db.prepare("SELECT id FROM handoffs WHERE recipient_project_id = ? LIMIT 1").get(projectId) as { id: string }

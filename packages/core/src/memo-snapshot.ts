@@ -319,7 +319,10 @@ export function snapshotFilesV2(data: SnapshotData): Result<{ files: SnapshotFil
 }
 
 /** Reconcile the whole Memo inventory and version-ordered history before any import. */
-export function validateMemoInventory(data: SnapshotData, manifest: VersionedSnapshotManifest): Result<void> {
+export function validateMemoInventory(
+  data: Pick<SnapshotData, "projects" | "memos" | "events">,
+  manifest: VersionedSnapshotManifest,
+): Result<void> {
   const memos = data.memos ?? [];
   if (manifest.formatVersion === 1) {
     if (memos.length !== 0) return corrupt("Format 1 cannot contain Memos");

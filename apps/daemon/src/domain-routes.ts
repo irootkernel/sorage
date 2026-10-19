@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -22,6 +21,7 @@ import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-
 import {
   type ActorRef,
   type AppError,
+  type ArtifactReadHandle,
   acceptHandoff,
   addProject,
   appError,
@@ -41,6 +41,7 @@ import {
   moveVault,
   ok,
   pinHandoff,
+  prepareHandoffFetch,
   projectActor,
   type ReadActorInput,
   readHandoffTimeline,
@@ -360,70 +361,118 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       // The daemon runs the RUN-002 drain obligation before serving bytes, so a
       // Handoff this daemon just created materializes instead of 409ing.
       createNodeVaultCommandPorts().drainAtStart();
-      const { fetchHandoff } = await import("@sorage/core");
-      const fetched = fetchHandoff(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
-      if (!fetched.ok) return void respondError(response, context, fetched.error);
-      const vault = deps.vaultPath();
-      if (vault === null)
-        return void respondError(response, context, appError("NOT_INITIALIZED", "Sorage has not been initialized."));
-      const storageKey = fetched.value.artifact.storageKey;
-      // The storage key is vault-relative and already carries its artifacts/ segment.
-      const path = `${vault}/${storageKey}`;
-      let size = 0;
-      try {
-        size = statSync(path).size;
-      } catch {
+      const prepared = prepareHandoffFetch(
+        createNodeHandoffReadPorts(),
+        actor.value,
+        (context.params?.id ?? "") as string,
+        { kind: "body" },
+      );
+      if (!prepared.ok) return void respondError(response, context, prepared.error);
+      if (prepared.value.kind !== "body") {
+        prepared.value.close();
         return void respondError(
           response,
           context,
-          appError("ARTIFACT_CORRUPTED", "the Artifact file is missing at its storage key"),
+          appError("INTERNAL_ERROR", "the prepared fetch carried no opened body"),
         );
       }
-      const etag = `"${fetched.value.artifact.sha256}"`;
-      for (const [name, value] of Object.entries(securityHeaders())) response.setHeader(name, value);
-      response.setHeader("X-Request-Id", context.requestId);
-      response.setHeader("ETag", etag);
-      response.setHeader("Accept-Ranges", "bytes");
-      // Section 11.2: .md and .txt serve as inline UTF-8 text for preview; every
-      // other extension serves as an octet-stream attachment under its original name.
-      const originalName = fetched.value.artifact.originalName;
-      if (/\.(md|txt)$/i.test(originalName)) {
-        response.setHeader("Content-Type", "text/plain; charset=utf-8");
-      } else {
-        response.setHeader("Content-Type", "application/octet-stream");
-        response.setHeader("Content-Disposition", `attachment; filename="${headerSafeFilename(originalName)}"`);
-      }
-      const range = request.headers.range;
-      const match = range !== undefined ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
-      if (match !== null && !(match[1] === "" && match[2] === "")) {
-        let start: number;
-        let end: number;
-        if (match[1] === "") {
-          // A suffix range serves the final N bytes (section 18.4, RFC 9110); a
-          // suffix covering the whole file serves it all, and bytes=-0 is
-          // unsatisfiable, like any range on an empty file.
-          const suffix = Number(match[2]);
-          start = suffix <= 0 ? Number.NaN : Math.max(0, size - suffix);
-          end = size - 1;
-        } else {
-          start = Number(match[1]);
-          end = match[2] === "" ? size - 1 : Number(match[2]);
+      // The safely opened descriptor is the one authority for size and bytes:
+      // no reconstructed vault path is statSynced or reopened after this guard
+      // (VLT-020, section 11.3).
+      const handle = prepared.value.body;
+      try {
+        const size = handle.sizeBytes;
+        // Both admitted content and 416 retain the representation headers.
+        // Delay setting them on other paths so settlement errors remain JSON.
+        const setContentHeaders = (): void => {
+          const etag = `"${prepared.value.artifact.sha256}"`;
+          for (const [name, value] of Object.entries(securityHeaders())) response.setHeader(name, value);
+          response.setHeader("X-Request-Id", context.requestId);
+          response.setHeader("ETag", etag);
+          response.setHeader("Accept-Ranges", "bytes");
+          // Section 11.2: .md and .txt serve as inline UTF-8 text for preview; every
+          // other extension serves as an octet-stream attachment under its original name.
+          const originalName = prepared.value.artifact.originalName;
+          if (/\.(md|txt)$/i.test(originalName)) {
+            response.setHeader("Content-Type", "text/plain; charset=utf-8");
+          } else {
+            response.setHeader("Content-Type", "application/octet-stream");
+            response.setHeader("Content-Disposition", `attachment; filename="${headerSafeFilename(originalName)}"`);
+          }
+        };
+        const range = request.headers.range;
+        const match = range !== undefined ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+        let start = 0;
+        let end = size - 1;
+        let admitted = false;
+        if (match !== null && !(match[1] === "" && match[2] === "")) {
+          let rangeStart: number;
+          let rangeEnd: number;
+          if (match[1] === "") {
+            // A suffix range serves the final N bytes (section 18.4, RFC 9110); a
+            // suffix covering the whole file serves it all, and bytes=-0 is
+            // unsatisfiable, like any range on an empty file.
+            const suffix = Number(match[2]);
+            rangeStart = suffix <= 0 ? Number.NaN : Math.max(0, size - suffix);
+            rangeEnd = size - 1;
+          } else {
+            rangeStart = Number(match[1]);
+            rangeEnd = match[2] === "" ? size - 1 : Number(match[2]);
+          }
+          if (Number.isNaN(rangeStart) || Number.isNaN(rangeEnd) || rangeStart > rangeEnd || rangeEnd >= size) {
+            // Range admission precedes settlement (HND-012): an unsatisfiable
+            // range records no first fetch and closes the opened descriptor
+            // before the early response.
+            handle.close();
+            setContentHeaders();
+            response.statusCode = 416;
+            response.setHeader("Content-Range", `bytes */${size}`);
+            response.end();
+            return;
+          }
+          start = rangeStart;
+          end = rangeEnd;
+          admitted = true;
         }
-        if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= size) {
-          response.statusCode = 416;
-          response.setHeader("Content-Range", `bytes */${size}`);
-          response.end();
+        // A response that already stopped is not an admitted fetch (HND-012):
+        // it settles nothing, and the opened descriptor is simply released.
+        if (response.destroyed || response.writableEnded) {
+          handle.close();
           return;
         }
-        response.statusCode = 206;
-        response.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+        // Only an admitted response settles the eligible first fetch; a
+        // settlement failure closes the descriptor and streams nothing.
+        const settled = prepared.value.settleFirstFetch();
+        if (!settled.ok) {
+          handle.close();
+          return void respondError(response, context, settled.error);
+        }
+        setContentHeaders();
+        response.statusCode = admitted ? 206 : 200;
+        if (admitted) response.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
         response.setHeader("Content-Length", String(end - start + 1));
-        createReadStream(path, { start, end }).pipe(response);
-        return;
+        await streamArtifactBody(handle, response, start, end);
+      } catch (error) {
+        // Contain every close or streaming failure and terminate the exchange
+        // visibly: while the response can still carry an error it answers with
+        // one, otherwise the truncated connection is the failure.
+        if (!response.headersSent && !response.writableEnded) {
+          respondError(response, context, appError("INTERNAL_ERROR", `serving the Artifact failed: ${String(error)}`));
+        } else if (!response.writableEnded) {
+          response.destroy();
+        }
+      } finally {
+        // Every exit disposes the acquired descriptor: the streaming helper
+        // and the early admission paths may already have closed it — the
+        // single-attempt ownership makes this idempotent — and a backstop
+        // disposal failure must never reject the handler or touch a response
+        // it no longer owns.
+        try {
+          handle.close();
+        } catch {
+          // Ownership was consumed; a failed backstop close stays contained.
+        }
       }
-      response.statusCode = 200;
-      response.setHeader("Content-Length", String(size));
-      createReadStream(path).pipe(response);
     },
   });
   add({
@@ -432,10 +481,25 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     handler: async (_request, response, context) => {
       const actor = contextActor(context);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const { fetchHandoff } = await import("@sorage/core");
-      const fetched = fetchHandoff(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
-      if (!fetched.ok) return void respondError(response, context, fetched.error);
-      return void respond(response, context, { ok: true, value: { localPath: fetched.value.localPath } });
+      // Reveal prepares the same authorized safe local path a fetch would, but
+      // never settles a first fetch: only the CLI fetch command and an admitted
+      // content response record one (HND-012, section 11.3).
+      const prepared = prepareHandoffFetch(
+        createNodeHandoffReadPorts(),
+        actor.value,
+        (context.params?.id ?? "") as string,
+        { kind: "local-path" },
+      );
+      if (!prepared.ok) return void respondError(response, context, prepared.error);
+      if (prepared.value.kind !== "local-path") {
+        prepared.value.close();
+        return void respondError(
+          response,
+          context,
+          appError("INTERNAL_ERROR", "the prepared fetch carried no local path"),
+        );
+      }
+      return void respond(response, context, { ok: true, value: { localPath: prepared.value.localPath } });
     },
   });
 
@@ -481,8 +545,10 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           ? {
               file: file.path,
               // The spool path is an opaque UUID, so the browser's filename is the
-              // original name the Artifact must record (VLT-007).
+              // original name the Artifact must record (VLT-007), and the source is
+              // an authenticated upload rather than a workspace path import (API-003).
               originalName: file.filename,
+              fileSourceKind: "authenticated-spool" as const,
             }
           : { bodyFile: bodyPart?.path }),
         allowExternalSource: true, // the browser upload is already the authenticated source
@@ -511,7 +577,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const result = sendHandoffs(createNodeSendPorts(), {
         to,
         title: String(body.title ?? ""),
-        ...(typeof body.path === "string" ? { file: body.path } : {}),
+        ...(typeof body.path === "string"
+          ? {
+              file: body.path,
+              // A path import records its own basename, so an original name's
+              // presence alone never identifies an upload spool (VLT-007).
+              originalName: basename(body.path),
+            }
+          : {}),
         ...(typeof body.body === "string" ? { body: body.body } : {}),
         ...(typeof body.supersedes === "string" ? { supersedes: body.supersedes } : {}),
         allowExternalSource: body.allowExternalSource === true,
@@ -636,6 +709,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           // The spool path is an opaque UUID, so the browser's filename is the
           // original name the replacement Artifact must record (VLT-007).
           originalName: file.filename,
+          fileSourceKind: "authenticated-spool",
           allowExternalSource: true, // the browser upload is already the authenticated source
           ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
           ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
@@ -994,6 +1068,105 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   }
 
   return [...routes, ...createMemoRoutes({ ...databaseOptions, ...(deps.memoClock ? { clock: deps.memoClock } : {}) })];
+}
+
+/** The largest chunk one bounded serving read copies (NFR-005 bounded buffers). */
+const ARTIFACT_SERVING_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Streams one safely opened Artifact body to the response (section 18.4): the
+ * loop reads bounded chunks from the SAME opened descriptor the route
+ * validated, applies backpressure by waiting for drain, stops on client
+ * close, error, or abort, and closes the descriptor exactly once on end,
+ * failure, or cancellation. A read that returns no bytes before the admitted
+ * end, or a response that stops early, terminates visibly — the truncated
+ * connection is the failure — instead of spinning or silently claiming the
+ * promised Content-Length. No whole body is buffered and no pathname is
+ * reopened after the guard. A descriptor close failure is contained until the
+ * response is terminated and then reported to the awaiting caller, never as
+ * an unhandled rejection.
+ */
+export async function streamArtifactBody(
+  handle: ArtifactReadHandle,
+  response: ServerResponse,
+  start: number,
+  end: number,
+): Promise<void> {
+  let position = start;
+  let complete = false;
+  const closeHandle = (): void => {
+    handle.close();
+  };
+  // A response that fails or closes mid-stream must not crash the daemon on a
+  // late write error; the loop notices the stopped response and terminates.
+  response.on("error", () => undefined);
+  const waitDrain = (): Promise<"drain" | "stopped"> => {
+    // A response that already stopped may never emit another close or drain,
+    // so the wait answers immediately instead of retaining the handle on a
+    // pending promise.
+    if (response.destroyed || response.writableEnded) return Promise.resolve("stopped");
+    return new Promise((resolve) => {
+      const onDrain = (): void => {
+        cleanup();
+        resolve("drain");
+      };
+      const onClose = (): void => {
+        cleanup();
+        resolve("stopped");
+      };
+      const onError = (): void => {
+        cleanup();
+        resolve("stopped");
+      };
+      const cleanup = (): void => {
+        response.removeListener("drain", onDrain);
+        response.removeListener("close", onClose);
+        response.removeListener("error", onError);
+      };
+      response.once("drain", onDrain);
+      response.once("close", onClose);
+      response.once("error", onError);
+    });
+  };
+  let closeFailure: unknown;
+  let closeFailureRecorded = false;
+  try {
+    while (position <= end) {
+      if (response.destroyed || response.writableEnded) break;
+      const read = handle.read(position, Math.min(ARTIFACT_SERVING_CHUNK_BYTES, end - position + 1));
+      if (!read.ok) break;
+      // Zero bytes before the admitted end must terminate visibly, never loop.
+      if (read.value.byteLength === 0) break;
+      position += read.value.byteLength;
+      const writable = response.write(read.value);
+      if (!writable && position <= end) {
+        if ((await waitDrain()) === "stopped") break;
+      }
+    }
+    complete = position > end;
+  } catch {
+    // A synchronous write failure on a stopped response terminates the stream;
+    // the finally block closes the descriptor and destroys the response.
+  } finally {
+    try {
+      closeHandle();
+    } catch (error) {
+      closeFailure = error;
+      closeFailureRecorded = true;
+    }
+    if (complete && !response.destroyed && !response.writableEnded) {
+      response.end();
+    } else if (!response.writableEnded) {
+      // The admitted bytes were not fully served; destroy the response so the
+      // client sees the truncation instead of a silent short body.
+      response.destroy();
+    }
+  }
+  if (closeFailureRecorded) {
+    // Reported only after cleanup, to the awaiting caller. Keep this outside
+    // finally so disposal never overrides an in-flight control flow statement.
+    throw closeFailure;
+  }
 }
 
 /** Rejects a missing or non-numeric expectation honestly instead of letting NaN silently fail every comparison. */

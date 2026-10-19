@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInstallation, parseConfigurationFile, runDoctor } from "@sorage/core";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { createNodeDoctorPorts } from "../../src/doctor";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
 import { openAndMigrate, asSchemaAdmission, readAppliedRows } from "../../src/sqlite/migrator";
 import * as connections from "../../src/sqlite/connection";
 import * as inspection from "../../src/sqlite/history-inspection";
@@ -33,7 +33,15 @@ function fixture(initialized = false) {
   }
   return { home, database };
 }
-function seed(database: string, count = 8) {
+function seed(database: string, count?: number) {
+  // Without an explicit count the fixture seeds the current database through
+  // the real production plan including the guarded schema-9 rebuild; an
+  // explicit count builds a truthful ordinary-catalog prefix of that version.
+  if (count === undefined) {
+    const plan = productionMigrationPlan();
+    openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds }).db.close();
+    return;
+  }
   openAndMigrate(database, MIGRATIONS.slice(0, count)).db.close();
 }
 function edit(database: string, sql: string, journal = "DELETE") {
@@ -45,7 +53,7 @@ function edit(database: string, sql: string, journal = "DELETE") {
     db.close();
   }
 }
-const future = "INSERT INTO schema_migrations VALUES(9, 'future', '2026-01-01')";
+const future = "INSERT INTO schema_migrations VALUES(10, 'future', '2026-01-01')";
 function doctor(home: string) {
   return createNodeDoctorPorts({ env: { SORAGE_HOME: home }, userHome: home, portProbe: () => false });
 }
@@ -62,8 +70,9 @@ function native(database: string, home?: string) {
   const source =
     home === undefined
       ? `import {openAndMigrate,asSchemaAdmission} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrator.ts", import.meta.url)))};
-       import {MIGRATIONS} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrations.ts", import.meta.url)))};
-       try {const r=openAndMigrate(${JSON.stringify(database)},MIGRATIONS);r.db.close();console.log('ok');}
+       import {productionMigrationPlan} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrations.ts", import.meta.url)))};
+       const plan=productionMigrationPlan();
+       try {const r=openAndMigrate(${JSON.stringify(database)},plan.migrations,{rebuilds:plan.rebuilds});r.db.close();console.log('ok');}
        catch(e){console.log(asSchemaAdmission(e)?.code ?? String(e));}`
       : `import {createNodeDoctorPorts} from ${JSON.stringify(fileURLToPath(new URL("../../src/doctor.ts", import.meta.url)))};
        import {asSchemaAdmission} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrator.ts", import.meta.url)))};
@@ -72,6 +81,18 @@ function native(database: string, home?: string) {
   const run = spawnSync("bun", ["-e", source], { encoding: "utf8", timeout: 15_000 });
   expect(run.status, run.stderr).toBe(0);
   return run.stdout.trim();
+}
+
+/** The native child performs the real production-plan migration and reports its outcome, not just success. */
+function nativeOutcome(database: string): { appliedVersions: number[]; alreadyUpToDate: boolean } {
+  const source = `import {openAndMigrate} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrator.ts", import.meta.url)))};
+       import {productionMigrationPlan} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrations.ts", import.meta.url)))};
+       const plan=productionMigrationPlan();
+       const r=openAndMigrate(${JSON.stringify(database)},plan.migrations,{rebuilds:plan.rebuilds});
+       console.log(JSON.stringify(r.outcome));r.db.close();`;
+  const run = spawnSync("bun", ["-e", source], { encoding: "utf8", timeout: 15_000 });
+  expect(run.status, run.stderr).toBe(0);
+  return JSON.parse(run.stdout.trim()) as { appliedVersions: number[]; alreadyUpToDate: boolean };
 }
 
 /** Commit while live, then kill and await close: no writable last-close checkpoint. */
@@ -142,7 +163,8 @@ describe("readonly admission before operational SQLite settings", () => {
     if (malformed) writeFileSync(join(home, "config.yaml"), "{ invalid yaml");
     const before = readFileSync(database);
     expect(before.subarray(18, 20)).toEqual(Buffer.from([1, 1]));
-    expectRefusal(() => openAndMigrate(database, MIGRATIONS));
+    const plan = productionMigrationPlan();
+    expectRefusal(() => openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds }));
     expectRefusal(() => doctor(home));
     expect(native(database)).toBe("STORAGE_SCHEMA_UNSUPPORTED");
     expect(native(database, home)).toBe("STORAGE_SCHEMA_UNSUPPORTED");
@@ -155,7 +177,11 @@ describe("readonly admission before operational SQLite settings", () => {
     const { home, database } = fixture(true);
     edit(database, "UPDATE schema_migrations SET name='wrong-name' WHERE version=4");
     const before = readFileSync(database);
-    expectRefusal(() => openAndMigrate(database, MIGRATIONS), "STORAGE_INTEGRITY_ERROR");
+    const plan = productionMigrationPlan();
+    expectRefusal(
+      () => openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds }),
+      "STORAGE_INTEGRITY_ERROR",
+    );
     expect(readFileSync(database)).toEqual(before);
     const ports = doctor(home);
     expect(ports.probe("db.migrations")).toMatchObject({
@@ -174,17 +200,18 @@ describe("readonly admission before operational SQLite settings", () => {
     copyFileSync(database, mainOnly);
     const bare = new DatabaseSync(mainOnly, { readOnly: true });
     try {
-      expect(bare.prepare("SELECT MAX(version) AS n FROM schema_migrations").get()).toMatchObject({ n: 8 });
+      expect(bare.prepare("SELECT MAX(version) AS n FROM schema_migrations").get()).toMatchObject({ n: 9 });
     } finally {
       bare.close();
     }
     const reader = connections.openSorageReadonlyAdmission(database);
     try {
-      expect(readAppliedRows(reader).at(-1)?.version).toBe(9);
+      expect(readAppliedRows(reader).at(-1)?.version).toBe(10);
     } finally {
       reader.close();
     }
-    expectRefusal(() => openAndMigrate(database, MIGRATIONS));
+    const plan = productionMigrationPlan();
+    expectRefusal(() => openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds }));
     expectRefusal(() => doctor(home));
     expect(native(database)).toBe("STORAGE_SCHEMA_UNSUPPORTED");
     expect(native(database, home)).toBe("STORAGE_SCHEMA_UNSUPPORTED");
@@ -198,14 +225,26 @@ describe("readonly admission before operational SQLite settings", () => {
     const { database } = fixture();
     seed(database, 7);
     await orphan(database, "UPDATE schema_migrations SET applied_at='orphan-supported' WHERE version=1");
-    expect(native(database)).toBe("ok");
-    const result = openAndMigrate(database, MIGRATIONS);
+    // The native child performs the actual older-prefix upgrade first: the
+    // observed outcome proves the real production plan applied the schema-9
+    // rebuild over the orphan-WAL database, not merely that it succeeded.
+    const upgraded = nativeOutcome(database);
+    expect(upgraded.alreadyUpToDate).toBe(false);
+    expect(upgraded.appliedVersions).toEqual([8, 9]);
+    const plan = productionMigrationPlan();
+    const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
+      // The second, already-current opener legitimately reports up-to-date.
       expect(result.outcome.alreadyUpToDate).toBe(true);
+      expect(result.outcome.appliedVersions).toEqual([]);
       expect(result.db.prepare("SELECT applied_at FROM schema_migrations WHERE version=1").get()).toMatchObject({
         applied_at: "orphan-supported",
       });
       expect(result.db.prepare("PRAGMA foreign_keys").get()).toMatchObject({ foreign_keys: 1 });
+      expect(result.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({
+        version: 9,
+      });
+      expect(result.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
       result.db.close();
     }
@@ -223,9 +262,10 @@ describe("readonly admission before operational SQLite settings", () => {
       }
       expect(readFileSync(database).length).toBe(0);
     }
-    const result = openAndMigrate(database, MIGRATIONS);
+    const plan = productionMigrationPlan();
+    const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
       expect(result.db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
     } finally {
       result.db.close();
@@ -280,7 +320,8 @@ describe("readonly admission before operational SQLite settings", () => {
       };
     });
     const writable = vi.spyOn(connections, "openSorageDatabase");
-    expect(() => openAndMigrate(database, MIGRATIONS)).toThrow("close failed");
+    const plan = productionMigrationPlan();
+    expect(() => openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds })).toThrow("close failed");
     expect(doctor(home).probe("db.migrations").severity).toBe("blocking");
     expect(writable).not.toHaveBeenCalled();
   });
@@ -355,7 +396,7 @@ describe("cold-WAL private history capture", () => {
         copyFileSync(source, target);
       },
     });
-    expect(rows?.at(-1)?.version).toBe(9);
+    expect(rows?.at(-1)?.version).toBe(10);
     expect(targets).toHaveLength(2);
     expect(targets.every((target) => !existsSync(dirname(target)))).toBe(true);
     expect(readFileSync(database)).toEqual(before);
@@ -374,7 +415,10 @@ describe("cold-WAL private history capture", () => {
     const { database } = fixture();
     writeFileSync(database, "parent file");
     expect(() => connections.databaseFileExists(join(database, "child"))).toThrow(/ENOTDIR/);
-    expect(() => openAndMigrate(join(database, "child"), MIGRATIONS)).toThrow(/ENOTDIR/);
+    const plan = productionMigrationPlan();
+    expect(() => openAndMigrate(join(database, "child"), plan.migrations, { rebuilds: plan.rebuilds })).toThrow(
+      /ENOTDIR/,
+    );
     expect(readFileSync(database, "utf8")).toBe("parent file");
   });
 
@@ -440,7 +484,8 @@ describe("cold-WAL private history capture", () => {
       }),
     );
     const writable = vi.spyOn(connections, "openSorageDatabase");
-    expect(() => openAndMigrate(database, MIGRATIONS)).toThrow(`${phase} failure`);
+    const plan = productionMigrationPlan();
+    expect(() => openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds })).toThrow(`${phase} failure`);
     expect(writable).not.toHaveBeenCalled();
   });
 });
@@ -459,7 +504,7 @@ it("reads active WAL through native readonly without falling back to a copy", as
       console.log(JSON.stringify({rows:rows.length,appliedAt:row.applied_at}));`;
     const result = spawnSync("bun", ["-e", source], { encoding: "utf8", timeout: 15_000 });
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ rows: 8, appliedAt: "live" });
+    expect(JSON.parse(result.stdout)).toEqual({ rows: 9, appliedAt: "live" });
   });
 });
 
@@ -467,14 +512,15 @@ it("measures native cold opening on the existing 10,000-Handoff metadata seed", 
   const { database } = fixture();
   const imports = `
     import {openAndMigrate} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrator.ts", import.meta.url)))};
-    import {MIGRATIONS} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrations.ts", import.meta.url)))};`;
+    import {productionMigrationPlan} from ${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/migrations.ts", import.meta.url)))};
+    const plan=productionMigrationPlan();`;
   const seeded = spawnSync(
     "bun",
     [
       "-e",
       `${imports}
     import {insertHandoffSeed} from ${JSON.stringify(fileURLToPath(new URL("../../src/testkit/seed.ts", import.meta.url)))};
-    const seeded=openAndMigrate(${JSON.stringify(database)},MIGRATIONS);insertHandoffSeed(seeded.db,10000);seeded.db.close();`,
+    const seeded=openAndMigrate(${JSON.stringify(database)},plan.migrations,{rebuilds:plan.rebuilds});insertHandoffSeed(seeded.db,10000);seeded.db.close();`,
     ],
     { encoding: "utf8", timeout: 25_000 },
   );
@@ -493,7 +539,7 @@ it("measures native cold opening on the existing 10,000-Handoff metadata seed", 
       [
         "-e",
         `${imports}
-      const started=performance.now();const current=openAndMigrate(${JSON.stringify(database)},MIGRATIONS);
+      const started=performance.now();const current=openAndMigrate(${JSON.stringify(database)},plan.migrations,{rebuilds:plan.rebuilds});
       if(current.db.prepare('SELECT COUNT(*) AS n FROM handoffs').get().n!==10000)throw Error('seed lost');
       current.db.close();console.log(JSON.stringify({elapsedMs:performance.now()-started}));`,
       ],
@@ -525,14 +571,13 @@ it("does not retry factory configuration failure when its unreturned handle also
       throw cleanup;
     }),
   };
-  vi.spyOn(sqlite, "Database").mockImplementation(function () {
-    return handle as unknown as InstanceType<typeof sqlite.Database>;
-  });
+  vi.spyOn(sqlite, "Database").mockImplementation(() => handle as unknown as InstanceType<typeof sqlite.Database>);
   const copy = vi.spyOn(connections, "openSorageInspectionCopy");
   const writable = vi.spyOn(connections, "openSorageDatabase");
   let failure: unknown;
   try {
-    openAndMigrate(database, MIGRATIONS);
+    const plan = productionMigrationPlan();
+    openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
   } catch (error) {
     failure = error;
   }

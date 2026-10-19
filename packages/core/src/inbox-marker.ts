@@ -1,4 +1,4 @@
-import { type AppError, ok, type Result } from "./errors";
+import { type AppError, appError, err, ok, type Result } from "./errors";
 import type { HandoffReadPorts, HandoffView, ListingScope } from "./handoff-read";
 
 /**
@@ -59,7 +59,15 @@ function currentInboxItems(ports: HandoffReadPorts, scope: ListingScope): Result
       afterSortKey,
     );
     if (!page.ok) return page;
-    items.push(...page.value.items);
+    if (page.value.items.some((candidate) => candidate.contentIntegrity === "artifact-record-missing")) {
+      return err(
+        appError(
+          "ARTIFACT_CORRUPTED",
+          "the current Artifact is missing, unreadable, or wrongly associated; run sorage vault verify and restore from backup",
+        ),
+      );
+    }
+    items.push(...page.value.items.map((candidate) => candidate.view));
     if (page.value.items.length < MARKER_PAGE_SIZE || page.value.lastSortKey === null) {
       return ok(items);
     }

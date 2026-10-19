@@ -75,7 +75,18 @@ describe("the frozen legacy revision through migration 8", () => {
       source.upgradeToCurrent();
       const ports = createNodeBackupCommandPorts({ env: { SORAGE_HOME: source.home }, userHome: source.home });
       const exporting = unwrap(ports.exportPorts(), "legacy export ports");
-      const data = redactSnapshotData(unwrap(exporting.readSnapshotData(), "legacy source rows"));
+      const exported = unwrap(exporting.readSnapshotData(), "legacy source rows");
+      // Construct the frozen file-only legacy fixture explicitly; never widen
+      // formats 1/2 to include the format-3 representation fields.
+      const data = redactSnapshotData({
+        ...exported,
+        handoffs: exported.handoffs.map((handoff) => {
+          if (handoff.artifact === null) return { ...handoff, artifact: null };
+          const { inlineBody, storageKey, ...artifact } = handoff.artifact;
+          if (inlineBody !== null || typeof storageKey !== "string") throw new Error("Expected legacy file Artifact");
+          return { ...handoff, artifact: { ...artifact, storageKey } };
+        }),
+      });
       const files =
         version === 1
           ? snapshotFiles({ ...data, events: data.events.map(({ memoId: _memoId, ...event }) => event) })
@@ -99,7 +110,13 @@ describe("the frozen legacy revision through migration 8", () => {
         expect(db.prepare("SELECT current_artifact_id FROM handoffs WHERE id = ?").get(LEGACY_HANDOFF)).toEqual({
           current_artifact_id: source.currentArtifactId,
         });
-        expect(db.prepare("SELECT id, storage_key FROM artifacts").get()).toEqual({
+        expect(
+          db
+            .prepare(
+              "SELECT a.id AS id, c.storage_key AS storage_key FROM artifacts a JOIN content_records c ON c.id = a.content_record_id",
+            )
+            .get(),
+        ).toEqual({
           id: source.currentArtifactId,
           storage_key: source.currentStorageKey,
         });
@@ -120,13 +137,18 @@ describe("the frozen legacy revision through migration 8", () => {
     const fixture = legacyReviseInstallation();
     try {
       const domainBefore = fixture.domainSnapshot();
+      const artifactsBefore = fixture.legacyArtifactSnapshot();
       const operationalBefore = fixture.operationalSnapshot();
       const bytesBefore = readFileSync(join(fixture.vault, fixture.currentStorageKey));
       const modeBefore = statSync(join(fixture.vault, fixture.currentStorageKey)).mode & 0o777;
 
       fixture.upgradeToCurrent();
 
+      // Every non-Artifact domain table is byte-identical, and the Artifact's
+      // physical projection — key, bytes, digest, materialization, names,
+      // provenance — survives the normalization onto its content record.
       expect(fixture.domainSnapshot()).toBe(domainBefore);
+      expect(fixture.normalizedArtifactProjection()).toBe(artifactsBefore);
       // The legacy columns are unchanged and the new owner columns are null.
       const db = openSorageDatabase(fixture.database);
       try {
@@ -276,7 +298,11 @@ describe("the frozen legacy revision through migration 8", () => {
         expect(handoff.row_version).toBe(5);
         expect(handoff.review_state).toBe("awaiting_recipient");
         expect(handoff.review_engaged_at).toBe("2026-10-01T01:00:00.000Z");
-        const artifact = db.prepare("SELECT * FROM artifacts").get() as Record<string, unknown>;
+        const artifact = db
+          .prepare(
+            "SELECT a.id AS id, c.storage_key AS storage_key, c.sha256 AS sha256, c.materialized AS materialized FROM artifacts a JOIN content_records c ON c.id = a.content_record_id",
+          )
+          .get() as Record<string, unknown>;
         expect(artifact.id).toBe(source.currentArtifactId);
         expect(artifact.storage_key).toBe(source.currentStorageKey);
         expect(artifact.sha256).toBe(createHash("sha256").update(Buffer.from(LEGACY_BODY_V2, "utf8")).digest("hex"));

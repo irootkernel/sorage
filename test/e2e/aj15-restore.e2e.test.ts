@@ -39,8 +39,10 @@ describe("AJ-15 the clean restore drill", () => {
     sorage(["project", "add", "--name", "Beta", "--dir", beta, "--json"], { home: homeA, cwd: workA });
 
     const briefs: Array<[string, string, string, string[]]> = [
-      ["accepted brief", "accepted.md", "# Accepted\n", ["--to", "beta"]],
-      ["declined brief", "declined.md", "# Declined\n", ["--to", "beta"]],
+      // This drill checks physical text files under Git autocrlf. Keep them
+      // above the inline threshold; inline byte-exact restore has its own drill.
+      ["accepted brief", "accepted.md", `# Accepted\r\n${"A".repeat(65_537)}`, ["--to", "beta"]],
+      ["declined brief", "declined.md", `# Declined\r\n${"D".repeat(65_537)}`, ["--to", "beta"]],
     ];
     const ids: Record<string, string> = {};
     for (const [title, file, body] of briefs) {
@@ -60,7 +62,7 @@ describe("AJ-15 the clean restore drill", () => {
         "";
     }
     // Move them to their terminal states.
-    sorage(
+    const accepted = sorage(
       [
         "accept",
         ids["accepted brief"] as string,
@@ -74,7 +76,8 @@ describe("AJ-15 the clean restore drill", () => {
       ],
       { home: homeA, cwd: beta },
     );
-    sorage(
+    expect(accepted.status, accepted.stderr).toBe(0);
+    const declined = sorage(
       [
         "decline",
         ids["declined brief"] as string,
@@ -83,16 +86,17 @@ describe("AJ-15 the clean restore drill", () => {
         "--reason",
         "not needed",
         "--expected-row-version",
-        "2",
+        "1",
         "--json",
       ],
       { home: homeA, cwd: beta },
     );
+    expect(declined.status, declined.stderr).toBe(0);
     // An unregistered-Workspace Handoff exercises the workspaceKey identity.
     const unregisteredBrief = join(workUnregistered, "unregistered.md");
     (function write() {
       const { writeFileSync } = require("node:fs") as typeof import("node:fs");
-      writeFileSync(unregisteredBrief, "# From an unregistered workspace\n");
+      writeFileSync(unregisteredBrief, `# From an unregistered workspace\r\n${"U".repeat(65_537)}`);
     })();
     const unregistered = sorage(
       ["send", "--to", "beta", "--title", "Unregistered", "--file", unregisteredBrief, "--json"],

@@ -10,6 +10,8 @@ Do not expose authentication material or copy output containing secrets into an 
 
 ## Release-candidate verification
 
+The commands below describe the published v0.1.2 packaging identity. Unversioned M9 source changes require the separate [M9 upgrade and rollback procedure](#m9-shared-content-upgrade-and-rollback); a matching version string does not establish a matching build or storage contract.
+
 Before publication, build and inspect the Apple Silicon macOS candidate from the reviewed checkout:
 
 ```sh
@@ -62,6 +64,8 @@ Stop and contact the Sorage maintainers if diagnosis reports database corruption
 
 ## Memo storage upgrade and rollback
 
+This section describes the published v0.1.2 transition from pre-Memo storage to schema 7 and format-2 backups. Its references to the new binary and writer mean that generation. M9 has a separate upgrade boundary below.
+
 Before upgrading an installation from the pre-Memo database, stop old CLI writers, the daemon, and scheduled backup processes. Keep them stopped throughout the upgrade and prevent mixed-version writers afterwards. Use the old binary to produce and verify a pre-upgrade format-1 backup, retain that copy, and complete a restore drill into a separate empty temporary installation before replacing the binary. The migration appends Memo storage and preserves existing domain rows and valid operational receipts. Do not assume an old binary will safely reject the upgraded database.
 
 Use explicit binary and installation paths so a rollback drill cannot select the live home by accident. Stop other CLI clients and external schedulers first; disable the built-in schedule and remote push before making the final manual backup. Record their previous settings with `config show --json` for an intentional later re-enable. If a LaunchAgent owns the daemon, stop that service with `launchctl bootout gui/$UID/xyz.rootkernel.sorage` before `daemon stop`; do not let it restart an old writer during the upgrade. The following template uses an already retained old binary and a local Vault path read from that installation's configuration. Replace every placeholder before running it. If the daemon is already stopped, `daemon stop` returns exit 69 / `DAEMON_UNAVAILABLE` with `no live daemon record was found`; confirm that no old daemon remains and continue without following its start suggestion. Stop on any other failure:
@@ -87,6 +91,22 @@ The new backup writer exports format 2, including a zero-Memo inventory when app
 Rollback uses the verified pre-upgrade format-1 backup in a fresh, separate home and Vault, with its daemon stopped. Set `SORAGE_HOME` explicitly for the separate installation, initialize it, run `sorage backup restore --from <pre-upgrade-vault-copy> --dry-run --as-user`, then run the same restore with `--confirm --as-user` instead of `--dry-run --as-user`. Keep the upgraded home intact; never downgrade its database in place or let the old writer overwrite its backups. Post-upgrade Memos are absent from the old backup, so preserve them with the new binary before switching installations. Automated recovery drills cover separate temporary homes and process restarts; real OS crash and power-loss testing requires a separate platform qualification.
 
 User-requested backups contain current Memo titles and bodies. Workspace-path redaction does not sanitize arbitrary paths, secrets, or personal data typed into free text; account for that before enabling remote backup. Earlier Git commits may retain previous bodies. Marking a Memo done or dismissed does not erase that data, and M7 provides no Memo purge.
+
+## M9 shared content upgrade and rollback
+
+M9 has no assigned product version; intended v0.1.3 scope remains M8. A locally packaged M9 source candidate may still print `0.1.2`, although published v0.1.2 predates shared content. Identify both executables by explicit paths, reviewed revisions and binary digests, not the version string alone. [Interface sections 38.7 and 38.8](../specs/interfaces-and-operations.md#387-migration-backup-and-supported-inventory) own the migration, supported inventory and breaking contract classification.
+
+An M9 candidate's `preflight` can inspect an existing home without operational migration. Resolve any unsupported, unverifiable or recovery-required result before proceeding. A compatible or upgrade-required report does not establish that an external backup or restore drill happened. Do not use a new candidate's operational `doctor`, `backup run` or other storage-opening command as the pre-upgrade backup step: it may migrate the database first.
+
+Before replacing the executable, use the **old matching executable** for the final backup and its verification. Stop old CLI writers, the daemon, its LaunchAgent and external schedulers, and deliberately disable built-in scheduling and remote push as in the Memo procedure above. Retain the prior settings for deliberate re-enablement. Keep a separate immutable copy of the verified backup and its matching old executable, then use that executable to complete a dry-run and actual restore into a separate empty temporary home and Vault with explicit `SORAGE_HOME`. Inspect the restored domain data and verify its files before upgrading. Published v0.1.2 uses schema 7 and format 2; an earlier installation may require format 1. Schema 8 and format 3 also exist in retained development builds, but are not a published v0.1.2 prerequisite.
+
+Keep every old writer away from the upgraded home and backup destination. Forward-schema refusal is qualified for guarded builds with an explicit known-schema inventory; it is not a safety guarantee for every historical published executable. Do not rely on an old binary to reject newer storage safely.
+
+The Handoff adoption build adds schema 9 after the additive schema-8 foundation. It normalizes body references while preserving existing Handoff/Artifact ids, file keys and bytes, receipts, and pending operations; it does not repack old small files. The Vault marker and configuration schema remain unchanged. Newly accepted small text can have `storageKey: null`, so update string-only Handoff DTO consumers before using that build. Its format-3 backups include inline Handoff bodies; old public backup readers cannot consume this generation.
+
+Only after the old-binary backup and separate restore drill succeed, start the reviewed new executable against the intended home. Use that same new executable to run `doctor`, inspect expected data, verify the Vault, and create and verify a new backup. Re-enable service, scheduling or push deliberately only after these checks. The [qualification map](../implementation-tips/m9-shared-content-qualification.md#9-handoff-adoption-at-schema-9) describes the retained migration and Handoff checks; later Memo and Channel adoption extend the supported inventory at their own boundaries.
+
+Rollback uses the retained pre-upgrade backup and its matching executable in a **fresh separate home and Vault**, with its daemon stopped. Keep the upgraded home intact; never downgrade its database in place or let an old writer overwrite post-upgrade backups. The restored installation adopts the original identity, so it and the upgraded installation are alternatives rather than concurrent writers. Data created after the retained backup is absent from rollback; preserve needed data with the new build before switching. Restore excludes operational receipts, browser recovery state and derived fetch-cache files. A preserved Installation identity therefore does not resolve an unknown request outcome or authorize redispatch with a new key. Physical power-loss and OS-crash recovery remain separate platform qualifications.
 
 ## Unknown Memo outcomes
 

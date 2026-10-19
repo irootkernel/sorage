@@ -17,10 +17,11 @@ import { createHash } from "node:crypto";
 import { appError, ok, type AppError, type Result } from "@sorage/core";
 import type { Configuration } from "@sorage/core";
 import { createConfigStore } from "./config-store";
+import { validateArtifactContentLinks } from "./content-store";
 import { createNodeHomePaths, type HomePaths } from "./home";
 import { acquireLock, createNodeLockProbePorts, isPidAlive, releaseLock } from "./lockfile";
 import { openSorageDatabase } from "./sqlite/connection";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { withInstallationInspection } from "./preflight";
 
@@ -52,6 +53,13 @@ export interface ArtifactSweepBatch {
   nextCursor: string | null;
   /** The bytes this batch plans to read, bounded by the tick budget. */
   plannedBytes: number;
+  /**
+   * Present when the Artifact-record relationship could not be verified: the
+   * tick reports the failure honestly, hashes nothing, and keeps its cursor so
+   * a repaired installation resumes at the same position. Never an uncaught
+   * exception — the daemon's sweep timer must stay alive.
+   */
+  failure?: Pick<AppError, "code" | "message">;
 }
 
 export interface NodeDaemonPorts {
@@ -80,7 +88,8 @@ export type NodeDaemonDatabase = ReturnType<typeof openAndMigrate>["db"];
 
 /** Opens and migrates the one connection the daemon owns for its whole lifetime. */
 export function openNodeDaemonDatabase(stateDir: string): NodeDaemonDatabase {
-  return openAndMigrate(join(stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+  const plan = productionMigrationPlan();
+  return openAndMigrate(join(stateDir, "sorage.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds }).db;
 }
 
 export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): NodeDaemonPorts {
@@ -133,13 +142,28 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
 
       const db = openSorageDatabase(databasePath);
       try {
+        // The shared content-link guard runs before the cursor and materialized
+        // filters: an Artifact whose authoritative record row is missing must
+        // surface as an explicit failed batch the runtime reports, never as a
+        // silently shortened — falsely healthy — walk (SHR-004, SEC-014).
+        const links = validateArtifactContentLinks(db);
+        if (!links.ok) {
+          return {
+            records: [],
+            nextCursor: fromKey,
+            plannedBytes: 0,
+            failure: { code: links.error.code, message: links.error.message },
+          };
+        }
         // The cursor names the first record the previous tick could not fit, so the
         // walk resumes at that record itself, never skipping past it.
         const statement =
           fromKey === null
-            ? db.prepare("SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1 ORDER BY storage_key")
+            ? db.prepare(
+                "SELECT c.storage_key AS storage_key, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.materialized = 1 AND c.storage_key IS NOT NULL ORDER BY c.storage_key",
+              )
             : db.prepare(
-                "SELECT storage_key, sha256 FROM artifacts WHERE materialized = 1 AND storage_key >= ? ORDER BY storage_key",
+                "SELECT c.storage_key AS storage_key, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.materialized = 1 AND c.storage_key IS NOT NULL AND c.storage_key >= ? ORDER BY c.storage_key",
               );
         const fetched = (fromKey === null ? statement.all() : statement.all(fromKey)) as unknown as Array<{
           storage_key: string;

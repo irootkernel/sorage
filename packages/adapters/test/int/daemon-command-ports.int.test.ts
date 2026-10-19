@@ -96,8 +96,11 @@ describe("the bounded checksum batch", () => {
     const vault = join(env.SORAGE_HOME as string, "vault");
     // Seed the database with the schema through the migration path the CLI uses.
     const { openAndMigrate } = await import("../../src/sqlite/migrator");
-    const { MIGRATIONS } = await import("../../src/sqlite/migrations");
-    const db = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+    const { productionMigrationPlan } = await import("../../src/sqlite/migrations");
+    const plan = productionMigrationPlan();
+    const db = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+      rebuilds: plan.rebuilds,
+    }).db;
 
     const _store = createNodeArtifactStore({ vaultPath: vault, installationId: INSTALLATION });
     const handoff = "2f0ac9a0-0000-4000-8000-0000000000h1" as string;
@@ -118,11 +121,18 @@ describe("the bounded checksum batch", () => {
     db.prepare(
       "INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version, review_state, created_at, updated_at) VALUES (?,?,?,?,?,1,1,'awaiting_recipient',?,?)",
     ).run(handoff, "Probe", "user", project, "a1", new Date().toISOString(), new Date().toISOString());
-    const insert = db.prepare(
-      "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, materialized, created_at) VALUES (?,?,?,?,?,?,?, ?,1,?)",
+    // Schema 9: each Artifact row references its own immutable content record.
+    const insertRecord = db.prepare(
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 10, ?, 1, ?)",
     );
-    insert.run("a1", handoff, key1, "one.md", "one.md", "text/markdown", 10, "0".repeat(64), new Date().toISOString());
-    insert.run("a2", handoff, key2, "two.md", "two.md", "text/markdown", 10, "0".repeat(64), new Date().toISOString());
+    const insertArtifact = db.prepare(
+      "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, created_at, content_record_id) VALUES (?,?,?,?,?,?,?)",
+    );
+    const now = new Date().toISOString();
+    insertRecord.run("c1", key1, "0".repeat(64), now);
+    insertArtifact.run("a1", handoff, "one.md", "one.md", "text/markdown", now, "c1");
+    insertRecord.run("c2", key2, "0".repeat(64), now);
+    insertArtifact.run("a2", handoff, "two.md", "two.md", "text/markdown", now, "c2");
     db.exec("COMMIT");
     db.close();
 

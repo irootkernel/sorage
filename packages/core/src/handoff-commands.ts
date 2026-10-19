@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type ActorRef, type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceActor } from "./events";
-import { type ArtifactStore, buildStorageKey } from "./artifacts";
-import { classifyMimeType, type PreparedImport, prepareArtifactImport } from "./import-policy";
+import type { ArtifactStore } from "./artifacts";
+import { isUtf8ExactText, type ArtifactBodyPrepareRequest, type PreparedArtifactBody } from "./content";
+import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
 import { type ProjectCommandPorts, checkRecipientEligibility } from "./project-commands";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveSenderIdentity, type SenderIdentity, workspaceKey } from "./workspace-identity";
@@ -32,13 +33,21 @@ export interface SendInput {
   asUser?: boolean | undefined;
   /** Names the caller's original file when `file` points at an opaque spool (VLT-007). */
   originalName?: string | undefined;
+  /**
+   * Marks `file` as an authenticated multipart upload spool rather than a
+   * workspace path import (API-003): the spool's logical name comes from
+   * `originalName`, its provenance records no workspace path, and the
+   * workspace external-source rule does not apply to it.
+   */
+  fileSourceKind?: "authenticated-spool" | undefined;
 }
 
 export interface SentHandoff {
   handoffId: string;
   recipientSlug: string;
   artifactId: string;
-  storageKey: string;
+  /** Always present; null exactly when the accepted body routed inline (SHR-013). */
+  storageKey: string | null;
   revision: 1;
   rowVersion: 1;
   reviewState: "awaiting_recipient";
@@ -67,7 +76,10 @@ export interface NewHandoffRecord {
 export interface NewArtifactRecord {
   id: string;
   handoffId: string;
-  storageKey: string;
+  /** Always present; null exactly when inlineBody carries the authoritative text (SHR-013). */
+  storageKey: string | null;
+  /** The exact accepted inline text, or null for a file-backed Artifact. */
+  inlineBody: string | null;
   originalName: string;
   storedName: string;
   mimeType: string;
@@ -118,6 +130,16 @@ export interface SendPorts {
   projectPorts: ProjectCommandPorts;
   handoffs: HandoffWritePort;
   artifactStore: ArtifactStore;
+  /**
+   * The shared body-prepare seam of section 38.2 (SHR-002): one routing
+   * 1): one routing implementation that classifies by the logical original
+   * name's MIME allowlist, decodes text fatally, and routes at the fixed
+   * threshold — inline for decodable text at or below it, the Vault for binary
+   * at every size and for larger or undecodable text.
+   */
+  content: {
+    prepareArtifactBody(request: ArtifactBodyPrepareRequest): Result<PreparedArtifactBody, AppError>;
+  };
   ids: IdGenerator;
   clock: Clock;
   config: {
@@ -128,8 +150,6 @@ export interface SendPorts {
   bindingDirectories: string[];
   /** Realpath-resolves a source and rejects special or unreadable files (VLT-008, SEC-006). */
   inspectSource(path: string, userHome: string): Result<{ resolvedSourcePath: string; originalName: string }, AppError>;
-  /** Writes the `--body` text to a scratch source file and returns its path (HND-023). */
-  writeBodySource(text: string, storedName: string): Result<{ sourcePath: string; cleanup: () => void }, AppError>;
   /** Digests a file with a bounded read, for the idempotency request hash (CLI-021). */
   digestSource(path: string): Result<string, AppError>;
 }
@@ -207,39 +227,33 @@ export function sendHandoffs(ports: SendPorts, input: SendInput): Result<SendOut
   if (input.body !== undefined && input.body.trim() === "") {
     return err(appError("CONFIG_INVALID", "the --body text must not be empty"));
   }
-
-  const cleanups: Array<() => void> = [];
-  try {
-    return sendStaged(ports, input, title, cleanups);
-  } finally {
-    for (const cleanup of cleanups.reverse()) cleanup();
+  if (input.body !== undefined && !isUtf8ExactText(input.body)) {
+    // A body that cannot round-trip UTF-8 (a lone surrogate) is rejected before
+    // any digest, idempotency lookup, or staging: its lossy UTF-8 digest could
+    // otherwise collide with a valid body's digest and replay a retained
+    // outcome past the store's byte-exact rejection (SHR-003).
+    return err(
+      appError("CONFIG_INVALID", "the --body text cannot be stored byte-exactly; it contains an unpaired surrogate"),
+    );
   }
+  return sendStaged(ports, input, title);
 }
 
-function sendStaged(
-  ports: SendPorts,
-  input: SendInput,
-  title: string,
-  cleanups: Array<() => void>,
-): Result<SendOutcome, AppError> {
+function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<SendOutcome, AppError> {
   // The request hash needs the content digest, so the body or file is digested before
   // anything else: the idempotency replay is evaluated first, before any eligibility,
-  // supersedes, or Row Version check (API-012).
+  // supersedes, or Row Version check (API-012). A `--body` send is explicit user
+  // content digested from the exact text; no scratch-file roundtrip exists anymore
+  // (HND-023, section 38.2).
   let contentSha256: string;
-  let bodySource: { sourcePath: string; cleanup: () => void } | null = null;
   const asBody = input.body !== undefined || input.bodyFile !== undefined;
   const storedName = asBody ? `${titleSlug(title)}-1.md` : "";
   if (input.body !== undefined) {
     contentSha256 = createHash("sha256").update(input.body, "utf8").digest("hex");
-    const written = ports.writeBodySource(input.body, storedName);
-    if (!written.ok) return err(written.error);
-    bodySource = written.value;
-    cleanups.push(written.value.cleanup);
   } else if (input.bodyFile !== undefined) {
     const digest = ports.digestSource(input.bodyFile);
     if (!digest.ok) return err(digest.error);
     contentSha256 = digest.value;
-    bodySource = { sourcePath: input.bodyFile, cleanup: () => undefined };
   } else {
     const file = input.file as string;
     const digest = ports.digestSource(file);
@@ -427,70 +441,95 @@ function sendStaged(
   const workspaceRoot = ports.projectPorts.bindings.realPath(input.path, input.userHome);
   if (!workspaceRoot.ok) return err(workspaceRoot.error);
 
-  // Stage every recipient's copy before any transaction: an injected failure here
-  // leaves zero Handoffs and only sweepable staged files (CP-1).
-  const staged: Array<{
+  // Resolve the file sources' policy once, before the per-recipient loop: the
+  // containment and external-source rules answer per source, not per recipient,
+  // and a refusal here still precedes any staging or transaction (CP-1).
+  let fileSource: {
+    physicalPath: string;
+    logicalOriginalName: string;
+    sourceKind: "workspace-path" | "authenticated-spool";
+    importedFromPath: string | null;
+  } | null = null;
+  if (input.file !== undefined) {
+    const file = input.file;
+    const spoolUpload = input.fileSourceKind === "authenticated-spool";
+    const inspected = ports.inspectSource(file, input.userHome);
+    if (!inspected.ok) return err(inspected.error);
+    const contained = checkVaultContainment({
+      resolvedVaultPath: ports.config.vaultPath,
+      resolvedBindingDirectories: ports.bindingDirectories,
+    });
+    if (!contained.ok) return err(contained.error);
+    // The workspace external-source rule governs path imports; an
+    // authenticated multipart upload is its own already-authenticated source
+    // and never a workspace claim (API-003, SEC-006).
+    if (!spoolUpload) {
+      const external = checkExternalSource({
+        resolvedSourcePath: inspected.value.resolvedSourcePath,
+        workspaceRoot: workspaceRoot.value,
+        policy: "workspace_or_explicit",
+        allowExternalSource: input.allowExternalSource,
+      });
+      if (!external.ok) return err(external.error);
+    }
+    fileSource = {
+      physicalPath: inspected.value.resolvedSourcePath,
+      // A browser upload hands over an opaque spool path, so the route names
+      // the user's file; a path import keeps the inspected name.
+      logicalOriginalName: input.originalName ?? inspected.value.originalName,
+      sourceKind: spoolUpload ? "authenticated-spool" : "workspace-path",
+      importedFromPath: spoolUpload ? null : file,
+    };
+  } else if (input.bodyFile !== undefined) {
+    // A streamed compose body is an authenticated spool: its recorded logical
+    // name follows the title-slug Markdown rule, and the opaque spool path
+    // never contributes an extension (HND-023, API-013).
+    fileSource = {
+      physicalPath: input.bodyFile,
+      logicalOriginalName: storedName,
+      sourceKind: "authenticated-spool",
+      importedFromPath: null,
+    };
+  }
+
+  // Prepare every recipient's body before any transaction: the one shared
+  // routing implementation classifies by the logical name's MIME allowlist and
+  // routes at the fixed threshold — inline text, or a staged Vault copy — so an
+  // injected failure here leaves zero Handoffs and only sweepable staged files
+  // (CP-1, SHR-002, section 38.2).
+  const preparedBodies: Array<{
     recipient: { slug: string; projectId: string };
     handoffId: string;
     artifactId: string;
-    prepared: PreparedImport;
+    prepared: PreparedArtifactBody;
   }> = [];
   for (const recipient of recipients) {
     const handoffId = ports.ids.next();
     const artifactId = ports.ids.next();
-    // A --body send is explicit user content, so the external-source rule does not
-    // apply to it; the containment, sanitization, and staging halves still do (HND-023).
-    const prepared: Result<PreparedImport, AppError> =
-      bodySource !== null
-        ? (() => {
-            const stagedFile = ports.artifactStore.stage({
-              sourcePath: bodySource.sourcePath,
-              maxBytes: ports.config.maxBytes,
-            });
-            if (!stagedFile.ok) return err(stagedFile.error);
-            const key = buildStorageKey({ handoffId, artifactId, storedName });
-            if (!key.ok) return err(key.error);
-            const bodyImport: PreparedImport = {
-              ...stagedFile.value,
-              originalName: storedName,
-              storedName,
-              mimeType: classifyMimeType(storedName),
-              storageKey: key.value,
-              importedFromPath: null,
-            };
-            return ok(bodyImport);
-          })()
-        : (() => {
-            const file = input.file as string;
-            const inspected = ports.inspectSource(file, input.userHome);
-            if (!inspected.ok) return err(inspected.error);
-            return prepareArtifactImport(
-              { artifactStore: ports.artifactStore },
-              {
-                sourcePath: file,
-                resolvedSourcePath: inspected.value.resolvedSourcePath,
-                // A browser upload hands over an opaque spool path, so the route
-                // names the user's file; a path import keeps the inspected name.
-                originalName: input.originalName ?? inspected.value.originalName,
-                workspaceRoot: workspaceRoot.value,
-                externalPolicy: "workspace_or_explicit",
-                allowExternalSource: input.allowExternalSource,
-                maxBytes: ports.config.maxBytes,
-                handoffId,
-                artifactId,
-                resolvedVaultPath: ports.config.vaultPath,
-                resolvedBindingDirectories: ports.bindingDirectories,
-              },
-            );
-          })();
+    const prepared = ports.content.prepareArtifactBody({
+      body:
+        input.body !== undefined
+          ? { kind: "text", text: input.body, logicalName: storedName }
+          : {
+              kind: "file",
+              physicalPath: (fileSource as { physicalPath: string }).physicalPath,
+              logicalOriginalName: (fileSource as { logicalOriginalName: string }).logicalOriginalName,
+              sourceKind: (fileSource as { sourceKind: "workspace-path" | "authenticated-spool" }).sourceKind,
+            },
+      classification: "mime-first",
+      identities: { handoffId, artifactId },
+      bounds: { maxBytes: ports.config.maxBytes },
+      provenance: { importedFromPath: fileSource?.importedFromPath ?? null },
+    });
     if (!prepared.ok) return err(prepared.error);
-    staged.push({ recipient, handoffId, artifactId, prepared: prepared.value });
+    preparedBodies.push({ recipient, handoffId, artifactId, prepared: prepared.value });
   }
 
-  // One all-or-nothing transaction: every Handoff row, its Artifact row, its activate
-  // intent, and its HANDOFF_CREATED event, plus the idempotency response when keyed.
+  // One all-or-nothing transaction: every Handoff row, its Artifact row, its
+  // content record and — for a file-backed body only — its activate intent and
+  // HANDOFF_CREATED event, plus the idempotency response when keyed.
   const vaultPrefix = `${ports.config.vaultPath.replace(/\/+$/, "")}/`;
-  const handoffRecords: NewHandoffRecord[] = staged.map(({ recipient, handoffId, artifactId }) => ({
+  const handoffRecords: NewHandoffRecord[] = preparedBodies.map(({ recipient, handoffId, artifactId }) => ({
     id: handoffId,
     dispatchGroupId,
     supersedesHandoffId: input.supersedes ?? null,
@@ -500,29 +539,37 @@ function sendStaged(
     currentArtifactId: artifactId,
     createdAt: now,
   }));
-  const artifactRecords: NewArtifactRecord[] = staged.map(({ handoffId, artifactId, prepared }) => ({
+  const artifactRecords: NewArtifactRecord[] = preparedBodies.map(({ handoffId, artifactId, prepared }) => ({
     id: artifactId,
     handoffId,
     storageKey: prepared.storageKey,
-    originalName: prepared.originalName,
-    storedName: prepared.storedName,
+    inlineBody: prepared.kind === "inline" ? prepared.text : null,
+    originalName: prepared.logicalName,
+    storedName: sanitizeStoredName(prepared.logicalName),
     mimeType: prepared.mimeType,
     sizeBytes: prepared.sizeBytes,
     sha256: prepared.sha256,
     importedFromPath: prepared.importedFromPath,
     createdAt: now,
   }));
-  const intents: NewPendingFsOp[] = staged.map(({ artifactId, prepared }) => ({
-    id: ports.ids.next(),
-    op: "activate" as const,
-    fromPath: prepared.stagingPath.startsWith(vaultPrefix)
-      ? prepared.stagingPath.slice(vaultPrefix.length)
-      : prepared.stagingPath,
-    toPath: prepared.storageKey,
-    artifactId,
-    createdAt: now,
-  }));
-  const events: NewDomainEvent[] = staged.map(({ handoffId, prepared }) => ({
+  // An inline body commits materialized with no activation and no physical
+  // event; a file-backed body keeps its staged copy and causal legacy intent.
+  const intents: NewPendingFsOp[] = preparedBodies.flatMap(({ artifactId, prepared }) => {
+    if (prepared.kind !== "file") return [];
+    return [
+      {
+        id: ports.ids.next(),
+        op: "activate" as const,
+        fromPath: prepared.stagingPath.startsWith(vaultPrefix)
+          ? prepared.stagingPath.slice(vaultPrefix.length)
+          : prepared.stagingPath,
+        toPath: prepared.storageKey,
+        artifactId,
+        createdAt: now,
+      },
+    ];
+  });
+  const events: NewDomainEvent[] = preparedBodies.map(({ handoffId, prepared }) => ({
     id: ports.ids.next(),
     handoffId,
     eventType: "HANDOFF_CREATED" as const,
@@ -537,7 +584,7 @@ function sendStaged(
     createdAt: now,
   }));
   const outcome: SendOutcome = {
-    handoffs: staged.map(({ recipient, handoffId, artifactId, prepared }) => ({
+    handoffs: preparedBodies.map(({ recipient, handoffId, artifactId, prepared }) => ({
       handoffId,
       recipientSlug: recipient.slug,
       artifactId,
@@ -604,17 +651,22 @@ function sendStaged(
     return err(committed.error);
   }
 
-  // Execute the committed intents outside any transaction, then complete each in one
-  // short transaction: materialized, intent cleared, activation event appended. A
-  // failed activation stays pending for the idempotent drain (CP-2 to CP-4).
+  // Execute the committed file intents outside any transaction, then complete
+  // each in one short transaction: materialized, intent cleared, activation
+  // event appended. A failed activation stays pending for the idempotent drain
+  // (CP-2 to CP-4). An inline body has no intent and no physical event: its
+  // record committed materialized in the fanout transaction.
   const completions: Array<{ intentId: string; artifactId: string; event: NewDomainEvent }> = [];
-  for (const [index, entry] of staged.entries()) {
+  let intentIndex = 0;
+  for (const entry of preparedBodies) {
+    if (entry.prepared.kind !== "file") continue;
+    const intent = intents[intentIndex] as NewPendingFsOp;
+    intentIndex += 1;
     const activated = ports.artifactStore.activate({
       stagingPath: entry.prepared.stagingPath,
       storageKey: entry.prepared.storageKey,
     });
     if (!activated.ok) continue;
-    const intent = intents[index] as NewPendingFsOp;
     completions.push({
       intentId: intent.id,
       artifactId: entry.artifactId,

@@ -8,10 +8,10 @@
     "warnings": [],
     "checked": {
       "vault": {
-        "artifacts": 5,
-        "recordedArtifacts": 5,
+        "artifacts": 0,
+        "recordedArtifacts": 0,
         "stagedFiles": 0,
-        "contentRecords": 0
+        "contentRecords": 5
       },
       "manifest": {
         "present": false,

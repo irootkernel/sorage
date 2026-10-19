@@ -3,8 +3,8 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readSync,
   renameSync,
@@ -17,6 +17,7 @@ import {
   appError,
   err,
   ok,
+  type ArtifactReadHandle,
   type ArtifactStore,
   type AppError,
   type Result,
@@ -26,6 +27,7 @@ import {
 import { isManagedStorageKey } from "@sorage/core";
 import { vaultMoveLockHeld } from "./lockfile";
 import { fsyncDirectory } from "./intent-log";
+import { UnsafeManagedPathError, managedDirectory, managedFile, openManagedFile } from "./managed-paths";
 import { openVault } from "./vault";
 
 /** One mebibyte: the fixed copy buffer that keeps import memory bounded (NFR-005). */
@@ -102,7 +104,38 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
           ),
         );
       }
-      const stagingPath = join(vaultPath, "staging", newStagingId());
+      let stagingPath: string;
+      let reportedStagingPath: string;
+      try {
+        // The staging root resolves through the canonical managed path: a
+        // symlinked or special staging directory is refused rather than
+        // created through or written past, so a staged file can never land
+        // outside the Vault through a linked root (section 6.2 canaries). The
+        // bytes open on the canonical root, while the caller-visible path is
+        // expressed under the configured selected root, so a valid directory
+        // alias keeps a coherent logical/physical mapping: the caller's own
+        // prefix stripping still yields `staging/<id>` (managed-root aliases).
+        const stagingRoot = managedDirectory(vaultPath, "staging", true, 0o755);
+        if (stagingRoot === undefined) {
+          return err(appError("INTERNAL_ERROR", "Preparing the managed staging directory failed."));
+        }
+        const stagingId = newStagingId();
+        stagingPath = join(stagingRoot, stagingId);
+        reportedStagingPath = join(vaultPath, "staging", stagingId);
+      } catch (error) {
+        if (error instanceof UnsafeManagedPathError) {
+          return err(
+            appError("INTERNAL_ERROR", "The managed staging directory is a link or special entry.", {
+              cause: String(error),
+            }),
+          );
+        }
+        return err(
+          appError("INTERNAL_ERROR", `Preparing the managed staging directory failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
       let source: number | undefined;
       let staged: number | undefined;
       try {
@@ -170,12 +203,12 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
         closeSync(staged);
         source = undefined;
         staged = undefined;
-        return ok({ stagingPath, sizeBytes: total, sha256: hash.digest("hex") });
+        return ok({ stagingPath: reportedStagingPath, sizeBytes: total, sha256: hash.digest("hex") });
       } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Staging ${request.sourcePath} failed unexpectedly: ${messageOf(error)}.`, {
             sourcePath: request.sourcePath,
-            stagingPath,
+            stagingPath: reportedStagingPath,
             cause: String(error),
           }),
         );
@@ -219,7 +252,22 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
       }
       try {
         if (pausedNow()) return err(pauseError());
-        mkdirSync(dirname(destination), { recursive: true });
+        // The managed parent check keeps a symlinked or special directory in
+        // the managed chain from being created through or renamed into
+        // (section 6.2 canaries).
+        const parentKey = request.storageKey.slice(0, request.storageKey.lastIndexOf("/"));
+        try {
+          managedDirectory(vaultPath, parentKey, true);
+        } catch (managedError) {
+          if (managedError instanceof UnsafeManagedPathError) {
+            return err(
+              appError("INTERNAL_ERROR", `The managed path ${request.storageKey} is unsafe.`, {
+                storageKey: request.storageKey,
+              }),
+            );
+          }
+          throw managedError;
+        }
         renameSync(request.stagingPath, destination);
         // The parent must be durable before any caller commits materialized = 1 (VLT-022).
         fsyncDirectory(dirname(destination));
@@ -249,24 +297,182 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
           }),
         );
       }
-      return ok(join(vaultPath, storageKey));
+      // Serving-path resolution adopts the managed guard (VLT-020, section 6.2
+      // canaries): a symlinked or special managed parent or leaf is refused
+      // instead of resolved, an absent leaf is a visible missing-Artifact
+      // failure, and the selected root stays a legitimate alias through its
+      // canonical resolution. The returned notation keeps the selected root so
+      // the caller-visible localPath contract is unchanged; safe open
+      // ownership belongs to openReadable.
+      try {
+        const { stat } = managedFile(vaultPath, storageKey);
+        if (stat === undefined) {
+          return err(
+            appError("ARTIFACT_CORRUPTED", `The Artifact at ${storageKey} is missing from its storage key.`, {
+              storageKey,
+            }),
+          );
+        }
+        return ok(join(vaultPath, storageKey));
+      } catch (error) {
+        if (error instanceof UnsafeManagedPathError) {
+          return err(
+            appError("ARTIFACT_CORRUPTED", `The managed path ${storageKey} is unsafe for serving.`, { storageKey }),
+          );
+        }
+        return err(
+          appError("ARTIFACT_CORRUPTED", `Inspecting the managed path ${storageKey} failed: ${messageOf(error)}.`, {
+            storageKey,
+            cause: String(error),
+          }),
+        );
+      }
+    },
+
+    openReadable(storageKey: string): Result<ArtifactReadHandle, AppError> {
+      if (!isManagedStorageKey(storageKey)) {
+        return err(
+          appError("INTERNAL_ERROR", `The storage key is not a managed artifacts/ key: ${storageKey}.`, {
+            storageKey,
+          }),
+        );
+      }
+      let handle: number;
+      try {
+        // The managed open refuses a symlinked or special leaf with O_NOFOLLOW,
+        // never blocks on a special entry (O_NONBLOCK), and verifies the opened
+        // regular-file identity before any byte is read (section 6.2 canaries).
+        handle = openManagedFile(vaultPath, storageKey);
+      } catch (error) {
+        return err(servingUnavailable(storageKey, error));
+      }
+      let closed = false;
+      const close = (): void => {
+        if (closed) return;
+        // Ownership is consumed before the single close attempt: a failed OS
+        // close may still have closed the descriptor, and the descriptor
+        // number may be reused, so a retry can never close a second time.
+        // The original close failure propagates, so a local-path preparation
+        // refuses instead of settling on a failed close (VLT-020, section
+        // 11.3).
+        closed = true;
+        closeSync(handle);
+      };
+      const disposeQuietly = (): void => {
+        try {
+          close();
+        } catch {
+          // Cleanup must not mask the typed corruption error it follows.
+        }
+      };
+      let sizeBytes: number;
+      try {
+        sizeBytes = fstatSync(handle).size;
+      } catch (error) {
+        // A disposal failure here must never replace the typed serving error.
+        disposeQuietly();
+        return err(servingUnavailable(storageKey, error));
+      }
+      return ok({
+        sizeBytes,
+        read(position: number, maxLength: number): Result<Uint8Array, AppError> {
+          if (closed) {
+            return err(
+              appError("ARTIFACT_CORRUPTED", `The Artifact at ${storageKey} was closed before this read.`, {
+                storageKey,
+              }),
+            );
+          }
+          if (!Number.isSafeInteger(position) || position < 0 || !Number.isSafeInteger(maxLength) || maxLength <= 0) {
+            return err(
+              appError(
+                "INTERNAL_ERROR",
+                `The bounded read of ${storageKey} needs a nonnegative position and a positive length.`,
+                { storageKey, position, maxLength },
+              ),
+            );
+          }
+          if (position >= sizeBytes) return ok(new Uint8Array(0));
+          const length = Math.min(maxLength, STREAM_BUFFER_BYTES, sizeBytes - position);
+          const buffer = Buffer.allocUnsafe(length);
+          let total = 0;
+          while (total < length) {
+            let count: number;
+            try {
+              count = readSync(handle, buffer, total, length - total, position + total);
+            } catch (error) {
+              // An actual read error disposes the acquired descriptor while
+              // the typed corruption error stays the answer.
+              disposeQuietly();
+              return err(servingReadFailed(storageKey, error));
+            }
+            if (count === 0) {
+              // Zero bytes before the recorded end of the body must terminate
+              // visibly instead of looping or silently claiming completion,
+              // and the descriptor is disposed rather than retained.
+              disposeQuietly();
+              return err(servingReadFailed(storageKey, new Error("the descriptor ended before the recorded size")));
+            }
+            total += count;
+          }
+          return ok(new Uint8Array(buffer.buffer, buffer.byteOffset, total));
+        },
+        close,
+      });
     },
 
     exists(storageKey: string): Result<boolean, AppError> {
       const path = resolveManagedPath(storageKey);
       if (!path.ok) return err(path.error);
-      return ok(existsSync(path.value));
+      try {
+        // The managed leaf check keeps a symlink or special entry from being
+        // reported as ordinary stored content (section 6.2 canaries).
+        return ok(managedFile(vaultPath, storageKey).stat !== undefined);
+      } catch (error) {
+        if (error instanceof UnsafeManagedPathError) {
+          return err(appError("INTERNAL_ERROR", `The managed path ${storageKey} is unsafe.`, { storageKey }));
+        }
+        return err(
+          appError("INTERNAL_ERROR", `Inspecting ${storageKey} failed: ${messageOf(error)}.`, {
+            storageKey,
+            cause: String(error),
+          }),
+        );
+      }
     },
 
     remove(storageKey: string): Result<void, AppError> {
-      const target = join(vaultPath, storageKey);
+      // Every mutation funnels through the move lock and the marker guard, the
+      // same boundary activate and stage enforce (RUN-014, VLT-019).
+      const opened = guard();
+      if (!opened.ok) return err(opened.error);
+      if (!isManagedStorageKey(storageKey)) {
+        return err(
+          appError("INTERNAL_ERROR", `The storage key is not a managed artifacts/ key: ${storageKey}.`, {
+            storageKey,
+          }),
+        );
+      }
+      // Serving and removal adopt the managed-path guards: a symlink or
+      // special entry at a managed parent or leaf is refused rather than
+      // followed, and only the managed-path classification turns into the
+      // managed-key error — genuine I/O keeps its ordinary failure report
+      // (VLT-020, section 6.2 canaries).
       try {
-        if (existsSync(target)) {
-          unlinkSync(target);
-          fsyncDirectory(dirname(target));
+        const { path } = managedFile(vaultPath, storageKey);
+        if (existsSync(path)) {
+          unlinkSync(path);
+          fsyncDirectory(dirname(path));
         }
         return ok(undefined);
       } catch (error) {
+        if (error instanceof UnsafeManagedPathError) {
+          return err(
+            appError("INTERNAL_ERROR", `The managed path ${storageKey} is unsafe and was not removed.`, {
+              storageKey,
+            }),
+          );
+        }
         return err(appError("INTERNAL_ERROR", `Removing ${storageKey} failed: ${String(error)}.`, { storageKey }));
       }
     },
@@ -277,7 +483,10 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
         const hash = createHash("sha256");
         let handle: number | undefined;
         try {
-          handle = openSync(path.value, "r");
+          // The managed open refuses symlinked or special leaves with
+          // O_NOFOLLOW and verifies the opened identity before any byte is
+          // read (section 6.2 canaries).
+          handle = openManagedFile(vaultPath, storageKey);
           const buffer = Buffer.allocUnsafe(STREAM_BUFFER_BYTES);
           for (;;) {
             const read = readSync(handle, buffer, 0, buffer.length, null);
@@ -289,6 +498,13 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
         }
         return ok(hash.digest("hex"));
       } catch (error) {
+        if (error instanceof UnsafeManagedPathError) {
+          return err(
+            appError("INTERNAL_ERROR", `The managed path ${storageKey} is unsafe and was not read.`, {
+              storageKey,
+            }),
+          );
+        }
         return err(
           appError("INTERNAL_ERROR", `Reading ${storageKey} for verification failed: ${messageOf(error)}.`, {
             storageKey,
@@ -314,6 +530,27 @@ export function createNodeArtifactStore(options: NodeArtifactStoreOptions): Arti
 function unreadableSource(sourcePath: string, error: unknown): AppError {
   return appError("INTERNAL_ERROR", `The source ${sourcePath} could not be read: ${messageOf(error)}.`, {
     sourcePath,
+    cause: String(error),
+  });
+}
+
+/**
+ * An unsafe, missing, or unreadable serving acquisition is one visible
+ * corruption failure of the Handoff read boundary (VLT-020, section 11.3);
+ * the store's maintenance methods keep their own error families.
+ */
+function servingUnavailable(storageKey: string, error: unknown): AppError {
+  return appError(
+    "ARTIFACT_CORRUPTED",
+    `The Artifact at ${storageKey} is missing, unsafe, or unreadable at its storage key.`,
+    { storageKey, cause: String(error) },
+  );
+}
+
+/** A read that fails or ends early must terminate visibly, never spin or claim the promised bytes. */
+function servingReadFailed(storageKey: string, error: unknown): AppError {
+  return appError("ARTIFACT_CORRUPTED", `Reading the Artifact at ${storageKey} failed mid-stream.`, {
+    storageKey,
     cause: String(error),
   });
 }

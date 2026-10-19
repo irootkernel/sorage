@@ -12,12 +12,13 @@ function rows(versions: number[]) {
 
 describe("admitAppliedHistory maximum and integrity ordering", () => {
   it("classifies future-plus-duplicate as unsupported, not deferred integrity", () => {
-    const mixed = [...rows([1, 2, 3, 3, 4, 5, 6, 7, 8]), { version: 9, name: "future" }];
+    const futureVersion = Math.max(...HISTORY.map((entry) => entry.version)) + 1;
+    const mixed = [...rows([...HISTORY.map((entry) => entry.version), 3]), { version: futureVersion, name: "future" }];
     const verdict = admitAppliedHistory(mixed, HISTORY);
     expect(verdict.kind).toBe("unsupported");
     if (verdict.kind === "unsupported") {
       expect(verdict.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
-      expect(verdict.error.message).toContain("9");
+      expect(verdict.error.message).toContain(String(futureVersion));
     }
   });
 

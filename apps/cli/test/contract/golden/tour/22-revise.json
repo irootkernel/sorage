@@ -5,7 +5,7 @@
     "revision": 2,
     "rowVersion": 5,
     "reviewState": "awaiting_recipient",
-    "storageKey": "artifacts/<uuid>/<uuid>/replacement.md",
+    "storageKey": null,
     "replayed": false
   },
   "meta": {

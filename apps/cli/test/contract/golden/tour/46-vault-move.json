@@ -3,7 +3,7 @@
   "data": {
     "fromPath": "<home>/vault",
     "toPath": "<home>/moved-vault",
-    "artifactsMoved": 5,
+    "artifactsMoved": 0,
     "event": "VAULT_MOVED"
   },
   "meta": {

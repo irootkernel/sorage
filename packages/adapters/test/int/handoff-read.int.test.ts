@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffReadStore } from "../../src/handoff-read-store";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { insertHandoffSeed } from "../../src/testkit/seed";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
@@ -20,7 +20,14 @@ afterAll(() => {
 function seeded() {
   const temp = makeTempDatabase();
   cleanups.push(temp.cleanup);
-  migrate(temp.db, MIGRATIONS);
+  // The normalized read store requires the schema-9 layout the current seed
+  // carries; migrate through the real production plan on this file-backed
+  // database before loading the 10,000-Handoff seed.
+  const plan = productionMigrationPlan();
+  migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: temp.databasePath,
+    rebuilds: plan.rebuilds,
+  });
   insertHandoffSeed(temp.db, 10_000);
   return temp.db;
 }
@@ -28,7 +35,7 @@ function seeded() {
 describe("handoff read store pagination", () => {
   it("returns every seeded row exactly once across all pages", { timeout: 30_000 }, () => {
     const db = seeded();
-    const store = createSqliteHandoffReadStore(db, createSqliteEventLedger(db));
+    const store = createSqliteHandoffReadStore(db, createSqliteEventLedger(db), { runDir: null });
     const filters = { includeArchived: false, includeDeleted: false };
     const seen = new Set<string>();
     let afterSortKey: string | null = null;
@@ -38,8 +45,8 @@ describe("handoff read store pagination", () => {
       expect(page.ok).toBe(true);
       if (!page.ok) return;
       for (const item of page.value.items) {
-        expect(seen.has(item.id)).toBe(false);
-        seen.add(item.id);
+        expect(seen.has(item.view.id)).toBe(false);
+        seen.add(item.view.id);
       }
       if (page.value.items.length === 0) break;
       pages += 1;
@@ -54,7 +61,7 @@ describe("handoff read store pagination", () => {
 
   it("keeps the cursor bound to its filter set through the use-case layer", { timeout: 30_000 }, () => {
     const db = seeded();
-    const store = createSqliteHandoffReadStore(db, createSqliteEventLedger(db));
+    const store = createSqliteHandoffReadStore(db, createSqliteEventLedger(db), { runDir: null });
     const first = store.listPage(
       { kind: "all" },
       { includeArchived: false, includeDeleted: false, state: "accepted" },
@@ -64,7 +71,7 @@ describe("handoff read store pagination", () => {
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     // The same filter set pages forward; the count matches the accepted third.
-    const seen = new Set(first.value.items.map((item) => item.id));
+    const seen = new Set(first.value.items.map((item) => item.view.id));
     let after = first.value.lastSortKey;
     for (;;) {
       const page = store.listPage(
@@ -74,7 +81,7 @@ describe("handoff read store pagination", () => {
         after,
       );
       if (!page.ok) return;
-      for (const item of page.value.items) seen.add(item.id);
+      for (const item of page.value.items) seen.add(item.view.id);
       after = page.value.lastSortKey;
       if (page.value.items.length < 700 || after === null) break;
     }

@@ -6,7 +6,7 @@
         "handoffId": "<uuid>",
         "recipientSlug": "beta",
         "artifactId": "<uuid>",
-        "storageKey": "artifacts/<uuid>/<uuid>/deletion-reject-case-1.md",
+        "storageKey": null,
         "revision": 1,
         "rowVersion": 1,
         "reviewState": "awaiting_recipient"

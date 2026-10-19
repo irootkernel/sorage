@@ -1,3 +1,5 @@
+import type { ArtifactReadHandle } from "./artifacts";
+import type { ContentBodyOpenPolicy } from "./content";
 import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
@@ -15,7 +17,8 @@ import { workspaceKey as deriveWorkspaceKey } from "./workspace-identity";
 
 export interface HandoffArtifactSummary {
   id: string;
-  storageKey: string;
+  /** Always present; null exactly for an inline Artifact whose stored text is the authoritative body (SHR-013). */
+  storageKey: string | null;
   originalName: string;
   mimeType: string;
   sizeBytes: number;
@@ -74,17 +77,51 @@ export type ListingScope =
   | { kind: "outbox_workspace"; workspaceKey: string }
   | { kind: "all" };
 
+/**
+ * The private missing-authority marker of the normalized read boundary
+ * (SHR-004, SHR-014): a living Handoff's current Artifact row exists but its
+ * authoritative content record is gone. The adapter reports the marker on the
+ * private loaded-state and list-candidate seams; the core resolves it into the
+ * honest integrity refusal after participant, tombstone, and page-trim
+ * resolution, never into a fabricated healthy null.
+ */
+export type HandoffContentIntegrity = "ok" | "artifact-record-missing";
+
+/** One listed Handoff carrying the private integrity marker beside its public view. */
+export interface HandoffListCandidate {
+  view: HandoffView;
+  contentIntegrity: HandoffContentIntegrity;
+}
+
+/** One loaded Handoff: the public view plus the private integrity marker. */
+export interface LoadedHandoff {
+  view: HandoffView;
+  contentIntegrity: HandoffContentIntegrity;
+}
+
 export interface HandoffReadPort {
-  /** One keyset page in the fixed (updatedAt DESC, id DESC) order; no events. */
+  /**
+   * One keyset page in the fixed (updatedAt DESC, id DESC) order; no events.
+   * Items are candidates: the caller trims the visible page before resolving
+   * the private missing-record marker, so an overflow row can neither leak a
+   * refusal nor fail a page it is not part of.
+   */
   listPage(
     scope: ListingScope,
     filters: HandoffListFilters,
     limit: number,
     afterSortKey: string | null,
-  ): Result<{ items: HandoffView[]; lastSortKey: string | null }, AppError>;
+  ): Result<{ items: HandoffListCandidate[]; lastSortKey: string | null }, AppError>;
   /** The full view of one Handoff, or null when the id does not exist. */
   findHandoffView(id: string): Result<HandoffView | null, AppError>;
-  /** Records the first fetch in its own short transaction; never a Row Version bump. */
+  /** The view plus the private integrity marker of one Handoff, or null when the id does not exist. */
+  loadHandoff(id: string): Result<LoadedHandoff | null, AppError>;
+  /**
+   * Records the first fetch in its own short transaction; never a Row Version
+   * bump, and a RUN-014 domain mutation: the adapter fences the write entry on
+   * the live vault-move lock and the database move fence before any timestamp
+   * or event lands (RUN-014, SHR-011).
+   */
   recordFirstFetch(handoffId: string, event: NewDomainEvent): Result<void, AppError>;
 }
 
@@ -92,9 +129,25 @@ export interface HandoffReadPorts {
   projectPorts: ProjectCommandPorts;
   handoffs: HandoffReadPort;
   config: { vaultPath: string; verifyChecksumOnFetch: boolean };
+  /**
+   * The private backend-neutral body seam of section 38.2 (SHR-005, SHR-006):
+   * every operation resolves one Artifact's authoritative content record by the
+   * Artifact id — never by a storage key, which an inline row does not carry —
+   * and the content-record identity never leaves the adapter. No public
+   * representation choice, content UUID, or body duplication is exposed.
+   */
   artifact: {
-    checksum(storageKey: string): Result<string, AppError>;
-    pathOf(storageKey: string): Result<string, AppError>;
+    /** Opens one bounded read handle over the Artifact's authoritative body. */
+    openArtifactBody(artifactId: string, policy: ContentBodyOpenPolicy): Result<ArtifactReadHandle, AppError>;
+    /**
+     * Materializes the readable local path: the managed in-Vault file of a
+     * file-backed row, or the derived read-only checksum-addressed fetch-cache
+     * file of an inline row (SHR-006). Resolution alone is not a checksum
+     * verification claim.
+     */
+    localPathOfArtifact(artifactId: string): Result<string, AppError>;
+    /** Verifies the recorded body digest through the common bounded reader under the given policy. */
+    verifyArtifactBody(artifactId: string, policy: ContentBodyOpenPolicy): Result<void, AppError>;
   };
   ids: { next(): string };
   clock: { now(): Date };
@@ -209,6 +262,22 @@ function validateBounds(filters: HandoffListFilters): Result<null, AppError> {
   return ok(null);
 }
 
+/** The honest integrity refusal for a living Handoff whose current Artifact's authoritative metadata is broken (section 4, SHR-004, SHR-014). */
+function missingArtifactRecord(): AppError {
+  return appError(
+    "ARTIFACT_CORRUPTED",
+    "the current Artifact is missing, unreadable, or wrongly associated; run sorage vault verify and restore from backup",
+  );
+}
+
+/** Resolves the private marker after the caller has fixed the visible selection (section 4). */
+function resolveCandidates(items: HandoffListCandidate[]): Result<HandoffView[], AppError> {
+  if (items.some((candidate) => candidate.contentIntegrity === "artifact-record-missing")) {
+    return err(missingArtifactRecord());
+  }
+  return ok(items.map((candidate) => candidate.view));
+}
+
 function runListing(ports: HandoffReadPorts, scope: ListingScope, query: ListQuery): Result<ListedHandoffs, AppError> {
   const bounds = validateBounds(query.filters);
   if (!bounds.ok) return bounds;
@@ -223,14 +292,20 @@ function runListing(ports: HandoffReadPorts, scope: ListingScope, query: ListQue
   }
   const page = ports.handoffs.listPage(scope, query.filters, limit + 1, afterSortKey);
   if (!page.ok) return err(page.error);
+  // The visible page is trimmed before any content-error resolution, so an
+  // overflow row's marker can neither leak a refusal nor fail the page; a
+  // marker inside the selected page refuses the whole page with no partial
+  // success and no new cursor (SHR-004, SHR-014).
   const overflow = page.value.items.length > limit;
-  const items = overflow ? page.value.items.slice(0, limit) : page.value.items;
-  const last = items[items.length - 1];
+  const selected = overflow ? page.value.items.slice(0, limit) : page.value.items;
+  const views = resolveCandidates(selected);
+  if (!views.ok) return err(views.error);
+  const last = views.value[views.value.length - 1];
   const nextCursor =
     overflow && last !== undefined
       ? encodeCursor({ filterHash: identity, lastSortKey: `${last.updatedAt}|${last.id}`, limit })
       : null;
-  return ok({ handoffs: items, nextCursor });
+  return ok({ handoffs: views.value, nextCursor });
 }
 
 export interface ReadActorInput {
@@ -291,7 +366,9 @@ function pageThrough(
   for (;;) {
     const page = ports.handoffs.listPage(scope, filters, pageSize, afterSortKey);
     if (!page.ok) return page;
-    items.push(...page.value.items);
+    const views = resolveCandidates(page.value.items);
+    if (!views.ok) return views;
+    items.push(...views.value);
     if (page.value.items.length < pageSize || page.value.lastSortKey === null) {
       return ok(items);
     }
@@ -333,8 +410,10 @@ export function waitForNewInboxItems(
     for (;;) {
       const page = ports.handoffs.listPage(scope.value, query.filters, query.limit, afterSortKey);
       if (!page.ok) return page;
-      fresh = fresh.concat(page.value.items.filter((handoff) => !known.has(handoff.id)));
-      const last = page.value.items[page.value.items.length - 1];
+      const views = resolveCandidates(page.value.items);
+      if (!views.ok) return views;
+      fresh = fresh.concat(views.value.filter((handoff) => !known.has(handoff.id)));
+      const last = views.value[views.value.length - 1];
       if (fresh.length > 0 || page.value.items.length < query.limit || page.value.lastSortKey === null) {
         break;
       }
@@ -377,18 +456,25 @@ export function getHandoff(
   actorInput: ReadActorInput,
   id: string,
 ): Result<HandoffView, AppError> {
-  const found = ports.handoffs.findHandoffView(id);
-  if (!found.ok) return err(found.error);
-  if (found.value === null) {
+  const loaded = ports.handoffs.loadHandoff(id);
+  if (!loaded.ok) return err(loaded.error);
+  if (loaded.value === null) {
     return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${id}'`, { handoffId: id }));
   }
-  const participant = participantRoleOf(ports, actorInput, found.value);
+  // The participant answer precedes every content-derived outcome: a
+  // nonparticipant learns nothing about a live or corrupted Handoff (HND-020).
+  const participant = participantRoleOf(ports, actorInput, loaded.value.view);
   if (participant === null) {
     return err(
       appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
     );
   }
-  return ok(found.value);
+  // A tombstone keeps its legitimately null current Artifact and its metadata
+  // readability; only a living Handoff refuses on a missing record (section 4).
+  if (loaded.value.view.deletedAt === null && loaded.value.contentIntegrity === "artifact-record-missing") {
+    return err(missingArtifactRecord());
+  }
+  return ok(loaded.value.view);
 }
 
 /** One metadata event of the bounded detail timeline; never Artifact bytes (HND-017). */
@@ -459,17 +545,63 @@ export interface FetchedHandoff {
   localPath: string;
 }
 
-export function fetchHandoff(
+/**
+ * The acquisition one serving surface requests of a prepared fetch
+ * (section 11.3): an internal output choice, never a physical backend choice.
+ */
+export type HandoffFetchMode = { kind: "local-path" } | { kind: "body" };
+
+/** One authorized, safely acquired fetch whose settlement is an explicit separate step (HND-012, section 11.3). */
+export type PreparedHandoffFetch =
+  | {
+      kind: "local-path";
+      handoff: HandoffView;
+      artifact: HandoffArtifactSummary;
+      /** The readable path notation after a successful probe that already closed its descriptor. */
+      localPath: string;
+      settleFirstFetch(): Result<void, AppError>;
+      close(): void;
+    }
+  | {
+      kind: "body";
+      handoff: HandoffView;
+      artifact: HandoffArtifactSummary;
+      /** The open safe bounded handle the caller streams and closes. */
+      body: ArtifactReadHandle;
+      settleFirstFetch(): Result<void, AppError>;
+      close(): void;
+    };
+
+/**
+ * The one authorized preparation behind every Artifact serving surface (VLT-020,
+ * HND-012, HND-020, section 11.3): the actor is resolved before the tombstone
+ * answer, so a nonparticipant learns nothing about a live or a tombstone
+ * Handoff — no checksum, no acquisition, no first-fetch, no existence — while an
+ * authorized actor sees `HANDOFF_DELETED` on a tombstone and acquires nothing.
+ * The safe acquisition (an `openReadable` probe that closes for a local path,
+ * a retained open handle for a body response) precedes any settlement, so a
+ * known unsafe, missing, or unreadable Artifact fails before the first fetch
+ * is recorded. The checksum guard keeps its existing `verifyChecksumOnFetch`
+ * placement and default-false policy; no whole-body hash is added.
+ */
+export function prepareHandoffFetch(
   ports: HandoffReadPorts,
   actorInput: ReadActorInput,
   id: string,
-): Result<FetchedHandoff, AppError> {
-  const found = ports.handoffs.findHandoffView(id);
-  if (!found.ok) return err(found.error);
-  if (found.value === null) {
+  mode: HandoffFetchMode,
+): Result<PreparedHandoffFetch, AppError> {
+  const loaded = ports.handoffs.loadHandoff(id);
+  if (!loaded.ok) return err(loaded.error);
+  if (loaded.value === null) {
     return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${id}'`, { handoffId: id }));
   }
-  const handoff = found.value;
+  const handoff = loaded.value.view;
+  const role = participantRoleOf(ports, actorInput, handoff);
+  if (role === null) {
+    return err(
+      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
+    );
+  }
   if (handoff.deletedAt !== null) {
     return err(
       appError(
@@ -479,11 +611,13 @@ export function fetchHandoff(
       ),
     );
   }
-  const role = participantRoleOf(ports, actorInput, handoff);
-  if (role === null) {
-    return err(
-      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
-    );
+  // A living Handoff whose authoritative row or record is gone refuses
+  // before any availability or acquisition answer: the marker is independent
+  // of the optional public artifact summary, so neither a missing Artifact
+  // row nor a missing record row can surface as a healthy materializing
+  // fetch (SHR-004, SHR-014).
+  if (loaded.value.contentIntegrity === "artifact-record-missing") {
+    return err(missingArtifactRecord());
   }
   if (handoff.currentArtifact === null) {
     return err(
@@ -503,38 +637,84 @@ export function fetchHandoff(
       ),
     );
   }
-  if (ports.config.verifyChecksumOnFetch) {
-    const checksum = ports.artifact.checksum(handoff.currentArtifact.storageKey);
-    if (!checksum.ok) return err(checksum.error);
-    if (checksum.value.toLowerCase() !== handoff.currentArtifact.sha256.toLowerCase()) {
-      return err(
-        appError(
-          "ARTIFACT_CORRUPTED",
-          "the recomputed checksum does not match the recorded Artifact digest; run sorage vault verify and restore from backup",
-          { handoffId: id },
-        ),
-      );
-    }
-  }
-  const path = ports.artifact.pathOf(handoff.currentArtifact.storageKey);
-  if (!path.ok) return err(path.error);
-  // Only the recipient Project and the User record a first fetch; a sender fetch of
-  // its own Handoff sets nothing and emits nothing (HND-012).
-  const firstFetchEligible = role === "recipient" || role === "user";
-  if (firstFetchEligible && handoff.firstFetchedAt === null) {
+  const settleFirstFetch = (): Result<void, AppError> => {
+    // Only the recipient Project and the User record a first fetch; a sender
+    // fetch of its own Handoff sets nothing and emits nothing (HND-012). The
+    // store's first_fetched_at compare-and-set keeps the recording exactly
+    // once under concurrency, from this snapshot alone, and its write entry
+    // carries the vault-move fences (RUN-014, SHR-011).
+    const firstFetchEligible = role === "recipient" || role === "user";
+    if (!firstFetchEligible || handoff.firstFetchedAt !== null) return ok(undefined);
     const actor = role === "user" ? USER_ACTOR : projectActor(handoff.recipientProjectId);
-    const recorded = ports.handoffs.recordFirstFetch(handoff.id, {
+    return ports.handoffs.recordFirstFetch(handoff.id, {
       id: ports.ids.next(),
       handoffId: handoff.id,
       eventType: "ARTIFACT_FETCHED_FIRST_TIME",
       actor,
       rowVersion: null,
-      metadata: { artifactId: handoff.currentArtifact.id, sha256: handoff.currentArtifact.sha256 },
+      metadata: { artifactId: handoff.currentArtifact?.id, sha256: handoff.currentArtifact?.sha256 },
       createdAt: ports.clock.now().toISOString(),
     });
-    if (!recorded.ok) return err(recorded.error);
+  };
+  // The hot checksum policy keeps its existing placement and default-false
+  // setting (VLT-023): the acquisition below resolves the Artifact's immutable
+  // content record by id and never touches a storage key an inline row lacks.
+  const hotPolicy: ContentBodyOpenPolicy = {
+    verifyFileDigest: "if-configured",
+    verifyChecksumOnFetch: ports.config.verifyChecksumOnFetch,
+  };
+  if (mode.kind === "body") {
+    const opened = ports.artifact.openArtifactBody(handoff.currentArtifact.id, hotPolicy);
+    if (!opened.ok) return err(opened.error);
+    const body = opened.value;
+    return ok({
+      kind: "body",
+      handoff,
+      artifact: handoff.currentArtifact,
+      body,
+      settleFirstFetch,
+      close: () => body.close(),
+    });
   }
-  return ok({ handoff, artifact: handoff.currentArtifact, localPath: path.value });
+  if (ports.config.verifyChecksumOnFetch) {
+    const verified = ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, hotPolicy);
+    if (!verified.ok) return err(verified.error);
+  }
+  // The inline fetch-cache write happens inside this acquisition, so a cache
+  // failure precedes any settlement (SHR-006).
+  const path = ports.artifact.localPathOfArtifact(handoff.currentArtifact.id);
+  if (!path.ok) return err(path.error);
+  return ok({
+    kind: "local-path",
+    handoff,
+    artifact: handoff.currentArtifact,
+    localPath: path.value,
+    settleFirstFetch,
+    close: () => undefined,
+  });
+}
+
+export function fetchHandoff(
+  ports: HandoffReadPorts,
+  actorInput: ReadActorInput,
+  id: string,
+): Result<FetchedHandoff, AppError> {
+  const prepared = prepareHandoffFetch(ports, actorInput, id, { kind: "local-path" });
+  if (!prepared.ok) return err(prepared.error);
+  if (prepared.value.kind !== "local-path") {
+    prepared.value.close();
+    return err(appError("INTERNAL_ERROR", "the prepared fetch did not carry the requested local path"));
+  }
+  const settled = prepared.value.settleFirstFetch();
+  if (!settled.ok) {
+    prepared.value.close();
+    return err(settled.error);
+  }
+  return ok({
+    handoff: prepared.value.handoff,
+    artifact: prepared.value.artifact,
+    localPath: prepared.value.localPath,
+  });
 }
 
 /** The actor's role relative to the Handoff, or null when it does not participate. */

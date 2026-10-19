@@ -1,3 +1,4 @@
+import type { ContentBodyHandle } from "./content";
 import { appError, err, ok, type AppError, type Result } from "./errors";
 
 /**
@@ -9,6 +10,17 @@ import { appError, err, ok, type AppError, type Result } from "./errors";
  * impossible. Core owns the path scheme and its validation; the filesystem
  * mechanics live in adapters.
  */
+
+/**
+ * The safe serving read of one Artifact body (VLT-020, section 11.3): a narrow
+ * projection of the shared bounded body handle of SHR-005 — recorded size,
+ * bounded positional reads, and explicit disposal — so a serving surface reads
+ * the same safely opened descriptor it validated and never reopens a
+ * reconstructed pathname after the guard. The alias introduces no content
+ * record identity, representation choice, or physical backend of its own.
+ */
+export type ArtifactReadHandle = Pick<ContentBodyHandle, "sizeBytes" | "read" | "close">;
+
 export interface StagedFile {
   /** The staged path under `<Vault>/staging/`. */
   stagingPath: string;
@@ -44,6 +56,16 @@ export interface ArtifactStore {
   activate(request: ActivateRequest): Result<{ path: string }, AppError>;
   /** Resolves a storageKey to its path inside this Vault. */
   pathOf(storageKey: string): Result<string, AppError>;
+  /**
+   * Opens one Artifact body for safe bounded serving (VLT-020, section 11.3):
+   * the adapter refuses a symlinked or special managed parent or leaf, opens
+   * the regular file without following links, and verifies the opened
+   * descriptor's identity, so the returned handle is the one authority for the
+   * bytes, size, and lifetime of this read. An unsafe, missing, or unreadable
+   * acquisition surfaces as `ARTIFACT_CORRUPTED`; maintenance methods keep
+   * their own error families.
+   */
+  openReadable(storageKey: string): Result<ArtifactReadHandle, AppError>;
   /** Reports whether the bytes at a storageKey are present (SEC-014). */
   exists(storageKey: string): Result<boolean, AppError>;
   /** Recomputes the SHA-256 of the bytes at a storageKey with a bounded buffer (SEC-014). */

@@ -45,8 +45,10 @@ function failure(run: ReturnType<typeof sorage>, code: string, exit: number) {
   expect(body.error.message).toContain(body.meta.requestId);
   return body;
 }
-function fixture(kind: "body" | "file" = "body", fanout = false, execute = true) {
+function fixture(kind: "body" | "file" | "binary" = "body", fanout = false, execute = true) {
   const f = twoProjectFixture("sorage-send-recovery-");
+  const physicalSource = kind === "binary" ? join(f.workA, "legacy.bin") : f.document;
+  if (kind === "binary") writeFileSync(physicalSource, Buffer.from([0, 255, 1, 254]));
   const key = `legacy:${randomUUID()}`;
   const body = "# Original\n";
   const args = [
@@ -56,7 +58,7 @@ function fixture(kind: "body" | "file" = "body", fanout = false, execute = true)
     ...(fanout ? ["--to", "alpha"] : []),
     "--title",
     "Original",
-    ...(kind === "file" ? ["--file", f.document, "--allow-external-source"] : ["--body", body]),
+    ...(kind === "body" ? ["--body", body] : ["--file", physicalSource, "--allow-external-source"]),
     "--idempotency-key",
     key,
   ];
@@ -92,6 +94,23 @@ function historical(f: ReturnType<typeof fixture>, version: number) {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('schema_migrations','migration_lock')",
       )
       .all() as { name: string }[]) {
+      // Project the current file-backed fixture into a genuine legacy layout;
+      // the old Artifact columns come from its normalized content record.
+      if (name === "artifacts") {
+        db.exec(
+          "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) " +
+            "SELECT a.id, a.handoff_id, c.storage_key, a.original_name, a.stored_name, a.mime_type, c.size_bytes, c.sha256, a.imported_from_path, c.materialized, a.created_at " +
+            "FROM source.artifacts a JOIN source.content_records c ON c.id = a.content_record_id",
+        );
+        continue;
+      }
+      if (name === "content_records") {
+        db.exec(
+          "INSERT INTO content_records SELECT c.* FROM source.content_records c " +
+            "WHERE NOT EXISTS (SELECT 1 FROM source.artifacts a WHERE a.content_record_id = c.id)",
+        );
+        continue;
+      }
       const columns = (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[])
         .map((r) => r.name)
         .join(",");
@@ -154,7 +173,9 @@ describe("AJ-25 compiled send recovery", () => {
     expect(data(f.recover())).toEqual({ ...f.outcome, replayed: true });
   });
   it.each([4, 5, 6, 7, 8])("reads complete historical schema %s without migration, drain or locks", (version) => {
-    const f = fixture();
+    // Legacy layouts require a genuine file key; preserve the new inline
+    // body/file replay coverage above rather than projecting a null key.
+    const f = fixture("binary");
     if (version !== knownSchemaMaximum()) historical(f, version);
     expect(data(f.recover())).toEqual({ ...f.outcome, replayed: true });
     f.db((d) => expect(d.prepare("SELECT count(*) AS n FROM schema_migrations").get()).toEqual({ n: version }));
@@ -164,7 +185,7 @@ describe("AJ-25 compiled send recovery", () => {
     }
   });
   it.each([1, 2, 3])("refuses receipt-less schema %s without migration", (version) => {
-    const f = fixture();
+    const f = fixture("binary");
     historical(f, version);
     failure(f.recover(), "STORAGE_SCHEMA_UNSUPPORTED", 78);
   });

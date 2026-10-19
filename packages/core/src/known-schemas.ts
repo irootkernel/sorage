@@ -5,12 +5,13 @@ import { type AppError, appError } from "./errors";
  * 38.7: one shared knowledge source in core, consumed by the migrator,
  * preflight, send replay inspection, doctor, and restore through per-surface
  * legacy prefix eligibility. The database migration maximum before M9 is 7;
- * version 8 is the TASK-106 additive infrastructure migration; each domain
- * migration takes the next unused version at its owning Task. A build's
- * operational catalog must match this inventory exactly — an adapter test pins
- * `MIGRATIONS` to it — while read-only surfaces consult the eligibility rules
- * below so a database whose applied maximum exceeds this build fails closed
- * with `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
+ * version 8 is the TASK-106 additive infrastructure migration; version 9 is
+ * the TASK-107 Handoff rebuild that normalizes Artifact storage onto the shared
+ * content records. A build's operational catalog must match this inventory
+ * exactly — an adapter test pins `MIGRATIONS` plus the production rebuild plan
+ * to it — while read-only surfaces consult the eligibility rules below so a
+ * database whose applied maximum exceeds this build fails closed with
+ * `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
  */
 
 export interface KnownSchemaVersion {
@@ -27,6 +28,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 6, name: "backup-runs-v1" },
   { version: 7, name: "project-memos-v1" },
   { version: 8, name: "shared-content-v1" },
+  { version: 9, name: "handoff-shared-content-v1" },
 ];
 
 /** The highest database schema version this build knows. */

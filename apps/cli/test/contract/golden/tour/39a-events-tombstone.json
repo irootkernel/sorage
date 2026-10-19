@@ -3,14 +3,6 @@
   "data": [
     {
       "id": "<uuid>",
-      "eventType": "ARTIFACT_UNLINKED",
-      "actorKind": "system",
-      "actorId": null,
-      "rowVersion": null,
-      "createdAt": "<ts>"
-    },
-    {
-      "id": "<uuid>",
       "eventType": "DELETION_APPROVED",
       "actorKind": "user",
       "actorId": null,
@@ -31,14 +23,6 @@
       "actorKind": "registered_project",
       "actorId": "<uuid>",
       "rowVersion": 2,
-      "createdAt": "<ts>"
-    },
-    {
-      "id": "<uuid>",
-      "eventType": "ARTIFACT_ACTIVATED",
-      "actorKind": "system",
-      "actorId": null,
-      "rowVersion": null,
       "createdAt": "<ts>"
     },
     {

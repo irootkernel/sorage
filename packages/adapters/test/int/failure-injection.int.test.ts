@@ -17,6 +17,8 @@ import {
 
 const err = <T>(error: AppError): Result<T, AppError> => ({ ok: false, error });
 import { createNodeArtifactStore } from "../../src/artifact-store";
+import { createHomePaths } from "../../src/home";
+import { createSqliteContentStore } from "../../src/content-store";
 import { createSqliteEventLedger } from "../../src/events";
 import {
   createSqliteHandoffWriteStore,
@@ -26,10 +28,10 @@ import {
 import { createSqliteHandoffReadStore } from "../../src/handoff-read-store";
 import { createSqliteIntentLog } from "../../src/intent-log";
 import { createSqliteProjectRepository } from "../../src/projects";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { openSorageDatabase } from "../../src/sqlite/connection";
-import { FakeClock, makeTempDatabase, makeTempVault } from "../../src/testkit";
+import { FakeClock, makeArtifactContentBindings, makeTempDatabase, makeTempVault } from "../../src/testkit";
 import { createVaultInitializer } from "../../src/vault";
 
 /**
@@ -82,10 +84,20 @@ function makeWorld(): World {
     rmSync(`${temp.databasePath}-shm`, { force: true });
     temp.home.cleanup();
   });
-  migrate(temp.db, MIGRATIONS);
+  // The real file-backed guarded migration through the schema-9 rebuild; the
+  // world then reopens this file per phase exactly like a restarted process.
+  const plan = productionMigrationPlan();
+  const outcome = migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: temp.databasePath,
+    rebuilds: plan.rebuilds,
+  });
+  if (outcome.alreadyUpToDate || !outcome.appliedVersions.includes(9)) {
+    throw new Error("fixture must migrate through the schema-9 rebuild");
+  }
   temp.db.close();
   const vault = makeTempVault("sorage-fi-vault-");
   cleanups.push(vault.cleanup);
+  const home = createHomePaths({ SORAGE_HOME: vault.home.home }, vault.home.home);
   if (!createVaultInitializer(new FakeClock()).initialize(vault.vaultPath, INSTALLATION).ok) {
     throw new Error("fixture vault marker must initialize");
   }
@@ -131,7 +143,12 @@ function makeWorld(): World {
       const db = open();
       const ledger = createSqliteEventLedger(db);
       const clock = new FakeClock();
-      const write: HandoffWritePort = createSqliteHandoffWriteStore(db, ledger, { now: () => clock.now() });
+      const write: HandoffWritePort = createSqliteHandoffWriteStore(
+        db,
+        ledger,
+        { now: () => clock.now() },
+        makeArtifactContentBindings({ db, ledger, vaultPath: vault.vaultPath, installationId: INSTALLATION }),
+      );
       const wrappedWrite: HandoffWritePort = {
         ...write,
         createFanout(commit: FanoutCommit) {
@@ -186,6 +203,7 @@ function makeWorld(): World {
             return artifactStore.activate(request);
           },
           pathOf: (key) => artifactStore.pathOf(key),
+          openReadable: (key) => artifactStore.openReadable(key),
           exists: (key) => artifactStore.exists(key),
           checksum: (key) => artifactStore.checksum(key),
           remove: (key) => {
@@ -201,16 +219,17 @@ function makeWorld(): World {
         digestSource: (path) => ({ ok: true, value: createHash("sha256").update(readFileSync(path)).digest("hex") }),
         bindingDirectories: [],
         inspectSource: (path) => ({ ok: true, value: { resolvedSourcePath: path, originalName: basename(path) } }),
-        writeBodySource: (text, storedName) => {
-          const sourcePath = join(sources, storedName);
-          writeFileSync(sourcePath, text);
-          return { ok: true, value: { sourcePath, cleanup: () => rmSync(sourcePath, { force: true }) } };
-        },
+        content: createSqliteContentStore({
+          db,
+          vaultPath: vault.vaultPath,
+          installationId: INSTALLATION,
+          runDir: home.runDir,
+        }),
       };
     },
     readStore(): HandoffReadPort {
       const db = open();
-      return createSqliteHandoffReadStore(db, createSqliteEventLedger(db));
+      return createSqliteHandoffReadStore(db, createSqliteEventLedger(db), { runDir: null });
     },
     drain(): Result<DrainReport, AppError> {
       const db = open();
@@ -224,7 +243,9 @@ function makeWorld(): World {
         return {
           handoffs: one("SELECT COUNT(*) AS c FROM handoffs"),
           artifacts: one("SELECT COUNT(*) AS c FROM artifacts"),
-          materialized: one("SELECT COUNT(*) AS c FROM artifacts WHERE materialized = 1"),
+          materialized: one(
+            "SELECT COUNT(*) AS c FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE c.materialized = 1",
+          ),
           intents: one("SELECT COUNT(*) AS c FROM pending_fs_ops"),
           notes: one("SELECT COUNT(*) AS c FROM review_notes"),
         };
@@ -250,7 +271,8 @@ function sourceOf(world: World, name: string, content: string): string {
 }
 
 function baseInput(world: World, overrides: Partial<Parameters<typeof sendHandoffs>[1]> = {}) {
-  const file = sourceOf(world, "doc.md", "document bytes");
+  // Crash points exercise physical staging/rename/unlink, so select a binary-classified file.
+  const file = sourceOf(world, "doc.bin", "document bytes");
   return {
     to: ["beta"],
     title: "Resilience brief",
@@ -310,7 +332,7 @@ describe("the section 20.8 crash points", () => {
     const id = sent.ok ? (sent.value.handoffs[0]?.handoffId as string) : "";
     const view = store.findHandoffView(id);
     const storageKey = view.ok && view.value !== null ? view.value.currentArtifact?.storageKey : undefined;
-    expect(storageKey !== undefined && existsSync(join(world.vaultPath, storageKey))).toBe(true);
+    expect(typeof storageKey === "string" && existsSync(join(world.vaultPath, storageKey))).toBe(true);
 
     const first = world.drain();
     expect(first.ok && first.value.resolved).toHaveLength(1);
@@ -359,7 +381,7 @@ describe("the section 20.8 crash points", () => {
 
     const db = openSorageDatabase(world.dbPath);
     const terminal = createSqliteTerminalStore(db, createSqliteEventLedger(db));
-    const read = createSqliteHandoffReadStore(db, createSqliteEventLedger(db));
+    const read = createSqliteHandoffReadStore(db, createSqliteEventLedger(db), { runDir: null });
     const accepted = terminal.applyTerminalTransition({
       handoffId: id,
       expectedRowVersion: 1,
@@ -422,9 +444,25 @@ describe("the section 20.8 crash points", () => {
     // (CP-2 shape on the revise path) and the old bytes are never unlinked early.
     const db = openSorageDatabase(world.dbPath);
     const ledger = createSqliteEventLedger(db);
-    const revisions = createSqliteRevisionStore(db, ledger);
+    const revisions = createSqliteRevisionStore(
+      db,
+      ledger,
+      {},
+      makeArtifactContentBindings({ db, ledger, vaultPath: world.vaultPath, installationId: INSTALLATION }),
+    );
     const artifactStore = createNodeArtifactStore({ vaultPath: world.vaultPath, installationId: INSTALLATION });
-    const originalView = createSqliteHandoffReadStore(db, ledger).findHandoffView(id);
+    // The revising actor is the recorded sender of this Handoff: the ActorRef
+    // carries the actual workspace key / Project id of that provenance.
+    const sender = db
+      .prepare("SELECT sender_kind, sender_workspace_key, sender_project_id FROM handoffs WHERE id = ?")
+      .get(id) as { sender_kind: string; sender_workspace_key: string | null; sender_project_id: string | null };
+    const reviseActor =
+      sender.sender_kind === "registered_project"
+        ? { kind: "registered_project" as const, id: sender.sender_project_id as string }
+        : sender.sender_kind === "user"
+          ? { kind: "user" as const, id: null }
+          : { kind: "unregistered_workspace" as const, id: sender.sender_workspace_key as string };
+    const originalView = createSqliteHandoffReadStore(db, ledger, { runDir: null }).findHandoffView(id);
     const originalStorageKey =
       originalView.ok && originalView.value ? (originalView.value.currentArtifact?.storageKey ?? "") : "";
     const staged = artifactStore.stage({
@@ -444,6 +482,7 @@ describe("the section 20.8 crash points", () => {
         mimeType: "text/markdown",
         sizeBytes: staged.ok ? staged.value.sizeBytes : 0,
         sha256: staged.ok ? staged.value.sha256 : "",
+        inlineBody: null,
         importedFromPath: null,
         createdAt: "2026-01-03T00:00:00.000Z",
       },
@@ -468,7 +507,7 @@ describe("the section 20.8 crash points", () => {
           id: "e-revise",
           handoffId: id,
           eventType: "HANDOFF_REVISED",
-          actor: { kind: "user", id: null },
+          actor: reviseActor,
           rowVersion: 2,
           metadata: {},
           createdAt: "2026-01-03T00:00:00.000Z",

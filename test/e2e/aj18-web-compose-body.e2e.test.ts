@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { join } from "node:path";
@@ -159,5 +159,91 @@ describe("AJ-18 User creates a Handoff from Web compose body text", () => {
     const fileId = /([0-9a-f-]{36})/.exec(fileSent)?.[1] ?? "";
     const fileDetail = await raw(`/api/v1/handoffs/${fileId}?asUser=true`, { bearer: token ?? "" });
     expect(JSON.parse(fileDetail.body).data.currentArtifact.originalName).toBe("still.md");
+  });
+
+  it("renders inline detail safely and reveals before preview without settling a fetch", async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      let dialogs = 0;
+      let externalRequests = 0;
+      page.on("dialog", async (dialog) => {
+        dialogs += 1;
+        await dialog.dismiss();
+      });
+      await page.route("**/attacker.invalid/**", (route) => {
+        externalRequests += 1;
+        return route.abort();
+      });
+      await page.addInitScript(() => Reflect.set(window, "__artifactXss", false));
+      const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
+      expect(web.status).toBe(0);
+      await page.goto(JSON.parse(web.stdout).url);
+      await page.waitForFunction(() => document.querySelector("#session-note")?.textContent === "");
+      await page.goto(`http://127.0.0.1:${port}/#/compose`);
+      const body =
+        '# Inline safety\n\n<img id="artifact-xss-probe" src=x onerror="window.__artifactXss=true">\n\n[unsafe](javascript:window.__artifactXss=true)\n\n![remote](https://attacker.invalid/pixel)';
+      await page.getByLabel("Title").fill("Inline safety");
+      await page.getByLabel("To").fill("beta");
+      await page.getByLabel("Body").fill(body);
+      await page.click('button[type="submit"]');
+      await page.waitForFunction(() => document.querySelectorAll("form ul li").length === 1);
+      const sent = await page.locator("form ul li").textContent();
+      const id = /([0-9a-f-]{36})/.exec(sent ?? "")?.[1];
+      if (id === undefined) throw new Error("Compose did not return a Handoff");
+      const bearer = await page.evaluate(() => sessionStorage.getItem("sorage-session"));
+      const detail = JSON.parse((await raw(`/api/v1/handoffs/${id}?asUser=true`, { bearer: bearer ?? "" })).body).data;
+      expect(detail.currentArtifact.storageKey).toBeNull();
+      const localPath = join(home, "state", "fetch-cache", detail.currentArtifact.sha256);
+      const url = `**/api/v1/handoffs/${id}/artifact/content?asUser=true`;
+      let releasePreview: (() => Promise<void>) | undefined;
+      let signalHeld: () => void = () => {};
+      const held = new Promise<void>((resolve) => {
+        signalHeld = resolve;
+      });
+      await page.route(url, (route) => {
+        releasePreview = () => route.continue();
+        signalHeld();
+      });
+      await page.goto(`http://127.0.0.1:${port}/#/handoff/${id}`);
+      await page.waitForSelector("dl.meta");
+      await held;
+      expect(await page.locator("dl.meta").allTextContents()).toContainEqual(
+        expect.stringContaining("inline (no Vault file)"),
+      );
+      await page.getByRole("button", { name: "Reveal in Finder" }).click();
+      await page.waitForFunction((path) => document.body.textContent?.includes(path), localPath);
+      // The browser's multipart form transmits CRLF as the accepted line endings.
+      const accepted = Buffer.from(body.replaceAll("\n", "\r\n"));
+      expect(readFileSync(localPath)).toEqual(accepted);
+      expect(statSync(localPath).mode & 0o777).toBe(0o444);
+      const timeline = () => {
+        const output = sorage(["events", id, "--as-user", "--json"], { home });
+        expect(output.status, output.stderr).toBe(0);
+        return JSON.parse(output.stdout).data as Array<{ eventType: string }>;
+      };
+      expect(timeline().filter((event) => event.eventType === "ARTIFACT_FETCHED_FIRST_TIME")).toHaveLength(0);
+      expect(
+        JSON.parse((await raw(`/api/v1/handoffs/${id}?asUser=true`, { bearer: bearer ?? "" })).body).data
+          .firstFetchedAt,
+      ).toBeNull();
+      if (releasePreview === undefined) throw new Error("Preview did not reach its held request");
+      await releasePreview();
+      await page.unroute(url);
+      await page.getByRole("heading", { name: "Preview", exact: true }).waitFor();
+      expect(await page.locator("#artifact-xss-probe").count()).toBe(0);
+      expect(await page.locator('a[href^="javascript:"]').count()).toBe(0);
+      expect(await page.evaluate(() => Reflect.get(window, "__artifactXss"))).toBe(false);
+      expect(dialogs).toBe(0);
+      expect(externalRequests).toBe(0);
+      const downloaded = page.waitForEvent("download");
+      await page.getByRole("button", { name: "Download", exact: true }).click();
+      const download = await downloaded;
+      expect(download.suggestedFilename()).toBe("inline-safety-1.md");
+      expect(readFileSync(await download.path())).toEqual(accepted);
+      expect(timeline().filter((event) => event.eventType === "ARTIFACT_FETCHED_FIRST_TIME")).toHaveLength(1);
+    } finally {
+      await browser.close();
+    }
   });
 });

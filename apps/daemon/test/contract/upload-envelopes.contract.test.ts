@@ -20,7 +20,7 @@ import { createDaemonServer } from "../../src/server";
 
 /**
  * TASK-084 upload contract: file-success, body-success, and input-error envelopes.
- * Additive non-breaking. Refresh with SORAGE_UPDATE_GOLDENS=1.
+ * The nullable Handoff storageKey is a breaking data-DTO revision (SHR-013); the envelope and protocol version remain unchanged under ADR-0030. Refresh with SORAGE_UPDATE_GOLDENS=1.
  */
 const home = mkdtempSync(join(tmpdir(), "sorage-upload-contract-"));
 const recipientDir = join(home, "recipient");

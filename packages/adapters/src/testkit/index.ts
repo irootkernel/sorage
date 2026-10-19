@@ -1,6 +1,7 @@
 export * from "./temp-home";
 export * from "./temp-vault";
 export * from "./temp-database";
+export * from "./artifact-content";
 export * from "./git-remote";
 export * from "./fakes";
 export * from "./fault-injection";

@@ -1,0 +1,88 @@
+{
+  "installationId": "a2d8d7ba-e496-4eed-805f-ddac716a7996",
+  "body": "﻿# Legacy body\r\nno-final-newline",
+  "outcome": {
+    "handoffs": [
+      {
+        "handoffId": "5906faca-98cd-4485-beab-8c22618431d4",
+        "recipientSlug": "recipient",
+        "artifactId": "46f0e832-1ba2-4c02-a289-e747d6aac8e2",
+        "storageKey": "artifacts/5906faca-98cd-4485-beab-8c22618431d4/46f0e832-1ba2-4c02-a289-e747d6aac8e2/legacy-body-1.md",
+        "revision": 1,
+        "rowVersion": 1,
+        "reviewState": "awaiting_recipient"
+      }
+    ],
+    "dispatchGroupId": null,
+    "replayed": false
+  },
+  "receiptSha256": "c573a03e09a35be9c0da408c28cdeff6f27ac054f0be0c9fc46397a8c9e7dcca",
+  "rows": {
+    "projects": [
+      {
+        "id": "c234d596-acbf-48c7-b77b-d3df8e4f6d18",
+        "slug": "recipient",
+        "display_name": "Recipient",
+        "description": null,
+        "status": "active",
+        "created_at": "2026-10-19T04:51:14.486Z",
+        "updated_at": "2026-10-19T04:51:14.486Z"
+      }
+    ],
+    "handoffs": [
+      {
+        "id": "5906faca-98cd-4485-beab-8c22618431d4",
+        "dispatch_group_id": null,
+        "supersedes_handoff_id": null,
+        "title": "Legacy body",
+        "sender_kind": "user",
+        "sender_project_id": null,
+        "sender_workspace_key": null,
+        "sender_path_snapshot": null,
+        "recipient_project_id": "c234d596-acbf-48c7-b77b-d3df8e4f6d18",
+        "current_artifact_id": "46f0e832-1ba2-4c02-a289-e747d6aac8e2",
+        "revision": 1,
+        "row_version": 1,
+        "review_state": "awaiting_recipient",
+        "accepted_revision": null,
+        "accepted_at": null,
+        "declined_at": null,
+        "decline_reason": null,
+        "withdrawn_at": null,
+        "consecutive_no_change_resolutions": 0,
+        "first_fetched_at": null,
+        "review_engaged_at": null,
+        "pinned": 0,
+        "archived_at": null,
+        "deleted_at": null,
+        "created_at": "2026-10-19T04:51:14.580Z",
+        "updated_at": "2026-10-19T04:51:14.580Z"
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "46f0e832-1ba2-4c02-a289-e747d6aac8e2",
+        "handoff_id": "5906faca-98cd-4485-beab-8c22618431d4",
+        "storage_key": "artifacts/5906faca-98cd-4485-beab-8c22618431d4/46f0e832-1ba2-4c02-a289-e747d6aac8e2/legacy-body-1.md",
+        "original_name": "legacy-body-1.md",
+        "stored_name": "legacy-body-1.md",
+        "mime_type": "text/markdown",
+        "size_bytes": 34,
+        "sha256": "e57d7e72db874b6fabf07966a56258578da7d6e7f135069842b22089fc2d856f",
+        "imported_from_path": null,
+        "materialized": 1,
+        "created_at": "2026-10-19T04:51:14.580Z"
+      }
+    ],
+    "idempotency_keys": [
+      {
+        "key": "frozen-schema8-body-request",
+        "scope": "send",
+        "request_hash": "da3495ecfd880e1784e86f3b2854336cf0025b3948870aa737e0792c14283954",
+        "response_json": "{\"handoffs\":[{\"handoffId\":\"5906faca-98cd-4485-beab-8c22618431d4\",\"recipientSlug\":\"recipient\",\"artifactId\":\"46f0e832-1ba2-4c02-a289-e747d6aac8e2\",\"storageKey\":\"artifacts/5906faca-98cd-4485-beab-8c22618431d4/46f0e832-1ba2-4c02-a289-e747d6aac8e2/legacy-body-1.md\",\"revision\":1,\"rowVersion\":1,\"reviewState\":\"awaiting_recipient\"}],\"dispatchGroupId\":null,\"replayed\":false}",
+        "created_at": "2026-10-19T04:51:14.580Z",
+        "expires_at": "2026-10-20T04:51:14.583Z"
+      }
+    ]
+  }
+}

@@ -20,6 +20,9 @@ function scriptedStore(script: Scripted): ArtifactStore {
       throw new Error("not used here");
     },
     pathOf: () => ok(`/vault/${KEY}`),
+    openReadable: () => {
+      throw new Error("not used here");
+    },
     exists: () => ok(script.present ?? true),
     remove: () => ({ ok: true, value: undefined }),
     checksum: () => {

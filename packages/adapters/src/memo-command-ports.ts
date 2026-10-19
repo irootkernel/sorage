@@ -15,7 +15,7 @@ import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteMemoRepository } from "./memos";
 import { createNodeProjectPorts } from "./project-command-ports";
 import type { SorageSqlite } from "./sqlite/connection";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 
 /** Keeps database admission details inside the composition boundary. */
@@ -39,7 +39,12 @@ export function createNodeMemoPorts(
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const read = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome }).read();
   if (!read.ok || !read.value) throw new Error("Memo configuration could not be read");
-  const db = options.database ?? openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), MIGRATIONS).db;
+  const plan = productionMigrationPlan();
+  const db =
+    options.database ??
+    openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+      rebuilds: plan.rebuilds,
+    }).db;
   try {
     return {
       installationId: read.value.config.installationId,

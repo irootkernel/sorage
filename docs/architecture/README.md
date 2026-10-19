@@ -15,8 +15,8 @@
 | Unregistered Workspace | Workspace not matched to a Project Binding |
 | Handoff | One sender-to-one-recipient document delivery and review lifecycle |
 | Dispatch Group | Correlation UUID shared by Handoffs created from one multi-recipient send |
-| Artifact | The one current managed file attached to a Handoff |
-| Materialization | Returning a locally readable path to the current Artifact without copying in the MVP |
+| Artifact | The one current managed document attached to a Handoff; its accepted bytes are stored either as a Vault file or, from M9, inline in the database content records |
+| Materialization | Making the current body available; inline content is complete at commit and a readable fetch path is derived lazily, while a Vault file becomes available after activation |
 | Revision | Counter beginning at 1 and increasing only when Artifact content changes |
 | Row Version | Counter increasing on every Handoff mutation for optimistic concurrency |
 | Review Note | The one current recipient-authored or User-authored feedback item for a Handoff |
@@ -164,24 +164,23 @@ Handoff
 Artifact
 - id: UUID or legacy short Artifact identifier
 - handoffId: UUID
-- storageKey: string, artifacts/<handoff-id>/<artifact-id>/<stored-name>
+- contentRecordId: private immutable content-record UUID
 - originalName: string
 - storedName: string
 - mimeType: string
-- sizeBytes: integer
-- sha256: lowercase hexadecimal string
 - importedFromPath: nullable string
-- materialized: boolean
 - createdAt: timestamp
 ```
 
 A legacy short Artifact identifier is exactly `a` followed by eight lowercase hexadecimal characters, for example `a1b2c3d4e`. The pre-M9 `revise` producer generated this form; existing Artifact IDs and their `currentArtifactId` references remain valid and MUST be preserved. Every new Artifact uses a UUID, including new revisions. [ADR-0031](../architecture-decision-records/README.md#adr-0031-legacy-short-artifact-identifiers-and-format-3-acceptance) records this compatibility boundary; other UUID-typed fields retain their existing rules.
 
-`storageKey` is the sole authority for an Artifact's location inside the Vault; no other field, convention, or derived path may be used to find the bytes (VLT-020). The `<artifact-id>` segment gives every Revision a unique slot, so replacement never overwrites in place.
+This is the normalized persistence model. The referenced record owns the mutually exclusive inline text or managed storage key, byte size, SHA-256 and materialization flag defined in [section 27](#27-m9-shared-content-and-channel-extension) and [interface section 38.1](../specs/interfaces-and-operations.md#381-shared-content-store). Public Artifact summaries project those values without exposing `contentRecordId`: `storageKey` is always present and is `string | null`, null exactly for inline content. [Interface section 38.8](../specs/interfaces-and-operations.md#388-public-contract-classification-and-format-3-serialization) owns this breaking data-DTO change and its unchanged envelope decision.
 
-`materialized` is false between the transaction that created the Artifact row and the transaction that confirms the file reached its `storageKey` path. Reads of a Handoff whose current Artifact is not materialized return `ARTIFACT_MATERIALIZING`.
+For a file-backed Artifact, `storageKey` is the sole location authority inside the Vault; never reconstruct a path from other fields (VLT-020). Its `artifacts/<handoff-id>/<artifact-id>/<stored-name>` slot keeps each Revision independent. Inline content has no Vault key: the shared body port resolves the Artifact's record, and `fetch` derives a read-only checksum-addressed local file under the home state tree (SHR-006). Cache absence or repair does not change the authoritative body.
 
-Only `currentArtifactId` is live. A superseded Artifact row is deleted in the same transaction that supersedes it, and its bytes are removed by the committed `unlink` Intent; garbage collection never touches a path named by a pending Intent.
+An inline record is materialized in the accepting transaction, even before a fetch-cache file exists. A file record is unmaterialized until activation confirms its managed file; body acquisition then returns `ARTIFACT_MATERIALIZING`, while metadata reads retain the real unmaterialized summary. A living Handoff's missing Artifact, wrong Artifact owner or missing record produces the private integrity marker, resolved after authorization and visible-page selection as `ARTIFACT_CORRUPTED`, without projecting another Handoff's body (HND-020, SHR-004, SHR-014).
+
+Only `currentArtifactId` is live. A superseded Artifact row leaves in the revision transaction; the retired content record is removed only after the same-transaction reference proof permits it. File-backed retirement additionally commits its real `unlink` Intent; inline retirement creates no file intent or physical event. Garbage collection preserves live, pending and retained-response references under [interface section 38.1](../specs/interfaces-and-operations.md#381-shared-content-store).
 
 ### 3.5 Review Note
 
@@ -328,7 +327,7 @@ The table has 25 rows. Every review-state transition of the state machine appear
 | Pending Deletion Request | DeletionRequest | Pending User decision, independent of review state |
 | `firstFetchedAt` | Handoff | Timestamp of the first `fetch` or artifact-content read by the recipient Project or the User; a sender read never sets it, so null means the recipient has never pulled the bytes |
 | `reviewEngagedAt` | Handoff | Timestamp of the first `review set`; never cleared, so a withdrawn Note still counts as engagement |
-| `materialized` | Artifact | Whether the file has reached its `storageKey` path; false makes reads return `ARTIFACT_MATERIALIZING` |
+| `materialized` | Artifact content record, projected in its summary | Inline content is complete at commit; a file becomes available after activation, and false prevents body acquisition with `ARTIFACT_MATERIALIZING` |
 
 These fields are not folded into one large state enum. `firstFetchedAt` and `reviewEngagedAt` are exposed in public Handoff representations (HND-024) because together they are the guard for `withdraw`, and neither increments Row Version when it is set.
 
@@ -429,7 +428,7 @@ Dispatch Group G
 Invariants:
 
 - Each Handoff has a unique UUID.
-- Each Handoff has its own Artifact copy with its own `storageKey`.
+- Each Handoff has its own Artifact and independent immutable content record; file-backed copies also have independent `storageKey` slots.
 - Initial hashes may match.
 - Revisions diverge independently.
 - Review Notes diverge independently.
@@ -437,7 +436,7 @@ Invariants:
 - Creation is all-or-nothing.
 - Dispatch Group is correlation metadata only.
 
-All-or-nothing creation is a pure database property under the intent log. Every Handoff row, every Artifact row, and every `activate` Intent for the fan-out commit in one transaction, and no filesystem rename participates in that decision. A crash between two renames therefore cannot create a partial Dispatch Group; it can only leave some Artifacts unmaterialized until the next drain.
+All-or-nothing creation is a database property. Every Handoff, Artifact and content record, its domain event and any keyed response, and the activation intents for file-backed copies commit together. Inline copies are complete at that commit and create no physical event. A crash between file renames cannot create a partial Dispatch Group; its remaining file activations converge through the drain.
 
 ## 9. Revision semantics
 
@@ -828,59 +827,63 @@ Sorage closes both gaps by committing the *intention* first. A row in `pending_f
 
 ### 20.2 Durability order
 
-Every artifact write uses the same order, with no step reordered or skipped (VLT-022):
+Every file-backed Artifact write uses the same order, with no step reordered or skipped (VLT-022):
 
 ```text
 write -> fsync(file) -> rename -> fsync(parent directory) -> commit that marks it materialized
 ```
 
+Shared routing is defined in [interface section 38.2](../specs/interfaces-and-operations.md#382-input-bounds-and-classification). Inline preparation verifies bounded exact UTF-8 bytes outside the transaction, then commits the complete content record, Artifact, Handoff change, events and optional receipt atomically with no filesystem intent. Domain transactions contain neither filesystem I/O nor `await`; derived fetch-cache creation is a later read-path operation. A mixed operation uses this inline arm and the file-backed discipline below without a partial domain commit.
+
 ### 20.3 Create and fan-out
 
-1. Stage all N files under `<Vault>/staging/<uuid>`.
-2. Verify size and SHA-256, and `fsync` each staged file.
-3. One transaction: insert the Handoff rows, insert the Artifact rows with `materialized = 0`, insert N `activate` Intents, append `HANDOFF_CREATED`; commit.
+1. Prepare all N bodies through shared routing; stage only file-backed copies under `<Vault>/staging/<uuid>`.
+2. Verify every body's size and SHA-256, and `fsync` each staged file.
+3. One transaction: insert all Handoff and Artifact rows and their independent content records, with file records at `materialized = 0` and inline records complete; insert activation intents only for file-backed copies, append every `HANDOFF_CREATED` and retain any keyed response; commit.
 4. Rename each staged file to its `storageKey` path and `fsync` the parent directory.
 5. One transaction: set `materialized = 1`, delete the executed Intents, append `ARTIFACT_ACTIVATED`; commit.
 
 ### 20.4 Revise
 
-1. Stage and verify the new file.
-2. One transaction: insert a new Artifact row with a new `artifact-id` and a new `storageKey`, switch `currentArtifactId`, increment Revision, run the Row Version compare-and-set, delete the Review Note when one is present, delete the previous Artifact row, insert one `activate` Intent for the new path and one `unlink` Intent for the old path, append `HANDOFF_REVISED` and, when a Note was removed, `REVIEW_NOTE_RESOLVED`; commit.
-3. Execute both Intents, then clear them and append `ARTIFACT_ACTIVATED` and `ARTIFACT_UNLINKED`.
+1. Apply the actor, state, Note and observed-version guards, verify the current body's ownership and checksum, and prepare the replacement through shared routing. Stage only a file-backed replacement. The no-change resolution also verifies the existing body before claiming success.
+2. One transaction: insert a new immutable content record and a new Artifact, switch `currentArtifactId`, increment Revision, apply the Row Version compare-and-set, remove the Review Note when present and the retired Artifact, and remove the retired record only through the reference proof. Insert an `activate` Intent for a new file and an `unlink` Intent for a retired file, append `HANDOFF_REVISED` and, when a Note was removed, `REVIEW_NOTE_RESOLVED`; commit.
+3. Execute the applicable file intents, then settle them with their physical events. An inline side has no corresponding file intent or physical event; all four inline/file transitions retain the same atomic domain semantics.
 
 Because the new Artifact has its own `artifact-id` segment, the old file is never overwritten in place, and a crash cannot destroy the previous Revision before the new one is durable (VLT-012).
 
 ### 20.5 Delete approval
 
-The review state is already terminal at this point, so no Review Note can have been added since the last check, and the transaction has nothing to race against but itself.
+Deletion requires a terminal review state. The transaction still rechecks the current state and Row Version, so a competing deletion cannot turn an earlier read into permission to delete different content.
 
 1. Before the transaction, verify that the current Artifact exists and that its recomputed SHA-256 matches; otherwise fail with `ARTIFACT_CORRUPTED` without claiming deletion (VLT-023).
-2. One transaction: set `deletedAt`, set `currentArtifactId` to null, delete any Review Note left from before the terminal transition, delete the current Artifact row, insert one `unlink` Intent, append `DELETION_APPROVED`; commit.
-3. Execute the Intent, then clear it and append `ARTIFACT_UNLINKED`.
+2. One transaction: set `deletedAt`, set `currentArtifactId` to null, delete any current Review Note and Artifact, and remove the unreferenced record through the same-transaction reference proof; insert an `unlink` Intent only for a real file-backed Artifact, append `DELETION_APPROVED`; commit.
+3. Execute and settle any file unlink with `ARTIFACT_UNLINKED`. Inline deletion is complete with the domain commit and manufactures no key, file intent or physical event.
 
 ### 20.6 Recovery and garbage collection
 
 At every operational process start, CLI or daemon, excluding M8 inspection paths in section 26, drain `pending_fs_ops` in `createdAt` order and idempotently:
 
-- `activate`, destination present and source gone: the effect already happened; mark it done.
-- `activate`, source still present: rename again, `fsync` the parent directory, mark it done.
-- `activate`, source gone and destination missing: mark the Handoff integrity-failed and append `ARTIFACT_INTEGRITY_FAILED`. Never fabricate a replacement file.
-- `unlink`, target present: remove it, `fsync` the parent directory, mark it done.
-- `unlink`, target already gone: mark it done.
+- `activate`: validate managed paths and source/destination state before placement. A source-absent/destination-present legacy Artifact retry syncs its validated parent before completion; the common-content executor additionally verifies recorded size and SHA-256. A both-present conflict retains the evidence rather than overwriting it.
+- `activate`, source and destination both missing: retain the failed intent and append the integrity-failure event. Never fabricate a replacement file.
+- `unlink`: defer while an unsettled activation for the same key exists, then validate ownership and remove the managed target, syncing its parent; an already absent target can settle without inventing bytes.
+- Ordinary post-commit execution and restart drain share the same settlement. The winning transaction rechecks the pending operation, key and Artifact association, and commits completion, intent removal and its success event together. Competing drains cannot duplicate success, and failed assessments retain their intent and failure accounting.
 
-Only after the drain has finished may garbage collection run:
+After the drain, run reference-aware record cleanup in its own fenced writer transaction, then recompute physical protection before sweeping. A missing or inconsistent live ownership link makes the proof unavailable: propagate the failure and run neither physical GC nor the fetch-cache sweep. With a valid proof:
 
 - Sweep `staging/` by age.
-- Sweep files under `artifacts/` that no row in the `artifacts` table references and that are older than the 24-hour grace window.
-- Never delete a path that matches any `storageKey` or any pending Intent, whatever its age.
+- Sweep unreferenced regular files under `artifacts/` and `content/` after `gc.graceHours`; never follow linked or special managed entries.
+- Preserve keys referenced by live records, pending intents or unexpired retained responses, whatever their age. Record references and physical-key references remain distinct, as [section 38.1](../specs/interfaces-and-operations.md#381-shared-content-store) specifies.
+- Sweep derived fetch-cache entries under the same grace policy without removing authoritative records or bodies.
 
 An integrity-failed Handoff behaves like a Missing Artifact: revise, accept, backup success, and deletion claims that depend on the bytes are blocked, while diagnostics and restore remain available (VLT-023).
 
 ### 20.7 Visibility while unmaterialized
 
-A read of a Handoff whose current Artifact has `materialized = 0` returns `ARTIFACT_MATERIALIZING`. The row is real and the operation is not lost; the caller retries after the drain. Metadata-only listings may still show the Handoff, flagged accordingly.
+Body acquisition for a present file-backed Artifact with `materialized = 0` returns `ARTIFACT_MATERIALIZING`. The caller can retry after the drain; metadata reads retain its genuine summary and administrative next actor. Missing metadata and wrong ownership instead return `ARTIFACT_CORRUPTED` after the existing actor, state, Note, observed-version and page-selection guards. Inline content is complete at commit and never waits for a fetch-cache file to become authoritative.
 
 ### 20.8 Crash points
+
+These seven points describe physical file work. An inline-only body has no staging, rename or unlink intermediate: its accepting transaction commits the domain change, complete record, events and optional receipt together, or rolls them all back. File-backed parts of mixed work retain the following recovery obligations.
 
 | # | Crash point | Expected recovery outcome |
 |---|---|---|

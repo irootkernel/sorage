@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import type { SorageSqlite } from "../../packages/adapters/src/sqlite/connection";
 import { migrate } from "../../packages/adapters/src/sqlite/migrator";
-import { MIGRATIONS } from "../../packages/adapters/src/sqlite/migrations";
+import { productionMigrationPlan } from "../../packages/adapters/src/sqlite/migrations";
+import { knownSchemaMaximum } from "../../packages/core/src/known-schemas";
 
 /** Example installation id from docs/specs/examples/config.example.yaml. */
 export const INSTALLATION_ID = "9d57384c-030e-4ff7-90ca-c615d8043db2";
@@ -26,18 +27,25 @@ export function markerText(): string {
   })}\n`;
 }
 
-/** Setup actor only. `through` selects a prefix of the existing migration list. */
-export function writeInstallation(home: string, through = MIGRATIONS.length): void {
+/** Setup actor only. `through` selects a prefix of the production schema inventory. */
+export function writeInstallation(home: string, through = knownSchemaMaximum()): void {
   mkdirSync(join(home, "logs"), { recursive: true });
   mkdirSync(join(home, "state"), { recursive: true });
   mkdirSync(join(home, "run"), { recursive: true });
   mkdirSync(join(home, "vault"), { recursive: true });
   writeFileSync(join(home, "config.yaml"), configText());
   writeFileSync(join(home, "vault", ".sorage-vault.json"), markerText());
-  const db = new Database(join(home, "state", "sorage.sqlite3"));
+  const databasePath = join(home, "state", "sorage.sqlite3");
+  const db = new Database(databasePath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA wal_autocheckpoint = 0");
-  migrate(db as unknown as SorageSqlite, MIGRATIONS.slice(0, through), () => STAMP);
+  const plan = productionMigrationPlan();
+  migrate(
+    db as unknown as SorageSqlite,
+    plan.migrations.filter((migration) => migration.version <= through),
+    () => STAMP,
+    { databasePath, rebuilds: plan.rebuilds.filter((migration) => migration.version <= through) },
+  );
   if (through >= 1) {
     db.prepare("INSERT INTO installation (id, installation_id, schema_version, created_at) VALUES (1, ?, 1, ?)").run(
       INSTALLATION_ID,

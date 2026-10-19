@@ -117,7 +117,7 @@ export interface TerminalOutcome {
 export function acceptHandoff(ports: TerminalPorts, input: AcceptInput): Result<TerminalOutcome, AppError> {
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
-  const { handoff } = loaded.value;
+  const { handoff, integrity } = loaded.value;
   const role = roleFor(ports, input, handoff);
   if (!role.ok) return err(role.error);
   const outcome = evaluateHandoffOperation("accept", factsOf(handoff), role.value, {
@@ -125,7 +125,41 @@ export function acceptHandoff(ports: TerminalPorts, input: AcceptInput): Result<
     expectedRevisionMatches: input.expectedRevision === handoff.revision,
     expectedRowVersionMatches: input.expectedRowVersion === handoff.rowVersion,
   });
-  if (!outcome.ok) return err(outcome.error);
+  if (!outcome.ok) {
+    // A missing record must never be masked as materializing: after the
+    // evaluator's earlier tombstone, terminal, role, and Note refusals, the
+    // observed expectations answer first — the expected Revision, then the
+    // expected Row Version — and only a current observation surfaces the
+    // honest corruption refusal (SHR-004, SHR-014, VLT-023).
+    if (outcome.error.code === "ARTIFACT_MATERIALIZING" && integrity === "artifact-record-missing") {
+      if (input.expectedRevision !== handoff.revision) {
+        return err(appError("REVISION_CONFLICT", "the expected Revision is stale"));
+      }
+      if (input.expectedRowVersion !== handoff.rowVersion) {
+        return err(
+          appError(
+            "ROW_VERSION_CONFLICT",
+            "the Handoff changed since it was last read; re-read it and retry with the new Row Version",
+          ),
+        );
+      }
+      return err(
+        appError(
+          "ARTIFACT_CORRUPTED",
+          "the current Artifact is missing, unreadable, or wrongly associated; run sorage vault verify and restore from backup",
+        ),
+      );
+    }
+    return err(outcome.error);
+  }
+  // The mandatory current-body gate of VLT-023: an accept claims the reviewed
+  // content is intact, so the recorded body is verified through the common
+  // bounded reader before any transition, leaving the domain untouched on
+  // failure.
+  if (handoff.currentArtifact !== null) {
+    const verified = ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
+    if (!verified.ok) return err(verified.error);
+  }
   const now = ports.clock.now().toISOString();
   const applied = ports.terminals.applyTerminalTransition({
     handoffId: handoff.id,
@@ -238,10 +272,10 @@ export function withdrawHandoff(ports: TerminalPorts, input: WithdrawInput): Res
 }
 
 function load(ports: TerminalPorts, handoffId: string) {
-  const found = ports.handoffs.findHandoffView(handoffId);
+  const found = ports.handoffs.loadHandoff(handoffId);
   if (!found.ok) return err(found.error);
   if (found.value === null) {
     return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${handoffId}'`, { handoffId }));
   }
-  return ok({ handoff: found.value });
+  return ok({ handoff: found.value.view, integrity: found.value.contentIntegrity });
 }

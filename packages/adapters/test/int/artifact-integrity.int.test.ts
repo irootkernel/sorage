@@ -7,7 +7,7 @@ import { createNodeArtifactStore } from "../../src/artifact-store";
 import { createSqliteIntentLog } from "../../src/intent-log";
 import { createVaultInitializer } from "../../src/vault";
 import { migrate } from "../../src/sqlite/migrator";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { FakeClock } from "../../src/testkit/fakes";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 import { makeTempVault } from "../../src/testkit/temp-vault";
@@ -21,7 +21,14 @@ function fixture(prefix: string) {
     throw new Error("fixture init must succeed");
   }
   const database = makeTempDatabase(`${prefix}db-`);
-  migrate(database.db, MIGRATIONS);
+  // The drain is an operational surface: its authoritative-row completion reads
+  // the normalized schema-9 layout, so the fixture migrates through the real
+  // production plan on this file-backed database.
+  const plan = productionMigrationPlan();
+  migrate(database.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: database.databasePath,
+    rebuilds: plan.rebuilds,
+  });
   return {
     vaultPath: vault.vaultPath,
     store: createNodeArtifactStore({ vaultPath: vault.vaultPath, installationId: INSTALLATION }),

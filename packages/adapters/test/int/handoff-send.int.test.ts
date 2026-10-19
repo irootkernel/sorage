@@ -1,17 +1,20 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import type { ProjectCommandPorts, SendPorts } from "@sorage/core";
 import { sendHandoffs } from "@sorage/core";
 import { createNodeArtifactStore } from "../../src/artifact-store";
+import { createHomePaths } from "../../src/home";
+import { createSqliteContentStore } from "../../src/content-store";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffWriteStore } from "../../src/handoffs";
 import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/intent-log";
 import { createSqliteProjectRepository } from "../../src/projects";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
-import { FakeClock, makeTempDatabase, makeTempVault } from "../../src/testkit";
+import { FakeClock, makeArtifactContentBindings, makeTempDatabase, makeTempVault } from "../../src/testkit";
 import { createVaultInitializer } from "../../src/vault";
 
 /**
@@ -40,15 +43,30 @@ afterAll(() => {
 function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
   const temp = makeTempDatabase();
   cleanups.push(temp.cleanup);
-  migrate(temp.db, MIGRATIONS);
+  // The real file-backed guarded migration through the schema-9 rebuild.
+  const plan = productionMigrationPlan();
+  const outcome = migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: temp.databasePath,
+    rebuilds: plan.rebuilds,
+  });
+  if (outcome.alreadyUpToDate || !outcome.appliedVersions.includes(9)) {
+    throw new Error("fixture must migrate through the schema-9 rebuild");
+  }
   const vault = makeTempVault("sorage-send-");
   cleanups.push(vault.cleanup);
+  mkdirSync(join(vault.vaultPath, "..", "sources"), { recursive: true });
+  const home = createHomePaths({ SORAGE_HOME: vault.home.home }, vault.home.home);
   const marker = createVaultInitializer(new FakeClock()).initialize(vault.vaultPath, INSTALLATION);
   if (!marker.ok) throw new Error("fixture vault marker must initialize");
   const ledger = createSqliteEventLedger(temp.db);
   const repository = createSqliteProjectRepository(temp.db, { installationId: INSTALLATION, events: ledger });
   const clock = new FakeClock();
-  const write = createSqliteHandoffWriteStore(temp.db, ledger, { now: () => clock.now() });
+  const write = createSqliteHandoffWriteStore(
+    temp.db,
+    ledger,
+    { now: () => clock.now() },
+    makeArtifactContentBindings({ db: temp.db, ledger, vaultPath: vault.vaultPath, installationId: INSTALLATION }),
+  );
   let ids = 0;
   const nextId = () => {
     ids += 1;
@@ -77,8 +95,6 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
     },
     handoffs: { openHandoffCount: () => ({ ok: true, value: 0 }) },
   };
-  const sourceDir = join(vault.home.home, "sources");
-  mkdirSync(sourceDir, { recursive: true });
   const ports: SendPorts = {
     projectPorts,
     handoffs:
@@ -99,11 +115,12 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
     inspectSource(path) {
       return { ok: true, value: { resolvedSourcePath: path, originalName: basename(path) } };
     },
-    writeBodySource(text, storedName) {
-      const sourcePath = join(sourceDir, storedName);
-      writeFileSync(sourcePath, text);
-      return { ok: true, value: { sourcePath, cleanup: () => rmSync(sourcePath, { force: true }) } };
-    },
+    content: createSqliteContentStore({
+      db: temp.db,
+      vaultPath: vault.vaultPath,
+      installationId: INSTALLATION,
+      runDir: home.runDir,
+    }),
     digestSource(path) {
       const digest = spawnSync("shasum", ["-a", "256", path], { encoding: "utf8" });
       return { ok: true, value: (digest.stdout ?? "").split(" ")[0] ?? "" };
@@ -132,12 +149,19 @@ function seedProject(fixture: Fixture, id: string, slug: string): void {
 }
 
 function seedTerminalHandoff(fixture: Fixture, id: string, state: string, deleted: string | null): void {
+  const contentRecordId = randomUUID();
+  const storageKey = `artifacts/${id}/a-${id}/doc.md`;
   fixture.db.exec("BEGIN");
   fixture.db
     .prepare(
-      "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, 'doc.md', 'doc.md', 'text/markdown', 1, 'sha', NULL, 1, '2026-01-01T00:00:00.000Z')",
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 1, ?, 1, '2026-01-01T00:00:00.000Z')",
     )
-    .run(`a-${id}`, id, `artifacts/${id}/a-${id}/doc.md`);
+    .run(contentRecordId, storageKey, createHash("sha256").update("old doc").digest("hex"));
+  fixture.db
+    .prepare(
+      "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, 'doc.md', 'doc.md', 'text/markdown', NULL, '2026-01-01T00:00:00.000Z', ?)",
+    )
+    .run(`a-${id}`, id, contentRecordId);
   fixture.db
     .prepare(
       "INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version, review_state, created_at, updated_at, deleted_at) VALUES (?, 'Old', 'user', 'p-1', ?, 1, 1, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', ?)",
@@ -215,26 +239,29 @@ describe("sorage send", () => {
     const rows = handoffRows(fixture);
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((row) => row.dispatch_group_id))).toEqual(new Set([sent.value.dispatchGroupId]));
-    // Independent Artifact copies: distinct storage keys, identical content digest.
+    // Independent Artifact copies through independent immutable records:
+    // distinct record ids, identical content digest. The small Markdown source
+    // routes inline, so the stored text is the authoritative body — no file,
+    // no activation intent, and no physical events (SHR-002, SHR-004).
     const keys = new Set(rows.map((row) => row.current_artifact_id));
     expect(keys.size).toBe(2);
-    const artifacts = fixture.db.prepare("SELECT * FROM artifacts").all() as Array<Record<string, unknown>>;
-    expect(new Set(artifacts.map((row) => row.storage_key)).size).toBe(2);
+    const artifacts = fixture.db
+      .prepare(
+        "SELECT a.id AS id, c.id AS record_id, c.storage_key AS storage_key, c.inline_text AS inline_text, c.sha256 AS sha256, c.materialized AS materialized FROM artifacts a JOIN content_records c ON c.id = a.content_record_id",
+      )
+      .all() as Array<Record<string, unknown>>;
+    expect(new Set(artifacts.map((row) => row.record_id)).size).toBe(2);
+    expect(new Set(artifacts.map((row) => row.storage_key))).toEqual(new Set([null]));
+    expect(new Set(artifacts.map((row) => row.inline_text))).toEqual(new Set(["shared document bytes"]));
     expect(new Set(artifacts.map((row) => row.sha256)).size).toBe(1);
     for (const artifact of artifacts) {
       expect(artifact.materialized).toBe(1);
-      expect(existsSync(join(fixture.vaultPath, artifact.storage_key as string))).toBe(true);
     }
     expect(fixture.db.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
     const events = fixture.db.prepare("SELECT event_type FROM events ORDER BY rowid").all() as Array<{
       event_type: string;
     }>;
-    expect(events.map((row) => row.event_type)).toEqual([
-      "HANDOFF_CREATED",
-      "HANDOFF_CREATED",
-      "ARTIFACT_ACTIVATED",
-      "ARTIFACT_ACTIVATED",
-    ]);
+    expect(events.map((row) => row.event_type)).toEqual(["HANDOFF_CREATED", "HANDOFF_CREATED"]);
   });
 
   it("sends to one recipient without a dispatch group", () => {
@@ -247,17 +274,25 @@ describe("sorage send", () => {
     expect(handoffRows(fixture)[0]?.dispatch_group_id).toBeNull();
   });
 
-  it("materializes a --body send as one Markdown Artifact named title-slug-1.md", () => {
+  it("materializes a --body send as one inline Markdown Artifact named title-slug-1.md", () => {
     const fixture = makeFixture();
     seedProject(fixture, "p-1", "alpha");
     const sent = sendHandoffs(fixture.ports, baseInput(fixture, { file: undefined, body: "# Notes for you" }));
     expect(sent.ok).toBe(true);
-    const artifact = fixture.db.prepare("SELECT * FROM artifacts").get() as Record<string, unknown>;
+    const artifact = fixture.db
+      .prepare(
+        "SELECT a.stored_name AS stored_name, a.original_name AS original_name, a.mime_type AS mime_type, a.imported_from_path AS imported_from_path, c.storage_key AS storage_key, c.inline_text AS inline_text, c.materialized AS materialized FROM artifacts a JOIN content_records c ON c.id = a.content_record_id",
+      )
+      .get() as Record<string, unknown>;
     expect(artifact.stored_name).toBe("design-brief-1.md");
     expect(artifact.original_name).toBe("design-brief-1.md");
     expect(artifact.mime_type).toBe("text/markdown");
     expect(artifact.imported_from_path).toBeNull();
-    expect(existsSync(join(fixture.vaultPath, artifact.storage_key as string))).toBe(true);
+    // The small text body routes inline: the stored text is the authoritative
+    // body with no Vault file and no pending intent (SHR-002, SHR-004).
+    expect(artifact.storage_key).toBeNull();
+    expect(artifact.inline_text).toBe("# Notes for you");
+    expect(artifact.materialized).toBe(1);
   });
 
   it("validates the supersedes link: terminal and tombstone targets qualify, others refuse", () => {
@@ -337,7 +372,12 @@ describe("sorage send", () => {
   it("leaves zero Handoffs and only a sweepable staged file when the intent commit fails (CP-1)", () => {
     const fixture = makeFixture({ failCreateFanout: true });
     seedProject(fixture, "p-1", "alpha");
-    const failed = sendHandoffs(fixture.ports, baseInput(fixture));
+    // The CP-1 shape is specifically the staged-file crash residue, so this
+    // one input selects the file representation deliberately: a small binary
+    // body always routes to the Vault (SHR-002), never inline.
+    const binarySource = join(fixture.vaultPath, "..", "sources", "payload.bin");
+    writeFileSync(binarySource, Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]));
+    const failed = sendHandoffs(fixture.ports, baseInput(fixture, { file: binarySource }));
     expect(!failed.ok).toBe(true);
     expect(handoffRows(fixture)).toHaveLength(0);
     expect(fixture.db.prepare("SELECT COUNT(*) AS c FROM artifacts").get()).toMatchObject({ c: 0 });
@@ -384,12 +424,19 @@ describe("sorage send", () => {
     expect(rows).toHaveLength(100);
     expect(new Set(rows.map((row) => row.dispatch_group_id)).size).toBe(1);
     expect(new Set(rows.map((row) => row.supersedes_handoff_id)).size).toBe(1);
-    const artifacts = fixture.db.prepare("SELECT * FROM artifacts").all() as Array<Record<string, unknown>>;
+    const artifacts = fixture.db
+      .prepare(
+        "SELECT a.id AS id, c.id AS record_id, c.storage_key AS storage_key, c.materialized AS materialized FROM artifacts a JOIN content_records c ON c.id = a.content_record_id",
+      )
+      .all() as Array<Record<string, unknown>>;
     expect(artifacts).toHaveLength(100);
-    expect(new Set(artifacts.map((row) => row.storage_key)).size).toBe(100);
+    // The small text source routes inline: one hundred independent immutable
+    // records, each carrying the same authoritative text with no file and no
+    // pending intent (SHR-002, SHR-004).
+    expect(new Set(artifacts.map((row) => row.record_id)).size).toBe(100);
+    expect(new Set(artifacts.map((row) => row.storage_key))).toEqual(new Set([null]));
     for (const artifact of artifacts) {
       expect(artifact.materialized).toBe(1);
-      expect(existsSync(join(fixture.vaultPath, artifact.storage_key as string))).toBe(true);
     }
     expect(fixture.db.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
   });

@@ -163,9 +163,11 @@ describe("moveVault", () => {
       VALUES (?, 'Move drain probe', 'user', ?, ?, 1, 1, 'awaiting_recipient', 0, 0, '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')`,
     ).run(handoffId, projectId, artifactId);
     db.prepare(
-      `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256,
-        imported_from_path, materialized, created_at) VALUES (?, ?, ?, 'doc.md', 'doc.md', 'text/markdown', 8, ?, NULL, 0, '2026-05-01T00:00:00.000Z')`,
-    ).run(artifactId, handoffId, key, sha);
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 8, ?, 0, '2026-05-01T00:00:00.000Z')",
+    ).run("0b111111-4444-4111-8111-1111111111bd", key, sha);
+    db.prepare(
+      "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, 'doc.md', 'doc.md', 'text/markdown', NULL, '2026-05-01T00:00:00.000Z', ?)",
+    ).run(artifactId, handoffId, "0b111111-4444-4111-8111-1111111111bd");
     db.prepare(
       "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('mi-1', 'activate', 'staging/staged-move-doc', ?, ?, '2026-05-01T00:00:00.000Z', 0)",
     ).run(key, artifactId);
@@ -191,7 +193,13 @@ describe("moveVault", () => {
       expect(events[0]?.actor_kind).toBe("system");
       expect(JSON.parse(events[0]?.metadata_json ?? "{}")).toEqual({ storageKey: key, sha256: sha });
       expect(database.prepare("SELECT COUNT(*) AS n FROM pending_fs_ops").get()).toMatchObject({ n: 0 });
-      expect(database.prepare("SELECT materialized FROM artifacts WHERE id = ?").get(artifactId)).toMatchObject({
+      expect(
+        database
+          .prepare(
+            "SELECT c.materialized AS materialized FROM content_records c JOIN artifacts a ON a.content_record_id = c.id WHERE a.id = ?",
+          )
+          .get(artifactId),
+      ).toMatchObject({
         materialized: 1,
       });
     } finally {

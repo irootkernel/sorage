@@ -215,37 +215,47 @@ export function handoffShardPath(handoffId: string): string {
   return `handoffs/${handoffId.slice(0, 2)}/${handoffId}.json`;
 }
 
+/** The structural metadata every snapshot generation counts, whatever its Artifact representation (BKP-024). */
+export function snapshotCounts(data: {
+  projects: unknown[];
+  handoffs: Array<{ artifact: unknown }>;
+  events: unknown[];
+}): { projects: number; handoffs: number; events: number; artifacts: number } {
+  return {
+    projects: data.projects.length,
+    handoffs: data.handoffs.length,
+    events: data.events.length,
+    artifacts: data.handoffs.filter((handoff) => handoff.artifact !== null).length,
+  };
+}
+
 /** The derived counts `manifest.json` carries and nothing else (BKP-024). */
 export function snapshotManifest(data: SnapshotData): SnapshotManifest {
   return {
     formatVersion: SNAPSHOT_FORMAT_VERSION,
-    counts: {
-      projects: data.projects.length,
-      handoffs: data.handoffs.length,
-      events: data.events.length,
-      artifacts: data.handoffs.filter((handoff) => handoff.artifact !== null).length,
-    },
+    counts: snapshotCounts(data),
   };
+}
+
+/** The deterministic code-unit string order every snapshot generation shares. */
+export function compareSnapshotStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** Computes every snapshot file's exact bytes in a deterministic order. */
 export function snapshotFiles(data: SnapshotData): SnapshotFile[] {
   const files: SnapshotFile[] = [{ path: "projects.json", content: canonicalJson(data.projects) }];
-  const byId = [...data.handoffs].sort((a, b) => compareStrings(a.id, b.id));
+  const byId = [...data.handoffs].sort((a, b) => compareSnapshotStrings(a.id, b.id));
   for (const handoff of byId) {
     files.push({ path: handoffShardPath(handoff.id), content: canonicalJson(handoff) });
   }
   const lines = [...data.events]
-    .sort((a, b) => compareStrings(a.createdAt, b.createdAt) || compareStrings(a.id, b.id))
+    .sort((a, b) => compareSnapshotStrings(a.createdAt, b.createdAt) || compareSnapshotStrings(a.id, b.id))
     .map((event) => canonicalJsonLine(event))
     .join("");
   files.push({ path: "events.jsonl", content: lines });
   files.push({ path: "manifest.json", content: canonicalJson(snapshotManifest(data)) });
   return files;
-}
-
-function compareStrings(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** Reads `manifest.json` bytes; used by restore to cross-check the derived counts. */

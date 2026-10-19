@@ -53,14 +53,22 @@ function portsOf(page: () => HandoffView[]): HandoffReadPorts {
         ok({
           items: [...page()]
             .filter((item) => filters.state === undefined || item.reviewState === filters.state)
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .map((view) => ({ view, contentIntegrity: "ok" as const })),
           lastSortKey: null,
         }),
       findHandoffView: () => ok(null),
+      loadHandoff: () => ok(null),
       recordFirstFetch: () => ok(undefined),
     },
     config: { vaultPath: "/vault", verifyChecksumOnFetch: false },
-    artifact: { checksum: () => ok(""), pathOf: () => ok("") },
+    artifact: {
+      verifyArtifactBody: () => ok(undefined),
+      localPathOfArtifact: () => ok(""),
+      openArtifactBody: () => {
+        throw new Error("not used here");
+      },
+    },
     ids: { next: () => "event" },
     clock,
   } as HandoffReadPorts;
@@ -161,7 +169,7 @@ describe("waitForNewInboxItems", () => {
       const slice = all.slice(start, start + limit);
       const last = slice[slice.length - 1];
       return ok({
-        items: slice,
+        items: slice.map((view) => ({ view, contentIntegrity: "ok" as const })),
         lastSortKey: slice.length === limit && last !== undefined ? `${last.updatedAt}|${last.id}` : null,
       });
     };
@@ -201,7 +209,7 @@ describe("waitForNewInboxItems", () => {
       const slice = all.slice(start, start + limit);
       const last = slice[slice.length - 1];
       return ok({
-        items: slice,
+        items: slice.map((view) => ({ view, contentIntegrity: "ok" as const })),
         lastSortKey: slice.length === limit && last !== undefined ? `${last.updatedAt}|${last.id}` : null,
       });
     };

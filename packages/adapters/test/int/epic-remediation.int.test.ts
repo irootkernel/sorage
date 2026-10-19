@@ -1,11 +1,15 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
+import { SystemClock } from "@sorage/core";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffReadStore } from "../../src/handoff-read-store";
 import { createSqliteRetentionStore, createSqliteRevisionStore } from "../../src/handoffs";
 import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/intent-log";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
-import { makeTempDatabase } from "../../src/testkit/temp-database";
+import { makeArtifactContentBindings, makeTempDatabase } from "../../src/testkit";
+import { makeTempVault } from "../../src/testkit/temp-vault";
+import { createVaultInitializer } from "../../src/vault";
 
 /**
  * The EPIC-005 whole-epic round-1 remediation regressions: the administrative next
@@ -15,6 +19,8 @@ import { makeTempDatabase } from "../../src/testkit/temp-database";
  * (F003, covered by the CLI suites that read the file before calling the core).
  */
 
+const INSTALLATION = "11111111-3333-4333-8333-333333333331";
+
 const cleanups: Array<() => void> = [];
 afterAll(() => {
   for (const cleanup of cleanups) cleanup();
@@ -23,18 +29,46 @@ afterAll(() => {
 function migratedDb() {
   const temp = makeTempDatabase();
   cleanups.push(temp.cleanup);
-  migrate(temp.db, MIGRATIONS);
-  return temp;
+  // The real file-backed guarded migration to schema 9: the rebuild runs on its
+  // own dedicated connection against this database path, never :memory:.
+  const plan = productionMigrationPlan();
+  const outcome = migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: temp.databasePath,
+    rebuilds: plan.rebuilds,
+  });
+  if (outcome.alreadyUpToDate || !outcome.appliedVersions.includes(9)) {
+    throw new Error("fixture must migrate through the schema-9 rebuild");
+  }
+  const vault = makeTempVault("sorage-epic-remediation-vault-");
+  cleanups.push(vault.cleanup);
+  if (!createVaultInitializer(new SystemClock()).initialize(vault.vaultPath, INSTALLATION).ok) {
+    throw new Error("fixture vault marker must initialize");
+  }
+  return { db: temp.db, vaultPath: vault.vaultPath };
+}
+
+function contentBindings(fixture: ReturnType<typeof migratedDb>, ledger: ReturnType<typeof createSqliteEventLedger>) {
+  return makeArtifactContentBindings({
+    db: fixture.db,
+    ledger,
+    vaultPath: fixture.vaultPath,
+    installationId: INSTALLATION,
+  });
 }
 
 function seedHandoff(db: ReturnType<typeof migratedDb>["db"], id: string, state: string): void {
+  const contentRecordId = randomUUID();
+  const storageKey = `artifacts/${id}/a-${id}/doc.md`;
   db.exec("BEGIN");
   db.prepare(
     "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES ('p-1', 'p-1', 'p-1', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
   ).run();
   db.prepare(
-    "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) VALUES (?, ?, ?, 'doc.md', 'doc.md', 'text/markdown', 1, 'sha', NULL, 1, '2026-01-01T00:00:00.000Z')",
-  ).run(`a-${id}`, id, `artifacts/${id}/a-${id}/doc.md`);
+    "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, 1, ?, 1, '2026-01-01T00:00:00.000Z')",
+  ).run(contentRecordId, storageKey, createHash("sha256").update("x").digest("hex"));
+  db.prepare(
+    "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, 'doc.md', 'doc.md', 'text/markdown', NULL, '2026-01-01T00:00:00.000Z', ?)",
+  ).run(`a-${id}`, id, contentRecordId);
   db.prepare(
     "INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version, review_state, created_at, updated_at) VALUES (?, 'T', 'user', 'p-1', ?, 1, 1, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
   ).run(id, `a-${id}`, state);
@@ -49,9 +83,15 @@ describe("the whole-epic round-1 remediations", () => {
         "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
       )
       .run("key-expired", "deletion-approve:h-1", "hash", "{}", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z");
-    const retention = createSqliteRetentionStore(temp.db, createSqliteEventLedger(temp.db), {
-      now: () => new Date("2026-01-02T00:00:00.000Z"),
-    });
+    const ledger = createSqliteEventLedger(temp.db);
+    const retention = createSqliteRetentionStore(
+      temp.db,
+      ledger,
+      {
+        now: () => new Date("2026-01-02T00:00:00.000Z"),
+      },
+      contentBindings(temp, ledger),
+    );
 
     const expired = retention.idempotencyLookup("key-expired", "deletion-approve:h-1");
 
@@ -61,7 +101,7 @@ describe("the whole-epic round-1 remediations", () => {
 
   it("F001: a pending Deletion Request or an unmaterialized Artifact makes the User the administrative next actor", () => {
     const temp = migratedDb();
-    const store = createSqliteHandoffReadStore(temp.db, createSqliteEventLedger(temp.db));
+    const store = createSqliteHandoffReadStore(temp.db, createSqliteEventLedger(temp.db), { runDir: null });
     seedHandoff(temp.db, "h-f001", "awaiting_recipient");
 
     const plain = store.findHandoffView("h-f001");
@@ -76,7 +116,11 @@ describe("the whole-epic round-1 remediations", () => {
     expect(pending.ok && pending.value?.nextActors.administrativeNextActor).toBe("user");
 
     temp.db.prepare("UPDATE deletion_requests SET status = 'rejected' WHERE id = 'dr-1'").run();
-    temp.db.prepare("UPDATE artifacts SET materialized = 0 WHERE id = 'a-h-f001'").run();
+    temp.db
+      .prepare(
+        "UPDATE content_records SET materialized = 0 WHERE id = (SELECT content_record_id FROM artifacts WHERE id = 'a-h-f001')",
+      )
+      .run();
     const unmaterialized = store.findHandoffView("h-f001");
     expect(unmaterialized.ok && unmaterialized.value?.nextActors.administrativeNextActor).toBe("user");
   });
@@ -85,8 +129,9 @@ describe("the whole-epic round-1 remediations", () => {
     const temp = migratedDb();
     const ledger = createSqliteEventLedger(temp.db);
     seedHandoff(temp.db, "h-f002", "changes_requested");
-    const revisions = createSqliteRevisionStore(temp.db, ledger);
-    const retention = createSqliteRetentionStore(temp.db, ledger);
+    const content = contentBindings(temp, ledger);
+    const revisions = createSqliteRevisionStore(temp.db, ledger, {}, content);
+    const retention = createSqliteRetentionStore(temp.db, ledger, {}, content);
 
     expect(setMoveFenceAndCountPending(temp.db, process.pid, "2026-01-02T00:00:00.000Z").ok).toBe(true);
 
@@ -101,7 +146,8 @@ describe("the whole-epic round-1 remediations", () => {
         storedName: "doc.md",
         mimeType: "text/markdown",
         sizeBytes: 1,
-        sha256: "sha2",
+        sha256: createHash("sha256").update("v2").digest("hex"),
+        inlineBody: null,
         importedFromPath: null,
         createdAt: "2026-01-02T00:00:00.000Z",
       },
@@ -161,7 +207,8 @@ describe("the whole-epic round-1 remediations", () => {
         storedName: "doc.md",
         mimeType: "text/markdown",
         sizeBytes: 1,
-        sha256: "sha3",
+        sha256: createHash("sha256").update("v3").digest("hex"),
+        inlineBody: null,
         importedFromPath: null,
         createdAt: "2026-01-02T00:00:00.000Z",
       },

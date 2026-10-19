@@ -2,6 +2,14 @@
 
 This file records concise shipped outcomes and the planned next stable release.
 
+## M9 source changes - version unallocated
+
+- Route newly accepted Handoff text of at most 65,536 UTF-8 bytes to SQLite, with larger text and binary content kept in the Vault. Preserve existing file-backed Artifacts and return a readable Vault or derived fetch-cache path from `fetch`.
+- **Breaking data contract:** Handoff `storageKey` fields are always present and may be `null` for inline content. Update string-only consumers; the response envelope, protocol version 1 and `/api/v1` prefix remain unchanged under [ADR-0030](docs/architecture-decision-records/README.md#adr-0030-agent-communication-channels-and-shared-content-storage-in-m9).
+- Normalize Handoff content references in database schema 9 and extend format-3 backups with inline Artifact bodies in Handoff shards. File-backed Artifacts retain their `artifacts/` paths; backups omit derived fetch-cache files and operational receipts. Keep a verified pre-upgrade backup and its matching executable for rollback into a separate empty home.
+
+M9 has no assigned product version. The intended v0.1.3 scope below remains M8, and published v0.1.2 predates these source changes. [The roadmap](docs/roadmap/README.md) owns delivery status; installation and publication remain separate operations.
+
 ## v0.1.3 - Unreleased
 
 ### Added

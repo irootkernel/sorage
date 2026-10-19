@@ -77,15 +77,17 @@ function seedOneHandoff(home: string, vault: string, options: { materialized?: b
       '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
   ).run(HANDOFF_ID);
   db.prepare(
-    `INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256,
-      materialized, created_at) VALUES ('22222222-2222-4222-8222-222222222222', ?, ?, 'brief.md', 'brief.md', 'text/markdown', ?, ?, ?, '2026-01-02T00:00:00.000Z')`,
+    "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES ('55555555-5555-4555-8555-555555555555', NULL, ?, ?, ?, ?, '2026-01-02T00:00:00.000Z')",
   ).run(
-    HANDOFF_ID,
     `artifacts/${HANDOFF_ID}/22222222-2222-4222-8222-222222222222/brief.md`,
     artifactBytes.length,
     createHash("sha256").update(artifactBytes).digest("hex"),
     options.materialized === false ? 0 : 1,
   );
+  db.prepare(
+    `INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
+    VALUES ('22222222-2222-4222-8222-222222222222', ?, 'brief.md', 'brief.md', 'text/markdown', NULL, '2026-01-02T00:00:00.000Z', '55555555-5555-4555-8555-555555555555')`,
+  ).run(HANDOFF_ID);
   db.prepare(
     `INSERT INTO events (id, handoff_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
     VALUES ('44444444-4444-4444-8444-444444444444', ?, 'HANDOFF_CREATED', 'user', NULL, 1, '{}', '2026-01-02T00:00:00.000Z')`,

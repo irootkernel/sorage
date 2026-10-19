@@ -7,7 +7,7 @@ import { nodeEnsureVaultGit } from "./backup-command-ports";
 import { type ConfigStoreFs, createConfigStore } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, type LockClock } from "./lockfile";
-import { MIGRATIONS } from "./sqlite/migrations";
+import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createNodeApiTokenStore } from "./token-store";
 import { createVaultInitializer } from "./vault";
@@ -76,7 +76,8 @@ function databasePort(databasePath: string): InitDatabasePort {
   return {
     migrate(): Result<{ appliedVersions: number[]; alreadyUpToDate: boolean }, AppError> {
       try {
-        const { db, outcome } = openAndMigrate(databasePath, MIGRATIONS);
+        const plan = productionMigrationPlan();
+        const { db, outcome } = openAndMigrate(databasePath, plan.migrations, { rebuilds: plan.rebuilds });
         db.close();
         return ok(outcome);
       } catch (error) {
