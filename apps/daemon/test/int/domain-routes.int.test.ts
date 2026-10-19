@@ -84,7 +84,8 @@ function call(
       init?.rawBody !== undefined ? init.rawBody : init?.body === undefined ? null : JSON.stringify(init.body);
     if (payload !== null && init?.rawBody === undefined) headers["content-type"] = "application/json";
     const outgoing = httpRequest(
-      { host: "127.0.0.1", port, path, method: init?.method ?? "GET", headers },
+      // Blocking database fixtures can outlive a pooled socket's idle timeout.
+      { host: "127.0.0.1", port, path, method: init?.method ?? "GET", headers, agent: false },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -97,7 +98,10 @@ function call(
         );
       },
     );
-    outgoing.on("error", reject);
+    outgoing.on("error", (error) => {
+      error.message += ` (${init?.method ?? "GET"} ${path}; reusedSocket=${outgoing.reusedSocket})`;
+      reject(error);
+    });
     if (payload !== null) outgoing.write(payload);
     outgoing.end();
   });
@@ -593,7 +597,7 @@ describe("diagnostics schema admission", () => {
     const writer = new DatabaseSync(database);
     const operationalOpen = vi.spyOn(sqliteConnections, "openSorageDatabase");
     try {
-      writer.exec("INSERT INTO schema_migrations VALUES(10, 'future', '2026-01-01')");
+      writer.exec("INSERT INTO schema_migrations VALUES(11, 'future', '2026-01-01')");
       // Keep a known connection alive so finalizing earlier request connections
       // cannot checkpoint their WAL inside the endpoint's byte-comparison window.
       const before = readFileSync(database);
@@ -618,7 +622,7 @@ describe("diagnostics schema admission", () => {
       expect(operationalOpen.mock.calls.filter(([path]) => path === database)).toHaveLength(0);
     } finally {
       try {
-        writer.exec("DELETE FROM schema_migrations WHERE version=10");
+        writer.exec("DELETE FROM schema_migrations WHERE version=11");
       } finally {
         operationalOpen.mockRestore();
         writer.close();

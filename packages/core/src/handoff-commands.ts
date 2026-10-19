@@ -152,6 +152,19 @@ export interface SendPorts {
   inspectSource(path: string, userHome: string): Result<{ resolvedSourcePath: string; originalName: string }, AppError>;
   /** Digests a file with a bounded read, for the idempotency request hash (CLI-021). */
   digestSource(path: string): Result<string, AppError>;
+  /**
+   * The optional large-content Git-history disclosure seam of SHR-011 (WR2):
+   * supplied by the production composition from `gitBackup.enabled` and
+   * `gitBackup.largeArtifactWarningBytes`; fired once per original source body
+   * strictly after the fanout commit succeeds and strictly before activation,
+   * so a later activation failure still disclosed the growth. Metadata-only;
+   * a failing sink never changes the outcome (WR2).
+   */
+  disclosures?: {
+    backupEnabled: boolean;
+    thresholdBytes: number;
+    largeContent(sizeBytes: number, thresholdBytes: number): void;
+  };
 }
 
 /** Derives the stored-name slug of a title: the same folding rule a Project slug uses. */
@@ -649,6 +662,22 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
       if (racedReplay.value !== null) return ok(racedReplay.value);
     }
     return err(committed.error);
+  }
+
+  // The fanout commit succeeded, so the original source body is durably stored:
+  // fire the large-content Git-history disclosure once per source body — never
+  // per fan-out copy — before any activation runs, so a later activation
+  // failure still disclosed the growth (SHR-011, WR2). A racing-replay return
+  // above never reaches this point, so a replayed send never notifies.
+  if (ports.disclosures !== undefined && ports.disclosures.backupEnabled) {
+    const sourceBytes = preparedBodies[0]?.prepared.sizeBytes;
+    if (sourceBytes !== undefined && sourceBytes > ports.disclosures.thresholdBytes) {
+      try {
+        ports.disclosures.largeContent(sourceBytes, ports.disclosures.thresholdBytes);
+      } catch {
+        // A diagnostic sink failure never changes the committed outcome.
+      }
+    }
   }
 
   // Execute the committed file intents outside any transaction, then complete

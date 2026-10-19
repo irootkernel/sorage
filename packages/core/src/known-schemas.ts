@@ -7,11 +7,12 @@ import { type AppError, appError } from "./errors";
  * legacy prefix eligibility. The database migration maximum before M9 is 7;
  * version 8 is the TASK-106 additive infrastructure migration; version 9 is
  * the TASK-107 Handoff rebuild that normalizes Artifact storage onto the shared
- * content records. A build's operational catalog must match this inventory
- * exactly — an adapter test pins `MIGRATIONS` plus the production rebuild plan
- * to it — while read-only surfaces consult the eligibility rules below so a
- * database whose applied maximum exceeds this build fails closed with
- * `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
+ * content records; version 10 is the TASK-108 Memo rebuild that normalizes
+ * Memo bodies onto the shared content records. A build's operational catalog
+ * must match this inventory exactly — an adapter test pins `MIGRATIONS` plus
+ * the production rebuild plan to it — while read-only surfaces consult the
+ * eligibility rules below so a database whose applied maximum exceeds this
+ * build fails closed with `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
  */
 
 export interface KnownSchemaVersion {
@@ -29,6 +30,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 7, name: "project-memos-v1" },
   { version: 8, name: "shared-content-v1" },
   { version: 9, name: "handoff-shared-content-v1" },
+  { version: 10, name: "memo-shared-content-v1" },
 ];
 
 /** The highest database schema version this build knows. */

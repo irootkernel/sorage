@@ -82,6 +82,17 @@ export interface RevisionPorts extends HandoffReadPorts {
   bindingDirectories: string[];
   /** Digests a file with a bounded read so the guards can run before staging (section 19). */
   digestSource(path: string): Result<string, AppError>;
+  /**
+   * The optional large-content Git-history disclosure seam of SHR-011 (WR2):
+   * fired once strictly after `applyContentRevision` succeeds and strictly
+   * before activation, for the prepared replacement body's bytes only — a
+   * `--no-change` resolution or a replayed revise never notifies.
+   */
+  disclosures?: {
+    backupEnabled: boolean;
+    thresholdBytes: number;
+    largeContent(sizeBytes: number, thresholdBytes: number): void;
+  };
 }
 
 export interface ReviseInput extends ReadActorInput {
@@ -242,6 +253,23 @@ function reviseContent(
   role: "sender" | "recipient" | "user",
   facts: HandoffFacts,
 ): Result<ReviseOutcome, AppError> {
+  // A successful competing revision can retire the captured Artifact before
+  // its body is verified. Confirm the captured version before diagnosing
+  // corruption; this failure-only check never retries the mutation.
+  const currentBodyFailure = (error: AppError): Result<never, AppError> => {
+    if (error.code !== "ARTIFACT_CORRUPTED") return err(error);
+    const latest = ports.handoffs.loadHandoff(handoff.id);
+    if (!latest.ok) return err(latest.error);
+    if (latest.value !== null && latest.value.view.rowVersion !== handoff.rowVersion) {
+      return err(
+        appError(
+          "ROW_VERSION_CONFLICT",
+          "the Handoff changed since it was last read; re-read it and retry with the new Row Version",
+        ),
+      );
+    }
+    return err(error);
+  };
   // The mandatory current-body verification of VLT-023 runs for both revision
   // variants after the earlier replay, state, and Note guards and before any
   // success is claimed: a missing authoritative row or record is refused
@@ -250,10 +278,11 @@ function reviseContent(
   // domain, Row Version, events, and receipts unchanged.
   const verifyCurrentBody = (): Result<void, AppError> | null => {
     if (contentIntegrity === "artifact-record-missing") {
-      return err(missingRecordAfterVersion(input, handoff));
+      return currentBodyFailure(missingRecordAfterVersion(input, handoff));
     }
     if (handoff.currentArtifact === null) return null;
-    return ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
+    const verified = ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
+    return verified.ok ? verified : currentBodyFailure(verified.error);
   };
   // The no-change resolution resolves the Note without staging anything.
   if (input.noChange === true) {
@@ -352,7 +381,7 @@ function reviseContent(
   // missing Artifact row or record row can neither be compared against nor
   // revised past (SHR-004, SHR-014, VLT-023).
   if (contentIntegrity === "artifact-record-missing") {
-    return err(missingRecordAfterVersion(input, handoff));
+    return currentBodyFailure(missingRecordAfterVersion(input, handoff));
   }
   // The same content refuses before anything mutates or stages (HND-015).
   if (
@@ -369,10 +398,8 @@ function reviseContent(
   }
   // The mandatory current-body gate (VLT-023): a present body is verified
   // through the common bounded reader before any staging or mutation.
-  if (handoff.currentArtifact !== null) {
-    const verified = ports.artifact.verifyArtifactBody(handoff.currentArtifact.id, { verifyFileDigest: "always" });
-    if (!verified.ok) return err(verified.error);
-  }
+  const verified = verifyCurrentBody();
+  if (verified !== null && !verified.ok) return err(verified.error);
   const spoolUpload = input.fileSourceKind === "authenticated-spool";
   const contained = checkVaultContainment({
     resolvedVaultPath: ports.config.vaultPath,
@@ -497,6 +524,21 @@ function reviseContent(
         : undefined,
   });
   if (!applied.ok) return err(applied.error);
+
+  // The revision committed: fire the large-content Git-history disclosure for
+  // the prepared replacement body before any activation runs (SHR-011, WR2).
+  // A `--no-change` resolution never prepared a body, and a replayed revise
+  // returned earlier, so neither reaches this notification.
+  if (ports.disclosures !== undefined && ports.disclosures.backupEnabled) {
+    const replacementBytes = prepared.value.sizeBytes;
+    if (replacementBytes > ports.disclosures.thresholdBytes) {
+      try {
+        ports.disclosures.largeContent(replacementBytes, ports.disclosures.thresholdBytes);
+      } catch {
+        // A diagnostic sink failure never changes the committed outcome.
+      }
+    }
+  }
 
   // Execute the committed file intents, then complete each with its system
   // event; an inline replacement has nothing physical to execute.

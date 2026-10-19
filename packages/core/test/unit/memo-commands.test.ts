@@ -8,6 +8,22 @@ describe("Memo application validation before storage", () => {
   const ports: MemoCommandPorts = {
     installationId: id,
     defaultPageSize: 20,
+    maxBytes: 65_536,
+    bodies: new Proxy({} as MemoCommandPorts["bodies"], {
+      get() {
+        throw new Error("Invalid input reached body storage");
+      },
+    }),
+    coherence: new Proxy({} as MemoCommandPorts["coherence"], {
+      get() {
+        throw new Error("Invalid input reached coherence inspection");
+      },
+    }),
+    staging: new Proxy({} as MemoCommandPorts["staging"], {
+      get() {
+        throw new Error("Invalid input reached staging");
+      },
+    }),
     memos: new Proxy({} as MemoRepository, {
       get() {
         throw new Error("Invalid input reached storage");

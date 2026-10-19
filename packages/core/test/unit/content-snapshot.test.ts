@@ -397,17 +397,18 @@ describe("classifySnapshotEvent", () => {
 describe("format-3 Memo shards", () => {
   it("serializes and parses back with the body carried as inline bodyContent", () => {
     const memo = sampleMemo();
-    const shard = serializeMemoSnapshotV3(memo);
+    const shard = serializeMemoSnapshotV3(inlineMemoV3(memo));
     expect(shard.ok).toBe(true);
     if (!shard.ok) return;
     expect(shard.value.path).toBe(`memos/01/${memo.id}.json`);
     const parsed = parseMemoSnapshotV3(shard.value.path, shard.value.bytes, shard.value.digest);
-    expect(parsed).toEqual({ ok: true, value: memo });
+    const { body, ...meta } = memo;
+    expect(parsed).toEqual({ ok: true, value: { meta, bodyContent: { kind: "inline", text: body } } });
   });
 
-  it("refuses the file-backed form as a valid later representation", () => {
+  it("rejects a file-backed form with noncanonical identities", () => {
     const memo = sampleMemo();
-    const shard = serializeMemoSnapshotV3(memo);
+    const shard = serializeMemoSnapshotV3(inlineMemoV3(memo));
     if (!shard.ok) return;
     const record = JSON.parse(Buffer.from(shard.value.bytes).toString("utf8")) as Record<string, unknown>;
     record.bodyContent = { contentPath: "content/memo/o/c", sizeBytes: 4, sha256: "c".repeat(64) };
@@ -415,22 +416,28 @@ describe("format-3 Memo shards", () => {
     const digest = createHash("sha256").update(bytes).digest("hex");
     const parsed = parseMemoSnapshotV3(shard.value.path, bytes, digest);
     expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.error.code).toBe("VAULT_SCHEMA_UNSUPPORTED");
+    if (!parsed.ok) expect(parsed.error.code).toBe("VAULT_INTEGRITY_ERROR");
   });
 
   it("verifies the digest over the exact raw bytes", () => {
     const memo = sampleMemo();
-    const shard = serializeMemoSnapshotV3(memo);
+    const shard = serializeMemoSnapshotV3(inlineMemoV3(memo));
     if (!shard.ok) return;
     const parsed = parseMemoSnapshotV3(shard.value.path, shard.value.bytes, "0".repeat(64));
     expect(parsed.ok).toBe(false);
   });
 });
 
+function inlineMemoV3(memo: Memo) {
+  const { body, ...meta } = memo;
+  return { ...meta, bodyContent: { kind: "inline" as const, text: body } };
+}
+
 function sampleDataV3(): SnapshotDataV3 {
   const data = sampleData();
   return {
     ...data,
+    memos: (data.memos ?? []).map(inlineMemoV3),
     handoffs: data.handoffs.map((handoff) => ({
       ...handoff,
       artifact: handoff.artifact === null ? null : { ...handoff.artifact, inlineBody: null },
@@ -439,6 +446,48 @@ function sampleDataV3(): SnapshotDataV3 {
 }
 
 describe("snapshotFilesV3", () => {
+  it("round-trips a file-backed Memo's exact historical bytes and reconciles its digest inventory", () => {
+    const data = sampleDataV3();
+    const memo = data.memos![0]!;
+    const contentId = "0123abcd-0000-4000-8000-0000000000ff";
+    const contentPath = `content/memo/${memo.id}/${contentId}`;
+    const bytes = Buffer.from("\uFEFF" + "x".repeat(65532) + "😀\r\nno-final-LF");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    memo.bodyContent = { kind: "file-backed", contentPath, sizeBytes: bytes.length, sha256 };
+    data.memoContentFiles = [{ memoId: memo.id, contentId, bytes }];
+    const built = snapshotFilesV3(data);
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.value.manifest.contentDigests).toEqual({ [contentPath]: sha256 });
+    expect(built.value.files.find((file) => file.path === contentPath)?.content).toEqual(bytes);
+    expect(validateSnapshot(data, built.value.manifest).ok).toBe(true);
+    const shard = serializeMemoSnapshotV3(memo);
+    expect(shard.ok).toBe(true);
+    if (!shard.ok) return;
+    const { bodyContent, ...meta } = memo;
+    expect(parseMemoSnapshotV3(shard.value.path, shard.value.bytes, shard.value.digest)).toEqual({
+      ok: true,
+      value: { meta, bodyContent },
+    });
+    for (const invalidBytes of [Buffer.from([0xff]), Buffer.from([0]), Buffer.from([0xe2, 0x82])]) {
+      const badDigest = createHash("sha256").update(invalidBytes).digest("hex");
+      const corruptData = {
+        ...data,
+        memos: [{ ...meta, bodyContent: { ...bodyContent, sizeBytes: invalidBytes.length, sha256: badDigest } }],
+        memoContentFiles: [{ memoId: memo.id, contentId, bytes: invalidBytes }],
+      };
+      expect(snapshotFilesV3(corruptData).ok).toBe(false);
+      expect(
+        validateSnapshot(corruptData, { ...built.value.manifest, contentDigests: { [contentPath]: badDigest } }).ok,
+      ).toBe(false);
+    }
+    expect(snapshotFilesV3({ ...data, memoContentFiles: [] }).ok).toBe(false);
+    expect(snapshotFilesV3({ ...data, memos: [] }).ok).toBe(false);
+    expect(
+      validateSnapshot(data, { ...built.value.manifest, contentDigests: { [contentPath]: "0".repeat(64) } }).ok,
+    ).toBe(false);
+  });
+
   it("writes the format-3 manifest with zero Channels and an empty contentDigests map", () => {
     const built = snapshotFilesV3(sampleDataV3());
     expect(built.ok).toBe(true);
@@ -607,7 +656,7 @@ describe("validateSnapshot format-3 classification", () => {
     expect(verified.ok).toBe(true);
   });
 
-  it("refuses a nonempty contentDigests map as a later representation", () => {
+  it("rejects a content digest with no owning Memo file", () => {
     const data = sampleDataV3();
     const built = snapshotFilesV3(data);
     expect(built.ok).toBe(true);
@@ -618,7 +667,7 @@ describe("validateSnapshot format-3 classification", () => {
     };
     const refused = validateSnapshot(format3Data(data), manifest);
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe("VAULT_SCHEMA_UNSUPPORTED");
+    if (!refused.ok) expect(refused.error.code).toBe("VAULT_INTEGRITY_ERROR");
   });
 
   it("keeps formats 1 and 2 restorable with their frozen shapes", () => {

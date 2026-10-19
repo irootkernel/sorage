@@ -1,16 +1,18 @@
-import { closeSync, mkdirSync, openSync, readSync, rmSync, statSync, writeSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
-import { appError } from "@sorage/core";
-import type { AppError } from "@sorage/core";
+import { openSync, readSync, closeSync, rmSync, statSync } from "node:fs";
+import { appError, type AppError } from "@sorage/core";
 import type { IncomingMessage } from "node:http";
+import { streamMultipart, type MultipartPartHeader, type MultipartEnginePolicy } from "./multipart-engine";
 
 /**
- * The browser streaming upload of TASK-047 and TASK-084 (API-003, API-013, NFR-005):
- * a multipart body is consumed chunk by chunk straight into a bounded spool file
- * under `state/uploads`, never buffered whole in memory. A file part and a `body`
- * field are mutually exclusive by presence. The stream aborts the moment it crosses
- * `artifact.maxBytes`, leaving no spool file behind.
+ * The browser streaming upload of TASK-047 and TASK-084 (API-003, API-013,
+ * NFR-005), now a thin Handoff policy over the shared multipart engine: a file
+ * part and a `body` field are mutually exclusive by presence, every streamed
+ * part is spooled under `state/uploads` with the mid-stream `artifact.maxBytes`
+ * abort, and the closing validation keeps the original empty-after-trim body
+ * check and error wording. The engine owns all framing mechanics; this wrapper
+ * preserves the Handoff domain rules and existing error categories.
  */
+
 export interface UploadedPart {
   field: string;
   filename: string;
@@ -28,7 +30,6 @@ export interface MultipartUploadResult {
   cleanup(): void;
 }
 
-const BOUNDARY_PREFIX = "--";
 const TEXT_FIELD_BOUND_BYTES = 65_536;
 const HEADER_BOUND_BYTES = 16_384;
 const SCAN_BUFFER_BYTES = 64 * 1024;
@@ -38,285 +39,147 @@ export function consumeMultipartUpload(
   request: IncomingMessage,
   options: { maxBytes: number; spoolDir: string },
 ): Promise<{ ok: true; value: MultipartUploadResult } | { ok: false; error: AppError }> {
-  const contentType = String(request.headers["content-type"] ?? "");
-  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
-  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
-  if (boundary === undefined || boundary === "") {
-    return Promise.resolve({
-      ok: false,
-      error: appError("CONFIG_INVALID", "the upload must be multipart/form-data with a boundary"),
-    });
-  }
-  const delimiter = Buffer.from(`${BOUNDARY_PREFIX}${boundary}`);
-  mkdirSync(options.spoolDir, { recursive: true });
-  const spoolPath = `${options.spoolDir}/${randomUUID()}`;
   const fields: Record<string, string[]> = {};
   let file: UploadedPart | null = null;
   let body: UploadedPart | null = null;
   let bodyPresent = false;
-  const hasher = createHash("sha256");
+  let cleaned = false;
 
-  return new Promise((resolve) => {
-    const fail = (error: AppError) => {
-      try {
-        if (spool !== null) closeSync(spool);
-        if (file !== null) rmSync(file.path, { force: true });
-        if (body !== null) rmSync(body.path, { force: true });
-        rmSync(spoolPath, { force: true });
-      } catch {
-        // Best-effort cleanup; the periodic sweep is the backstop.
-      }
-      request.resume();
-      resolve({ ok: false, error });
-    };
-
-    // A tiny state machine over the raw byte stream: the buffer never holds more
-    // than the current part's framing plus one incoming chunk.
-    let buffer: Buffer = Buffer.alloc(0);
-    let stage: "preamble" | "headers" | "body" | "done" = "preamble";
-    let currentField = "";
-    let currentFilename: string | null = null;
-    let streamingKind: "file" | "body" | "field" = "field";
-    // The spool is a plain descriptor opened eagerly: a lazily-opened stream
-    // would recreate the file after an abort's unlink.
-    let spool: number | null = null;
-    let written = 0;
-
-    const openSpool = () => {
-      spool = openSync(spoolPath, "w");
-    };
-
-    const isStreaming = () => streamingKind === "file" || streamingKind === "body";
-
-    request.on("data", (chunk: Buffer) => {
-      if (stage === "done") return;
-      buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
-      for (;;) {
-        if (stage === "preamble" || stage === "body") {
-          const index = buffer.indexOf(delimiter);
-          if (index === -1) {
-            // No delimiter in sight: everything before a tail guard is file or
-            // body data; a text part stays buffered because its value is small.
-            if (stage === "preamble" && buffer.length > TEXT_FIELD_BOUND_BYTES) {
-              fail(appError("CONFIG_INVALID", "the multipart preamble exceeded its bound"));
-              stage = "done";
-              return;
-            }
-            if (stage === "body" && isStreaming()) {
-              const keep = delimiter.length + 3;
-              const emit = buffer.length > keep ? buffer.subarray(0, buffer.length - keep) : Buffer.alloc(0);
-              if (emit.length > 0) {
-                written += emit.length;
-                if (written > options.maxBytes) {
-                  fail(
-                    appError(
-                      "ARTIFACT_TOO_LARGE",
-                      `the upload crossed artifact.maxBytes (${options.maxBytes} bytes) and was aborted mid-stream`,
-                    ),
-                  );
-                  stage = "done";
-                  return;
-                }
-                hasher.update(emit);
-                if (spool !== null) writeSync(spool, emit);
-                buffer = buffer.subarray(emit.length);
-              }
-            } else if (stage === "body" && buffer.length > TEXT_FIELD_BOUND_BYTES) {
-              fail(appError("CONFIG_INVALID", "a text form field exceeded its bound"));
-              stage = "done";
-            }
-            return;
-          }
-          if (stage === "body") {
-            const emit = buffer.subarray(0, Math.max(0, index - 2)); // strip the CRLF before the boundary
-            if (streamingKind === "field") {
-              const value = emit.toString("utf8");
-              if (currentField !== "") {
-                fields[currentField] = fields[currentField] ?? [];
-                (fields[currentField] as string[]).push(value);
-              }
-              buffer = buffer.subarray(index + delimiter.length);
-              if (buffer.subarray(0, 2).toString("latin1") === "--") {
-                stage = "done";
-                finish();
-                return;
-              }
-              stage = "headers";
-              continue;
-            }
-            written += emit.length;
-            if (written > options.maxBytes) {
-              fail(
-                appError(
-                  "ARTIFACT_TOO_LARGE",
-                  `the upload crossed artifact.maxBytes (${options.maxBytes} bytes) and was aborted mid-stream`,
-                ),
-              );
-              stage = "done";
-              return;
-            }
-            hasher.update(emit);
-            if (spool !== null) {
-              writeSync(spool, emit);
-              closeSync(spool);
-              spool = null;
-            }
-            const part: UploadedPart = {
-              field: currentField,
-              filename: currentFilename ?? (streamingKind === "body" ? "body.md" : "upload"),
-              path: spoolPath,
-              bytes: written,
-              sha256: "",
-            };
-            if (streamingKind === "body") body = part;
-            else file = part;
-          }
-          buffer = buffer.subarray(index + delimiter.length);
-          // `--boundary--` is the terminator. Detect it here, not after headers,
-          // so a body or file whose bytes start with `--` (YAML frontmatter) is kept.
-          if (buffer.subarray(0, 2).toString("latin1") === "--") {
-            stage = "done";
-            finish();
-            return;
-          }
-          stage = "headers";
-          continue;
+  const policy: MultipartEnginePolicy<MultipartUploadResult> = {
+    boundaryError: appError("CONFIG_INVALID", "the upload must be multipart/form-data with a boundary"),
+    malformedError: appError("CONFIG_INVALID", "the multipart body ended without a closing boundary"),
+    preambleBoundBytes: TEXT_FIELD_BOUND_BYTES,
+    preambleTooLargeError: appError("CONFIG_INVALID", "the multipart preamble exceeded its bound"),
+    textFieldBoundBytes: TEXT_FIELD_BOUND_BYTES,
+    textFieldTooLargeError: appError("CONFIG_INVALID", "a text form field exceeded its bound"),
+    headerBoundBytes: HEADER_BOUND_BYTES,
+    headerTooLargeError: appError("CONFIG_INVALID", "the multipart part headers are too large"),
+    totalRawTooLargeError: (sizeBytes: number) =>
+      appError("ARTIFACT_TOO_LARGE", `the upload crossed artifact.maxBytes and was aborted mid-stream`),
+    framingTooLargeError: (framingBytes: number) =>
+      appError("CONFIG_INVALID", "the multipart framing exceeded its bound", { framingBytes }),
+    partMaxBytes: options.maxBytes,
+    partTooLargeError: (_sizeBytes: number) =>
+      appError(
+        "ARTIFACT_TOO_LARGE",
+        `the upload crossed artifact.maxBytes (${String(options.maxBytes)} bytes) and was aborted mid-stream`,
+      ),
+    resolveAtTerminator: true,
+    spoolDir: options.spoolDir,
+    decideHeader(header: MultipartPartHeader) {
+      if (header.name === "body") {
+        if (bodyPresent || body !== null) {
+          return { kind: "reject", error: appError("CONFIG_INVALID", "the upload carries more than one body field") };
         }
-        if (stage === "headers") {
-          const terminator = buffer.indexOf("\r\n\r\n");
-          if (terminator === -1) {
-            if (buffer.length > HEADER_BOUND_BYTES) {
-              fail(appError("CONFIG_INVALID", "the multipart part headers are too large"));
-              stage = "done";
-            }
-            return;
-          }
-          const headerBlock = buffer.subarray(0, terminator).toString("utf8");
-          buffer = buffer.subarray(terminator + 4);
-          currentField = /name="([^"]*)"/.exec(headerBlock)?.[1] ?? "";
-          currentFilename = /filename="([^"]*)"/.exec(headerBlock)?.[1] ?? null;
-          if (currentField === "body") {
-            if (bodyPresent || body !== null) {
-              fail(appError("CONFIG_INVALID", "the upload carries more than one body field"));
-              stage = "done";
-              return;
-            }
-            if (file !== null) {
-              fail(appError("CONFIG_INVALID", "the upload carries both a file part and a body field"));
-              stage = "done";
-              return;
-            }
-            bodyPresent = true;
-            streamingKind = "body";
-            written = 0;
-            openSpool();
-          } else if (currentFilename !== null) {
-            if (file !== null) {
-              fail(appError("CONFIG_INVALID", "the upload carries more than one file part"));
-              stage = "done";
-              return;
-            }
-            if (bodyPresent || body !== null) {
-              fail(appError("CONFIG_INVALID", "the upload carries both a file part and a body field"));
-              stage = "done";
-              return;
-            }
-            streamingKind = "file";
-            written = 0;
-            openSpool();
-          } else {
-            streamingKind = "field";
-          }
-          stage = "body";
-          continue;
+        if (file !== null) {
+          return {
+            kind: "reject",
+            error: appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
+          };
         }
-        return;
+        bodyPresent = true;
+        return { kind: "engine-spool" };
       }
-    });
-
-    request.on("end", () => {
-      if (stage === "done") return;
-      if (stage === "body") {
-        fail(appError("CONFIG_INVALID", "the multipart body ended without a closing boundary"));
-        return;
+      if (header.filename !== null) {
+        if (file !== null) {
+          return { kind: "reject", error: appError("CONFIG_INVALID", "the upload carries more than one file part") };
+        }
+        if (bodyPresent || body !== null) {
+          return {
+            kind: "reject",
+            error: appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
+          };
+        }
+        return { kind: "engine-spool" };
       }
-      finish();
-    });
-
-    request.on("error", () => {
-      if (stage !== "done") {
-        fail(appError("INTERNAL_ERROR", "the upload stream failed"));
+      return { kind: "text" };
+    },
+    onTextEnd(part) {
+      if (part.header.name !== "") {
+        fields[part.header.name] = fields[part.header.name] ?? [];
+        (fields[part.header.name] as string[]).push(part.value);
       }
-    });
-
-    function finish() {
-      stage = "done";
+      return null;
+    },
+    onSpoolEnd(part) {
+      const uploaded: UploadedPart = {
+        field: part.header.name,
+        filename: part.header.filename ?? (part.header.name === "body" ? "body.md" : "upload"),
+        path: part.path,
+        bytes: part.bytes,
+        sha256: part.sha256,
+      };
+      if (part.header.name === "body") body = uploaded;
+      else file = uploaded;
+      return null;
+    },
+    onComplete(totalRawBytes: number, payloadBytes: number) {
+      void totalRawBytes;
+      void payloadBytes;
       if (file !== null && bodyPresent) {
-        fail(appError("CONFIG_INVALID", "the upload carries both a file part and a body field"));
-        return;
+        return { ok: false, error: appError("CONFIG_INVALID", "the upload carries both a file part and a body field") };
       }
       if (bodyPresent) {
         if (body === null) {
-          fail(appError("CONFIG_INVALID", "the body field is empty after trimming"));
-          return;
+          return { ok: false, error: appError("CONFIG_INVALID", "the body field is empty after trimming") };
         }
-        const emptiness = utf8EmptyAfterTrim(body.path);
+        const emptiness = utf8EmptyAfterTrim((body as UploadedPart).path);
         if (!emptiness.ok) {
-          fail(emptiness.error);
-          return;
+          return { ok: false, error: emptiness.error };
         }
         if (emptiness.empty) {
-          fail(appError("CONFIG_INVALID", "the body field is empty after trimming"));
-          return;
+          return { ok: false, error: appError("CONFIG_INVALID", "the body field is empty after trimming") };
         }
-        body.sha256 = hasher.digest("hex");
-        try {
-          statSync(body.path);
-        } catch {
-          resolve({ ok: false, error: appError("INTERNAL_ERROR", "the spooled upload vanished") });
-          return;
+        if (!spoolSurvives((body as UploadedPart).path)) {
+          return { ok: false, error: appError("INTERNAL_ERROR", "the spooled upload vanished") };
         }
-        settle();
-        return;
+        return { ok: true, value: result() };
       }
       if (file === null) {
-        rmSync(spoolPath, { force: true });
-        resolve({
-          ok: false,
-          error: appError("CONFIG_INVALID", "the upload carried no file part"),
-        });
-        return;
+        return { ok: false, error: appError("CONFIG_INVALID", "the upload carried no file part") };
       }
-      file.sha256 = hasher.digest("hex");
-      try {
-        statSync(file.path);
-      } catch {
-        resolve({ ok: false, error: appError("INTERNAL_ERROR", "the spooled upload vanished") });
-        return;
+      if (!spoolSurvives((file as UploadedPart).path)) {
+        return { ok: false, error: appError("INTERNAL_ERROR", "the spooled upload vanished") };
       }
-      settle();
-    }
+      return { ok: true, value: result() };
+    },
+    onAbort() {
+      cleanup();
+    },
+  };
 
-    function settle() {
-      resolve({
-        ok: true,
-        value: {
-          fields,
-          file,
-          body,
-          cleanup: () => {
-            // Only this upload's own spool file: the shared state/uploads directory
-            // holds the spools of every concurrent upload and must survive (TASK-047).
-            try {
-              rmSync(spoolPath, { force: true });
-            } catch {
-              // Best effort.
-            }
-          },
-        },
-      });
+  function cleanup(): void {
+    if (cleaned) return;
+    cleaned = true;
+    // Only this upload's own spool file: the shared state/uploads directory
+    // holds the spools of every concurrent upload and must survive (TASK-047).
+    try {
+      if (file !== null) rmSync(file.path, { force: true });
+      if (body !== null) rmSync(body.path, { force: true });
+    } catch {
+      // Best effort.
     }
-  });
+  }
+
+  function spoolSurvives(path: string): boolean {
+    try {
+      statSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function result(): MultipartUploadResult {
+    return {
+      fields,
+      file,
+      body,
+      cleanup,
+    };
+  }
+
+  return streamMultipart(request, policy);
 }
 
 /** True when the UTF-8 file is empty after JavaScript `trim()`, scanned with a bounded buffer. */

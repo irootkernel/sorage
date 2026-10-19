@@ -27,6 +27,7 @@ export * from "./memos";
 export * from "./memo-repository";
 export * from "./memo-commands";
 export * from "./memo-protocol";
+export * from "./memo-request-hash";
 export * from "./memo-snapshot";
 export * from "./preflight";
 export * from "./project-commands";

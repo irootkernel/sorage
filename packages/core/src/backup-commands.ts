@@ -17,6 +17,7 @@ import {
   validateSnapshotCommonEvent,
   validateSnapshotHandoffV3,
   validateSnapshotProjectV3,
+  validateSnapshotMemoContent,
 } from "./content-snapshot";
 import { parseMemoEventAssociation, validateMemoInventory, type VersionedSnapshotManifest } from "./memo-snapshot";
 import { type Configuration, isValidTimezone, SCHEDULE_AT_PATTERN } from "./config";
@@ -163,15 +164,9 @@ export function validateSnapshot(
       ),
     );
   }
-  if (manifest.formatVersion === 3 && Object.keys(manifest.contentDigests).length > 0) {
-    return err(
-      appError(
-        "VAULT_SCHEMA_UNSUPPORTED",
-        "The snapshot carries exported shared-content files, a valid later representation this build cannot import",
-      ),
-    );
-  }
   if (manifest.formatVersion === 3) {
+    const content = validateSnapshotMemoContent(data as SnapshotDataV3, manifest.contentDigests);
+    if (!content.ok) return content;
     // Refuse recognized later ledger families before the legacy Memo inventory
     // or supported-family associations can interpret their rows.
     for (const event of data.events) {

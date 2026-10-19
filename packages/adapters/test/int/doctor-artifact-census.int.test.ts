@@ -148,7 +148,7 @@ describe("the doctor Artifact census across the adoption boundary", () => {
     // diagnostic; the doctor never upgrades the database to silence it.
     const migrations = doctor.probe("db.migrations");
     expect(migrations.severity).toBe("blocking");
-    expect(migrations.message).toContain("at 8, expected 9");
+    expect(migrations.message).toContain("at 8, expected 10");
   });
 
   it("blocks when the owned legacy Artifact file is missing on schema 8", () => {

@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createNodeMemoPorts, type NodeMemoPortsOptions } from "@sorage/adapters/src/memo-command-ports";
+import { randomUUID } from "node:crypto";
+import {
+  createNodeMemoPorts,
+  sweepMemoAcceptedInputs,
+  type NodeMemoPortsOptions,
+} from "@sorage/adapters/src/memo-command-ports";
 import {
   addMemo,
   appError,
@@ -15,10 +20,12 @@ import {
   parseMemoExecution,
   showMemo,
   successEnvelope,
+  type AcceptedMemoBody,
   type Result,
 } from "@sorage/core";
 import type { RouteEntryInternal } from "./route-kit";
 import { SECURITY_HEADERS, type DaemonRequestContext } from "./server";
+import { consumeMemoMultipart } from "./memo-multipart";
 
 /** Collect bytes before one fatal decode. Overflow stops accumulation without destroying the response socket. */
 function readMemoBody(request: IncomingMessage): Promise<Result<unknown>> {
@@ -88,6 +95,9 @@ function respond(response: ServerResponse, context: DaemonRequestContext, result
 
 /** Memo deliberately never sets idempotent: the shared DB receipt is its sole replay authority. */
 export function createMemoRoutes(options: NodeMemoPortsOptions = {}): RouteEntryInternal[] {
+  // Startup maintenance belongs to the adapter composition, once per daemon's
+  // route construction. Requests never create or clear another operation's spool.
+  sweepMemoAcceptedInputs(options);
   const definitions = [
     ["GET", "/api/v1/memos", "list"],
     ["POST", "/api/v1/memos", "add"],
@@ -102,39 +112,86 @@ export function createMemoRoutes(options: NodeMemoPortsOptions = {}): RouteEntry
     pattern,
     handler: async (request, response, context) => {
       const mutation = method !== "GET";
-      const body = mutation ? await readMemoBody(request) : queryInput(request, operation === "list");
-      if (!body.ok) {
-        respond(response, context, body);
+      const multipart =
+        mutation &&
+        String(request.headers["content-type"] ?? "")
+          .toLowerCase()
+          .startsWith("multipart/form-data");
+      // The state-action routes stay JSON; only the create and update routes
+      // add the multipart ingestion of interface section 38.2.
+      if (multipart && operation !== "add" && operation !== "update") {
+        respond(response, context, err(appError("MEMO_INVALID_INPUT", "Memo state actions take JSON only")));
         return;
       }
-      // Mutations take only their documented JSON fields; query scope belongs to GET.
+      // Mutations take only their documented JSON or multipart fields; query scope belongs to GET.
       if (mutation && new URL(request.url ?? "/", "http://localhost").search !== "") {
-        respond(response, context, err(appError("MEMO_INVALID_INPUT", "Memo mutation inputs belong in JSON")));
-        return;
-      }
-      const keys = rawHeaderValues(request, "idempotency-key");
-      const policy = parseMemoExecution(
-        rawHeaderValues(request, "idempotency-mode"),
-        keys.length > 1 ? keys : keys[0],
-        mutation,
-      );
-      if (!policy.ok) {
-        respond(response, context, policy);
+        respond(
+          response,
+          context,
+          err(appError("MEMO_INVALID_INPUT", "Memo mutation inputs belong in the request body")),
+        );
         return;
       }
       const ports = createNodeMemoPorts(options);
+      let accepted: AcceptedMemoBody | undefined;
       try {
+        let metaInput: Result<unknown>;
+        if (multipart) {
+          const ingested = await consumeMemoMultipart(request, {
+            maxBytes: ports.maxBytes,
+            stateDir: ports.stateDir,
+            spoolId: randomUUID(),
+          });
+          if (!ingested.ok) {
+            respond(response, context, ingested);
+            return;
+          }
+          accepted = ingested.value.acceptedBody ?? undefined;
+          metaInput = ok(ingested.value.meta);
+          if (accepted === undefined && operation === "add") {
+            // An absent body part on create is the existing empty body: carry
+            // the JSON route's explicit empty-body field so the normalized
+            // request identity matches across encodings. An absent body on
+            // update stays a title-only change (section 38.2).
+            metaInput = ok({ ...(ingested.value.meta as Record<string, unknown>), body: "" });
+          }
+        } else if (mutation) {
+          const json = await readMemoBody(request);
+          if (!json.ok) {
+            respond(response, context, json);
+            return;
+          }
+          metaInput = json;
+        } else {
+          metaInput = ok(undefined);
+        }
+        const body = mutation ? metaInput : queryInput(request, operation === "list");
+        if (!body.ok) {
+          respond(response, context, body);
+          return;
+        }
+        const keys = rawHeaderValues(request, "idempotency-key");
+        const policy = parseMemoExecution(
+          rawHeaderValues(request, "idempotency-mode"),
+          keys.length > 1 ? keys : keys[0],
+          mutation,
+        );
+        if (!policy.ok) {
+          respond(response, context, policy);
+          return;
+        }
         const id = context.params?.id ?? "";
         const result =
           operation === "add"
-            ? addMemo(ports, body.value, policy.value)
+            ? addMemo(ports, body.value, policy.value, accepted)
             : operation === "list"
               ? listMemos(ports, body.value)
               : operation === "show"
                 ? showMemo(ports, id, (body.value as { projectId?: string }).projectId)
-                : mutateMemo(ports, operation, id, body.value, policy.value);
+                : mutateMemo(ports, operation, id, body.value, policy.value, accepted);
         respond(response, context, result);
       } finally {
+        if (accepted !== undefined) ports.releaseAcceptedBody(accepted);
         ports.close();
       }
     },

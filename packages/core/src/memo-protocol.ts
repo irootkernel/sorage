@@ -1,13 +1,18 @@
 import { appError, err, ok, type Result } from "./errors";
 import {
   type Memo,
+  type MemoBodyRef,
+  type MemoSnapshot,
   type MemoState,
+  MEMO_BODY_BYTES,
   MEMO_PREVIEW_BYTES,
   isMemoRowVersion,
   isMemoState,
   isMemoTimestamp,
   isMemoUuid,
   normalizeMemoTitle,
+  publicMemoOf,
+  snapshotOfInlineMemo,
   validateMemoBody,
   validateMemoQuery,
 } from "./memos";
@@ -58,6 +63,27 @@ export interface MemoListFilter {
   cursor?: string;
 }
 
+/** One bounded list-capture row: metadata, SQL match flags, and an inline preview seed; never a full body. */
+export interface MemoCandidateDescriptor {
+  id: string;
+  projectId: string;
+  createdAt: string;
+  title: string;
+  state: MemoState;
+  rowVersion: number;
+  updatedAt: string;
+  closedAt: string | null;
+  representation: "inline" | "file";
+  recordId: string;
+  sizeBytes: number;
+  sha256: string;
+  titleMatch: boolean;
+  inlineMatch: boolean;
+  /** Inline rows: the stored text's bounded head exactly as the SQL substr produced it; null for file rows. */
+  previewSeed: string | null;
+  project: { slug: string; displayName: string; status: "active" | "archived" };
+}
+
 /** Closed objects at the Memo boundary; JSON null and arrays are never records. */
 export function memoObject(
   value: unknown,
@@ -76,12 +102,12 @@ function invalid(message: string): Result<never> {
   return err(appError("MEMO_INVALID_INPUT", message));
 }
 
-export function parseMemoCreate(value: unknown): Result<MemoCreateRequest> {
+export function parseMemoCreate(value: unknown, bodyBound: number = MEMO_BODY_BYTES): Result<MemoCreateRequest> {
   if (!memoObject(value, ["projectId", "title"], ["body"]) || !isMemoUuid(value.projectId))
     return invalid("Invalid Memo create fields");
   const title = normalizeMemoTitle(value.title);
   if (!title.ok) return title;
-  const body = validateMemoBody(Object.hasOwn(value, "body") ? value.body : "");
+  const body = validateMemoBody(Object.hasOwn(value, "body") ? value.body : "", bodyBound);
   if (!body.ok) return body;
   return ok({ projectId: value.projectId, title: title.value, body: body.value });
 }
@@ -99,7 +125,11 @@ export function parseMemoStateRequest(value: unknown): Result<MemoStateRequest> 
   });
 }
 
-export function parseMemoUpdate(value: unknown): Result<MemoUpdateRequest> {
+export function parseMemoUpdate(
+  value: unknown,
+  bodyBound: number = MEMO_BODY_BYTES,
+  options: { externalBody?: boolean } = {},
+): Result<MemoUpdateRequest> {
   if (!memoObject(value, ["expectedRowVersion"], ["projectId", "title", "body"]))
     return invalid("Invalid Memo update fields");
   const base = parseMemoStateRequest({
@@ -107,7 +137,11 @@ export function parseMemoUpdate(value: unknown): Result<MemoUpdateRequest> {
     ...(Object.hasOwn(value, "projectId") ? { projectId: value.projectId } : {}),
   });
   if (!base.ok) return base;
-  if (!Object.hasOwn(value, "title") && !Object.hasOwn(value, "body")) return invalid("Supply a Memo title or body");
+  // A transport-held accepted body counts as the update's supplied body: the
+  // closed field shape and every unknown-field rule stay strict, only the
+  // title-or-body presence requirement widens to title-or-external-body.
+  if (!Object.hasOwn(value, "title") && !Object.hasOwn(value, "body") && options.externalBody !== true)
+    return invalid("Supply a Memo title or body");
   const result: MemoUpdateRequest = base.value;
   if (Object.hasOwn(value, "title")) {
     const title = normalizeMemoTitle(value.title);
@@ -115,7 +149,7 @@ export function parseMemoUpdate(value: unknown): Result<MemoUpdateRequest> {
     result.title = title.value;
   }
   if (Object.hasOwn(value, "body")) {
-    const body = validateMemoBody(value.body);
+    const body = validateMemoBody(value.body, bodyBound);
     if (!body.ok) return body;
     result.body = body.value;
   }
@@ -196,31 +230,44 @@ function isUser(value: unknown): boolean {
 }
 
 /** Used for complete response/receipt data and snapshot rows, without normalizing stored values. */
-export function parseMemoDetail(value: unknown): Result<MemoDetail> {
+export function parseMemoDetail(value: unknown, bodyBound: number = MEMO_BODY_BYTES): Result<MemoDetail> {
   if (
     !memoObject(value, MEMO_FIELDS) ||
-    !isMemoUuid(value.id) ||
-    !isMemoUuid(value.projectId) ||
-    !isMemoState(value.state) ||
-    !isMemoRowVersion(value.rowVersion) ||
-    (value.state !== "open" && value.rowVersion === 1) ||
-    !isMemoTimestamp(value.createdAt) ||
-    !isMemoTimestamp(value.updatedAt) ||
-    !isUser(value.createdBy) ||
-    !isUser(value.updatedBy)
+    !validateMemoDetailFields(value) ||
+    !validateMemoBody(value.body, bodyBound).ok
   )
     return invalid("Invalid Memo detail fields");
-  const title = normalizeMemoTitle(value.title);
-  if (!title.ok || title.value !== value.title) return invalid("Memo detail title must already be normalized");
-  const body = validateMemoBody(value.body);
-  if (!body.ok) return body;
-  if (
-    value.state === "open"
-      ? value.closedAt !== null || value.closedBy !== null
-      : value.closedAt !== value.updatedAt || !isUser(value.closedBy)
-  )
-    return invalid("Memo closing metadata does not match its state");
   return ok(value as unknown as MemoDetail);
+}
+
+/** The same stored lifecycle and provenance checks without materializing a body. */
+export function parseMemoMetadata(value: unknown): Result<Omit<MemoDetail, "body">> {
+  if (
+    !memoObject(
+      value,
+      MEMO_FIELDS.filter((field) => field !== "body"),
+    ) ||
+    !validateMemoDetailFields(value)
+  )
+    return invalid("Invalid Memo metadata fields");
+  return ok(value as unknown as Omit<MemoDetail, "body">);
+}
+
+/** The closed metadata checks every Memo record shape shares, body excluded. */
+function validateMemoDetailFields(memo: Record<string, unknown>): boolean {
+  if (!isMemoUuid(memo.id) || !isMemoUuid(memo.projectId)) return false;
+  if (!isMemoState(memo.state) || !isMemoRowVersion(memo.rowVersion)) return false;
+  return validateMemoDetailState(memo);
+}
+
+function validateMemoDetailState(memo: Record<string, unknown>): boolean {
+  if (memo.state !== "open" && memo.rowVersion === 1) return false;
+  if (!isMemoTimestamp(memo.createdAt) || !isMemoTimestamp(memo.updatedAt)) return false;
+  if (!isUser(memo.createdBy) || !isUser(memo.updatedBy)) return false;
+  const title = normalizeMemoTitle(memo.title);
+  if (!title.ok || title.value !== memo.title) return false;
+  if (memo.state === "open") return memo.closedAt === null && memo.closedBy === null;
+  return memo.closedAt === memo.updatedAt && isUser(memo.closedBy);
 }
 
 export function parseMemoReceipt(value: unknown): Result<MemoReceipt> {
@@ -233,6 +280,115 @@ export function parseMemoReceipt(value: unknown): Result<MemoReceipt> {
   const memo = parseMemoDetail(value.memo);
   if (!memo.ok) return memo;
   return ok({ memo: memo.value, changed: value.changed, replayed: value.replayed });
+}
+
+/** The stored reference form's memo field set: the public fields with `bodyRef` in the body's position. */
+const MEMO_RECEIPT_REF_FIELDS = [
+  "id",
+  "projectId",
+  "title",
+  "bodyRef",
+  "state",
+  "rowVersion",
+  "createdAt",
+  "updatedAt",
+  "createdBy",
+  "updatedBy",
+  "closedAt",
+  "closedBy",
+];
+
+/** One stored Memo receipt in either historical form: a verbatim embedded inline body, or an immutable record reference. */
+export interface StoredMemoReceipt {
+  memo: MemoSnapshot;
+  changed: boolean;
+  replayed: boolean;
+}
+
+function storedCorrupt(message: string): Result<never> {
+  return err(appError("STORAGE_INTEGRITY_ERROR", message));
+}
+
+function validMemoBodyRef(value: unknown): value is MemoBodyRef {
+  if (!memoObject(value, ["recordId", "sizeBytes", "sha256"])) return false;
+  return (
+    isMemoUuid(value.recordId) &&
+    typeof value.sizeBytes === "number" &&
+    Number.isSafeInteger(value.sizeBytes) &&
+    value.sizeBytes >= 0 &&
+    typeof value.sha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(value.sha256)
+  );
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Parses a stored Memo receipt in either form (SHR-008): a legacy receipt
+ * embeds its inline body verbatim under the frozen 65,536 cap, and a receipt
+ * for a Vault-backed original references its immutable content record without
+ * serializing the body into SQLite. Malformed data of either shape is a
+ * storage-integrity refusal — never absence, so a broken receipt can never
+ * become deletion license or a silent miss.
+ */
+export function parseStoredMemoReceipt(value: unknown): Result<StoredMemoReceipt> {
+  if (!memoObject(value, ["memo", "changed", "replayed"]))
+    return storedCorrupt("A stored Memo receipt is not its closed object");
+  if (typeof value.changed !== "boolean" || value.replayed !== false)
+    return storedCorrupt("A stored Memo receipt must be an original outcome");
+  const memo = value.memo;
+  if (!isPlainObject(memo)) return storedCorrupt("A stored Memo receipt's memo is not an object");
+  if (Object.hasOwn(memo, "bodyRef")) {
+    if (!memoObject(memo, MEMO_RECEIPT_REF_FIELDS))
+      return storedCorrupt("A referenced Memo receipt does not carry its closed field set");
+    if (!validateMemoDetailFields(memo)) return storedCorrupt("A referenced Memo receipt's Memo fields are invalid");
+    if (!validMemoBodyRef(memo.bodyRef)) return storedCorrupt("A referenced Memo receipt's body reference is invalid");
+    const { bodyRef, ...meta } = memo;
+    return ok({
+      memo: { ...(meta as unknown as Omit<MemoSnapshot, "body" | "bodyRef">), body: null, bodyRef },
+      changed: value.changed,
+      replayed: false,
+    });
+  }
+  const legacy = parseMemoReceipt(value);
+  if (!legacy.ok) return storedCorrupt("A stored Memo receipt's embedded form is invalid");
+  return ok({
+    memo: snapshotOfInlineMemo(legacy.value.memo),
+    changed: legacy.value.changed,
+    replayed: legacy.value.replayed,
+  });
+}
+
+/**
+ * Serializes one receipt for SQLite storage: an inline original keeps the
+ * legacy verbatim embedded shape byte-for-byte, and a Vault-backed original
+ * stores only its immutable record reference (SHR-008).
+ */
+export function serializeMemoReceiptForStorage(receipt: { memo: MemoSnapshot; changed: boolean }): string {
+  if (receipt.memo.body !== null) {
+    return JSON.stringify({ memo: publicMemoOf(receipt.memo), changed: receipt.changed, replayed: false });
+  }
+  const memo = receipt.memo;
+  return JSON.stringify({
+    memo: {
+      id: memo.id,
+      projectId: memo.projectId,
+      title: memo.title,
+      bodyRef: { recordId: memo.bodyRef.recordId, sizeBytes: memo.bodyRef.sizeBytes, sha256: memo.bodyRef.sha256 },
+      state: memo.state,
+      rowVersion: memo.rowVersion,
+      createdAt: memo.createdAt,
+      updatedAt: memo.updatedAt,
+      createdBy: memo.createdBy,
+      updatedBy: memo.updatedBy,
+      closedAt: memo.closedAt,
+      closedBy: memo.closedBy,
+    },
+    changed: receipt.changed,
+    replayed: false,
+  });
 }
 
 export function parseMemoSummary(value: unknown): Result<MemoSummary> {
@@ -293,6 +449,29 @@ export function parseMemoPage(value: unknown): Result<MemoPage> {
     items.push(parsed.value);
   }
   return ok({ items, nextCursor: value.nextCursor });
+}
+
+/**
+ * The one bounded-preview rule every surface shares: accumulate scalars while
+ * the cumulative UTF-8 byte count stays within 512 bytes, and mark truncation
+ * against the body's total recorded bytes — identical bytes for an inline body
+ * (whose preview seed is the stored text's head) and a file-backed body.
+ */
+export function memoPreviewOf(
+  previewSeed: string,
+  totalBodyBytes: number,
+): { bodyPreview: string; bodyPreviewTruncated: boolean } {
+  let bodyPreview = "";
+  let size = 0;
+  for (const scalar of previewSeed) {
+    size += Buffer.byteLength(scalar);
+    if (size > MEMO_PREVIEW_BYTES) break;
+    bodyPreview += scalar;
+  }
+  return {
+    bodyPreview,
+    bodyPreviewTruncated: Buffer.byteLength(bodyPreview) < totalBodyBytes,
+  };
 }
 
 export function summarizeMemo(

@@ -7,3 +7,4 @@ export * from "./fakes";
 export * from "./fault-injection";
 export * from "./seed";
 export * from "./fsync-probe";
+export * from "./memo-ports";

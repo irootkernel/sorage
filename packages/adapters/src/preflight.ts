@@ -35,7 +35,7 @@ import {
 import { parseDocument } from "yaml";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
-import { migrate } from "./sqlite/migrator";
+import { execMigrationSegments, migrate } from "./sqlite/migrator";
 
 /**
  * Non-mutating installation inspection. The selected SQLite files are copied
@@ -714,7 +714,7 @@ function referenceCatalog(prefix: number): Map<string, string> {
         let rebuildError: unknown;
         try {
           db.exec("BEGIN IMMEDIATE");
-          db.exec(rebuild.sql);
+          execMigrationSegments(db as unknown as SorageSqlite, rebuild);
           db.exec("COMMIT");
         } catch (error) {
           try {

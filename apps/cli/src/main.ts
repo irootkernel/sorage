@@ -67,6 +67,7 @@ import {
   listInbox,
   listOutbox,
   listProjects,
+  largeContentDisclosureMessage,
   memoError,
   moveVault,
   ok,
@@ -510,6 +511,7 @@ export function buildProgram(
   registerMemoCommands(program, {
     out: ports.out,
     requestId,
+    warn: (text) => ports.err(text),
     fail: (error, json) => {
       reportExitCode(renderAppError(memoError(error), ports, json));
     },
@@ -905,7 +907,22 @@ export function buildProgram(
         reportExitCode(renderAppError(drained.error, ports, json));
         return;
       }
-      const result = sendHandoffs(createNodeSendPorts(), {
+      const sendPorts = createNodeSendPorts();
+      // WR3: the disclosure buffers metadata per invocation and flushes after
+      // the result — a JSON failure appends it inside the existing error
+      // message so stderr stays exactly one envelope; success prints it as a
+      // stderr diagnostic before the unchanged stdout output.
+      const sendWarnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
+      if (sendPorts.disclosures !== undefined) {
+        const composed = sendPorts.disclosures;
+        sendPorts.disclosures = {
+          ...composed,
+          largeContent: (sizeBytes: number, thresholdBytes: number) => {
+            sendWarnings.push({ sizeBytes, thresholdBytes });
+          },
+        };
+      }
+      const result = sendHandoffs(sendPorts, {
         to: options.to as string[],
         title: options.title,
         file: options.file,
@@ -920,8 +937,35 @@ export function buildProgram(
         asUser: globals.asUser === true,
       });
       if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
+        let error = result.error;
+        if (json) {
+          try {
+            if (sendWarnings.length > 0)
+              error = {
+                ...error,
+                message: `${error.message}; ${sendWarnings.map((warning) => largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)).join(" ")}`,
+              };
+          } catch {
+            // Formatting failure leaves the original error intact.
+          }
+        } else {
+          for (const warning of sendWarnings) {
+            try {
+              ports.err(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
+            } catch {
+              /* Best effort. */
+            }
+          }
+        }
+        reportExitCode(renderAppError(error, ports, json));
         return;
+      }
+      for (const warning of sendWarnings) {
+        try {
+          ports.err(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
+        } catch {
+          // A diagnostic flush failure never changes a committed outcome.
+        }
       }
       for (const handoff of result.value.handoffs) {
         refreshMarker(handoff.handoffId, ports);
@@ -1299,7 +1343,20 @@ export function buildProgram(
           resolvedSourcePath = inspected.value.resolvedPath;
           originalName = basename(expanded);
         }
-        const result = reviseHandoff(createNodeRevisionPorts(), {
+        const revisionPorts = createNodeRevisionPorts();
+        // WR3: buffered per-invocation disclosure with the same flush rules as
+        // send and Memo (SHR-011, WR2).
+        const reviseWarnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
+        if (revisionPorts.disclosures !== undefined) {
+          const composed = revisionPorts.disclosures;
+          revisionPorts.disclosures = {
+            ...composed,
+            largeContent: (sizeBytes: number, thresholdBytes: number) => {
+              reviseWarnings.push({ sizeBytes, thresholdBytes });
+            },
+          };
+        }
+        const result = reviseHandoff(revisionPorts, {
           ...actorInputOf(globals),
           handoffId: id,
           file: options.file,
@@ -1312,8 +1369,35 @@ export function buildProgram(
           expectedRowVersion: expectedRowVersionOf(globals),
         });
         if (!result.ok) {
-          reportExitCode(renderAppError(result.error, ports, json));
+          let error = result.error;
+          if (json) {
+            try {
+              if (reviseWarnings.length > 0)
+                error = {
+                  ...error,
+                  message: `${error.message}; ${reviseWarnings.map((warning) => largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)).join(" ")}`,
+                };
+            } catch {
+              // Formatting failure leaves the original error intact.
+            }
+          } else {
+            for (const warning of reviseWarnings) {
+              try {
+                ports.err(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
+              } catch {
+                /* Best effort. */
+              }
+            }
+          }
+          reportExitCode(renderAppError(error, ports, json));
           return;
+        }
+        for (const warning of reviseWarnings) {
+          try {
+            ports.err(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
+          } catch {
+            // A diagnostic flush failure never changes a committed outcome.
+          }
         }
         refreshMarker(id, ports);
         if (json) {

@@ -94,6 +94,8 @@ describe("native Memo CLI", () => {
   });
   it("rejects malformed sources without blocking on FIFO/device, consuming keys or emitting content", () => {
     const f = fixture();
+    const configPath = join(f.home, "config.yaml");
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace(/maxBytes:\s*\d+/, "maxBytes: 65536"));
     const file = join(f.home, "body.md");
     const key = randomUUID();
     const add = (more: string[]) =>

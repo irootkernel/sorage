@@ -12,6 +12,11 @@ export const WEB_MEMOS_JS = String.raw`
   var memoDrafts = Object.create(null);
   var memoRenderTicket = 0;
   var memoVisible = null;
+  var memoBodyCap = null;
+  var memoBodyCapCurrent = false;
+  var memoRisk = { current: false, enabled: false, warnBytes: 0 };
+  var memoConfigTicket = 0;
+  var memoPersistFailure = null;
 
   function memoUuid(value) { return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
   function memoBytes(text) { return new TextEncoder().encode(text).length; }
@@ -19,6 +24,11 @@ export const WEB_MEMOS_JS = String.raw`
     if (typeof text !== "string" || memoBytes(text) > limit || text.indexOf("\0") !== -1) return false;
     for (var scalar of text) { var code = scalar.codePointAt(0); if (code >= 0xd800 && code <= 0xdfff) return false; }
     return true;
+  }
+  function memoBodyText(value, cap) {
+    if (typeof value !== "string" || value.indexOf("\0") !== -1) return false;
+    for (var scalar of value) { var code = scalar.codePointAt(0); if (code >= 0xd800 && code <= 0xdfff) return false; }
+    return cap === null || memoBytes(value) <= cap;
   }
   function memoTitle(text) { return memoText(text, 800) && !/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(text) && Array.from(text.trim()).length > 0 && Array.from(text.trim()).length <= 200; }
   function memoVersion(value) { return Number.isSafeInteger(value) && value > 0; }
@@ -43,7 +53,6 @@ export const WEB_MEMOS_JS = String.raw`
   function memoLoadRecovery() {
     try {
       var raw = sessionStorage.getItem(MEMO_STORAGE_KEY);
-      if (raw !== null && memoBytes(raw) > 524288) throw new Error("Oversized recovery record");
       var parsed = raw === null ? { version: 1, active: null, notices: [] } : JSON.parse(raw);
       if (!memoStoredState(parsed)) throw new Error("Invalid recovery record");
       memoRecovery = parsed;
@@ -54,7 +63,7 @@ export const WEB_MEMOS_JS = String.raw`
     try {
       if (memoStorageError || sessionStorage.getItem(MEMO_STORAGE_KEY) !== memoStorageRaw) throw new Error("Recovery storage changed");
       var raw = JSON.stringify(next);
-      if (!memoStoredState(next) || memoBytes(raw) > 524288) throw new Error("Recovery record exceeds its bounds");
+      if (!memoStoredState(next)) throw new Error("Recovery record exceeds its bounds");
       sessionStorage.setItem(MEMO_STORAGE_KEY, raw);
       if (sessionStorage.getItem(MEMO_STORAGE_KEY) !== raw) throw new Error("Recovery storage did not retain the write");
       memoRecovery = next;
@@ -62,6 +71,11 @@ export const WEB_MEMOS_JS = String.raw`
       return true;
     } catch (error) {
       memoStorageError = "Local Memo recovery storage could not be saved or verified. No new request will be sent and writes remain blocked. Preserve this tab's data before repairing storage.";
+      // Only the initial persistence of a brand-new pending precedes any
+      // dispatch. Every later failure keeps the original material and gate
+      // with neutral guidance: the record's shape cannot prove whether the
+      // server returned a receipt, refused, or was never contacted.
+      memoPersistFailure = next.active !== null && memoRecovery.active === null ? { kind: "unsent", material: next.active } : { kind: "transition", material: memoRecovery.active };
       memoRenderRecovery();
       return false;
     }
@@ -81,11 +95,58 @@ export const WEB_MEMOS_JS = String.raw`
       return memoInstallation;
     });
   }
-  function memoInputValid(operation, input, projectId, memoId) {
+  function memoLearnCap() {
+    var ticket = ++memoConfigTicket;
+    return memoRequest("/api/v1/config").then(function (result) {
+      if (result.status !== 200 || !result.body || result.body.ok !== true || !memoObject(result.body.data) || !memoObject(result.body.data.config)) throw new Error("unavailable");
+      var artifact = result.body.data.config.artifact;
+      var value = memoObject(artifact) ? artifact.maxBytes : undefined;
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new Error("invalid");
+      // The retention-risk sample comes from this same response; invalid
+      // backup fields leave the risk unknown without touching the cap.
+      var gitBackup = result.body.data.config.gitBackup;
+      var enabled = memoObject(gitBackup) ? gitBackup.enabled : undefined;
+      var warnBytes = memoObject(gitBackup) ? gitBackup.largeArtifactWarningBytes : undefined;
+      var risk = enabled !== true && enabled !== false ? null : typeof warnBytes === "number" && Number.isSafeInteger(warnBytes) && warnBytes > 0 ? { current: true, enabled: enabled, warnBytes: warnBytes } : null;
+      // Only the most recently initiated refresh moves the shared display
+      // state; a late older refresh never re-marks a newer failure current.
+      if (ticket === memoConfigTicket) {
+        memoBodyCap = value;
+        memoBodyCapCurrent = true;
+        memoRisk = risk === null ? { current: false, enabled: false, warnBytes: 0 } : risk;
+      }
+      return { cap: value, risk: risk };
+    }).catch(function () {
+      if (ticket === memoConfigTicket) {
+        memoBodyCapCurrent = false;
+        memoRisk = { current: false, enabled: false, warnBytes: 0 };
+      }
+      return { cap: null, risk: null };
+    });
+  }
+  function memoEncodeInput(input) {
+    var json = JSON.stringify(input);
+    if (memoBytes(json) <= 524288) return { headers: { "content-type": "application/json" }, body: json };
+    var meta = {};
+    Object.keys(input).forEach(function (name) { if (name !== "body") meta[name] = input[name]; });
+    var metaJson = JSON.stringify(meta);
+    var boundary;
+    do { boundary = "----sorage-memo-" + crypto.randomUUID(); } while (metaJson.indexOf(boundary) !== -1 || input.body.indexOf(boundary) !== -1);
+    // Explicit Blob segments with hand-written framing: no FormData filename
+    // injection and no string CRLF normalization — the body bytes stay exact.
+    var opening = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"meta\"\r\nContent-Type: application/json\r\n\r\n" + metaJson + "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"body\"\r\nContent-Type: text/plain\r\n\r\n";
+    return { headers: { "content-type": "multipart/form-data; boundary=" + boundary }, body: new Blob([opening, new TextEncoder().encode(input.body), "\r\n--" + boundary + "--\r\n"]) };
+  }
+  function memoInputValid(operation, input, projectId, memoId, cap) {
     if (!memoObject(input) || !memoUuid(projectId)) return false;
-    if (operation === "add") return memoId === null && memoKeys(input, ["projectId", "title", "body"]) && input.projectId === projectId && memoTitle(input.title) && input.title === input.title.trim() && memoText(input.body, 65536);
+    if (operation === "add") return memoId === null && memoKeys(input, ["projectId", "title", "body"]) && input.projectId === projectId && memoTitle(input.title) && memoBodyText(input.body, cap);
     if (!memoUuid(memoId) || !memoVersion(input.expectedRowVersion)) return false;
-    if (operation === "update") return memoKeys(input, ["title", "body", "expectedRowVersion"]) && memoTitle(input.title) && input.title === input.title.trim() && memoText(input.body, 65536);
+    if (operation === "update") {
+      if (!memoKeys(input, ["title", "body", "expectedRowVersion"]) || (input.title === undefined && input.body === undefined)) return false;
+      if (input.title !== undefined && !memoTitle(input.title)) return false;
+      if (input.body !== undefined && !memoBodyText(input.body, cap)) return false;
+      return true;
+    }
     return ["done", "dismiss", "reopen"].indexOf(operation) !== -1 && memoKeys(input, ["expectedRowVersion"]);
   }
   function memoActor(value) { return memoKeys(value, ["kind", "id"]) && value.kind === "user" && value.id === null; }
@@ -95,13 +156,20 @@ export const WEB_MEMOS_JS = String.raw`
     var data = envelope.data;
     if (!memoKeys(data, ["memo", "changed", "replayed"]) || typeof data.changed !== "boolean" || typeof data.replayed !== "boolean" || (recovery && data.replayed !== true)) return false;
     var memo = data.memo;
-    if (!memoKeys(memo, ["id", "projectId", "title", "body", "state", "rowVersion", "createdAt", "updatedAt", "createdBy", "updatedBy", "closedAt", "closedBy"]) || !memoUuid(memo.id) || memo.projectId !== pending.projectId || !memoTitle(memo.title) || memo.title !== memo.title.trim() || !memoText(memo.body, 65536) || !memoVersion(memo.rowVersion) || !memoTime(memo.createdAt) || !memoTime(memo.updatedAt) || !memoActor(memo.createdBy) || !memoActor(memo.updatedBy)) return false;
+    if (!memoKeys(memo, ["id", "projectId", "title", "body", "state", "rowVersion", "createdAt", "updatedAt", "createdBy", "updatedBy", "closedAt", "closedBy"]) || !memoUuid(memo.id) || memo.projectId !== pending.projectId || !memoTitle(memo.title) || memo.title !== memo.title.trim() || !memoBodyText(memo.body, null) || !memoVersion(memo.rowVersion) || !memoTime(memo.createdAt) || !memoTime(memo.updatedAt) || !memoActor(memo.createdBy) || !memoActor(memo.updatedBy)) return false;
     if (memo.state === "open") { if (memo.closedAt !== null || memo.closedBy !== null) return false; }
     else if (["done", "dismissed"].indexOf(memo.state) === -1 || memo.closedAt !== memo.updatedAt || !memoActor(memo.closedBy) || memo.rowVersion < 2) return false;
     var input = pending.input;
-    if (pending.operation === "add") return data.changed && memo.rowVersion === 1 && memo.state === "open" && memo.title === input.title && memo.body === input.body;
+    if (pending.operation === "add") return data.changed && memo.rowVersion === 1 && memo.state === "open" && memo.title === input.title.trim() && memo.body === input.body;
     if (memo.id !== pending.memoId || memo.rowVersion !== input.expectedRowVersion + (data.changed ? 1 : 0)) return false;
-    if (pending.operation === "update") return memo.state === "open" && memo.title === input.title && memo.body === input.body;
+    if (pending.operation === "update") {
+      // Correlate only the fields the original request actually carried; a
+      // bodyless update settles on title/version/id without touching body.
+      if (memo.state !== "open") return false;
+      if (input.title !== undefined && memo.title !== input.title.trim()) return false;
+      if (input.body !== undefined && memo.body !== input.body) return false;
+      return true;
+    }
     return memo.state === ({ done: "done", dismiss: "dismissed", reopen: "open" })[pending.operation];
   }
   function memoFirstRefusal(result) {
@@ -109,7 +177,7 @@ export const WEB_MEMOS_JS = String.raw`
     var body = result.body;
     return memoKeys(body, ["ok", "error", "meta"]) && body.ok === false && memoObject(body.error) && typeof body.error.message === "string" && body.meta && memoUuid(body.meta.requestId) && statuses[body.error.code] === result.status;
   }
-  function memoRefreshCurrent(pending, id, success) {
+  function memoRefreshCurrent(pending, id, success, settledMemo) {
     memoRefreshing = true;
     memoRenderRecovery();
     return memoRequest("/api/v1/memos/" + id).then(function (result) {
@@ -118,7 +186,9 @@ export const WEB_MEMOS_JS = String.raw`
       if (success && (pending.operation === "add" || pending.operation === "update")) {
         var draftKey = pending.memoId || "new:" + pending.projectId;
         var draft = memoDrafts[draftKey];
-        if (draft && draft.title.trim() === pending.input.title && draft.body === pending.input.body) delete memoDrafts[draftKey];
+        var titleMatches = draft && (pending.input.title !== undefined ? draft.title.trim() === pending.input.title : Boolean(settledMemo) && draft.title === settledMemo.title);
+        var bodyMatches = draft && (pending.input.body !== undefined ? draft.body === pending.input.body : Boolean(settledMemo) && draft.body === settledMemo.body);
+        if (draft && titleMatches && bodyMatches) delete memoDrafts[draftKey];
         else if (draft && pending.operation === "add" && !memoDrafts[id]) {
           memoDrafts[id] = draft;
           delete memoDrafts[draftKey];
@@ -135,19 +205,56 @@ export const WEB_MEMOS_JS = String.raw`
   function memoDispatch(pending, recovery) {
     if (!memoMatches(pending) || memoFlight || memoStorageError) return Promise.resolve();
     var flight = { key: pending.key, installationId: pending.installationId };
+    var learned = null;
     memoFlight = flight;
     memoRenderRecovery();
     return memoIdentify().then(function (installation) {
       if (!memoMatches(pending) || memoFlight !== flight) return null;
-      if (pending.origin !== location.origin || installation !== pending.installationId || !memoInputValid(pending.operation, pending.input, pending.projectId, pending.memoId)) throw new Error("Original request material or Installation does not match. Investigate read-only or explicitly abandon recovery.");
-      var path = "/api/v1/memos" + (pending.memoId ? "/" + pending.memoId : "") + (["done", "dismiss", "reopen"].indexOf(pending.operation) !== -1 ? "/" + pending.operation : "");
-      return memoRequest(path, { method: pending.operation === "update" ? "PATCH" : "POST", headers: { "content-type": "application/json", "idempotency-key": pending.key, "idempotency-mode": recovery ? "replay-only" : "execute" }, body: JSON.stringify(pending.input) });
+      return memoLearnCap().then(function (sample) {
+        learned = sample;
+        if (!memoMatches(pending) || memoFlight !== flight) return null;
+        if (pending.origin !== location.origin || installation !== pending.installationId || !memoInputValid(pending.operation, pending.input, pending.projectId, pending.memoId, null)) throw new Error("Original request material or Installation does not match. Investigate read-only or explicitly abandon recovery.");
+        var cap = sample.cap;
+        if (cap !== null && pending.input && typeof pending.input.body === "string" && memoBytes(pending.input.body) > cap) {
+          // The server owns the accepting cap; a locally known refusal is never sent.
+          if (!recovery) {
+            if (!memoPersist({ version: 1, active: null, notices: memoRecovery.notices })) return null;
+            memoMessage = "The current Memo body limit is " + cap + " UTF-8 bytes; nothing was sent and your draft is preserved.";
+            return null;
+          }
+          memoMessage = "The current Memo body limit is " + cap + " UTF-8 bytes and refuses the original body; nothing was sent. The original outcome remains unknown: inspect it with the original key in replay-only mode from the CLI or an authenticated HTTP client, or explicitly abandon recovery.";
+          return null;
+        }
+        var path = "/api/v1/memos" + (pending.memoId ? "/" + pending.memoId : "") + (["done", "dismiss", "reopen"].indexOf(pending.operation) !== -1 ? "/" + pending.operation : "");
+        var encoded = memoEncodeInput(pending.input);
+        return memoRequest(path, { method: pending.operation === "update" ? "PATCH" : "POST", headers: Object.assign(encoded.headers, { "idempotency-key": pending.key, "idempotency-mode": recovery ? "replay-only" : "execute" }), body: encoded.body });
+      });
     }).then(function (result) {
       if (!result || !memoMatches(pending) || memoFlight !== flight) return;
       if (memoReceipt(result, pending, recovery)) {
         if (!memoPersist({ version: 1, active: null, notices: memoRecovery.notices })) return;
         memoMessage = result.body.data.replayed ? "Original request confirmed by a historical receipt; refreshing current state." : "Memo saved; refreshing current state.";
-        return memoRefreshCurrent(pending, result.body.data.memo.id, true);
+        try {
+          // Best-effort retention warning judged only on this dispatch's own
+          // successful config sample; the settlement above is already final.
+          if (
+            learned !== null &&
+            learned.risk !== null &&
+            learned.risk.current &&
+            learned.risk.enabled &&
+            !recovery &&
+            result.body.data.changed === true &&
+            result.body.data.replayed === false &&
+            pending.input &&
+            typeof pending.input.body === "string" &&
+            memoBytes(pending.input.body) > learned.risk.warnBytes
+          ) {
+            memoMessage += " A new body was accepted. With Git backup enabled, Git history retains every committed revision of this body forever.";
+          }
+        } catch (error) {
+          // The warning can never affect the settled outcome or the gate.
+        }
+        return memoRefreshCurrent(pending, result.body.data.memo.id, true, result.body.data.memo);
       }
       if (!recovery && memoFirstRefusal(result)) {
         if (!memoPersist({ version: 1, active: null, notices: memoRecovery.notices })) return;
@@ -160,16 +267,23 @@ export const WEB_MEMOS_JS = String.raw`
       if (memoMatches(pending) && memoFlight === flight) memoMessage = "Outcome unknown. " + error.message + " No replacement was sent.";
     }).finally(function () { if (memoFlight === flight) memoFlight = null; memoRenderRecovery(); });
   }
+  function invalidInputMessage(cap) {
+    return "Invalid Memo input: title needs 1–200 characters / at most 800 UTF-8 bytes; body must be valid Unicode text without NUL" + (cap === null ? "; the server enforces the current body size limit." : " and at most " + cap + " UTF-8 bytes.");
+  }
   function memoSubmit(operation, projectId, memoId, title, input) {
     if (memoLocked()) { memoMessage = "Another Memo request or a local recovery problem blocks writes in this tab."; memoRenderRecovery(); return Promise.resolve(); }
-    if (!memoInputValid(operation, input, projectId, memoId)) { memoMessage = "Invalid Memo input: title needs 1–200 characters / at most 800 UTF-8 bytes; body permits 65,536 bytes and no NUL or invalid Unicode."; memoRenderRecovery(); return Promise.resolve(); }
+    if (!memoInputValid(operation, input, projectId, memoId, null)) { memoMessage = invalidInputMessage(null); memoRenderRecovery(); return Promise.resolve(); }
     memoPreparing = true;
     memoRenderRecovery();
     return memoIdentify().then(function (installation) {
-      var pending = { origin: location.origin, installationId: installation, operation: operation, key: crypto.randomUUID(), projectId: projectId, memoId: memoId, title: title.trim(), firstAttemptAt: new Date().toISOString(), input: input };
-      if (memoRecovery.active || !memoPersist({ version: 1, active: pending, notices: memoRecovery.notices })) return;
-      memoPreparing = false;
-      return memoDispatch(pending, false);
+      return memoLearnCap().then(function (sample) {
+        var cap = sample.cap;
+        if (cap !== null && !memoInputValid(operation, input, projectId, memoId, cap)) { memoMessage = invalidInputMessage(cap); return; }
+        var pending = { origin: location.origin, installationId: installation, operation: operation, key: crypto.randomUUID(), projectId: projectId, memoId: memoId, title: title.trim(), firstAttemptAt: new Date().toISOString(), input: input };
+        if (memoRecovery.active || !memoPersist({ version: 1, active: pending, notices: memoRecovery.notices })) return;
+        memoPreparing = false;
+        return memoDispatch(pending, false);
+      });
     }).catch(function () { memoMessage = "Disconnected: cannot verify the Installation. Draft preserved; no Memo request sent."; }).finally(function () { memoPreparing = false; memoRenderRecovery(); });
   }
   function memoAbandon() {
@@ -191,6 +305,18 @@ export const WEB_MEMOS_JS = String.raw`
     if (!region) return;
     region.replaceChildren();
     if (memoStorageError) region.appendChild(el("p", { role: "alert", text: memoStorageError }));
+    if (memoPersistFailure) {
+      var guidance = {
+        unsent: "The request material below was never sent and exists only in this tab because recovery storage cannot retain it. Copy it now. With its original idempotency key it can be inspected in replay-only mode from the CLI or an authenticated HTTP client; nothing was dispatched from this tab.",
+        transition: "A recovery-record update failed, so this tab keeps its recovery gate for the request below and writes stay blocked. The local failure says nothing about what the server did or did not do with the original request. Copy the material now; it can be inspected with its original idempotency key in replay-only mode from the CLI or an authenticated HTTP client, or recovery can be explicitly abandoned here."
+      };
+      region.appendChild(el("p", { text: guidance[memoPersistFailure.kind] }));
+      if (memoPersistFailure.material) {
+        var material = el("textarea", { readonly: "", rows: "10", "aria-label": "Copy Memo recovery material" });
+        material.value = JSON.stringify(memoPersistFailure.material, null, 2);
+        region.appendChild(material);
+      }
+    }
     if (memoMessage) region.appendChild(el("p", { role: "status", text: memoMessage }));
     var pending = memoRecovery.active;
     if (pending) {
@@ -251,8 +377,21 @@ export const WEB_MEMOS_JS = String.raw`
     function update() {
       draft.title = title.value;
       draft.body = body.value === displayedBody ? originalBody : body.value;
-      var valid = memoTitle(draft.title) && memoText(draft.body, 65536);
-      limits.textContent = Array.from(draft.title.trim()).length + "/200 title characters, " + memoBytes(draft.title) + "/800 title bytes; " + memoBytes(draft.body) + "/65536 body bytes." + (valid ? "" : " Invalid input: provide a single-line title within the limits; body cannot contain NUL or invalid Unicode.");
+      var bytes = memoBytes(draft.body);
+      var valid = memoTitle(draft.title) && memoBodyText(draft.body, null);
+      // The cap suffix claims a limit only while the last refresh actually
+      // learned it; a failed refresh never presents a stale value as current.
+      var capSuffix = memoBodyCapCurrent && memoBodyCap !== null ? "/" + memoBodyCap + " body bytes" + (bytes > memoBodyCap ? " — over the current limit" : "") : " body bytes";
+      // Retention guidance is conditional: a current enabled sample above the
+      // threshold names this body and the truthful numbers; a current enabled
+      // sample at or below keeps the threshold-scoped sentence; an unknown,
+      // failed or stale sample shows the generic sentence without numbers; a
+      // current disabled configuration claims nothing.
+      var riskSentence = "";
+      if (memoRisk.current && memoRisk.enabled && bytes > memoRisk.warnBytes) riskSentence = " With Git backup enabled, Git history retains every committed revision of this body (" + bytes + " UTF-8 bytes, above gitBackup.largeArtifactWarningBytes " + memoRisk.warnBytes + ") forever.";
+      else if (memoRisk.current && memoRisk.enabled) riskSentence = " With Git backup enabled, Git history retains every committed revision of a body above gitBackup.largeArtifactWarningBytes (" + memoRisk.warnBytes + ") forever.";
+      else if (!memoRisk.current) riskSentence = " With Git backup enabled, Git history retains every committed revision of a body above gitBackup.largeArtifactWarningBytes forever.";
+      limits.textContent = Array.from(draft.title.trim()).length + "/200 title characters, " + memoBytes(draft.title) + "/800 title bytes; " + bytes + capSuffix + "." + (valid ? "" : " Invalid input: provide a single-line title within the limits; body cannot contain NUL or invalid Unicode.") + riskSentence;
       preview.replaceChildren(el("h4", { text: "Read-only preview" }), renderMarkdownSafe(draft.body));
     }
     title.addEventListener("input", update);
@@ -265,9 +404,14 @@ export const WEB_MEMOS_JS = String.raw`
       event.preventDefault();
       if (composing) return;
       update();
-      var input = { title: draft.title.trim(), body: draft.body };
+      var input = { title: draft.title.trim() };
       if (memo) input.expectedRowVersion = memo.rowVersion;
-      else input.projectId = projectId;
+      else { input.projectId = projectId; input.body = draft.body; }
+      // Omit the body only when the draft still equals the loaded server
+      // body — the authoritative comparison, not the remounted textarea seam
+      // — so a retained edited draft always saves its body, while a title-only
+      // edit stays legal when the accepting cap is below the stored size.
+      if (memo && draft.body !== memo.body) input.body = draft.body;
       memoSubmit(memo ? "update" : "add", projectId, memo ? memo.id : null, draft.title, input);
     });
     form.appendChild(el("p", { class: "field" }, [el("label", { text: "Title " }, [title])]));
@@ -277,6 +421,7 @@ export const WEB_MEMOS_JS = String.raw`
     form.appendChild(preview);
     container.appendChild(form);
     update();
+    memoLearnCap().then(function () { if (limits.isConnected) update(); });
   }
   function memoPageStart(heading) {
     var ticket = ++memoRenderTicket;

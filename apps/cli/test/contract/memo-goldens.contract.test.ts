@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { memoCliFixture, cliData } from "../fixtures/memo-cli";
 
@@ -13,6 +14,9 @@ function normalize(value: string): string {
 describe("Memo CLI additive contracts", () => {
   it("pins receipts, details, summaries, historical replay and typed errors", () => {
     const f = memoCliFixture();
+    // Preserve the recorded limit refusal under an explicitly configured cap.
+    const configPath = join(f.home, "config.yaml");
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace(/maxBytes:\s*\d+/, "maxBytes: 65536"));
     try {
       const outputs: Record<string, unknown> = {};
       function capture(name: string, args: string[], status = 0) {

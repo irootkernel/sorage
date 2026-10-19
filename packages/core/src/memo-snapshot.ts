@@ -10,7 +10,7 @@ import {
 } from "./backup-snapshot";
 import { appError, err, ok, type Result } from "./errors";
 import { isActorKind, isMemoEventType, snapshotEventTypeAllowed, type MemoEventType } from "./events";
-import { memoObject, parseMemoDetail } from "./memo-protocol";
+import { memoObject, parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
 import { type Memo, isMemoUuid, isMemoRowVersion, isMemoTimestamp } from "./memos";
 
 /** Format 2 extends the legacy snapshot families with independently validated Memo shards. */
@@ -206,7 +206,7 @@ export function parseMemoSnapshot(path: string, bytes: Uint8Array, digest: strin
 export function parseMemoEventAssociation(
   value: unknown,
   formatVersion: 1 | 2 | 3,
-  memos: ReadonlyMap<string, Memo>,
+  memos: ReadonlyMap<string, Omit<Memo, "body">>,
 ): Result<MemoSnapshotEvent> {
   const fields = ["id", "handoffId", "eventType", "actorKind", "actorId", "rowVersion", "metadata", "createdAt"];
   if (!memoObject(value, [...fields, ...(formatVersion >= 2 ? ["memoId"] : [])]))
@@ -320,7 +320,7 @@ export function snapshotFilesV2(data: SnapshotData): Result<{ files: SnapshotFil
 
 /** Reconcile the whole Memo inventory and version-ordered history before any import. */
 export function validateMemoInventory(
-  data: Pick<SnapshotData, "projects" | "memos" | "events">,
+  data: Pick<SnapshotData, "projects" | "events"> & { memos?: Array<Omit<Memo, "body"> & { body?: string }> },
   manifest: VersionedSnapshotManifest,
 ): Result<void> {
   const memos = data.memos ?? [];
@@ -330,9 +330,11 @@ export function validateMemoInventory(
     return corrupt("Memo count does not match inventory");
   }
   const projects = new Set(data.projects.map((project) => project.id));
-  const owners = new Map<string, Memo>();
+  const owners = new Map<string, Omit<Memo, "body">>();
   for (const memo of memos) {
-    if (!parseMemoDetail(memo).ok || owners.has(memo.id) || !projects.has(memo.projectId))
+    const { bodyContent: _representation, ...metadata } = memo as Omit<Memo, "body"> & { bodyContent?: unknown };
+    const valid = manifest.formatVersion === 3 ? parseMemoMetadata(metadata) : parseMemoDetail(memo);
+    if (!valid.ok || owners.has(memo.id) || !projects.has(memo.projectId))
       return corrupt("Memo identity, fields or owning Project are invalid");
     owners.set(memo.id, memo);
   }

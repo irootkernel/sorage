@@ -85,7 +85,13 @@ function exportedHistory() {
         }),
       );
     }
-    expect(db.prepare("SELECT id FROM content_records").all()).toEqual([]);
+    expect(
+      db
+        .prepare(
+          "SELECT id FROM content_records WHERE id IN (SELECT json_extract(metadata_json,'$.contentId') FROM events WHERE event_type LIKE 'CONTENT_%')",
+        )
+        .all(),
+    ).toEqual([]);
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'channel%'").all()).toEqual([]);
   } finally {
     db.close();
@@ -354,7 +360,7 @@ describe("format-3 filesystem and representation boundaries", () => {
     },
   );
 
-  it("classifies a coherent later file-backed Memo as unsupported before import", () => {
+  it("verifies and restores a coherent file-backed Memo with exact bytes", () => {
     const source = exportedHistory();
     const root = join(source.vault, "snapshots");
     const contentPath = `content/memo/${MEMO_ID}/${randomUUID()}`;
@@ -371,7 +377,28 @@ describe("format-3 filesystem and representation boundaries", () => {
     manifest.memoDigests[path] = createHash("sha256").update(raw).digest("hex");
     manifest.contentDigests = { [contentPath]: sha256 };
     writeFileSync(manifestPath(source), canonicalJson(manifest));
-    refusesBeforeImport(source, "VAULT_SCHEMA_UNSUPPORTED");
+    const verified = unwrap(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date() }));
+    expect(verified.findings).toEqual([
+      "The Vault has no Git repository; re-run sorage init --initialize-git to initialize one.",
+    ]);
+    const target = installation();
+    const before = inventory(target);
+    unwrap(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun: true }));
+    expect(inventory(target)).toEqual(before);
+    unwrap(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun: false }));
+    const db = openSorageDatabase(target.database);
+    try {
+      const restored = db
+        .prepare(
+          "SELECT c.id AS content_id, c.storage_key AS storage_key FROM project_memos m JOIN content_records c ON c.id=m.content_record_id WHERE m.id=?",
+        )
+        .get(MEMO_ID) as { content_id: string; storage_key: string };
+      expect(restored.content_id).not.toBe(contentPath.split("/")[3]);
+      expect(readFileSync(join(target.vault, restored.storage_key))).toEqual(bytes);
+      expect(db.prepare("SELECT * FROM idempotency_keys").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 
   it.each(["channels", "content", "handoffs"])("rejects unsafe %s inventory roots and descendants", (family) => {
@@ -637,9 +664,9 @@ describe("format-3 filesystem and representation boundaries", () => {
       for (let reopened = 0; reopened < 2; reopened++) {
         const db = openSorageDatabase(${JSON.stringify(target.database)});
         try {
-          const row = db.prepare("SELECT body, typeof(body) AS kind, hex(body) AS bytes, length(CAST(body AS BLOB)) AS size FROM project_memos WHERE id=?").get(${JSON.stringify(MEMO_ID)});
+          const row = db.prepare("SELECT c.inline_text AS body, typeof(c.inline_text) AS kind, hex(c.inline_text) AS bytes, length(CAST(c.inline_text AS BLOB)) AS size, c.size_bytes AS recorded_size, c.sha256 AS digest FROM project_memos m JOIN content_records c ON c.id=m.content_record_id WHERE m.id=?").get(${JSON.stringify(MEMO_ID)});
           const bytes = Buffer.from(${JSON.stringify(body)}, "utf8");
-          if (row.kind !== "text" || row.body !== ${JSON.stringify(body)} || row.bytes !== bytes.toString("hex").toUpperCase() || row.size !== bytes.length || createHash("sha256").update(row.body).digest("hex") !== createHash("sha256").update(bytes).digest("hex")) throw Error("Native restore changed Memo bytes: " + JSON.stringify(row));
+          if (row.kind !== "text" || row.body !== ${JSON.stringify(body)} || row.bytes !== bytes.toString("hex").toUpperCase() || row.size !== bytes.length || row.recorded_size !== bytes.length || row.digest !== createHash("sha256").update(bytes).digest("hex") || createHash("sha256").update(row.body).digest("hex") !== createHash("sha256").update(bytes).digest("hex")) throw Error("Native restore changed Memo bytes: " + JSON.stringify(row));
         } finally { db.close(); }
       }
       console.log(JSON.stringify({nativeBun:Bun.version, reopened:2}));
@@ -707,7 +734,7 @@ describe("format-3 filesystem and representation boundaries", () => {
 });
 
 describe("format-3 historical physical-content snapshots", () => {
-  it("round-trips all common event families without retaining owners, content rows, files or receipts", () => {
+  it("round-trips all common event families without retaining their owners, content rows, files or receipts", () => {
     const source = exportedHistory();
     const manifest = JSON.parse(readFileSync(manifestPath(source), "utf8"));
     expect(manifest.counts.channels).toBe(0);
@@ -725,7 +752,13 @@ describe("format-3 historical physical-content snapshots", () => {
     expect(commonHistory(target)).toEqual(commonHistory(source));
     const db = openSorageDatabase(target.database);
     try {
-      expect(db.prepare("SELECT id FROM content_records").all()).toEqual([]);
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM content_records WHERE id IN (SELECT json_extract(metadata_json,'$.contentId') FROM events WHERE event_type LIKE 'CONTENT_%')",
+          )
+          .all(),
+      ).toEqual([]);
       expect(db.prepare("SELECT key FROM idempotency_keys").all()).toEqual([]);
       expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'channel%'").all()).toEqual([]);
     } finally {

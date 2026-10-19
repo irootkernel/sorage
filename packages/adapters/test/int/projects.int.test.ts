@@ -75,12 +75,14 @@ describe("project registry migration", () => {
 
   it("rolls a failed later migration back and leaves no orphan index", () => {
     const temp = migratedDb();
+    const projectSql = PROJECT_REGISTRY_MIGRATION.sql;
+    if (projectSql === undefined) throw new Error("The Project registry fixture requires its original SQL migration");
     const failing = [
       ...MIGRATIONS,
       {
         version: 9,
         name: "broken-after-projects",
-        sql: `${PROJECT_REGISTRY_MIGRATION.sql.replace(/projects/g, "orphan_projects")}; CREATE TABLE deliberately_broken (id INTEGER PRIMARY KEY);`,
+        sql: `${projectSql.replace(/projects/g, "orphan_projects")}; CREATE TABLE deliberately_broken (id INTEGER PRIMARY KEY);`,
       },
     ];
     expect(() => migrate(temp.db, failing)).toThrowError(MigrationFailedError);

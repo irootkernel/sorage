@@ -61,6 +61,7 @@ import {
   CONTENT_INLINE_MAX_UTF8_BYTES,
   classifyContentIntentOwnership,
   contentIntentIntegrityError,
+  parseStoredMemoReceipt,
 } from "@sorage/core";
 import { createSqliteEventLedger, type SqliteEventLedger } from "./events";
 import { fsyncDirectory, isSafeVaultRelativePath, liveFencePaused } from "./intent-log";
@@ -715,6 +716,16 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
             db.exec("ROLLBACK");
             return livingLinks;
           }
+          // The Memo-side link guard runs in the same writer transaction and
+          // before the first deletion: a schema-10 database whose Memo rows
+          // lost their record references must refuse the proof exactly like a
+          // broken Artifact link, never pass as a healthy empty reference set
+          // that frees owned records (SHR-004, SHR-014, ADR-0032 plan).
+          const livingMemoLinks = validateMemoContentLinks(db);
+          if (!livingMemoLinks.ok) {
+            db.exec("ROLLBACK");
+            return livingMemoLinks;
+          }
           // Reference providers read inside the writer transaction, so the
           // reference snapshot and the deletions serialize on the write lock.
           const domainIds = references.domainReferencedRecordIds();
@@ -1157,6 +1168,11 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
       // refuses here.
       const livingLinks = validateArtifactContentLinks(db);
       if (!livingLinks.ok) return livingLinks;
+      // The Memo link guard joins this same open transaction before the first
+      // deletion, mirroring the cleanup path: a schema-10 Memo reference fault
+      // refuses the removal instead of freeing an owned record (SHR-004).
+      const livingMemoLinks = validateMemoContentLinks(db);
+      if (!livingMemoLinks.ok) return livingMemoLinks;
       const domainIds = options.references.domainReferencedRecordIds();
       if (!domainIds.ok) return domainIds;
       const receiptIds = options.references.receiptReferencedRecordIds(options.now);
@@ -2046,6 +2062,88 @@ export function validateArtifactContentLinks(db: SorageSqlite): Result<void, App
   }
 }
 
+/** The applied-history-aware Memo storage layouts the Memo link guard understands. */
+export type MemoStorageLayout = "pre-memo" | "legacy-body" | "content-records" | "inconsistent";
+
+/** The Memo adoption schema version; at or above it the normalized layout is required (SHR-009). */
+export const MEMO_CONTENT_ADOPTION_SCHEMA_VERSION = 10;
+
+/**
+ * Inspects the Memo storage layout against the applied migration history: a
+ * database below version 7 legitimately has no Memo table, versions 7 through
+ * 9 legitimately keep the inline `body` column, and a database at or above the
+ * adoption version must carry the normalized `content_record_id` reference —
+ * its absence is inconsistency, never a legacy layout (SHR-004, SHR-014).
+ */
+export function inspectMemoStorageLayout(db: SorageSqlite): MemoStorageLayout {
+  const columns = db.prepare("PRAGMA table_info(project_memos)").all() as Array<{ name: string }>;
+  if (columns.length === 0) {
+    return appliedSchemaMaximum(db) >= 7 ? "inconsistent" : "pre-memo";
+  }
+  if (columns.some((column) => column.name === "content_record_id")) return "content-records";
+  return appliedSchemaMaximum(db) >= MEMO_CONTENT_ADOPTION_SCHEMA_VERSION ? "inconsistent" : "legacy-body";
+}
+
+/**
+ * The Memo-side metadata guard, the symmetric twin of
+ * `validateArtifactContentLinks` (SHR-004, SHR-014, ADR-0032 plan): legitimate
+ * pre-adoption layouts pass, a schema-10 database missing the required table
+ * or reference column is an integrity refusal, and every Memo row must
+ * reference an existing content record — a dangling reference never passes as
+ * a healthy empty proof that frees owned records. Bounded metadata queries
+ * only; never a body read, never filesystem I/O. Called inside both deletion
+ * writer transactions before the first delete, and at the Doctor census and
+ * consistent-export boundaries before any healthy-empty conclusion.
+ */
+export function validateMemoContentLinks(db: SorageSqlite): Result<void, AppError> {
+  try {
+    const layout = inspectMemoStorageLayout(db);
+    if (layout === "pre-memo" || layout === "legacy-body") return ok(undefined);
+    if (layout === "inconsistent") {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The applied schema is at or above version ${String(MEMO_CONTENT_ADOPTION_SCHEMA_VERSION)} but the project_memos table is missing or has no content_record_id column; the Memo content links could not be verified.`,
+          { cause: "memo-storage-layout-inconsistent" },
+        ),
+      );
+    }
+    const recordTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+      .get() as { name: string } | null | undefined;
+    if (recordTable === null || recordTable === undefined) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The applied schema is at or above version ${String(MEMO_CONTENT_ADOPTION_SCHEMA_VERSION)} but the content_records table is missing; the Memo content links could not be verified.`,
+          { cause: "content-records-table-missing" },
+        ),
+      );
+    }
+    const dangling = db
+      .prepare(
+        "SELECT m.id AS memo_id, m.content_record_id AS content_record_id FROM project_memos m LEFT JOIN content_records c ON c.id = m.content_record_id WHERE c.id IS NULL OR m.content_record_id IS NULL LIMIT 1",
+      )
+      .get() as { memo_id: string; content_record_id: string | null } | null | undefined;
+    if (dangling !== null && dangling !== undefined) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The Memo ${dangling.memo_id} references content record ${String(dangling.content_record_id)}, which is missing; the Memo content links could not be verified.`,
+          { memoId: dangling.memo_id, contentRecordId: dangling.content_record_id },
+        ),
+      );
+    }
+    return ok(undefined);
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Verifying the Memo content links failed: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+}
+
 /**
  * The living-Handoff half of the normalized metadata guard (SHR-004,
  * SHR-014): every non-tombstone Handoff that names a current Artifact must
@@ -2141,25 +2239,25 @@ function validateLivingHandoffArtifactLinks(db: SorageSqlite): Result<void, AppE
 
 /**
  * The default SQL reference provider. `domainReferencedRecordIds` reads the
- * Artifact record references through the verified storage layout: empty on a
- * legitimate pre-adoption database, the actual references on an adoption-version
- * database, and a visible integrity refusal when the adoption version's required
- * table or reference column is missing — an inconsistent current database must
- * never pass as an empty proof, because the standalone cleanup would treat that
- * as license to delete owned records. `receiptReferencedRecordIds` stays
- * honestly empty because Handoff and Memo receipts embed legacy outcome strings
- * that are their own copy, never record references. Scanning receipt bodies for
- * managed-key-shaped strings would classify a legacy inline body that literally
- * equals a key as a reference, so the default returns no reference instead of
- * guessing; the adoption Task that introduces a record-based receipt format
- * supplies its parser, and a supported parser must resolve what a receipt names
- * and must never silently turn malformed data into absence.
+ * Artifact record references through the verified Artifact storage layout and
+ * the Memo record references through the verified Memo layout: a legitimate
+ * pre-adoption database contributes no references of either domain, the actual
+ * references are read on adoption-version databases, and a database whose
+ * applied history demands a layout it does not carry is a visible integrity
+ * refusal — an inconsistent current database must never pass as an empty
+ * proof, because the standalone cleanup would treat that as license to delete
+ * owned records. `receiptReferencedRecordIds` resolves the Memo-scope
+ * retained-response family through the dual-form receipt parser: a
+ * reference-form receipt names its immutable record (SHR-008), a legacy
+ * embedded receipt is its own verbatim copy and references none, and a
+ * malformed stored receipt is a storage-integrity refusal that stops cleanup
+ * and the physical GC — never silently absence.
  */
 export function sqliteContentReferences(db: SorageSqlite): ContentReferences {
   return {
     domainReferencedRecordIds() {
       try {
-        // The verified layout decides: a legitimate pre-adoption database has no
+        // The verified Artifact layout decides: a legitimate pre-adoption database has no
         // Artifact record references, while an adoption-version database missing
         // the required table or reference column is inconsistent and must
         // surface, never pass as empty (SHR-004, SHR-014).
@@ -2173,23 +2271,78 @@ export function sqliteContentReferences(db: SorageSqlite): ContentReferences {
             ),
           );
         }
-        if (layout === "legacy-columns" || layout === "pre-adoption") return ok([]);
-        const rows = db
-          .prepare("SELECT content_record_id FROM artifacts WHERE content_record_id IS NOT NULL")
-          .all() as unknown as Array<{ content_record_id: string }>;
-        return ok(rows.map((row) => row.content_record_id));
+        const artifactIds =
+          layout === "legacy-columns" || layout === "pre-adoption"
+            ? []
+            : (
+                db
+                  .prepare("SELECT content_record_id FROM artifacts WHERE content_record_id IS NOT NULL")
+                  .all() as unknown as Array<{ content_record_id: string }>
+              ).map((row) => row.content_record_id);
+        // The Memo layout is verified the same way: a schema-10 database whose
+        // Memo table lost its reference column is inconsistent, while every
+        // legitimate earlier layout contributes no Memo references.
+        const memoLayout = inspectMemoStorageLayout(db);
+        if (memoLayout === "inconsistent") {
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The applied schema is at or above version ${String(MEMO_CONTENT_ADOPTION_SCHEMA_VERSION)} but the project_memos table is missing or has no content_record_id column; the Memo content references could not be read.`,
+              { cause: "memo-storage-layout-inconsistent" },
+            ),
+          );
+        }
+        const memoIds =
+          memoLayout === "content-records"
+            ? (
+                db
+                  .prepare("SELECT content_record_id FROM project_memos WHERE content_record_id IS NOT NULL")
+                  .all() as unknown as Array<{ content_record_id: string }>
+              ).map((row) => row.content_record_id)
+            : [];
+        return ok([...artifactIds, ...memoIds]);
       } catch (error) {
         return err(
-          appError("INTERNAL_ERROR", `Reading the Artifact content references failed: ${messageOf(error)}.`, {
+          appError("INTERNAL_ERROR", `Reading the content references failed: ${messageOf(error)}.`, {
             cause: String(error),
           }),
         );
       }
     },
-    receiptReferencedRecordIds(_now: Date) {
-      // No receipt format of this build references a content record; see the
-      // function doc comment for why no heuristic may substitute for that.
-      return ok([]);
+    receiptReferencedRecordIds(now: Date) {
+      // Memo-scope receipts are the one retained-response family that can
+      // reference immutable records (SHR-008): a reference-form receipt names
+      // its record, and a legacy embedded receipt references none. A malformed
+      // stored receipt is a storage-integrity refusal — never absence, because
+      // a broken parser result must never become deletion license.
+      try {
+        const rows = db
+          .prepare("SELECT scope, response_json FROM idempotency_keys WHERE scope LIKE 'memo:%' AND expires_at > ?")
+          .all(now.toISOString()) as unknown as Array<{ scope: string; response_json: string }>;
+        const ids: string[] = [];
+        for (const row of rows) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(row.response_json);
+          } catch {
+            return err(
+              appError("STORAGE_INTEGRITY_ERROR", `A stored Memo receipt under scope ${row.scope} is not valid JSON.`, {
+                scope: row.scope,
+              }),
+            );
+          }
+          const receipt = parseStoredMemoReceipt(parsed);
+          if (!receipt.ok) return receipt;
+          if (receipt.value.memo.body === null) ids.push(receipt.value.memo.bodyRef.recordId);
+        }
+        return ok(ids);
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading the retained Memo receipt references failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
     },
   };
 }

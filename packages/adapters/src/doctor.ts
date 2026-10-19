@@ -24,7 +24,7 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
-import { inspectArtifactStorageLayout, validateArtifactContentLinks } from "./content-store";
+import { inspectArtifactStorageLayout, validateArtifactContentLinks, validateMemoContentLinks } from "./content-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { launchAgentPlistPath, launchAgentsDirectory, launchAgentUid, plistPointsAtBinary } from "./launchagent-ports";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
@@ -484,6 +484,13 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           const db = opened.db;
           let records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }> = [];
           try {
+            // The Memo link guard runs before any census conclusion and inside
+            // the connection-close ownership: a schema-10 database whose Memo
+            // rows lost their record references is a blocking integrity
+            // finding, never a healthy empty census (SHR-004, SHR-014), and
+            // the refusal path releases this check's own connection.
+            const memoLinks = validateMemoContentLinks(db);
+            if (!memoLinks.ok) return blocking(memoLinks.error.message);
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
               .get() as { name: string } | null | undefined;

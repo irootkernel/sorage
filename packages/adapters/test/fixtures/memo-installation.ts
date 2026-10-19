@@ -9,13 +9,18 @@ import {
   initializeInstallation,
   backupRestore,
   exportSnapshot,
+  sha256OfText,
+  utf8ByteLength,
   type Memo,
   type MemoChange,
+  type MemoSnapshot,
   type Result,
 } from "@sorage/core";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
+import { createSqliteContentStore } from "../../src/content-store";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { createSqliteMemoRepository } from "../../src/memos";
+import { createNodeMemoPorts } from "../../src/memo-command-ports";
 import { FakeClock } from "../../src/testkit/fakes";
 
 export const MEMO_PROJECT = "cd000000-0000-4000-8000-000000000001";
@@ -48,41 +53,84 @@ export function memoInstallation() {
   };
 }
 
-/** Seed through the real repository; no CLI/application operation is simulated. */
+function inlineSnapshotOf(memo: Memo, recordId: string): MemoSnapshot {
+  return {
+    ...memo,
+    body: memo.body,
+    bodyRef: { recordId, sizeBytes: utf8ByteLength(memo.body), sha256: sha256OfText(memo.body) },
+  };
+}
+
+/** Seed through the real repository's content-plan path; no CLI/application operation is simulated. */
 export function seedMemoInstallation(installation: ReturnType<typeof memoInstallation>, newlyCreated = false): Memo {
   const db = openSorageDatabase(installation.database);
   db.exec("PRAGMA foreign_keys=ON");
   db.prepare(
     "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES (?, 'memo-project', 'Memo Project', 'active', ?, ?)",
   ).run(MEMO_PROJECT, MEMO_TIME, MEMO_TIME);
-  const repository = createSqliteMemoRepository(db);
-  let transition = unwrap(
+  const { installationId } = createNodeMemoPorts({
+    env: { SORAGE_HOME: installation.home },
+    userHome: installation.home,
+    database: db,
+  });
+  const repository = createSqliteMemoRepository(db, {
+    contentStore: createSqliteContentStore({ db, vaultPath: installation.vault, installationId }),
+  });
+  const created = unwrap(
     createMemo(MEMO_ID, MEMO_PROJECT, { title: "검토 😀", body: "e\u0301\r\nMemo body" }, MEMO_TIME),
   );
+  let memo: Memo = created.memo;
+  let snapshot = inlineSnapshotOf(memo, randomUUID());
   unwrap(
     repository.run((tx) => {
-      const inserted = tx.insert(transition.memo);
-      return inserted.ok ? tx.appendEvent(randomUUID(), required(transition.event)) : inserted;
+      const committed = tx.commitContent(
+        {
+          kind: "inline",
+          contentId: snapshot.bodyRef.recordId,
+          text: memo.body,
+          sizeBytes: snapshot.bodyRef.sizeBytes,
+          sha256: snapshot.bodyRef.sha256,
+        },
+        MEMO_ID,
+        MEMO_TIME,
+      );
+      if (!committed.ok) return committed;
+      const inserted = tx.insertMemo(snapshot);
+      return inserted.ok ? tx.appendEvent(randomUUID(), required(created.event)) : inserted;
     }),
   );
   for (const operation of newlyCreated ? [] : (["update", "done"] as const)) {
     const change: MemoChange =
       operation === "update"
-        ? { operation, expectedRowVersion: transition.memo.rowVersion, body: "edited\r\n한글 😀" }
-        : { operation, expectedRowVersion: transition.memo.rowVersion };
-    transition = unwrap(changeMemo(transition.memo, change, "2026-09-27T01:00:00.000Z"));
+        ? { operation, expectedRowVersion: memo.rowVersion, body: "edited\r\n한글 😀" }
+        : { operation, expectedRowVersion: memo.rowVersion };
+    const transition = unwrap(changeMemo(memo, change, "2026-09-27T01:00:00.000Z"));
+    memo = transition.memo;
+    snapshot = inlineSnapshotOf(memo, randomUUID());
     unwrap(
       repository.run((tx) => {
-        const written = tx.compareAndSet(transition.memo, transition.memo.rowVersion - 1);
+        const committed = tx.commitContent(
+          {
+            kind: "inline",
+            contentId: snapshot.bodyRef.recordId,
+            text: memo.body,
+            sizeBytes: snapshot.bodyRef.sizeBytes,
+            sha256: snapshot.bodyRef.sha256,
+          },
+          MEMO_ID,
+          "2026-09-27T01:00:00.000Z",
+        );
+        if (!committed.ok) return committed;
+        const written = tx.compareAndSetMemo(snapshot, snapshot.rowVersion - 1);
         return written.ok ? tx.appendEvent(randomUUID(), required(transition.event)) : written;
       }),
     );
   }
   db.prepare(
     "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, 'memo-create', 'original', ?, ?, '2099-01-01T00:00:00.000Z')",
-  ).run(randomUUID(), JSON.stringify({ memo: transition.memo, changed: true }), MEMO_TIME);
+  ).run(randomUUID(), JSON.stringify({ memo, changed: true }), MEMO_TIME);
   db.close();
-  return transition.memo;
+  return memo;
 }
 
 /** Same installation identity and committed create, deliberately without its operational receipt. */

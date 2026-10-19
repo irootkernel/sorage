@@ -1078,3 +1078,39 @@ Clarify the Artifact ID and current-Artifact reference types in [architecture se
 ### Consequences
 
 Existing revisions remain readable and restorable while new revisions conform to UUID generation. Qualification covers a populated schema-7 legacy revision through the real schema-8 upgrade and format-3 export, verification, dry-run and restore, plus native UUID-producing revisions and frozen legacy restore inputs. No historical completion events are inferred or backfilled by this identity correction.
+
+## ADR-0032: Memo operational coherence errors in M9
+
+- **Status:** Accepted (2026-10-19)
+- **Date:** 2026-10-19
+- **Scope:** TASK-108 error-contract clarification under [EPIC-016](../roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage)
+
+### Problem
+
+TASK-108's bounded Memo read and write designs need an honest, retryable refusal for operations whose view of the authoritative database cannot be kept coherent: a Memo list page assembled from bounded candidate batches must reflect one database read snapshot (MEM-011), and a Memo mutation prepared against a freshly bound Vault must not commit after a Vault move invalidated that preparation (SHR-012, SHR-014). The existing catalogue offers no exact code for these conditions: `SERVICE_PAUSED` means a conclusively held `vault-move.lock`, `CONFIG_CONFLICT` means a stale configuration revision or changed ETag, and `INTERNAL_ERROR` is a forbidden fall-through for an expected refusal.
+
+### Decision
+
+From M9, the existing shared code `STORAGE_INSPECTION_UNAVAILABLE` (HTTP 503, CLI exit 75) additionally covers two Memo operational conditions: a Memo list page that cannot be assembled coherently because the database kept changing across the bounded attempt budget, and a Memo write whose preparation state could not be kept coherent with the authoritative database under the same finite budget. The refusal is honest about what happened — no page was emitted and this invocation committed nothing — and per-surface recovery guidance travels in the response's existing recovery field, directing a read retry or a retry of the mutation with its original mode and inputs and the original key when one was present, never an automatic execute, a replacement key, or a claim that the write committed. The mode preserved on retry is the current invocation's mode: a replay-only recovery attempt stays replay-only across its retries and never reverts to the execute mode of an earlier unknown attempt, whose outcome remains unknown (MEM-007, [Memo contract section 9](../specs/project-memos.md#9-http-and-error-contract)). This is an additive surface use of an existing section 15 row; the response envelope, protocol version 1, `/api/v1` routing, the error enum, and every exit-code category are unchanged.
+
+### Alternatives considered
+
+- A new symbolic code for Memo coherence refusals | rejected: a larger public contract change than the additive reuse of an existing row whose meaning already is that a safe coherent storage view cannot be established.
+- Reporting coherence exhaustion as `CONFIG_CONFLICT` or `SERVICE_PAUSED` | rejected: dishonest unless a Vault path actually changed or the lock is conclusively live, and both codes carry their own stronger contracts.
+- Falling through to `INTERNAL_ERROR` | rejected: an expected, retryable refusal must not surface as an unexpected defect, and the storage guards forbid that fall-through.
+
+### Compatibility impact
+
+The M8 send replay-only usage of `STORAGE_INSPECTION_UNAVAILABLE` keeps its CLI-only scope, its canonical hand recovery text, and the guidance of interface section 37 unchanged; the section 15 row's recovery cell stays generic and per-surface guidance remains a response concern. Section 16 already places the code in the exit-75 temporary-conflict category. No Handoff surface, snapshot format, or DTO changes.
+
+### Migration impact
+
+None. This decision is a documentation-only error-contract clarification; the Memo schema-10 adoption migration, its rebuild, and every storage change remain TASK-108 implementation work under the reviewed plan.
+
+### Required Source of Truth edits and roadmap impact
+
+Executed with this decision: the shared-error row of [interface section 15](../specs/interfaces-and-operations.md#15-symbolic-error-codes) extends its meaning to the two M9 Memo conditions with a cross-reference from [interface section 38.2](../specs/interfaces-and-operations.md#382-input-bounds-and-classification), and [the Memo contract](../specs/project-memos.md#7-read-model-and-paging) gains the bounded coherence and recovery clarification in its sections 7, 8, and 9. Requirement identities, the roadmap registry, dependency order, milestone and release allocation, and Task lifecycle are unchanged; this clarification is not a Task completion candidate.
+
+### Consequences
+
+Memo reads and writes gain an honest, bounded, retryable refusal under sustained concurrent database changes, with conservative availability disclosed rather than hidden: a client may need to reissue an identical request. The finite write-attempt budget, the once-captured accepted input, and the unchanged replay-only uncertainty boundaries (MEM-007) make the refusal's guarantee precise: this invocation made no new Memo commit. The refusal does not settle any earlier outcome-unknown attempt and authorizes neither an execute fallback nor a replacement key; a retry preserves the caller's original mode and inputs, and the original key when one was present. A committed-but-unmaterialized write keeps its existing `CONTENT_MATERIALIZING` contract.

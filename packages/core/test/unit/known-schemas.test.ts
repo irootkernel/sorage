@@ -22,17 +22,21 @@ describe("the central known-schema inventory", () => {
       ...plan.migrations.map((migration) => ({ version: migration.version, name: migration.name })),
       ...plan.rebuilds.map((migration) => ({ version: migration.version, name: migration.name })),
     ]).toEqual([...KNOWN_SCHEMA_HISTORY]);
-    expect(knownSchemaMaximum()).toBe(9);
+    expect(knownSchemaMaximum()).toBe(10);
   });
 
   it("admits a complete applied prefix", () => {
     expect(admitKnownAppliedHistory(ROWS([1, 2, 3, 4, 5, 6, 7, 8])).kind).toBe("ok");
+    expect(admitKnownAppliedHistory(ROWS([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).kind).toBe("ok");
     expect(admitKnownAppliedHistory(ROWS([1, 2, 3, 4])).kind).toBe("ok");
     expect(admitKnownAppliedHistory([]).kind).toBe("ok");
   });
 
   it("refuses an unknown forward applied version as STORAGE_SCHEMA_UNSUPPORTED", () => {
-    const refused = admitKnownAppliedHistory([...ROWS([1, 2, 3, 4, 5, 6, 7, 8, 9]), { version: 10, name: "future" }]);
+    const refused = admitKnownAppliedHistory([
+      ...ROWS([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+      { version: 11, name: "future" },
+    ]);
     expect(refused.kind).toBe("unsupported");
     if (refused.kind === "unsupported") expect(refused.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
   });
@@ -61,7 +65,8 @@ describe("per-surface legacy prefix eligibility", () => {
     expect(schemaSurfaceSupports("send-replay", 4)).toBe(true);
     expect(schemaSurfaceSupports("send-replay", 8)).toBe(true);
     expect(schemaSurfaceSupports("send-replay", 9)).toBe(true);
-    expect(schemaSurfaceSupports("send-replay", 10)).toBe(false);
+    expect(schemaSurfaceSupports("send-replay", 10)).toBe(true);
+    expect(schemaSurfaceSupports("send-replay", 11)).toBe(false);
   });
 
   it("scopes Memo surfaces to histories that contain the Memo domain", () => {
@@ -70,6 +75,7 @@ describe("per-surface legacy prefix eligibility", () => {
     expect(schemaSurfaceSupports("memo", 7)).toBe(true);
     expect(schemaSurfaceSupports("memo", 8)).toBe(true);
     expect(schemaSurfaceSupports("memo", 9)).toBe(true);
+    expect(schemaSurfaceSupports("memo", 10)).toBe(true);
   });
 
   it("keeps Channel surfaces nonexistent before the Channel migration", () => {
@@ -84,6 +90,8 @@ describe("per-surface legacy prefix eligibility", () => {
     expect(schemaSurfaceSupports("preflight", 8)).toBe(true);
     expect(schemaSurfaceSupports("operational", 9)).toBe(true);
     expect(schemaSurfaceSupports("preflight", 9)).toBe(true);
-    expect(schemaSurfaceSupports("operational", 10)).toBe(false);
+    expect(schemaSurfaceSupports("operational", 10)).toBe(true);
+    expect(schemaSurfaceSupports("preflight", 10)).toBe(true);
+    expect(schemaSurfaceSupports("operational", 11)).toBe(false);
   });
 });

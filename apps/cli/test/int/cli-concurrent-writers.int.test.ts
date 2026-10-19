@@ -115,8 +115,8 @@ describe("two concurrent writers on one Handoff", () => {
       ),
     ]);
     const { winners, conflicts } = outcomes([review.code, revise.code]);
-    expect(winners).toBe(1);
-    expect(conflicts).toBe(1);
+    expect(winners, JSON.stringify({ review, revise })).toBe(1);
+    expect(conflicts, JSON.stringify({ review, revise })).toBe(1);
     // The loser names the compare-and-set conflict; exit 75 alone is ambiguous.
     const loser = review.code === 75 ? review : revise;
     expect(loser.stderr).toContain("ROW_VERSION_CONFLICT");
@@ -157,8 +157,8 @@ describe("two concurrent writers on one Handoff", () => {
       ),
     ]);
     const { winners, conflicts } = outcomes([a.code, b.code]);
-    expect(winners).toBe(1);
-    expect(conflicts).toBe(1);
+    expect(winners, JSON.stringify({ a, b })).toBe(1);
+    expect(conflicts, JSON.stringify({ a, b })).toBe(1);
     // The loser names the compare-and-set conflict, not just any exit 75.
     const raceLoser = a.code === 75 ? a : b;
     expect(raceLoser.stderr).toContain("ROW_VERSION_CONFLICT");

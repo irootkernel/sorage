@@ -104,10 +104,17 @@ function historical(f: ReturnType<typeof fixture>, version: number) {
         );
         continue;
       }
+      if (name === "project_memos") {
+        db.exec(
+          "INSERT INTO project_memos (id,project_id,title,body,state,row_version,created_at,updated_at,created_by,updated_by,closed_at,closed_by) " +
+            "SELECT m.id,m.project_id,m.title,c.inline_text,m.state,m.row_version,m.created_at,m.updated_at,m.created_by,m.updated_by,m.closed_at,m.closed_by FROM source.project_memos m JOIN source.content_records c ON c.id=m.content_record_id",
+        );
+        continue;
+      }
       if (name === "content_records") {
         db.exec(
           "INSERT INTO content_records SELECT c.* FROM source.content_records c " +
-            "WHERE NOT EXISTS (SELECT 1 FROM source.artifacts a WHERE a.content_record_id = c.id)",
+            "WHERE NOT EXISTS (SELECT 1 FROM source.artifacts a WHERE a.content_record_id = c.id) AND NOT EXISTS (SELECT 1 FROM source.project_memos m WHERE m.content_record_id=c.id)",
         );
         continue;
       }

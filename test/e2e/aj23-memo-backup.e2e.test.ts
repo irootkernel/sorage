@@ -16,20 +16,27 @@ function rows(home: string) {
   const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
   try {
     return Object.fromEntries(
-      ["projects", "project_memos", "handoffs", "artifacts", "review_notes", "events", "idempotency_keys"].map(
-        (table) => [
-          table,
-          db
-            .prepare(
-              `SELECT * FROM ${table} ORDER BY ${table === "idempotency_keys" ? "scope, key" : table === "review_notes" ? "handoff_id" : "id"}`,
-            )
-            .all()
-            .map(
-              (row): Record<string, unknown> =>
-                typeof row.metadata_json === "string" ? { ...row, metadata_json: JSON.parse(row.metadata_json) } : row,
-            ),
-        ],
-      ),
+      [
+        "projects",
+        "project_memos",
+        "content_records",
+        "handoffs",
+        "artifacts",
+        "review_notes",
+        "events",
+        "idempotency_keys",
+      ].map((table) => [
+        table,
+        db
+          .prepare(
+            `SELECT * FROM ${table} ORDER BY ${table === "idempotency_keys" ? "scope, key" : table === "review_notes" ? "handoff_id" : "id"}`,
+          )
+          .all()
+          .map(
+            (row): Record<string, unknown> =>
+              typeof row.metadata_json === "string" ? { ...row, metadata_json: JSON.parse(row.metadata_json) } : row,
+          ),
+      ]),
     );
   } finally {
     db.close();
@@ -121,7 +128,11 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
     expect(data(target, ["config", "show"]).installationId).toBe(identity);
     for (const memo of memos) expect(data<Memo>(target, ["memo", "show", memo.id])).toEqual(memo);
     const restored = rows(target);
-    expect(restored.project_memos).toEqual(original.project_memos);
+    const metadata = (memos: Array<Record<string, unknown>> = []) =>
+      memos.map(({ content_record_id: _id, ...row }) => row);
+    expect(metadata(restored.project_memos)).toEqual(metadata(original.project_memos));
+    const originalRecords = new Set(original.project_memos?.map((row) => row.content_record_id));
+    for (const row of restored.project_memos ?? []) expect(originalRecords.has(row.content_record_id)).toBe(false);
     expect(restored.events?.filter((row) => row.memo_id !== null)).toEqual(
       original.events?.filter((row) => row.memo_id !== null),
     );

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,14 +9,15 @@ import {
   backupVerify,
   canonicalJson,
   canonicalJsonLine,
-  changeMemo,
+  mutateMemo,
+  showMemo,
   exportSnapshot,
   snapshotFiles,
   type SnapshotData,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
-import { createSqliteMemoRepository } from "../../src/memos";
+import { createNodeMemoPorts } from "../../src/memo-command-ports";
 import {
   memoInstallation,
   restoredMemoInstallation,
@@ -77,29 +78,35 @@ function rows(value: Installation) {
   const db = new DatabaseSync(value.database);
   try {
     return Object.fromEntries(
-      ["projects", "project_memos", "events", "idempotency_keys", "handoffs", "artifacts"].map((table) => [
-        table,
-        db
-          .prepare(`SELECT * FROM ${table} ORDER BY ${table === "events" ? "id" : "rowid"}`)
-          .all()
-          .map((row) =>
-            Object.fromEntries(
-              Object.entries(row).map(([key, value]) => [
-                key,
-                ["metadata_json", "created_by", "updated_by", "closed_by"].includes(key) && typeof value === "string"
-                  ? JSON.parse(value)
-                  : value,
-              ]),
+      ["projects", "project_memos", "content_records", "events", "idempotency_keys", "handoffs", "artifacts"].map(
+        (table) => [
+          table,
+          db
+            .prepare(`SELECT * FROM ${table} ORDER BY ${table === "events" ? "id" : "rowid"}`)
+            .all()
+            .map((row) =>
+              Object.fromEntries(
+                Object.entries(row).map(([key, value]) => [
+                  key,
+                  ["metadata_json", "created_by", "updated_by", "closed_by"].includes(key) && typeof value === "string"
+                    ? JSON.parse(value)
+                    : value,
+                ]),
+              ),
             ),
-          ),
-      ]),
+        ],
+      ),
     );
   } finally {
     db.close();
   }
 }
 
-describe("Memo format-2 export and recovery", () => {
+function logicalMemoRows(value: Installation) {
+  return rows(value).project_memos?.map(({ content_record_id: _recordId, ...metadata }) => metadata);
+}
+
+describe("Memo snapshot export and recovery", () => {
   it("publishes deterministic canonical bytes with independently computed digests and restores all lifecycle fields", () => {
     const source = installation();
     const memo = seedMemoInstallation(source);
@@ -135,9 +142,13 @@ describe("Memo format-2 export and recovery", () => {
       JSON.parse(readFileSync(join(source.vault, ".sorage-vault.json"), "utf8")).installationId,
     );
     const db = openSorageDatabase(target.database);
-    expect(unwrap(createSqliteMemoRepository(db).get(MEMO_ID))).toEqual(memo);
+    const memoPorts = createNodeMemoPorts({ env: { SORAGE_HOME: target.home }, userHome: target.home, database: db });
+    expect(unwrap(showMemo(memoPorts, MEMO_ID))).toEqual(memo);
     db.close();
-    expect(rows(target).project_memos).toEqual(rows(source).project_memos);
+    expect(logicalMemoRows(target)).toEqual(logicalMemoRows(source));
+    expect(rows(target).project_memos?.[0]?.content_record_id).not.toBe(
+      rows(source).project_memos?.[0]?.content_record_id,
+    );
     expect(rows(target).events?.filter((row) => row.memo_id !== null)).toEqual(rows(source).events);
     expect(rows(target).idempotency_keys).toEqual([]);
     expect(rows(target).handoffs).toEqual([]);
@@ -149,25 +160,15 @@ describe("Memo format-2 export and recovery", () => {
     const target = restoredMemoInstallation();
     cleanups.push(target.cleanup);
     const db = openSorageDatabase(target.database);
-    expect(unwrap(createSqliteMemoRepository(db).get(MEMO_ID))).toEqual(target.memo);
+    const memoPorts = createNodeMemoPorts({ env: { SORAGE_HOME: target.home }, userHome: target.home, database: db });
+    expect(unwrap(showMemo(memoPorts, MEMO_ID))).toEqual(target.memo);
     expect(target.memo.rowVersion).toBe(1);
     expect(db.prepare("SELECT * FROM idempotency_keys").all()).toEqual([]);
     expect(db.prepare("SELECT * FROM events WHERE memo_id IS NOT NULL").all()).toHaveLength(1);
-    const repository = createSqliteMemoRepository(db);
     const changed = unwrap(
-      changeMemo(
-        target.memo,
-        { operation: "update", expectedRowVersion: 1, body: "After restore" },
-        "2026-09-28T00:00:00.000Z",
-      ),
+      mutateMemo(memoPorts, "update", target.memo.id, { expectedRowVersion: 1, body: "After restore" }),
     );
-    unwrap(
-      repository.run((tx) => {
-        const result = tx.compareAndSet(changed.memo, 1);
-        return result.ok ? tx.appendEvent(randomUUID(), required(changed.event)) : result;
-      }),
-    );
-    expect(unwrap(repository.get(MEMO_ID))).toEqual(changed.memo);
+    expect(unwrap(showMemo(memoPorts, MEMO_ID))).toEqual(changed.memo);
     db.close();
   });
 
@@ -258,7 +259,7 @@ describe("Memo format-2 export and recovery", () => {
     db.close();
     unwrap(restore(target, source));
     expect(rows(target).idempotency_keys).toEqual([]);
-    expect(rows(target).project_memos).toEqual(rows(source).project_memos);
+    expect(logicalMemoRows(target)).toEqual(logicalMemoRows(source));
   });
 });
 

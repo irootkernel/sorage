@@ -8,6 +8,10 @@ This file records concise shipped outcomes and the planned next stable release.
 - **Breaking data contract:** Handoff `storageKey` fields are always present and may be `null` for inline content. Update string-only consumers; the response envelope, protocol version 1 and `/api/v1` prefix remain unchanged under [ADR-0030](docs/architecture-decision-records/README.md#adr-0030-agent-communication-channels-and-shared-content-storage-in-m9).
 - Normalize Handoff content references in database schema 9 and extend format-3 backups with inline Artifact bodies in Handoff shards. File-backed Artifacts retain their `artifacts/` paths; backups omit derived fetch-cache files and operational receipts. Keep a verified pre-upgrade backup and its matching executable for rollback into a separate empty home.
 
+- Store newly accepted Project Memo bodies through the shared SQLite/Vault interface: up to 65,536 UTF-8 bytes inline and larger text in immutable files, bounded by `artifact.maxBytes`. Keep complete historical reads and original receipt output independent of a later lowered input cap; newly supplied request bodies still meet the current input bounds.
+- Preserve the existing Memo JSON responses and 512 KiB JSON request limit, add multipart create/update for larger bodies, and retain literal search, title-only edits and the Web recovery gate across both storage backends.
+- Normalize Memo references in schema 10 without repacking old inline text or rewriting retained receipts. Extend format-3 backups with selected Memo content files and exact digest validation; restore fresh private records without operational receipts. Disclose configured large-body Git-history growth through the CLI and Web guidance.
+
 M9 has no assigned product version. The intended v0.1.3 scope below remains M8, and published v0.1.2 predates these source changes. [The roadmap](docs/roadmap/README.md) owns delivery status; installation and publication remain separate operations.
 
 ## v0.1.3 - Unreleased

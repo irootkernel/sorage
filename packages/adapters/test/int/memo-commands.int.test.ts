@@ -9,19 +9,17 @@ import {
   showMemo,
   listMemos,
   resolveMemoProject,
-  UuidGenerator,
-  type MemoCommandPorts,
   type Result,
   type MemoExecution,
   backupRestore,
   exportSnapshot,
 } from "@sorage/core";
 import { createNodeMemoPorts } from "../../src/memo-command-ports";
-import { createSqliteMemoRepository } from "../../src/memos";
+import { createTestMemoCommandPorts } from "../../src/testkit/memo-ports";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { openSorageDatabase, type SorageSqlite } from "../../src/sqlite/connection";
 import { migrate } from "../../src/sqlite/migrator";
-import { MIGRATIONS } from "../../src/sqlite/migrations";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 import { FakeClock } from "../../src/testkit/fakes";
 import {
@@ -42,20 +40,25 @@ const request = { projectId: MEMO_PROJECT, title: "메모 😀", body: "e\u0301\
 function fixture() {
   const temp = makeTempDatabase();
   cleanups.push(temp.cleanup);
-  migrate(temp.db, MIGRATIONS);
+  const plan = productionMigrationPlan();
+  migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
+    databasePath: temp.databasePath,
+    rebuilds: plan.rebuilds,
+  });
   temp.db
     .prepare(
       "INSERT INTO projects (id,slug,display_name,status,created_at,updated_at) VALUES (?,'memo','Memo','active',?,?)",
     )
     .run(MEMO_PROJECT, MEMO_TIME, MEMO_TIME);
   const clock = new FakeClock(Date.parse(MEMO_TIME));
-  const ports: MemoCommandPorts = {
+  const ports = createTestMemoCommandPorts({
+    db: temp.db,
+    vaultPath: join(temp.home.home, "vault"),
     installationId: INSTALLATION,
-    memos: createSqliteMemoRepository(temp.db),
+    runDir: join(temp.home.home, "run"),
+    stateDir: join(temp.home.home, "state"),
     clock,
-    ids: new UuidGenerator(),
-    defaultPageSize: 2,
-  };
+  });
   return { ...temp, ports, clock };
 }
 function code(result: Result<unknown>): string {
@@ -70,13 +73,13 @@ const execute = (key = randomUUID()): MemoExecution => ({ mode: "execute", idemp
 const inspect = (key: string): MemoExecution => ({ mode: "replay-only", idempotencyKey: key });
 
 // Child processes use the real pinned Bun SQLite engine and independent connections.
-function concurrent(database: string, calls: string[]) {
+function concurrent(database: string, homePath: string, calls: string[]) {
   const children = calls.map((call) => {
     const script = `import {openSorageDatabase} from './packages/adapters/src/sqlite/connection.ts';
-      import {createSqliteMemoRepository} from './packages/adapters/src/memos.ts';
-      import {addMemo,mutateMemo,UuidGenerator} from './packages/core/src/index.ts';
+      import {createTestMemoCommandPorts} from './packages/adapters/src/testkit/memo-ports.ts';
+      import {addMemo,mutateMemo} from './packages/core/src/index.ts';
       const db=openSorageDatabase(${JSON.stringify(database)});
-      const ports={installationId:${JSON.stringify(INSTALLATION)},memos:createSqliteMemoRepository(db),clock:{now:()=>new Date(${JSON.stringify(MEMO_TIME)})},ids:new UuidGenerator(),defaultPageSize:2};
+      const ports=createTestMemoCommandPorts({db,vaultPath:${JSON.stringify(`${homePath}/vault`)},installationId:${JSON.stringify(INSTALLATION)},runDir:${JSON.stringify(`${homePath}/run`)},stateDir:${JSON.stringify(`${homePath}/state`)},clock:{now:()=>new Date(${JSON.stringify(MEMO_TIME)})}});
       console.log('ready');for await(const line of console){ console.log(JSON.stringify(${call}));break; }db.close();`;
     const child = spawn("bun", ["-e", script], { stdio: ["pipe", "pipe", "pipe"] });
     let output = "";
@@ -185,8 +188,11 @@ describe("shared Memo application", () => {
       "INSERT INTO handoffs (id,title,sender_kind,recipient_project_id,current_artifact_id,revision,row_version,review_state,created_at,updated_at) VALUES ('handoff','Legacy','user',?,'artifact',1,1,'awaiting_recipient',?,?)",
     ).run(MEMO_PROJECT, MEMO_TIME, MEMO_TIME);
     db.prepare(
-      "INSERT INTO artifacts VALUES ('artifact','handoff','artifacts/handoff/artifact/body.md','body.md','body.md','text/markdown',0,?,NULL,1,?)",
+      "INSERT INTO content_records VALUES ('legacy-content',NULL,'artifacts/handoff/artifact/body.md',0,?,1,?)",
     ).run("0".repeat(64), MEMO_TIME);
+    db.prepare(
+      "INSERT INTO artifacts (id,handoff_id,content_record_id,original_name,stored_name,mime_type,imported_from_path,created_at) VALUES ('artifact','handoff','legacy-content','body.md','body.md','text/markdown',NULL,?)",
+    ).run(MEMO_TIME);
     db.prepare("INSERT INTO review_notes VALUES ('handoff','user',NULL,1,'Legacy note',?,?)").run(MEMO_TIME, MEMO_TIME);
     db.prepare(
       "INSERT INTO events (id,handoff_id,event_type,actor_kind,actor_id,row_version,metadata_json,created_at) VALUES ('event','handoff','HANDOFF_CREATED','user',NULL,1,'{}',?)",
@@ -245,7 +251,7 @@ describe("shared Memo application", () => {
   });
 
   it("keeps normalized historical receipts across edits, archive and process-independent connections", () => {
-    const { ports, db, databasePath } = fixture();
+    const { ports, db, databasePath, home } = fixture();
     const policy = execute();
     const original = unwrap(addMemo(ports, { title: "  메모 😀  ", projectId: MEMO_PROJECT }, policy));
     const expires = db.prepare("SELECT expires_at FROM idempotency_keys").get();
@@ -253,9 +259,17 @@ describe("shared Memo application", () => {
     db.prepare("UPDATE projects SET status='archived'").run();
     const second = openSorageDatabase(databasePath);
     try {
+      const secondPorts = createTestMemoCommandPorts({
+        db: second,
+        vaultPath: join(home.home, "vault"),
+        installationId: INSTALLATION,
+        runDir: join(home.home, "run"),
+        stateDir: join(home.home, "state"),
+        clock: new FakeClock(Date.parse(MEMO_TIME)),
+      });
       const replayed = unwrap(
         addMemo(
-          { ...ports, memos: createSqliteMemoRepository(second) },
+          secondPorts,
           { body: "", projectId: MEMO_PROJECT, title: "메모 😀" },
           inspect(policy.idempotencyKey as string),
         ),
@@ -447,7 +461,7 @@ describe("shared Memo application", () => {
     expect(db.prepare("SELECT 1 AS n").get()).toEqual({ n: 1 });
   });
 
-  it("uses the real format-2 restore fixture without recreating lost receipts", () => {
+  it("uses the current snapshot restore fixture without recreating lost receipts", () => {
     const installation = restoredMemoInstallation();
     cleanups.push(installation.cleanup);
     const ports = createNodeMemoPorts({ env: { SORAGE_HOME: installation.home }, userHome: installation.home });
@@ -506,9 +520,9 @@ describe("shared Memo application", () => {
   );
 
   it.each([false, true])("serializes duplicate keys with separate processes (changed request: %s)", (changed) => {
-    const { databasePath, db } = fixture();
+    const { databasePath, db, home } = fixture();
     const policy = execute();
-    return concurrent(databasePath, [
+    return concurrent(databasePath, home.home, [
       `addMemo(ports,${JSON.stringify(request)},${JSON.stringify(policy)})`,
       `addMemo(ports,${JSON.stringify({ ...request, title: changed ? "other" : request.title })},${JSON.stringify(policy)})`,
     ]).then((results) => {
@@ -524,9 +538,9 @@ describe("shared Memo application", () => {
   });
 
   it.each(["update", "done"])("serializes update versus %s using stale expectations", async (operation) => {
-    const { databasePath, ports, db } = fixture();
+    const { databasePath, ports, db, home } = fixture();
     const memo = unwrap(addMemo(ports, request)).memo;
-    const results = await concurrent(databasePath, [
+    const results = await concurrent(databasePath, home.home, [
       `mutateMemo(ports,'update','${memo.id}',{expectedRowVersion:1,body:'A'})`,
       `mutateMemo(ports,'${operation}','${memo.id}',${JSON.stringify({ expectedRowVersion: 1, ...(operation === "update" ? { body: "B" } : {}) })})`,
     ]);
@@ -536,14 +550,14 @@ describe("shared Memo application", () => {
   });
 
   it.each(["add", "reopen"])("serializes Project archive versus %s in the write transaction", async (operation) => {
-    const { databasePath, ports } = fixture();
+    const { databasePath, ports, home } = fixture();
     const memo = unwrap(addMemo(ports, request)).memo;
     unwrap(mutateMemo(ports, "done", memo.id, { expectedRowVersion: 1 }));
     const call =
       operation === "add"
         ? `addMemo(ports,${JSON.stringify(request)})`
         : `mutateMemo(ports,'reopen','${memo.id}',{expectedRowVersion:2})`;
-    const results = await concurrent(databasePath, [
+    const results = await concurrent(databasePath, home.home, [
       call,
       `(()=>{db.exec('BEGIN IMMEDIATE');db.prepare("UPDATE projects SET status='archived'").run();db.exec('COMMIT');return {ok:true,value:null};})()`,
     ]);

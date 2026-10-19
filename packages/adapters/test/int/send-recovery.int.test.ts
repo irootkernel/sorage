@@ -186,11 +186,9 @@ function legacy(f: ReturnType<typeof fixture>, through: number) {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('schema_migrations','migration_lock')",
       )
       .all() as Array<{ name: string }>) {
-      // The source installation is normalized at schema 9, so the legacy
-      // Artifact projection rematerializes the physical columns an old schema
-      // expects from the content records, and only records no Artifact row
-      // references enter a schema-8 content_records table — the pre-adoption
-      // truth, never a fabricated mixed layout.
+      // The current source stores Artifact and Memo references. Reconstruct
+      // their legacy physical columns and exclude domain-owned records from
+      // the schema-8 infrastructure table to preserve a valid old layout.
       if (name === "artifacts") {
         target.exec(
           "INSERT INTO artifacts (id, handoff_id, storage_key, original_name, stored_name, mime_type, size_bytes, sha256, imported_from_path, materialized, created_at) " +
@@ -199,10 +197,17 @@ function legacy(f: ReturnType<typeof fixture>, through: number) {
         );
         continue;
       }
+      if (name === "project_memos") {
+        target.exec(
+          "INSERT INTO project_memos (id,project_id,title,body,state,row_version,created_at,updated_at,created_by,updated_by,closed_at,closed_by) " +
+            "SELECT m.id,m.project_id,m.title,c.inline_text,m.state,m.row_version,m.created_at,m.updated_at,m.created_by,m.updated_by,m.closed_at,m.closed_by FROM source.project_memos m JOIN source.content_records c ON c.id=m.content_record_id",
+        );
+        continue;
+      }
       if (name === "content_records") {
         target.exec(
           "INSERT INTO content_records SELECT cr.* FROM source.content_records cr " +
-            "WHERE NOT EXISTS (SELECT 1 FROM source.artifacts a WHERE a.content_record_id = cr.id)",
+            "WHERE NOT EXISTS (SELECT 1 FROM source.artifacts a WHERE a.content_record_id = cr.id) AND NOT EXISTS (SELECT 1 FROM source.project_memos m WHERE m.content_record_id=cr.id)",
         );
         continue;
       }
@@ -510,7 +515,7 @@ describe("native send receipt inspection", () => {
     if (scenario === "db-header") writeFileSync(f.databasePath, "garbage");
     if (scenario === "db-history") f.db((d) => d.exec("UPDATE schema_migrations SET name='invalid' WHERE version=4"));
     if (scenario === "db-newer")
-      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(10,'future','2026-01-01')"));
+      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(11,'future','2026-01-01')"));
     if (scenario === "db-identity")
       f.db((d) =>
         d

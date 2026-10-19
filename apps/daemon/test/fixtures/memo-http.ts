@@ -139,7 +139,10 @@ export async function memoHttpFixture(clock?: Clock, cli = memoCliFixture()) {
           const payload = options.raw ?? (options.body === undefined ? undefined : JSON.stringify(options.body));
           if (options.beforeEnd) {
             request.write(payload);
-            void options.beforeEnd().then(() => request.end(), reject);
+            void options.beforeEnd().then(
+              () => request.end(),
+              (error: Error) => request.destroy(error),
+            );
           } else request.end(payload);
         }
       });

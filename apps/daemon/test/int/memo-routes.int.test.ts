@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Memo, MemoPage } from "@sorage/core";
@@ -173,6 +174,8 @@ describe("authenticated Memo HTTP application", () => {
 
   it("accepts split multibyte text and valid replacement characters but enforces both byte limits on known keys", async () => {
     const f = await fixture();
+    const configPath = join(f.home, "config.yaml");
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace(/maxBytes:\s*\d+/, "maxBytes: 65536"));
     const key = randomUUID();
     const body = { projectId: f.projectId, title: "한글😀", body: "�\r\n😀" };
     const bytes = Buffer.from(JSON.stringify(body));

@@ -151,6 +151,7 @@ describe("AJ-21-B: storage and response failure boundaries", () => {
 
   it("rejects visible input overflows and settles only a definitive original refusal while preserving the draft", async () => {
     const f = await fixture();
+    f.run(["config", "set", "artifact.maxBytes", "65536", "--as-user"]);
     await f.list();
     let sends = 0;
     f.page.on("request", (request) => {

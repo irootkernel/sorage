@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
-import type { ArtifactStore, HandoffDetailReadPorts, HandoffEventView, SendPorts } from "@sorage/core";
+import type { ArtifactStore, HandoffDetailReadPorts, HandoffEventView, RevisionPorts, SendPorts } from "@sorage/core";
 import { type AppError, appError, err, ok, type Result, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createArtifactBodyPorts } from "./artifact-body-ports";
@@ -20,6 +20,7 @@ import { digestFile, inspectSourceFile } from "./import-source";
 import { executeLegacyIntent } from "./intent-log";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
 import { createNodeProjectPorts } from "./project-command-ports";
+import { appendStructuredLog } from "./structured-log";
 import { createSqliteReviewStore } from "./review-store";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
@@ -273,6 +274,19 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
     digestSource(path) {
       return digestFile(expandHome(path, userHome));
     },
+    disclosures: {
+      backupEnabled: effective.gitBackup.enabled,
+      thresholdBytes: effective.gitBackup.largeArtifactWarningBytes,
+      largeContent: (sizeBytes: number, thresholdBytes: number) => {
+        // The CLI attaches its own stderr sink after composition; the default
+        // records the structured diagnostic (never user delivery).
+        appendStructuredLog(
+          { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "handoff", sizeBytes, thresholdBytes },
+          home,
+          effective.logging,
+        );
+      },
+    },
   };
 }
 
@@ -355,6 +369,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
   bindingDirectories: string[];
   digestSource: (path: string) => Result<string, AppError>;
+  disclosures?: NonNullable<RevisionPorts["disclosures"]>;
 } {
   const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
@@ -413,6 +428,17 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
     bindingDirectories: bindingDirectoriesOf(db),
     digestSource(path: string) {
       return digestFile(path);
+    },
+    disclosures: {
+      backupEnabled: effective.gitBackup.enabled,
+      thresholdBytes: effective.gitBackup.largeArtifactWarningBytes,
+      largeContent: (sizeBytes: number, thresholdBytes: number) => {
+        appendStructuredLog(
+          { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "handoff", sizeBytes, thresholdBytes },
+          home,
+          effective.logging,
+        );
+      },
     },
   };
 }

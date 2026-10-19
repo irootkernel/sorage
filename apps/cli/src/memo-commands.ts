@@ -1,11 +1,17 @@
 import { homedir } from "node:os";
-import { createNodeMemoPorts, memoStorageError } from "@sorage/adapters/src/memo-command-ports";
-import { readMemoBodyFile } from "@sorage/adapters/src/memo-body-file";
+import { randomUUID } from "node:crypto";
+import {
+  createNodeMemoPorts,
+  memoStorageError,
+  sweepMemoAcceptedInputs,
+  type NodeMemoPorts,
+} from "@sorage/adapters/src/memo-command-ports";
+import { captureMemoBodyFile, captureMemoBodyText } from "@sorage/adapters/src/memo-body-file";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   addMemo,
   appError,
-  err,
+  largeContentDisclosureMessage,
   listMemos,
   mutateMemo,
   ok,
@@ -13,6 +19,7 @@ import {
   resolveMemoProject,
   showMemo,
   successEnvelope,
+  type AcceptedMemoBody,
   type AppError,
   type Memo,
   type MemoPage,
@@ -26,16 +33,31 @@ interface MemoCliOutput {
   out(text: string): void;
   fail(error: AppError, json: boolean): void;
   requestId(): string;
+  /** The diagnostic sink for the large-content Git-history disclosure: stderr, never stdout, never the JSON DTO (WR2). */
+  warn(text: string): void;
 }
 
-function bodyInput(options: Record<string, unknown>): Result<{ body?: string }> {
-  if (options.body !== undefined && options.bodyFile !== undefined)
-    return err(appError("MEMO_INVALID_INPUT", "Choose one Memo body source: --body or --body-file"));
+/** Captures the selected body source once: small text stays in the request, larger accepted input reaches the application as its private spool. */
+function bodyInput(
+  options: Record<string, unknown>,
+  ports: NodeMemoPorts,
+): Result<{ fields: { body?: string }; accepted?: AcceptedMemoBody }> {
+  const captureOptions = { maxBytes: ports.maxBytes, stateDir: ports.stateDir, spoolId: randomUUID() };
   if (typeof options.bodyFile === "string") {
-    const body = readMemoBodyFile(options.bodyFile);
-    return body.ok ? ok({ body: body.value }) : body;
+    const captured = captureMemoBodyFile(options.bodyFile, captureOptions);
+    if (!captured.ok) return captured;
+    return captured.value.kind === "text"
+      ? ok({ fields: { body: captured.value.text } })
+      : ok({ fields: {}, accepted: captured.value });
   }
-  return ok(typeof options.body === "string" ? { body: options.body } : {});
+  if (options.body !== undefined) {
+    const captured = captureMemoBodyText(String(options.body), captureOptions);
+    if (!captured.ok) return captured;
+    return captured.value.kind === "text"
+      ? ok({ fields: { body: captured.value.text } })
+      : ok({ fields: {}, accepted: captured.value });
+  }
+  return ok({ fields: {} });
 }
 
 export function registerMemoCommands(program: Command, output: MemoCliOutput): void {
@@ -81,6 +103,8 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
     const json = globals.json === true;
     const mutation = operation !== "list" && operation !== "show";
     const invalid = (message: string) => output.fail(appError("MEMO_INVALID_INPUT", message), json);
+    if (options.body !== undefined && options.bodyFile !== undefined)
+      return invalid("Choose one Memo body source: --body or --body-file");
     if (globals.as !== undefined || globals.confirm !== undefined)
       return invalid("Memo commands do not accept --as or --confirm; provenance is always User");
     if (operation !== "list" && (globals.limit !== undefined || globals.cursor !== undefined))
@@ -95,15 +119,13 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       mutation,
     );
     if (!execution.ok) return output.fail(execution.error, json);
-    const body = bodyInput(options);
-    if (!body.ok) return output.fail(body.error, json);
     if (operation === "add" && options.title === undefined) return invalid("Memo add requires --title");
     if (mutation && operation !== "add" && globals.expectedRowVersion === undefined)
       return invalid("Memo mutations require --expected-row-version from the observed Memo");
     // Existing native recovery remains separate from the Memo operation's own effects.
     const drained = createNodeVaultCommandPorts().drainAtStart();
     if (!drained.ok) return output.fail(drained.error, json);
-    let ports: ReturnType<typeof createNodeMemoPorts>;
+    let ports: NodeMemoPorts;
     try {
       ports = createNodeMemoPorts();
     } catch (error) {
@@ -111,7 +133,32 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       // instead of collapsing into INTERNAL_ERROR (SHR-009).
       return output.fail(memoStorageError(error), json);
     }
+    let accepted: AcceptedMemoBody | undefined;
+    // The per-invocation disclosure buffer of WR3: the core callback records
+    // metadata only — never output at commit time — and the flush below owns
+    // the presentation, so a post-commit failure still yields exactly one
+    // error document on stderr with the disclosure inside the existing
+    // message field, and a success keeps its stdout JSON and exit 0.
+    const warnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
     try {
+      // The crash-orphan backstop runs at the command entry, before this
+      // operation's own spool can exist, under the configured grace window.
+      sweepMemoAcceptedInputs();
+      if (ports.disclosures !== undefined) {
+        const composed = ports.disclosures;
+        ports = {
+          ...ports,
+          disclosures: {
+            ...composed,
+            largeContent: (sizeBytes: number, thresholdBytes: number) => {
+              warnings.push({ sizeBytes, thresholdBytes });
+            },
+          },
+        };
+      }
+      const body = bodyInput(options, ports);
+      if (!body.ok) return output.fail(body.error, json);
+      accepted = body.value.accepted;
       let projectId: string | undefined;
       if (
         options.project !== undefined ||
@@ -127,7 +174,7 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       }
       let result: Result<MemoReceipt | MemoPage | Memo>;
       if (operation === "add")
-        result = addMemo(ports, { projectId, title: options.title, ...body.value }, execution.value);
+        result = addMemo(ports, { projectId, title: options.title, ...body.value.fields }, execution.value, accepted);
       else if (operation === "list")
         result = listMemos(ports, {
           ...(options.allProjects === true ? { allProjects: true } : { projectId }),
@@ -146,14 +193,53 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
             expectedRowVersion: globals.expectedRowVersion,
             ...(projectId === undefined ? {} : { projectId }),
             ...(options.title === undefined ? {} : { title: options.title }),
-            ...body.value,
+            ...body.value.fields,
           },
           execution.value,
+          accepted,
         );
-      if (!result.ok) return output.fail(result.error, json);
+      if (!result.ok) {
+        // WR3: a JSON failure keeps stdout empty and emits exactly one error
+        // envelope; a buffered disclosure rides inside the existing message
+        // field as a conditional append, preserving the base message prefix,
+        // code, details, recovery, and exit. A non-JSON failure flushes the
+        // warning lines to stderr before the human error. The formatter is
+        // best-effort: if building the appended message itself fails, the
+        // original error renders unchanged.
+        if (warnings.length > 0 && json) {
+          let error = result.error;
+          try {
+            const appended = warnings
+              .map((warning) => largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes))
+              .join(" ");
+            error = { ...error, message: `${error.message}; ${appended}` };
+          } catch {
+            // Formatting failure leaves the original error intact.
+          }
+          return output.fail(error, json);
+        }
+        for (const warning of warnings) {
+          try {
+            output.warn(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
+          } catch {
+            // A diagnostic flush failure never masks the real error.
+          }
+        }
+        return output.fail(result.error, json);
+      }
+      // Success: the disclosure is a stderr diagnostic; the stdout success
+      // JSON, its shape, and exit 0 are unchanged.
+      for (const warning of warnings) {
+        try {
+          output.warn(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
+        } catch {
+          // A diagnostic flush failure never changes a committed outcome.
+        }
+      }
       if (json) output.out(`${JSON.stringify(successEnvelope(result.value, output.requestId()), null, 2)}\n`);
       else renderMemo(result.value, output.out);
     } finally {
+      if (accepted !== undefined) ports.releaseAcceptedBody(accepted);
       ports.close();
     }
   }

@@ -42,6 +42,9 @@ import {
   parseVersionedSnapshotManifest,
   parseMemoSnapshot,
   parseMemoSnapshotV3,
+  memoContentFilePath,
+  type MemoContentFileExport,
+  type SnapshotMemoV3,
   parseUniqueSnapshotJson,
   validateSnapshot,
   type Memo,
@@ -74,7 +77,15 @@ import {
   validateArtifactContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
-import { memoFromRow, insertMemoRow } from "./memos";
+import {
+  insertMemoWithFileRecordRows,
+  insertMemoWithInlineRecord,
+  placeMemoContentFile,
+  readMemoContentFileBytes,
+  readMemoExport,
+  type MemoContentReference,
+} from "./memos";
+import { validateMemoContentLinks } from "./content-store";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
@@ -229,6 +240,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         return links;
       }
       let data: Result<SnapshotDataV3, AppError>;
+      let pendingContentFiles: MemoContentReference[] = [];
       try {
         const projects = db.prepare("SELECT * FROM projects ORDER BY id").all() as unknown as Row[];
         const bindings = db.prepare("SELECT * FROM project_bindings ORDER BY id").all() as unknown as Row[];
@@ -241,10 +253,26 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         const reviewNotes = db.prepare("SELECT * FROM review_notes ORDER BY handoff_id").all() as unknown as Row[];
         const deletionRequests = db.prepare("SELECT * FROM deletion_requests ORDER BY id").all() as unknown as Row[];
         const events = db.prepare("SELECT * FROM events ORDER BY created_at, id").all() as unknown as Row[];
-        const memos = db.prepare("SELECT * FROM project_memos ORDER BY id").all().map(memoFromRow);
+        // The consistent export guard runs before the Memo read: a schema-10
+        // database whose Memo links are broken must fail the export loudly,
+        // never produce a silently reduced or empty Memo inventory.
+        const memoLinks = validateMemoContentLinks(db);
+        if (!memoLinks.ok) {
+          db.exec("ROLLBACK");
+          return memoLinks;
+        }
+        const memosResult = readMemoExport(db);
+        if (!memosResult.ok) {
+          db.exec("ROLLBACK");
+          return memosResult;
+        }
+        // Only rows were read inside the transaction; the file-backed bodies'
+        // bytes are read from the Vault AFTER the snapshot read commits, so
+        // no filesystem I/O rides the read transaction (W1, SHR-012).
+        pendingContentFiles = memosResult.value.contentFiles;
         data = ok({
           ...mapSnapshotData({ projects, bindings, handoffs, artifacts, reviewNotes, deletionRequests, events }),
-          memos,
+          memos: memosResult.value.memos,
         });
       } catch (error) {
         db.exec("ROLLBACK");
@@ -255,6 +283,20 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         );
       }
       db.exec("COMMIT");
+      if (pendingContentFiles.length > 0) {
+        const configRead = store.read();
+        if (!configRead.ok || configRead.value === null) {
+          return err(appError("NOT_INITIALIZED", "Sorage is not initialized."));
+        }
+        const memoFilesResult = readMemoContentFileBytes(
+          expandConfigurationPath(configRead.value.config.vault.path, userHome, home.home),
+          pendingContentFiles,
+        );
+        if (!memoFilesResult.ok) return memoFilesResult;
+        if (data.ok) {
+          data = ok({ ...data.value, memoContentFiles: memoFilesResult.value });
+        }
+      }
       return data;
     });
   }
@@ -422,14 +464,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       if (!content.ok) return content;
       // Inspect filesystem safety without applying this build's empty content
       // inventory assumption to a recognized later representation.
-      if (
-        manifest.value.formatVersion === 3 &&
-        (manifest.value.counts.channels !== 0 || Object.keys(manifest.value.contentDigests).length !== 0)
-      ) {
+      if (manifest.value.formatVersion === 3 && manifest.value.counts.channels !== 0) {
         return err(
           appError(
             "VAULT_SCHEMA_UNSUPPORTED",
-            "The snapshot carries a later Channel or shared-content representation this build cannot import",
+            "The snapshot carries a later Channel representation this build cannot import",
           ),
         );
       }
@@ -441,29 +480,111 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           ),
         );
       }
-      if (manifest.value.formatVersion === 3) {
-        // The content-file inventory must agree with the map before import: an
-        // empty `contentDigests` with files present is a disagreement, and a
-        // nonempty map was already refused with the later-generation check.
-        if (content.value.length !== 0) {
+      const contentDigests = manifest.value.formatVersion === 3 ? manifest.value.contentDigests : {};
+      if (manifest.value.formatVersion !== 3 && content.value.length !== 0)
+        return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected content files"));
+      /** Read one carried content file's exact bytes; the map's digests were already shape-checked. */
+      const readContentFile = (relative: string): Result<Uint8Array, AppError> => {
+        const read = readSnapshotBytes(join(sourcePath, "snapshots"), relative);
+        if (!read.ok) return err(read.error);
+        const entry = contentDigests[relative];
+        if (entry === undefined || createHash("sha256").update(read.value).digest("hex") !== entry) {
           return err(
             appError(
               "VAULT_INTEGRITY_ERROR",
-              "The snapshot's exported content files disagree with its empty content digest inventory",
+              `The carried content file ${relative} disagrees with its manifest digest.`,
+              {
+                relative,
+              },
             ),
           );
+        }
+        return ok(read.value);
+      };
+      if (manifest.value.formatVersion === 3) {
+        // The content-file inventory must agree with the map exactly: a file
+        // the map omits, a map key with no regular file, or a non-Memo content
+        // path this build cannot faithfully import is refused before adoption.
+        const contentNames = new Set(content.value.map((file) => `content/${file}`));
+        const mapKeys = Object.keys(manifest.value.contentDigests);
+        if (
+          mapKeys.some((key) => !contentNames.has(key)) ||
+          [...contentNames].some((name) => !(name in contentDigests))
+        ) {
+          return err(
+            appError(
+              "VAULT_INTEGRITY_ERROR",
+              "The snapshot's exported content files disagree with its content digest inventory",
+            ),
+          );
+        }
+        for (const key of mapKeys) {
+          if (!/^content\/memo\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/.test(key)) {
+            return err(
+              appError(
+                "VAULT_SCHEMA_UNSUPPORTED",
+                "The snapshot carries shared content outside the Memo content family this build cannot import",
+              ),
+            );
+          }
         }
       }
       const memoFiles = readMemoSnapshotFiles(sourcePath, manifest.value);
       if (!memoFiles.ok) return memoFiles;
       const memos: Memo[] = [];
+      const memoExports: SnapshotMemoV3[] = [];
+      const memoContentFiles: MemoContentFileExport[] = [];
       for (const file of memoFiles.value) {
-        const parsed =
-          manifest.value.formatVersion === 3
-            ? parseMemoSnapshotV3(file.path, file.bytes, file.digest)
-            : parseMemoSnapshot(file.path, file.bytes, file.digest);
-        if (!parsed.ok) return parsed;
-        memos.push(parsed.value);
+        if (manifest.value.formatVersion === 3) {
+          const parsed = parseMemoSnapshotV3(file.path, file.bytes, file.digest);
+          if (!parsed.ok) return parsed;
+          const imported = parsed.value;
+          if (imported.bodyContent.kind === "inline") {
+            memoExports.push({ ...imported.meta, bodyContent: { kind: "inline", text: imported.bodyContent.text } });
+          } else {
+            // The file-backed form: the carried content file must exist, match
+            // the shard's recorded size and digest, and live under this Memo's
+            // own identity path; the metadata is validated independently of the carried body.
+            const contentPath = imported.bodyContent.contentPath;
+            const canonicalContentPath = memoContentFilePath(imported.meta.id, contentPath.split("/")[3] as string);
+            if (!canonicalContentPath.ok || canonicalContentPath.value !== contentPath) {
+              return err(
+                appError(
+                  "VAULT_INTEGRITY_ERROR",
+                  `The Memo shard names a content file outside its own identity path.`,
+                  {
+                    memoId: imported.meta.id,
+                  },
+                ),
+              );
+            }
+            const bytes = readContentFile(contentPath);
+            if (!bytes.ok) return bytes;
+            if (bytes.value.byteLength !== imported.bodyContent.sizeBytes) {
+              return err(
+                appError(
+                  "VAULT_INTEGRITY_ERROR",
+                  `The carried content file for Memo ${imported.meta.id} disagrees with its recorded size.`,
+                ),
+              );
+            }
+            const contentId = contentPath.split("/")[3] as string;
+            memoContentFiles.push({ memoId: imported.meta.id, contentId, bytes: bytes.value });
+            memoExports.push({
+              ...imported.meta,
+              bodyContent: {
+                kind: "file-backed",
+                contentPath,
+                sizeBytes: imported.bodyContent.sizeBytes,
+                sha256: imported.bodyContent.sha256,
+              },
+            });
+          }
+        } else {
+          const parsed = parseMemoSnapshot(file.path, file.bytes, file.digest);
+          if (!parsed.ok) return parsed;
+          memos.push(parsed.value);
+        }
       }
       const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
       if (!projectsRaw.ok) return err(projectsRaw.error);
@@ -565,7 +686,13 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       }
       const data: SnapshotData | SnapshotDataV3 =
         manifest.value.formatVersion === 3
-          ? { projects: projects.value as unknown as SnapshotProject[], handoffs: v3Handoffs, events, memos }
+          ? {
+              projects: projects.value as unknown as SnapshotProject[],
+              handoffs: v3Handoffs,
+              events,
+              memos: memoExports,
+              memoContentFiles,
+            }
           : { projects: projects.value as unknown as SnapshotProject[], handoffs: legacyHandoffs, events, memos };
       const valid = validateSnapshot(data, manifest.value);
       if (!valid.ok) return valid;
@@ -846,9 +973,84 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function rebuildDatabase(data: SnapshotData | SnapshotDataV3, marker: VaultMarker): Result<void, AppError> {
-    return withDatabase((db) => {
+    const resolvedInstallation = installation();
+    if (!resolvedInstallation.ok) return err(resolvedInstallation.error);
+    const vaultPath = resolvedInstallation.value.vaultPath;
+    // Every file-backed Memo's carried bytes are placed, fsynced, and
+    // digest-verified at fresh private managed keys BEFORE the SQL transaction
+    // opens: the transaction then inserts only rows — metadata-only, no
+    // filesystem I/O inside it (MEM-009, P5). A placement failure leaves the
+    // database untouched and removes every placed file of this restore.
+    const carriedMemoContent = new Map(
+      ((data as SnapshotDataV3).memoContentFiles ?? []).map((carried) => [
+        `${carried.memoId}:${carried.contentId}`,
+        carried.bytes,
+      ]),
+    );
+    const placedFiles: Array<{
+      meta: Omit<Memo, "body">;
+      recordId: string;
+      identity: { sizeBytes: number; sha256: string };
+      storageKey: string;
+    }> = [];
+    const placedKeys: string[] = [];
+    const discardPlacedFiles = (): void => {
+      for (const key of placedKeys) {
+        try {
+          rmSync(join(vaultPath, key), { force: true });
+        } catch {
+          /* Unreachable owned files may remain. */
+        }
+      }
+    };
+    for (const memo of data.memos ?? []) {
+      if (!("bodyContent" in memo) || memo.bodyContent.kind !== "file-backed") continue;
+      const exportedContentId = memo.bodyContent.contentPath.split("/")[3] as string;
+      const bytes = carriedMemoContent.get(`${memo.id}:${exportedContentId}`);
+      if (bytes === undefined) {
+        discardPlacedFiles();
+        return err(
+          appError("VAULT_INTEGRITY_ERROR", `The Memo ${memo.id} names a content file the snapshot does not carry`, {
+            memoId: memo.id,
+          }),
+        );
+      }
+      const { bodyContent: _file, ...meta } = memo;
+      const recordId = randomUUID();
+      const placed = placeMemoContentFile(vaultPath, memo.id, recordId, bytes);
+      if (!placed.ok) {
+        discardPlacedFiles();
+        return placed;
+      }
+      if (placed.value.sizeBytes !== memo.bodyContent.sizeBytes || placed.value.sha256 !== memo.bodyContent.sha256) {
+        placedKeys.push(placed.value.storageKey);
+        discardPlacedFiles();
+        return err(
+          appError(
+            "VAULT_INTEGRITY_ERROR",
+            `The Memo ${memo.id} carried bytes disagree with its shard's recorded identity`,
+            {
+              memoId: memo.id,
+            },
+          ),
+        );
+      }
+      placedKeys.push(placed.value.storageKey);
+      placedFiles.push({
+        meta,
+        recordId,
+        identity: { sizeBytes: placed.value.sizeBytes, sha256: placed.value.sha256 },
+        storageKey: placed.value.storageKey,
+      });
+    }
+    const placedByMemo = new Map(placedFiles.map((entry) => [entry.meta.id, entry]));
+    let committed = false;
+    let cleanupSafe = true;
+    let commitAttempted = false;
+    const rebuilt = withDatabase((db) => {
       try {
         db.exec("BEGIN IMMEDIATE");
+        cleanupSafe = false;
       } catch (error) {
         return err(appError("INTERNAL_ERROR", `Beginning the restore rebuild failed: ${messageOf(error)}.`));
       }
@@ -982,7 +1184,18 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             );
           }
         }
-        for (const memo of data.memos ?? []) insertMemoRow(db, memo);
+        for (const memo of data.memos ?? []) {
+          if (!("bodyContent" in memo)) {
+            insertMemoWithInlineRecord(db, memo, randomUUID());
+          } else if (memo.bodyContent.kind === "inline") {
+            const { bodyContent, ...meta } = memo;
+            insertMemoWithInlineRecord(db, { ...meta, body: bodyContent.text }, randomUUID());
+          } else {
+            const placed = placedByMemo.get(memo.id);
+            if (placed === undefined) throw new Error("A Memo lost its prepared content placement");
+            insertMemoWithFileRecordRows(db, placed.meta, placed.identity, placed.recordId, placed.storageKey);
+          }
+        }
         // Operational receipts are deliberately neither read nor reconstructed from snapshots.
         db.prepare("DELETE FROM idempotency_keys").run();
         for (const event of [...data.events].sort(byEventOrder)) {
@@ -1029,10 +1242,17 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           }),
           now,
         );
+        commitAttempted = true;
         db.exec("COMMIT");
+        committed = true;
         return ok(undefined);
       } catch (error) {
-        db.exec("ROLLBACK");
+        try {
+          db.exec("ROLLBACK");
+          if (!commitAttempted) cleanupSafe = true;
+        } catch {
+          // Never delete files whose authoritative row outcome is uncertain.
+        }
         return err(
           appError("INTERNAL_ERROR", `Rebuilding the installation from the backup failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -1040,6 +1260,21 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         );
       }
     });
+    if (!rebuilt.ok && cleanupSafe) discardPlacedFiles();
+    if (!rebuilt.ok && committed)
+      return err({
+        ...appError("INTERNAL_ERROR", "The restore rebuild committed, but closing its database connection failed"),
+        recovery: { suggestedCommand: "Inspect the restored installation read-only before attempting recovery" },
+      });
+    if (!rebuilt.ok && !cleanupSafe)
+      return err({
+        ...appError(
+          "INTERNAL_ERROR",
+          "The restore rebuild outcome is uncertain; its prepared content files were preserved",
+        ),
+        recovery: { suggestedCommand: "Inspect the target installation read-only before retrying restore" },
+      });
+    return rebuilt;
   }
 
   function regenerateApiToken(): Result<void, AppError> {

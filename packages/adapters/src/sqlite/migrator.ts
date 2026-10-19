@@ -20,7 +20,36 @@ export { readAppliedRows } from "./history-inspection";
 export interface Migration {
   version: number;
   name: string;
-  sql: string;
+  /** The single-SQL form every migration through version 9 uses. */
+  sql?: string;
+  /**
+   * The segmented form a data-carrying rebuild uses (SHR-009, interface
+   * section 38.7): the runner executes `sqlBefore`, then the synchronous
+   * `backfill` callback on the same connection inside the same savepoint, then
+   * `sqlAfter`. Exactly one of `sql` and the segmented triple is present; a
+   * backfill that throws fails its step and rolls back the whole batch exactly
+   * like a SQL error.
+   */
+  sqlBefore?: string;
+  backfill?: (connection: SorageSqlite) => void;
+  sqlAfter?: string;
+}
+
+/** Executes one migration's segments in declaration order; throws on any failure so the caller's rollback owns the batch. */
+export function execMigrationSegments(connection: SorageSqlite, migration: Migration): void {
+  if (migration.sql !== undefined) {
+    if (migration.sqlBefore !== undefined || migration.sqlAfter !== undefined || migration.backfill !== undefined) {
+      throw new Error(`migration ${String(migration.version)} declares both the single-sql and segmented forms`);
+    }
+    connection.exec(migration.sql);
+    return;
+  }
+  if (migration.sqlBefore === undefined || migration.sqlAfter === undefined) {
+    throw new Error(`migration ${String(migration.version)} is neither single-sql nor a complete segmented step`);
+  }
+  connection.exec(migration.sqlBefore);
+  if (migration.backfill !== undefined) migration.backfill(connection);
+  connection.exec(migration.sqlAfter);
 }
 
 export interface MigrationOutcome {
@@ -153,7 +182,7 @@ function migrateOrdinary(
       // Each step is its own savepoint, so a failure leaves the previous schema active.
       db.exec("SAVEPOINT sorage_migration_step");
       try {
-        db.exec(migration.sql);
+        execMigrationSegments(db, migration);
         db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
           migration.version,
           migration.name,
@@ -254,7 +283,7 @@ function migrateRebuildBatch(
       // attribution; rollback always covers the entire batch.
       dedicated.exec("SAVEPOINT sorage_migration_step");
       try {
-        dedicated.exec(migration.sql);
+        execMigrationSegments(dedicated, migration);
         dedicated
           .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
           .run(migration.version, migration.name, now());

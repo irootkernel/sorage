@@ -47,6 +47,7 @@ import {
   sqliteContentReferences,
   sweepFetchCache,
   validateArtifactContentLinks,
+  validateMemoContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
@@ -273,6 +274,12 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         recordedArtifacts,
         recordedContent: () =>
           withDatabase((db) => {
+            // The Memo link guard runs at this census boundary itself, not only
+            // through the maintenance cleanup: a schema-10 database whose Memo
+            // rows lost their record references fails the verify proof loudly
+            // (SHR-004, SHR-014).
+            const memoLinks = validateMemoContentLinks(db);
+            if (!memoLinks.ok) return memoLinks;
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
               .get() as { name: string } | null | undefined;

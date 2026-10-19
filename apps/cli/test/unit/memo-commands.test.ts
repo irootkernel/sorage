@@ -14,7 +14,7 @@ describe("Memo CLI validation before opening storage", () => {
     const program = new Command();
     const out = vi.fn();
     const fail = vi.fn();
-    registerMemoCommands(program, { out, fail, requestId: () => "unused" });
+    registerMemoCommands(program, { out, fail, warn: vi.fn(), requestId: () => "unused" });
     program.parse(["memo", ...args], { from: "user" });
     expect(out).not.toHaveBeenCalled();
     expect(fail).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: "MEMO_INVALID_INPUT" }), false);

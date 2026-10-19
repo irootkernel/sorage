@@ -61,8 +61,17 @@ afterAll(() => {
   for (const cleanup of cleanups) cleanup();
 });
 
+/** The frozen owning-Task slice: later Memo adoption has separate fidelity tests. */
+function handoffAdoptionPlan() {
+  const current = productionMigrationPlan();
+  return {
+    migrations: current.migrations.filter((step) => step.version <= 9),
+    rebuilds: current.rebuilds.filter((step) => step.version <= 9),
+  };
+}
+
 function migrateProduction(temp: ReturnType<typeof makeTempDatabase>): void {
-  const plan = productionMigrationPlan();
+  const plan = handoffAdoptionPlan();
   const outcome = migrate(temp.db, plan.migrations, () => "2026-01-01T00:00:00.000Z", {
     databasePath: temp.databasePath,
     rebuilds: plan.rebuilds,
@@ -153,7 +162,7 @@ function populatedVersion8(): ReturnType<typeof makeTempDatabase> {
 
 describe("schema 9: the guarded Handoff rebuild over a real production graph", () => {
   it("registers version 9 exactly once and never in the ordinary catalog", () => {
-    const plan = productionMigrationPlan();
+    const plan = handoffAdoptionPlan();
     expect(plan.migrations.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(plan.rebuilds.map((migration) => migration.version)).toEqual([9]);
     expect(HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION.name).toBe("handoff-shared-content-v1");
@@ -280,18 +289,18 @@ describe("schema 9: the guarded Handoff rebuild over a real production graph", (
     );
   });
 
-  it("refuses a future version-10 history through the production open path", () => {
+  it("refuses a future version-11 history through the production open path", () => {
     const temp = populatedVersion8();
     migrateProduction(temp);
     temp.db
       .prepare(
-        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (10, 'future', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'future', '2026-01-01T00:00:00.000Z')",
       )
       .run();
     let admission: unknown = null;
     expect(() => {
       try {
-        const plan = productionMigrationPlan();
+        const plan = handoffAdoptionPlan();
         openAndMigrate(temp.databasePath, plan.migrations, { rebuilds: plan.rebuilds });
       } catch (error) {
         admission = asSchemaAdmission(error);
@@ -300,7 +309,7 @@ describe("schema 9: the guarded Handoff rebuild over a real production graph", (
     }).toThrow();
     // asSchemaAdmission unwraps to the public AppError itself: { code, message }.
     expect(admission).toMatchObject({ code: "STORAGE_SCHEMA_UNSUPPORTED" });
-    expect((admission as { message: string }).message).toContain("migration 10");
+    expect((admission as { message: string }).message).toContain("migration 11");
   });
 });
 
@@ -600,6 +609,8 @@ describe("schema 9: whole-batch rollback, restoration reporting, and native conc
       const { migrate } = await import(${JSON.stringify(MIGRATOR_URL)});
       const { productionMigrationPlan } = await import(${JSON.stringify(MIGRATIONS_URL)});
       const plan = productionMigrationPlan();
+      plan.migrations = plan.migrations.filter(step => step.version <= 9);
+      plan.rebuilds = plan.rebuilds.filter(step => step.version <= 9);
       const holdPath = ${JSON.stringify(input.holdAcquiredUntilReleased ?? "")};
       const acquiredPath = ${JSON.stringify(input.acquiredMarker ?? "")};
       const attemptingPath = ${JSON.stringify(input.attemptingMarker ?? "")};
@@ -708,13 +719,14 @@ describe("schema 9: whole-batch rollback, restoration reporting, and native conc
     // The fault is genuinely injected: exactly one assertion's expected value
     // is off by one, so the CHECK-constrained assertion table aborts mid-DDL.
     const real = HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION;
+    if (real.sql === undefined) throw new Error("The Handoff rebuild fixture requires its original SQL migration");
     const faultedSql = real.sql.replace(
       "('handoff-count', (SELECT COUNT(*) FROM handoffs), (SELECT COUNT(*) FROM handoffs_new))",
       "('handoff-count', (SELECT COUNT(*) FROM handoffs) - 1, (SELECT COUNT(*) FROM handoffs_new))",
     );
     expect(faultedSql).not.toBe(real.sql);
     const faulted: Migration = { version: real.version, name: real.name, sql: faultedSql };
-    const plan = productionMigrationPlan();
+    const plan = handoffAdoptionPlan();
     let thrown: unknown;
     try {
       migrate(temp.db, plan.migrations, () => "2026-01-03T00:00:00.000Z", {
@@ -737,7 +749,7 @@ describe("schema 9: whole-batch rollback, restoration reporting, and native conc
       name: "fails-after-nine",
       sql: "INSERT INTO nonexistent_table VALUES (1)",
     };
-    const plan = productionMigrationPlan();
+    const plan = handoffAdoptionPlan();
     let thrown: unknown;
     try {
       migrate(temp.db, plan.migrations, () => "2026-01-03T00:00:00.000Z", {
@@ -759,7 +771,7 @@ describe("schema 9: whole-batch rollback, restoration reporting, and native conc
     const temp = populatedVersion8();
     const before = captureGraph(temp.db);
     const instrument = foreignKeyReadFaultFactory(3);
-    const plan = productionMigrationPlan();
+    const plan = handoffAdoptionPlan();
     let thrown: unknown;
     try {
       migrate(temp.db, plan.migrations, () => "2026-01-03T00:00:00.000Z", {
@@ -856,7 +868,7 @@ describe("schema 9: whole-batch rollback, restoration reporting, and native conc
     // The in-flight batch vanished: the truthful old version-8 graph survives.
     expectStillVersion8(temp.db, before);
     // The real production retry then applies schema 9 exactly once.
-    const plan = productionMigrationPlan();
+    const plan = handoffAdoptionPlan();
     const outcome = migrate(temp.db, plan.migrations, () => "2026-01-04T00:00:00.000Z", {
       databasePath: temp.databasePath,
       rebuilds: plan.rebuilds,
@@ -887,7 +899,7 @@ describe("schema 9: whole-batch rollback, restoration reporting, and native conc
     }
     // A fresh production open sees the applied history and the complete
     // normalized graph, with no duplicate application.
-    const plan = productionMigrationPlan();
+    const plan = handoffAdoptionPlan();
     const opened = openAndMigrate(temp.databasePath, plan.migrations, { rebuilds: plan.rebuilds });
     try {
       expect(opened.outcome.alreadyUpToDate).toBe(true);

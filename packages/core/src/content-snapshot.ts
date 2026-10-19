@@ -20,7 +20,7 @@ import {
   utf8ByteLength,
   validateCommonContentEventMetadata,
 } from "./content";
-import { memoObject, parseMemoDetail } from "./memo-protocol";
+import { memoObject, parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
 import {
   isCanonicalContentFilePath,
   memoIdFromSnapshotPath,
@@ -47,10 +47,6 @@ import { REVIEW_STATES } from "./handoffs";
 
 function corrupt(message: string): Result<never, AppError> {
   return err(appError("VAULT_INTEGRITY_ERROR", message));
-}
-
-function unsupported(message: string): Result<never, AppError> {
-  return err(appError("VAULT_SCHEMA_UNSUPPORTED", message));
 }
 
 /** The closed `BodyContent` union of section 38.8: exactly `inline`, or exactly the file-backed triple. */
@@ -409,23 +405,132 @@ function memoRecordV3(memo: Memo): Record<string, unknown> {
   return { ...rest, bodyContent: { inline: memo.body } };
 }
 
-/** Serializes one Memo as its format-3 shard: every Memo field with the body carried as inline `bodyContent`. */
-export function serializeMemoSnapshotV3(memo: Memo): Result<MemoSnapshotShard> {
-  const checked = parseMemoDetail(memo);
-  if (!checked.ok) return corrupt("Memo snapshot fields are invalid");
-  const path = memoSnapshotPath(memo.id);
+/** One format-3 Memo export record: the public metadata plus the routed bodyContent (SHR-010, section 38.8). */
+export interface SnapshotMemoV3 extends Omit<Memo, "body"> {
+  bodyContent: ParsedBodyContent;
+}
+
+/** One carried Memo content file for export: the record's exact raw bytes (SHR-010). */
+export interface MemoContentFileExport {
+  memoId: string;
+  contentId: string;
+  bytes: Uint8Array;
+}
+
+/** Validate historical raw text without applying today's ingestion cap or normalizing bytes. */
+export function isMemoContentBytes(bytes: Uint8Array): boolean {
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  try {
+    for (let offset = 0; offset < bytes.byteLength; offset += 65536) {
+      const chunk = bytes.subarray(offset, offset + 65536);
+      if (chunk.includes(0)) return false;
+      decoder.decode(chunk, { stream: true });
+    }
+    decoder.decode();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Reconcile the closed Memo bodies, their owned files, and their raw identities before adoption. */
+export function validateSnapshotMemoContent(
+  data: Pick<SnapshotDataV3, "memos" | "memoContentFiles">,
+  digests?: Readonly<Record<string, string>>,
+): Result<void, AppError> {
+  const carried = new Map<string, Uint8Array>();
+  for (const file of data.memoContentFiles ?? []) {
+    const path = memoContentFilePath(file.memoId, file.contentId);
+    if (!path.ok) return path;
+    if (carried.has(path.value)) return corrupt("Duplicate Memo content file identity");
+    carried.set(path.value, file.bytes);
+  }
+  const used = new Set<string>();
+  for (const memo of data.memos ?? []) {
+    if (!memoObject(memo, MEMO_V3_FIELDS)) return corrupt("Format-3 Memo snapshot fields are invalid");
+    const { bodyContent, ...meta } = memo;
+    if (!parseMemoMetadata(meta).ok) return corrupt("Memo snapshot metadata is invalid");
+    if (bodyContent === null || typeof bodyContent !== "object") return corrupt("Memo snapshot body is invalid");
+    if (bodyContent.kind === "inline") {
+      if (!memoObject(bodyContent, ["kind", "text"]) || !parseMemoDetail({ ...meta, body: bodyContent.text }).ok)
+        return corrupt("Memo inline snapshot body is invalid");
+      continue;
+    }
+    if (!memoObject(bodyContent, ["kind", "contentPath", "sizeBytes", "sha256"]) || bodyContent.kind !== "file-backed")
+      return corrupt("Memo snapshot body representation is invalid");
+    const { kind: _kind, ...wire } = bodyContent;
+    const parsed = parseSnapshotBodyContent(wire);
+    if (!parsed.ok) return parsed;
+    const ownedPath = memoContentFilePath(memo.id, bodyContent.contentPath.split("/")[3] as string);
+    if (!ownedPath.ok || ownedPath.value !== bodyContent.contentPath || used.has(ownedPath.value))
+      return corrupt("Memo snapshot content ownership is invalid");
+    const bytes = carried.get(ownedPath.value);
+    if (bytes === undefined || bytes.byteLength !== bodyContent.sizeBytes || !isMemoContentBytes(bytes))
+      return corrupt("Memo snapshot content bytes are missing or invalid");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== bodyContent.sha256 || (digests !== undefined && digests[ownedPath.value] !== digest))
+      return corrupt("Memo snapshot content digest disagrees with its recorded identity");
+    used.add(ownedPath.value);
+  }
+  if (used.size !== carried.size || (digests !== undefined && Object.keys(digests).length !== used.size))
+    return corrupt("Memo snapshot content inventory disagrees with its records");
+  return ok(undefined);
+}
+
+/** Serializes one Memo as its format-3 shard with its inline or file-backed `bodyContent` (section 38.8). */
+export function serializeMemoSnapshotV3(record: SnapshotMemoV3): Result<MemoSnapshotShard> {
+  const { bodyContent, ...meta } = record;
+  if (!parseMemoMetadata(meta).ok) return corrupt("Memo snapshot metadata is invalid");
+  const wireBody =
+    bodyContent.kind === "inline"
+      ? { inline: bodyContent.text }
+      : { contentPath: bodyContent.contentPath, sizeBytes: bodyContent.sizeBytes, sha256: bodyContent.sha256 };
+  const parsedBody = parseSnapshotBodyContent(wireBody);
+  if (!parsedBody.ok) return parsedBody;
+  const path = memoSnapshotPath(record.id);
   if (!path.ok) return path;
-  const bytes = new TextEncoder().encode(canonicalJson(memoRecordV3(memo)));
+  if (bodyContent.kind === "file-backed") {
+    // The file form names a snapshots/-relative content file whose digest the
+    // manifest's contentDigests map carries; the shard itself records only the
+    // reference triple, never the bytes.
+    const bytes = new TextEncoder().encode(
+      canonicalJson({
+        ...meta,
+        bodyContent: {
+          contentPath: bodyContent.contentPath,
+          sizeBytes: bodyContent.sizeBytes,
+          sha256: bodyContent.sha256,
+        },
+      }),
+    );
+    return ok({ path: path.value, bytes, digest: createHash("sha256").update(bytes).digest("hex") });
+  }
+  const checked = parseMemoDetail({ ...meta, body: bodyContent.text });
+  if (!checked.ok) return corrupt("Memo snapshot fields are invalid");
+  const bytes = new TextEncoder().encode(canonicalJson(memoRecordV3(checked.value)));
   return ok({ path: path.value, bytes, digest: createHash("sha256").update(bytes).digest("hex") });
 }
 
+/** The canonical snapshots/-relative content-file path for one file-backed Memo body. */
+export function memoContentFilePath(memoId: string, contentId: string): Result<string> {
+  if (!isMemoUuid(memoId) || !isMemoUuid(contentId)) return corrupt("The Memo content file identity is not canonical");
+  return ok(`content/memo/${memoId}/${contentId}`);
+}
+
+/** One parsed format-3 Memo: its metadata plus the closed bodyContent union. */
+export interface MemoSnapshotV3Import {
+  meta: Omit<Memo, "body">;
+  bodyContent: ParsedBodyContent;
+}
+
 /**
- * Parses one format-3 Memo shard back to its legacy representation: the record
- * carries the closed Memo field set with `bodyContent` in place of `body`, this
- * build imports only the inline form, and the file-backed form is the valid
- * later representation TASK-108 adds and fails closed before import.
+ * Parses one format-3 Memo shard (section 38.8): the record carries the closed
+ * Memo field set with `bodyContent` in place of `body`. The inline form
+ * returns its exact text; the file-backed form returns its reference triple —
+ * a valid representation this build imports when the snapshot carries the
+ * content file — and the caller owns the carried-file inventory check.
  */
-export function parseMemoSnapshotV3(path: string, bytes: Uint8Array, digest: string): Result<Memo, AppError> {
+export function parseMemoSnapshotV3(path: string, bytes: Uint8Array, digest: string): Result<MemoSnapshotV3Import> {
   const id = memoIdFromSnapshotPath(path);
   if (!id.ok) return id;
   if (!/^[0-9a-f]{64}$/.test(digest) || createHash("sha256").update(bytes).digest("hex") !== digest)
@@ -442,18 +547,39 @@ export function parseMemoSnapshotV3(path: string, bytes: Uint8Array, digest: str
   if (!memoObject(value, MEMO_V3_FIELDS)) return corrupt("Format-3 Memo snapshot fields are invalid");
   const body = parseSnapshotBodyContent(value.bodyContent);
   if (!body.ok) return body;
-  if (body.value.kind !== "inline") {
-    return unsupported(
-      "The snapshot carries a Vault-backed Memo body, a valid later representation this build cannot import",
-    );
+  const { bodyContent: _bodyContent, ...meta } = value as Record<string, unknown>;
+  if (body.value.kind === "inline") {
+    // The inline form's exact stored text is the authoritative body: validate
+    // the whole record against the closed schema and the frozen inline cap.
+    const memo = { ...meta, body: body.value.text } as unknown as Memo;
+    const detailed = parseMemoDetail(memo);
+    if (!detailed.ok || detailed.value.id !== id.value)
+      return corrupt("Memo snapshot record does not match its closed schema or path");
+    if (canonicalJson(memoRecordV3(detailed.value)) !== text) return corrupt("Memo snapshot bytes are not canonical");
+    const { body: _checkedBody, ...checkedMeta } = detailed.value;
+    return ok({ meta: checkedMeta, bodyContent: { kind: "inline", text: body.value.text } });
   }
-  const { bodyContent: _bodyContent, ...rest } = value as Record<string, unknown>;
-  const memo = { ...rest, body: body.value.text } as unknown as Memo;
-  const detailed = parseMemoDetail(memo);
-  if (!detailed.ok || detailed.value.id !== id.value)
-    return corrupt("Memo snapshot record does not match its closed schema or path");
-  if (canonicalJson(memoRecordV3(detailed.value)) !== text) return corrupt("Memo snapshot bytes are not canonical");
-  return ok(detailed.value);
+  // Lifecycle and provenance are validated without fabricating body text.
+  if (!isMemoUuid(meta.id) || meta.id !== id.value) return corrupt("Memo snapshot record does not match its path");
+  const ownedContent = memoContentFilePath(meta.id, body.value.contentPath.split("/")[3] as string);
+  if (!ownedContent.ok || ownedContent.value !== body.value.contentPath)
+    return corrupt("Memo snapshot content path does not match its owner");
+  const metadata = parseMemoMetadata(meta);
+  if (!metadata.ok) return corrupt("Memo snapshot record does not match its closed schema");
+  const roundTrip = canonicalJson({
+    ...meta,
+    bodyContent: { contentPath: body.value.contentPath, sizeBytes: body.value.sizeBytes, sha256: body.value.sha256 },
+  });
+  if (roundTrip !== text) return corrupt("Memo snapshot bytes are not canonical");
+  return ok({
+    meta: metadata.value,
+    bodyContent: {
+      kind: "file-backed",
+      contentPath: body.value.contentPath,
+      sizeBytes: body.value.sizeBytes,
+      sha256: body.value.sha256,
+    },
+  });
 }
 
 /**
@@ -482,13 +608,19 @@ export interface SnapshotArtifactV3 {
 /** The format-3-only Handoff record: the legacy shape over the V3 Artifact. */
 export type SnapshotHandoffV3 = Omit<SnapshotHandoff, "artifact"> & { artifact: SnapshotArtifactV3 | null };
 
-/** The format-3 export input: the legacy snapshot data over the V3 Handoff records. */
-export type SnapshotDataV3 = Omit<SnapshotData, "handoffs"> & { handoffs: SnapshotHandoffV3[] };
+/** The format-3 export input: the legacy snapshot data over the V3 Handoff records and routed Memo bodies. */
+export type SnapshotDataV3 = Omit<SnapshotData, "handoffs" | "memos"> & {
+  handoffs: SnapshotHandoffV3[];
+  memos?: SnapshotMemoV3[];
+  /** The exact raw bytes of each file-backed Memo body, carried as snapshot content files (SHR-010). */
+  memoContentFiles?: MemoContentFileExport[];
+};
 
 /** The workspace-path redaction over the V3 shape: the same fields, honestly typed. */
 export function redactSnapshotDataV3(data: SnapshotDataV3): SnapshotDataV3 {
   return {
     ...(data.memos === undefined ? {} : { memos: data.memos }),
+    ...(data.memoContentFiles === undefined ? {} : { memoContentFiles: data.memoContentFiles }),
     projects: data.projects.map((project) => ({
       ...project,
       bindings: project.bindings.map(({ directory: _directory, ...binding }) => binding),
@@ -503,9 +635,9 @@ export function redactSnapshotDataV3(data: SnapshotDataV3): SnapshotDataV3 {
  * projects shard bytes, Handoff shards serialized directly from their V3
  * records — each Artifact carrying its closed `inlineBody` XOR `storageKey`
  * pair, an inline body's exact stored text being the authoritative bytes —
- * Memo shards carrying `bodyContent` inline bodies, and a manifest whose
- * Channel count is zero and whose shared-content digest map is empty, because
- * this schema exports no Channel records and no file-backed shared content. A
+ * Memo shards carrying inline or file-backed `bodyContent` with each
+ * file-backed body's exact raw bytes carried as a snapshot content file and
+ * digested in `contentDigests`, and a manifest whose Channel count is zero. A
  * file-backed Artifact's bytes keep arriving through the committed
  * `artifacts/` tree outside `contentDigests`, which never covers Handoff
  * Artifact files at any M9 build.
@@ -513,6 +645,8 @@ export function redactSnapshotDataV3(data: SnapshotDataV3): SnapshotDataV3 {
 export function snapshotFilesV3(
   data: SnapshotDataV3,
 ): Result<{ files: SnapshotFile[]; manifest: ContentSnapshotManifest }, AppError> {
+  const content = validateSnapshotMemoContent(data);
+  if (!content.ok) return content;
   // The projects shard reuses the legacy serializer over an empty Handoff set,
   // so its exact bytes stay shared without pretending a V3 Handoff satisfies
   // the file-only legacy shape.
@@ -524,19 +658,53 @@ export function snapshotFilesV3(
     files.push({ path: handoffShardPath(handoff.id), content: canonicalJson(handoff) });
   }
   const memoDigests: Record<string, string> = {};
-  for (const memo of [...(data.memos ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
+  const contentDigests: Record<string, string> = {};
+  const contentCarried = new Map<string, Uint8Array>();
+  for (const carried of data.memoContentFiles ?? []) {
+    const carriedPath = memoContentFilePath(carried.memoId, carried.contentId);
+    if (!carriedPath.ok) return carriedPath;
+    if (contentCarried.has(carriedPath.value)) return corrupt("Duplicate Memo content file identity");
+    contentCarried.set(carriedPath.value, carried.bytes);
+    contentDigests[carriedPath.value] = createHash("sha256").update(carried.bytes).digest("hex");
+  }
+  const memos = data.memos ?? [];
+  for (const memo of [...memos].sort((a, b) => compareSnapshotStrings(a.id, b.id))) {
     const shard = serializeMemoSnapshotV3(memo);
     if (!shard.ok) return shard;
     if (Object.hasOwn(memoDigests, shard.value.path)) return corrupt("Duplicate Memo snapshot ID");
     memoDigests[shard.value.path] = shard.value.digest;
     files.push({ path: shard.value.path, content: Buffer.from(shard.value.bytes).toString("utf8") });
+    // A file-backed Memo's shard must name exactly one carried content file
+    // whose bytes match the shard's recorded size and digest.
+    if (memo.bodyContent.kind === "file-backed") {
+      const bytes = contentCarried.get(memo.bodyContent.contentPath);
+      if (bytes === undefined) {
+        return corrupt("A file-backed Memo shard names a content file the export does not carry");
+      }
+      if (
+        bytes.byteLength !== memo.bodyContent.sizeBytes ||
+        contentDigests[memo.bodyContent.contentPath] !== memo.bodyContent.sha256
+      ) {
+        return corrupt("A file-backed Memo shard disagrees with its carried content file");
+      }
+      files.push({ path: memo.bodyContent.contentPath, content: bytes });
+    }
+  }
+  // Every carried content file must be named by exactly one shard: an orphan
+  // file is an inventory disagreement, never a silent extra.
+  for (const contentPath of contentCarried.keys()) {
+    if (
+      !memos.some((memo) => memo.bodyContent.kind === "file-backed" && memo.bodyContent.contentPath === contentPath)
+    ) {
+      return corrupt("The export carries a Memo content file no shard names");
+    }
   }
   const events = data.events.map((event) => ({ ...event, memoId: event.memoId ?? null }));
   const manifest: ContentSnapshotManifest = {
     formatVersion: 3,
-    counts: { ...snapshotCounts(data), memos: data.memos?.length ?? 0, channels: 0 },
+    counts: { ...snapshotCounts(data), memos: memos.length, channels: 0 },
     memoDigests,
-    contentDigests: {},
+    contentDigests,
   };
   files.push({
     path: "events.jsonl",

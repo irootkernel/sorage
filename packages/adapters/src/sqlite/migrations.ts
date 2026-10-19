@@ -1,4 +1,204 @@
+import { createHash, randomUUID } from "node:crypto";
 import type { Migration } from "./migrator";
+import type { SorageSqlite } from "./connection";
+
+/**
+ * The TASK-108 Memo adoption rebuild (SHR-004, SHR-009, SHR-014, interface
+ * section 38.7, ADR-0030): the complete `project_memos` table together with
+ * `events` — which references both domains — is rebuilt through the official
+ * SQLite generalized `ALTER TABLE` procedure on a dedicated non-operational
+ * connection. `project_memos` loses its `body` column and keeps domain
+ * metadata plus a NOT NULL reference to one immutable shared content record
+ * that becomes the single physical authority; every existing inline body
+ * moves into a fresh inline content record with its exact stored bytes —
+ * byte-order mark, CRLF, empty bodies, and the presence or absence of a final
+ * newline included — with size recomputed in SQL-verified form and SHA-256
+ * computed in the synchronous segmented callback over the same
+ * `CAST(body AS BLOB)` bytes it reads, never an invented SQLite digest
+ * function. Memo UUIDs, all metadata, event rows and associations, pending
+ * filesystem intents, and the exact raw `idempotency_keys` receipts are
+ * preserved verbatim with no threshold repacking. Executed in-transaction
+ * assertions prove per-table counts, the one-to-one Memo-to-record mapping,
+ * SQL-expressible physical fidelity (inline presence, materialization, size
+ * agreement, and created_at), NULL-safe column fidelity, and event
+ * association preservation; the digest itself is verified by the migration
+ * tests' independent recomputation. The private `:memory:` reference catalog
+ * executes the same segments, where the backfill is an honest no-op over an
+ * empty table.
+ */
+export const MEMO_SHARED_CONTENT_REBUILD_MIGRATION: Migration = {
+  version: 10,
+  name: "memo-shared-content-v1",
+  sqlBefore: `
+CREATE TABLE project_memos_new (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  content_record_id TEXT NOT NULL REFERENCES content_records(id),
+  state TEXT NOT NULL CHECK (state IN ('open', 'done', 'dismissed')),
+  row_version INTEGER NOT NULL CHECK (row_version BETWEEN 1 AND 9007199254740991),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  closed_at TEXT,
+  closed_by TEXT,
+  CHECK ((state = 'open' AND closed_at IS NULL AND closed_by IS NULL)
+    OR (state != 'open' AND row_version >= 2 AND closed_at IS NOT NULL AND closed_at = updated_at AND closed_by IS NOT NULL))
+);
+
+CREATE TABLE events_new (
+  id TEXT PRIMARY KEY,
+  handoff_id TEXT REFERENCES handoffs(id),
+  memo_id TEXT REFERENCES project_memos(id),
+  event_type TEXT NOT NULL,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('registered_project', 'unregistered_workspace', 'user', 'system')),
+  actor_id TEXT,
+  row_version INTEGER,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`,
+  backfill: backfillMemoContentRecords,
+  sqlAfter: `
+INSERT INTO events_new (id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at)
+  SELECT id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at FROM events;
+
+CREATE TABLE migration_v10_assertions (
+  name TEXT PRIMARY KEY,
+  expected INTEGER NOT NULL,
+  actual INTEGER NOT NULL,
+  CHECK (expected = actual)
+);
+
+INSERT INTO migration_v10_assertions (name, expected, actual) VALUES
+  ('memo-count', (SELECT COUNT(*) FROM project_memos), (SELECT COUNT(*) FROM project_memos_new)),
+  ('event-count', (SELECT COUNT(*) FROM events), (SELECT COUNT(*) FROM events_new)),
+  ('memo-record-mapping', (SELECT COUNT(*) FROM project_memos),
+    (SELECT COUNT(*) FROM content_records cr JOIN project_memos_new n ON cr.id = n.content_record_id)),
+  ('record-physical-fidelity', (SELECT COUNT(*) FROM project_memos),
+    (SELECT COUNT(*) FROM project_memos m
+      JOIN project_memos_new n ON n.id = m.id
+      JOIN content_records cr ON cr.id = n.content_record_id
+      WHERE cr.inline_text IS NOT NULL
+        AND cr.storage_key IS NULL
+        AND cr.materialized = 1
+        AND cr.size_bytes = length(CAST(m.body AS BLOB))
+        AND cr.created_at = m.created_at)),
+  ('memo-column-fidelity', (SELECT COUNT(*) FROM project_memos),
+    (SELECT COUNT(*) FROM project_memos m JOIN project_memos_new n ON n.id = m.id
+      WHERE n.project_id IS m.project_id
+        AND n.title IS m.title
+        AND n.state IS m.state
+        AND n.row_version IS m.row_version
+        AND n.created_at IS m.created_at
+        AND n.updated_at IS m.updated_at
+        AND n.created_by IS m.created_by
+        AND n.updated_by IS m.updated_by
+        AND n.closed_at IS m.closed_at
+        AND n.closed_by IS m.closed_by)),
+  ('event-association-pairs', (SELECT COUNT(*) FROM events),
+    (SELECT COUNT(*) FROM events e
+      JOIN events_new en ON en.id = e.id
+      WHERE en.handoff_id IS e.handoff_id
+        AND en.memo_id IS e.memo_id));
+
+DROP TABLE migration_v10_assertions;
+
+DROP TABLE events;
+DROP TABLE project_memos;
+
+ALTER TABLE project_memos_new RENAME TO project_memos;
+ALTER TABLE events_new RENAME TO events;
+
+CREATE INDEX idx_project_memos_project_state ON project_memos(project_id, state, created_at DESC, id DESC);
+CREATE INDEX idx_project_memos_created ON project_memos(created_at DESC, id DESC);
+CREATE INDEX idx_events_handoff_created ON events(handoff_id, created_at);
+CREATE INDEX idx_events_memo ON events(memo_id, created_at);
+CREATE UNIQUE INDEX idx_events_memo_version ON events(memo_id, row_version) WHERE memo_id IS NOT NULL;
+
+CREATE TRIGGER events_append_only_update
+  BEFORE UPDATE ON events
+  BEGIN
+    SELECT RAISE(ABORT, 'events is append-only');
+  END;
+
+CREATE TRIGGER events_append_only_delete
+  BEFORE DELETE ON events
+  BEGIN
+    SELECT RAISE(ABORT, 'events is append-only');
+  END;
+
+CREATE TRIGGER events_memo_association
+  BEFORE INSERT ON events
+  WHEN (NEW.event_type IN ('MEMO_CREATED', 'MEMO_UPDATED', 'MEMO_MARKED_DONE', 'MEMO_DISMISSED', 'MEMO_REOPENED')
+    AND (NEW.memo_id IS NULL OR NEW.handoff_id IS NOT NULL OR NEW.actor_kind != 'user'
+      OR NEW.actor_id IS NOT NULL OR NEW.row_version IS NULL))
+    OR (NEW.event_type NOT IN ('MEMO_CREATED', 'MEMO_UPDATED', 'MEMO_MARKED_DONE', 'MEMO_DISMISSED', 'MEMO_REOPENED')
+      AND NEW.memo_id IS NOT NULL)
+  BEGIN
+    SELECT RAISE(ABORT, 'invalid Memo event association');
+  END;
+`,
+};
+
+/** The bounded synchronous backfill: keyset batches over the old rows, exact stored bytes, JS-computed digests. */
+function backfillMemoContentRecords(connection: SorageSqlite): void {
+  const insertRecord = connection.prepare(
+    `INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+    VALUES (?, CAST(? AS TEXT), NULL, ?, ?, 1, ?)`,
+  );
+  const insertMemo = connection.prepare(
+    `INSERT INTO project_memos_new
+    (id, project_id, title, content_record_id, state, row_version, created_at, updated_at, created_by, updated_by, closed_at, closed_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const selectBatch = connection.prepare(
+    `SELECT id, CAST(body AS BLOB) AS body_bytes, project_id, title, state, row_version, created_at, updated_at, created_by, updated_by, closed_at, closed_by
+    FROM project_memos WHERE id > ? ORDER BY id LIMIT ?`,
+  );
+  const batchSize = 200;
+  let lastId = "";
+  for (;;) {
+    const rows = selectBatch.all(lastId, batchSize) as Array<{
+      id: string;
+      body_bytes: Uint8Array;
+      project_id: string;
+      title: string;
+      state: string;
+      row_version: number;
+      created_at: string;
+      updated_at: string;
+      created_by: string;
+      updated_by: string;
+      closed_at: string | null;
+      closed_by: string | null;
+    }>;
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const bytes = Buffer.from(row.body_bytes);
+      const recordId = randomUUID();
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      insertRecord.run(recordId, bytes, bytes.byteLength, digest, row.created_at);
+      insertMemo.run(
+        row.id,
+        row.project_id,
+        row.title,
+        recordId,
+        row.state,
+        row.row_version,
+        row.created_at,
+        row.updated_at,
+        row.created_by,
+        row.updated_by,
+        row.closed_at,
+        row.closed_by,
+      );
+    }
+    lastId = rows[rows.length - 1]?.id ?? "";
+    if (rows.length < batchSize) break;
+  }
+}
 
 /**
  * The first released schema, captured as the upgrade fixture for TASK-063. Version 1
@@ -557,13 +757,14 @@ CREATE TRIGGER events_memo_association
 };
 
 /**
- * The single production migration plan of TASK-107 (SHR-009, interface section
- * 38.7): the ordinary catalog stays exactly versions 1 to 8, and version 9 is
- * registered exactly once as a rebuild-marked step the guarded whole-batch
- * runner executes on its dedicated non-operational connection. Every production
- * opener, the migrator's admission catalog, and preflight's reference catalog
- * consume this one accessor so no surface can drift, never a second ordinary
- * registration of 9, and never a silent bypass of the dedicated path.
+ * The single production migration plan of TASK-107/TASK-108 (SHR-009,
+ * interface section 38.7): the ordinary catalog stays exactly versions 1 to 8,
+ * and versions 9 and 10 are registered exactly once each as rebuild-marked
+ * steps the guarded whole-batch runner executes on its dedicated
+ * non-operational connection. Every production opener, the migrator's
+ * admission catalog, and preflight's reference catalog consume this one
+ * accessor so no surface can drift, never a second ordinary registration, and
+ * never a silent bypass of the dedicated path.
  */
 export interface ProductionMigrationPlan {
   migrations: Migration[];
@@ -571,7 +772,10 @@ export interface ProductionMigrationPlan {
 }
 
 export function productionMigrationPlan(): ProductionMigrationPlan {
-  return { migrations: MIGRATIONS, rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION] };
+  return {
+    migrations: MIGRATIONS,
+    rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
+  };
 }
 
 export const MIGRATIONS: Migration[] = [

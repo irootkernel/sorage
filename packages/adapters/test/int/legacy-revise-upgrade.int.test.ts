@@ -80,6 +80,10 @@ describe("the frozen legacy revision through migration 8", () => {
       // formats 1/2 to include the format-3 representation fields.
       const data = redactSnapshotData({
         ...exported,
+        memos: (exported.memos ?? []).map(({ bodyContent, ...meta }) => {
+          if (bodyContent.kind !== "inline") throw new Error("Expected legacy inline Memo");
+          return { ...meta, body: bodyContent.text };
+        }),
         handoffs: exported.handoffs.map((handoff) => {
           if (handoff.artifact === null) return { ...handoff, artifact: null };
           const { inlineBody, storageKey, ...artifact } = handoff.artifact;
