@@ -12,7 +12,7 @@ import {
   MIGRATIONS,
   productionMigrationPlan,
 } from "../../src/sqlite/migrations";
-import { KNOWN_SCHEMA_HISTORY } from "@sorage/core";
+import { KNOWN_SCHEMA_HISTORY, knownSchemaMaximum } from "@sorage/core";
 
 /**
  * Migration 10 fidelity (SHR-009, SHR-014): the Memo component rebuild moves
@@ -115,7 +115,12 @@ function upgradeToV10(database: string): void {
   const db = openSorageDatabase(database);
   try {
     const plan = productionMigrationPlan();
-    migrate(db, plan.migrations, () => "2026-01-04T00:00:00.000Z", { databasePath: database, rebuilds: plan.rebuilds });
+    migrate(
+      db,
+      plan.migrations.filter((step) => step.version <= 10),
+      () => "2026-01-04T00:00:00.000Z",
+      { databasePath: database, rebuilds: plan.rebuilds.filter((step) => step.version <= 10) },
+    );
   } finally {
     db.close();
   }
@@ -258,8 +263,8 @@ describe("migration 10: memo-shared-content-v1", () => {
     upgradeToV10(database);
     const db = openSorageDatabase(database);
     db.prepare(
-      "INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'future-v1', '2026-01-05T00:00:00.000Z')",
-    ).run();
+      "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future-v1', '2026-01-05T00:00:00.000Z')",
+    ).run(knownSchemaMaximum() + 1);
     const verdict = admitKnownAppliedHistory(readAppliedRows(db));
     expect(verdict.kind).toBe("unsupported");
     db.close();

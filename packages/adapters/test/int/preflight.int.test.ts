@@ -20,7 +20,7 @@ import { isMap, parseDocument } from "yaml";
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { preflightExitCode } from "@sorage/core";
+import { knownSchemaMaximum, preflightExitCode } from "@sorage/core";
 import { CAPTURE_ATTEMPTS, inspectPreflight } from "../../src/preflight";
 import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
 import type { SorageSqlite } from "../../src/sqlite/connection";
@@ -276,8 +276,8 @@ describe("installation preflight inspection", () => {
     writeCurrent(newer);
     const newerDb = new DatabaseSync(join(newer, "state", "sorage.sqlite3"));
     newerDb
-      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'future', ?)")
-      .run("2026-01-01T00:00:00.000Z");
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future', ?)")
+      .run(knownSchemaMaximum() + 1, "2026-01-01T00:00:00.000Z");
     newerDb.close();
     const newerReport = inspectPreflight(newer);
     expect(newerReport.status).toBe("unsupported");
@@ -784,7 +784,11 @@ describe("installation preflight inspection", () => {
   });
 
   it("rejects a current prefix that lost a non-representative index and trigger", () => {
-    for (const sql of ["DROP INDEX idx_pending_fs_ops_created_at", "DROP TRIGGER events_memo_association"]) {
+    for (const sql of [
+      "DROP INDEX idx_pending_fs_ops_created_at",
+      "DROP TRIGGER events_memo_association",
+      "DROP TRIGGER events_channel_association",
+    ]) {
       const home = tempHome();
       writeCurrent(home);
       const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
@@ -1414,8 +1418,8 @@ describe("installation preflight inspection", () => {
     rmSync(join(newer, "vault", ".sorage-vault.json"));
     const newerDb = new DatabaseSync(join(newer, "state", "sorage.sqlite3"));
     newerDb
-      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (11, 'future', ?)")
-      .run("2026-01-01T00:00:00.000Z");
+      .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future', ?)")
+      .run(knownSchemaMaximum() + 1, "2026-01-01T00:00:00.000Z");
     newerDb.close();
     const newerReport = inspectPreflight(newer);
     expect(newerReport.status).toBe("unsupported");

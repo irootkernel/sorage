@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { setImmediate } from "node:timers/promises";
 import {
   type AppError,
+  knownSchemaMaximum,
   initializeInstallation,
   ok,
   type Result,
@@ -515,7 +516,11 @@ describe("native send receipt inspection", () => {
     if (scenario === "db-header") writeFileSync(f.databasePath, "garbage");
     if (scenario === "db-history") f.db((d) => d.exec("UPDATE schema_migrations SET name='invalid' WHERE version=4"));
     if (scenario === "db-newer")
-      f.db((d) => d.exec("INSERT INTO schema_migrations(version,name,applied_at) VALUES(11,'future','2026-01-01')"));
+      f.db((d) =>
+        d.exec(
+          `INSERT INTO schema_migrations(version,name,applied_at) VALUES(${knownSchemaMaximum() + 1},'future','2026-01-01')`,
+        ),
+      );
     if (scenario === "db-identity")
       f.db((d) =>
         d

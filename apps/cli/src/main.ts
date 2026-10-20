@@ -115,6 +115,7 @@ import { buildCompletionScript } from "./completion";
 import { runPreflightCommand } from "./preflight-command";
 import { runSendRecoveryCommand } from "./send-recovery-command";
 import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
+import { registerChannelCommands, renderChannelRecoveryError } from "./channel-commands";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
 import * as webBindings from "./web";
@@ -514,6 +515,22 @@ export function buildProgram(
     warn: (text) => ports.err(text),
     fail: (error, json) => {
       reportExitCode(renderAppError(memoError(error), ports, json));
+    },
+  });
+
+  registerChannelCommands(program, {
+    out: ports.out,
+    err: (text) => ports.err(text),
+    requestId,
+    warn: (text) => ports.err(text),
+    fail: (error, json) => {
+      reportExitCode(renderAppError(error, ports, json));
+    },
+    failReadOnly: (error, json) => {
+      reportExitCode(renderChannelRecoveryError(error, { err: ports.err, json, requestId: requestId() }));
+    },
+    usageExit: () => {
+      reportExitCode(2);
     },
   });
 

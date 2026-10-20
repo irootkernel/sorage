@@ -31,6 +31,9 @@ import {
   type PreflightVaultFact,
   KNOWN_SCHEMA_HISTORY,
   parseConfigurationFile,
+  err,
+  ok,
+  type Result,
 } from "@sorage/core";
 import { parseDocument } from "yaml";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -109,6 +112,58 @@ const refuse = (
 
 export function inspectPreflight(homePath: string, ports: PreflightInspectPorts = {}): PreflightReport {
   return withInstallationInspection(homePath, ports, (observation) => assessPreflight(observation.facts));
+}
+
+/** Config-only bootstrap; it never replaces the later coherent receipt inspection. */
+export function readRecoveryConfiguration(homePath: string, userHome: string): Result<Configuration, AppError> {
+  const located = locateHome(homePath);
+  if (located.kind === "absent") {
+    return locateHome(homePath).kind === "absent"
+      ? err(appError("NOT_INITIALIZED", "the selected Installation has no configuration"))
+      : err(unavailable());
+  }
+  if (located.kind !== "directory") return err(unavailable());
+  const binding = rootBinding(homePath);
+  if (binding === undefined || binding !== rootBinding(located.canonical)) return err(unavailable());
+  const path = join(located.canonical, "config.yaml");
+  if (pathLook(path).kind === "missing") {
+    return pathLook(path).kind === "missing" && rootBinding(homePath) === binding
+      ? err(appError("NOT_INITIALIZED", "the selected Installation has no configuration"))
+      : err(unavailable());
+  }
+  const stamp = () => {
+    const shape = fileShape(path, located.canonical, true);
+    const look = pathLook(path);
+    if (shape === undefined || look.kind !== "stat" || look.stat.isSymbolicLink() || !look.stat.isFile())
+      return undefined;
+    return `${shape} ${look.stat.size} ${look.stat.mtimeMs} ${look.stat.ctimeMs}`;
+  };
+  const before = stamp();
+  if (before === undefined) return err(unavailable());
+  let text: string;
+  let again: string;
+  try {
+    text = readFileSync(path, "utf8");
+    again = readFileSync(path, "utf8");
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string")
+      return err(unavailable());
+    throw error;
+  }
+  if (text !== again || stamp() !== before || rootBinding(homePath) !== binding) return err(unavailable());
+  const classified = classifyConfig(text, userHome, homePath);
+  if (classified.kind !== "supported") {
+    return err(
+      appError(
+        classified.kind === "newer" || classified.kind === "unsupported-format"
+          ? "STORAGE_SCHEMA_UNSUPPORTED"
+          : "CONFIG_INVALID",
+        "the selected configuration cannot support inspection",
+      ),
+    );
+  }
+  const loaded = loadConfiguration(text, { userHome, sorageHome: homePath });
+  return loaded.ok ? ok(loaded.value.config) : loaded;
 }
 
 /** Capture retries end before the consumer runs. Reader and scratch never escape this lifetime. */
@@ -689,20 +744,40 @@ function referenceCatalog(prefix: number): Map<string, string> {
   const cached = referenceCatalogs.get(prefix);
   if (cached !== undefined) return cached;
   const plan = productionMigrationPlan();
-  const ordinary = plan.migrations.slice(0, Math.min(prefix, plan.migrations.length));
+  // Version selection over the combined ordered steps, never a positional
+  // slice: a prefix selects every production step at or below its version, so
+  // the reference catalog is exactly the schema that prefix's history
+  // establishes — ordinary and rebuild-marked alike, in version order
+  // (SHR-009, interface section 38.7).
+  const combined = [...plan.migrations, ...plan.rebuilds].sort((a, b) => a.version - b.version);
+  const selected = combined.filter((migration) => migration.version <= prefix);
+  const rebuildSet = new Set(plan.rebuilds);
+  const firstRebuild = selected.findIndex((migration) => rebuildSet.has(migration));
+  const ordinary = firstRebuild < 0 ? selected : selected.slice(0, firstRebuild);
+  const remaining = firstRebuild < 0 ? [] : selected.slice(firstRebuild);
   const db = new Database(":memory:") as unknown as PrivateDatabase;
   try {
     migrate(db as unknown as SorageSqlite, ordinary, () => "2026-01-01T00:00:00.000Z");
-    if (prefix > plan.migrations.length) {
-      // The rebuild steps of the production plan run on this SAME private
+    if (remaining.length > 0) {
+      // Remaining steps keep their version order; rebuilds run on this SAME private
       // `:memory:` connection with the migration's own foreign-key ceremony —
       // verified ON, disabled and verified OFF outside the transaction, one
       // `BEGIN IMMEDIATE`, committed DDL, enforcement restored and verified —
       // because routing them through the guarded runner's dedicated connection
       // would apply the rebuild to a different database and leave this one
       // without the version-9 DDL (SHR-009, interface section 38.7).
-      const rebuilds = plan.rebuilds.filter((migration) => migration.version <= prefix);
-      for (const rebuild of rebuilds) {
+      for (const step of remaining) {
+        if (!rebuildSet.has(step)) {
+          db.exec("BEGIN IMMEDIATE");
+          try {
+            execMigrationSegments(db as unknown as SorageSqlite, step);
+            db.exec("COMMIT");
+          } catch (error) {
+            db.exec("ROLLBACK");
+            throw error;
+          }
+          continue;
+        }
         db.exec("PRAGMA foreign_keys = ON");
         if (pragmaNumber(db, "foreign_keys") !== 1) {
           throw new Error("the private reference-catalog connection could not enable foreign-key enforcement");
@@ -714,7 +789,7 @@ function referenceCatalog(prefix: number): Map<string, string> {
         let rebuildError: unknown;
         try {
           db.exec("BEGIN IMMEDIATE");
-          execMigrationSegments(db as unknown as SorageSqlite, rebuild);
+          execMigrationSegments(db as unknown as SorageSqlite, step);
           db.exec("COMMIT");
         } catch (error) {
           try {

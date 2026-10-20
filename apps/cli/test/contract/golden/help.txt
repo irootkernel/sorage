@@ -32,6 +32,8 @@ Commands:
                                   and report the catalog
   memo                            record and manage Project reminders separately
                                   from Handoffs
+  channel                         manage attributed agent communication Channels
+                                  for one orchestration invocation
   project                         register and inspect Projects and their
                                   bindings
   send [options]                  hand one current document to one or more

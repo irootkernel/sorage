@@ -531,6 +531,113 @@ ALTER TABLE pending_fs_ops ADD COLUMN content_id TEXT;
 };
 
 /**
+ * The TASK-109 additive Channel domain migration (CHN-001 to CHN-009, SHR-009,
+ * interface section 38.7): pure additive DDL that rebuilds no existing table,
+ * so `events` keeps its v9/v10 shape and only gains the Channel association
+ * trigger. The four Channel tables carry the closed domain constraints at the
+ * database level — lifecycle states, roles, message kinds, the relay target's
+ * presence exactly on `relay_request`, the one-main invariant through a partial
+ * unique index, handle uniqueness inside one Channel, closing and deactivation
+ * coherence, the unhandled/handled processing row version of 1/2, and the
+ * NOT NULL one-to-one reference from a message to its immutable content
+ * record — while application validation owns the closed metadata and
+ * same-Channel membership rules the mutation transaction enforces.
+ */
+export const CHANNEL_DOMAIN_MIGRATION: Migration = {
+  version: 11,
+  name: "channels-v1",
+  sql: `
+CREATE TABLE channels (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+  creator_kind TEXT NOT NULL CHECK (creator_kind IN ('registered_project', 'unregistered_workspace', 'user')),
+  creator_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_at TEXT,
+  closed_by_participant_id TEXT,
+  closed_by_kind TEXT CHECK (closed_by_kind IS NULL OR closed_by_kind IN ('participant', 'user')),
+  CHECK ((state = 'open' AND closed_at IS NULL AND closed_by_participant_id IS NULL AND closed_by_kind IS NULL)
+    OR (state = 'closed' AND closed_at IS NOT NULL AND closed_by_kind IS NOT NULL))
+);
+
+CREATE INDEX idx_channels_state_created ON channels(state, created_at DESC, id DESC);
+
+CREATE TABLE channel_participants (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES channels(id),
+  role TEXT NOT NULL CHECK (role IN ('main', 'worker', 'judge')),
+  handle TEXT NOT NULL,
+  native_provenance_json TEXT NOT NULL,
+  active INTEGER NOT NULL CHECK (active IN (0, 1)),
+  registered_at TEXT NOT NULL,
+  deactivated_at TEXT,
+  CHECK ((active = 1 AND deactivated_at IS NULL) OR (active = 0 AND deactivated_at IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX idx_channel_participants_handle ON channel_participants(channel_id, handle);
+CREATE UNIQUE INDEX idx_channel_one_main ON channel_participants(channel_id) WHERE role = 'main';
+CREATE INDEX idx_channel_participants_order ON channel_participants(channel_id, registered_at, id);
+
+CREATE TABLE channel_assignments (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES channels(id),
+  participant_id TEXT REFERENCES channel_participants(id),
+  label TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+  created_at TEXT NOT NULL,
+  closed_at TEXT,
+  CHECK ((state = 'open' AND closed_at IS NULL) OR (state = 'closed' AND closed_at IS NOT NULL))
+);
+
+CREATE INDEX idx_channel_assignments_order ON channel_assignments(channel_id, created_at, id);
+
+CREATE TABLE channel_messages (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES channels(id),
+  sender_participant_id TEXT NOT NULL REFERENCES channel_participants(id),
+  sender_handle TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('report', 'question', 'relay_request')),
+  content_record_id TEXT NOT NULL REFERENCES content_records(id),
+  assignment_id TEXT REFERENCES channel_assignments(id),
+  assignment_late INTEGER NOT NULL CHECK (assignment_late IN (0, 1)),
+  relay_to_participant_id TEXT REFERENCES channel_participants(id),
+  context_session TEXT,
+  context_node TEXT,
+  context_attempt TEXT,
+  handled INTEGER NOT NULL CHECK (handled IN (0, 1)),
+  handled_at TEXT,
+  handled_by_participant_id TEXT,
+  handled_by_kind TEXT CHECK (handled_by_kind IS NULL OR handled_by_kind IN ('participant', 'user')),
+  handle_note TEXT,
+  processing_row_version INTEGER NOT NULL CHECK (processing_row_version IN (1, 2)),
+  created_at TEXT NOT NULL,
+  CHECK ((kind = 'relay_request' AND relay_to_participant_id IS NOT NULL)
+    OR (kind != 'relay_request' AND relay_to_participant_id IS NULL)),
+  CHECK ((handled = 0 AND processing_row_version = 1 AND handled_at IS NULL
+      AND handled_by_participant_id IS NULL AND handled_by_kind IS NULL AND handle_note IS NULL)
+    OR (handled = 1 AND processing_row_version = 2 AND handled_at IS NOT NULL AND handled_by_kind IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX idx_channel_messages_record ON channel_messages(content_record_id);
+CREATE INDEX idx_channel_messages_order ON channel_messages(channel_id, created_at DESC, id DESC);
+CREATE INDEX idx_channel_messages_unhandled ON channel_messages(channel_id, created_at DESC, id DESC) WHERE handled = 0;
+CREATE INDEX idx_channel_messages_assignment ON channel_messages(assignment_id);
+
+CREATE TRIGGER events_channel_association
+  BEFORE INSERT ON events
+  WHEN NEW.event_type IN ('CHANNEL_CREATED', 'CHANNEL_CLOSED', 'CHANNEL_PARTICIPANT_REGISTERED',
+      'CHANNEL_PARTICIPANT_DEACTIVATED', 'CHANNEL_ASSIGNMENT_CREATED', 'CHANNEL_ASSIGNMENT_CLOSED',
+      'CHANNEL_MESSAGE_SUBMITTED', 'CHANNEL_MESSAGE_HANDLED')
+    AND (NEW.handoff_id IS NOT NULL OR NEW.memo_id IS NOT NULL)
+  BEGIN
+    SELECT RAISE(ABORT, 'invalid Channel event association');
+  END;
+`,
+};
+
+/**
  * The TASK-107 Handoff adoption rebuild (SHR-004, SHR-009, SHR-014, interface
  * section 38.7, ADR-0030/0031): the complete `handoffs`/`artifacts` FK cycle
  * plus its dependents `review_notes`, `deletion_requests`, and `events` is
@@ -757,11 +864,15 @@ CREATE TRIGGER events_memo_association
 };
 
 /**
- * The single production migration plan of TASK-107/TASK-108 (SHR-009,
- * interface section 38.7): the ordinary catalog stays exactly versions 1 to 8,
- * and versions 9 and 10 are registered exactly once each as rebuild-marked
- * steps the guarded whole-batch runner executes on its dedicated
- * non-operational connection. Every production opener, the migrator's
+ * The single production migration plan of TASK-107 through TASK-109 (SHR-009,
+ * interface section 38.7): the raw `MIGRATIONS` list stays exactly versions 1
+ * to 8 — the legacy fixture catalog every historical builder migrates with —
+ * while the production accessor appends the additive TASK-109 Channel
+ * migration at version 11 as an ordinary step and registers versions 9 and 10
+ * exactly once each as the rebuild-marked steps. The combined runner orders
+ * every pending step by version, so ordinary 11 executes after rebuilds 9 and
+ * 10 inside the one guarded whole-batch path the non-empty rebuild set already
+ * selects; no runner branch changes. Every production opener, the migrator's
  * admission catalog, and preflight's reference catalog consume this one
  * accessor so no surface can drift, never a second ordinary registration, and
  * never a silent bypass of the dedicated path.
@@ -773,7 +884,7 @@ export interface ProductionMigrationPlan {
 
 export function productionMigrationPlan(): ProductionMigrationPlan {
   return {
-    migrations: MIGRATIONS,
+    migrations: [...MIGRATIONS, CHANNEL_DOMAIN_MIGRATION],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };
 }

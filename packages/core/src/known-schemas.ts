@@ -9,10 +9,12 @@ import { type AppError, appError } from "./errors";
  * the TASK-107 Handoff rebuild that normalizes Artifact storage onto the shared
  * content records; version 10 is the TASK-108 Memo rebuild that normalizes
  * Memo bodies onto the shared content records. A build's operational catalog
- * must match this inventory exactly — an adapter test pins `MIGRATIONS` plus
- * the production rebuild plan to it — while read-only surfaces consult the
+ * must match this inventory exactly — an adapter test pins the production
+ * ordinary and rebuild plan to it — while read-only surfaces consult the
  * eligibility rules below so a database whose applied maximum exceeds this
  * build fails closed with `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
+ * Version 11 is the TASK-109 additive Channel domain migration; the Channel
+ * surface floor below stays at 11, so no earlier history is eligible.
  */
 
 export interface KnownSchemaVersion {
@@ -31,6 +33,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 8, name: "shared-content-v1" },
   { version: 9, name: "handoff-shared-content-v1" },
   { version: 10, name: "memo-shared-content-v1" },
+  { version: 11, name: "channels-v1" },
 ];
 
 /** The highest database schema version this build knows. */
@@ -47,8 +50,7 @@ export function knownSchemaEntry(version: number): KnownSchemaVersion | undefine
  * migrator and preflight read every known version; send replay-only reads
  * complete known receipt histories from version 4 on; Memo surfaces read only
  * histories that contain the Memo domain from version 7 on; Channel surfaces
- * exist only after the Channel migration of TASK-109, so no version is eligible
- * for them at this build.
+ * require the Channel migration of TASK-109, so earlier versions are ineligible.
  */
 export type SchemaSurface = "operational" | "preflight" | "send-replay" | "memo" | "channel";
 

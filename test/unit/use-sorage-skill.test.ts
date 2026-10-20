@@ -22,6 +22,10 @@ describe("the standalone shipped use-sorage resources", () => {
     expect(readFileSync(skillPath)).toEqual(readFileSync(join(source, "SKILL.md")));
     expect(text.startsWith("---\n")).toBe(true);
     expect(text.slice(0, text.indexOf("\n---\n", 4))).toContain("name: use-sorage");
+    // The Channel trigger is an explicit broker-operation request, and the
+    // code-work non-trigger sentence stays intact (AJ-29 verifies behavior).
+    expect(text).toContain("explicitly requests a Sorage Channel broker operation");
+    expect(text).toContain("Mentioning Sorage or developing its code does not trigger broker operations");
   });
 
   it("resolves every local Markdown resource entirely inside the standalone copy", () => {

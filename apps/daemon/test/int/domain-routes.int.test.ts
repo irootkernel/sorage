@@ -25,7 +25,7 @@ import {
   createNodeTokenEntropy,
   createNodeWebSecretStore,
 } from "@sorage/adapters/src/token-store";
-import { appError, err, initializeInstallation } from "@sorage/core";
+import { appError, err, initializeInstallation, knownSchemaMaximum } from "@sorage/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSessionService } from "../../src/auth";
 import { createDomainRoutes } from "../../src/domain-routes";
@@ -597,7 +597,7 @@ describe("diagnostics schema admission", () => {
     const writer = new DatabaseSync(database);
     const operationalOpen = vi.spyOn(sqliteConnections, "openSorageDatabase");
     try {
-      writer.exec("INSERT INTO schema_migrations VALUES(11, 'future', '2026-01-01')");
+      writer.prepare("INSERT INTO schema_migrations VALUES(?, 'future', '2026-01-01')").run(knownSchemaMaximum() + 1);
       // Keep a known connection alive so finalizing earlier request connections
       // cannot checkpoint their WAL inside the endpoint's byte-comparison window.
       const before = readFileSync(database);
@@ -622,7 +622,7 @@ describe("diagnostics schema admission", () => {
       expect(operationalOpen.mock.calls.filter(([path]) => path === database)).toHaveLength(0);
     } finally {
       try {
-        writer.exec("DELETE FROM schema_migrations WHERE version=11");
+        writer.prepare("DELETE FROM schema_migrations WHERE version=?").run(knownSchemaMaximum() + 1);
       } finally {
         operationalOpen.mockRestore();
         writer.close();

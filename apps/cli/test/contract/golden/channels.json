@@ -1,0 +1,750 @@
+{
+  "create": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "channel": {
+          "id": "<uuid>",
+          "title": "Journey",
+          "state": "open",
+          "creatorKind": "registered_project",
+          "creatorId": "<uuid>",
+          "mainParticipantId": "<uuid>",
+          "closedAt": null,
+          "closedByParticipantId": null,
+          "closedByKind": null,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "participantCount": 1,
+          "messageCount": 0,
+          "unhandledCount": 0,
+          "participants": [
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "main",
+              "handle": "orchestrator",
+              "nativeProvenance": [],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            }
+          ],
+          "assignments": []
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "create-retained": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "channel": {
+          "id": "<uuid>",
+          "title": "Journey",
+          "state": "open",
+          "creatorKind": "registered_project",
+          "creatorId": "<uuid>",
+          "mainParticipantId": "<uuid>",
+          "closedAt": null,
+          "closedByParticipantId": null,
+          "closedByKind": null,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "participantCount": 1,
+          "messageCount": 0,
+          "unhandledCount": 0,
+          "participants": [
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "main",
+              "handle": "orchestrator",
+              "nativeProvenance": [],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            }
+          ],
+          "assignments": []
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "participant-add": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "role": "worker",
+          "handle": "worker-a",
+          "nativeProvenance": [
+            ""
+          ],
+          "active": true,
+          "deactivatedAt": null,
+          "registeredAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "judge-add": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "role": "judge",
+          "handle": "judge-x",
+          "nativeProvenance": [
+            "ctx:node"
+          ],
+          "active": true,
+          "deactivatedAt": null,
+          "registeredAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "assignment-add": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "assignment": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "participantId": "<uuid>",
+          "label": "task",
+          "state": "open",
+          "createdAt": "<ts>",
+          "closedAt": null
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "assignment-close": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "assignment": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "participantId": "<uuid>",
+          "label": "task",
+          "state": "closed",
+          "createdAt": "<ts>",
+          "closedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "list": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "id": "<uuid>",
+            "title": "Journey",
+            "state": "open",
+            "mainHandle": "orchestrator",
+            "createdAt": "<ts>",
+            "closedAt": null
+          }
+        ],
+        "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "show": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "channel": {
+          "id": "<uuid>",
+          "title": "Journey",
+          "state": "open",
+          "creatorKind": "registered_project",
+          "creatorId": "<uuid>",
+          "mainParticipantId": "<uuid>",
+          "closedAt": null,
+          "closedByParticipantId": null,
+          "closedByKind": null,
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "participantCount": 3,
+          "messageCount": 0,
+          "unhandledCount": 0,
+          "participants": [
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "main",
+              "handle": "orchestrator",
+              "nativeProvenance": [],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            },
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "worker",
+              "handle": "worker-a",
+              "nativeProvenance": [
+                ""
+              ],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            },
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "judge",
+              "handle": "judge-x",
+              "nativeProvenance": [
+                "ctx:node"
+              ],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            }
+          ],
+          "assignments": [
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "participantId": "<uuid>",
+              "label": "task",
+              "state": "closed",
+              "createdAt": "<ts>",
+              "closedAt": "<ts>"
+            }
+          ]
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "submit": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "kind": "report",
+          "senderParticipantId": "<uuid>",
+          "senderHandle": "worker-a",
+          "assignmentId": "<uuid>",
+          "assignmentLate": true,
+          "relayToParticipantId": null,
+          "contextSession": "sess",
+          "contextNode": "",
+          "contextAttempt": null,
+          "handled": false,
+          "handledAt": null,
+          "handledByParticipantId": null,
+          "handledByKind": null,
+          "handleNote": null,
+          "processingRowVersion": 1,
+          "createdAt": "<ts>",
+          "bodyBytes": 22,
+          "bodyPreview": "Report body\r\nwith CRLF",
+          "bodyPreviewTruncated": false
+        },
+        "replayed": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages-unhandled": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "id": "<uuid>",
+            "channelId": "<uuid>",
+            "kind": "report",
+            "senderParticipantId": "<uuid>",
+            "senderHandle": "worker-a",
+            "assignmentId": "<uuid>",
+            "assignmentLate": true,
+            "relayToParticipantId": null,
+            "contextSession": "sess",
+            "contextNode": "",
+            "contextAttempt": null,
+            "handled": false,
+            "handledAt": null,
+            "handledByParticipantId": null,
+            "handledByKind": null,
+            "handleNote": null,
+            "processingRowVersion": 1,
+            "createdAt": "<ts>",
+            "bodyBytes": 22,
+            "bodyPreview": "Report body\r\nwith CRLF",
+            "bodyPreviewTruncated": false
+          }
+        ],
+        "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "wait-pending": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "id": "<uuid>",
+            "channelId": "<uuid>",
+            "kind": "report",
+            "senderParticipantId": "<uuid>",
+            "senderHandle": "worker-a",
+            "assignmentId": "<uuid>",
+            "assignmentLate": true,
+            "relayToParticipantId": null,
+            "contextSession": "sess",
+            "contextNode": "",
+            "contextAttempt": null,
+            "handled": false,
+            "handledAt": null,
+            "handledByParticipantId": null,
+            "handledByKind": null,
+            "handleNote": null,
+            "processingRowVersion": 1,
+            "createdAt": "<ts>",
+            "bodyBytes": 22,
+            "bodyPreview": "Report body\r\nwith CRLF",
+            "bodyPreviewTruncated": false
+          }
+        ],
+        "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "read": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "kind": "report",
+          "senderParticipantId": "<uuid>",
+          "senderHandle": "worker-a",
+          "assignmentId": "<uuid>",
+          "assignmentLate": true,
+          "relayToParticipantId": null,
+          "contextSession": "sess",
+          "contextNode": "",
+          "contextAttempt": null,
+          "handled": false,
+          "handledAt": null,
+          "handledByParticipantId": null,
+          "handledByKind": null,
+          "handleNote": null,
+          "processingRowVersion": 1,
+          "createdAt": "<ts>",
+          "bodyBytes": 22,
+          "bodyPreview": "Report body\r\nwith CRLF",
+          "bodyPreviewTruncated": false,
+          "body": "Report body\r\nwith CRLF"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "forbidden-role": {
+    "status": 77,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_FORBIDDEN_ROLE",
+        "message": "The operation requires the main participant or the User",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Run as the main participant or with --as-user"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "handle": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "kind": "report",
+          "senderParticipantId": "<uuid>",
+          "senderHandle": "worker-a",
+          "assignmentId": "<uuid>",
+          "assignmentLate": true,
+          "relayToParticipantId": null,
+          "contextSession": "sess",
+          "contextNode": "",
+          "contextAttempt": null,
+          "handled": true,
+          "handledAt": "<ts>",
+          "handledByParticipantId": "<uuid>",
+          "handledByKind": "participant",
+          "handleNote": "done",
+          "processingRowVersion": 2,
+          "createdAt": "<ts>",
+          "bodyBytes": 22,
+          "bodyPreview": "Report body\r\nwith CRLF",
+          "bodyPreviewTruncated": false
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "handle-stale": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "ROW_VERSION_CONFLICT",
+        "message": "Another handling attempt won the compare-and-set on this message",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages-handled": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "id": "<uuid>",
+            "channelId": "<uuid>",
+            "kind": "report",
+            "senderParticipantId": "<uuid>",
+            "senderHandle": "worker-a",
+            "assignmentId": "<uuid>",
+            "assignmentLate": true,
+            "relayToParticipantId": null,
+            "contextSession": "sess",
+            "contextNode": "",
+            "contextAttempt": null,
+            "handled": true,
+            "handledAt": "<ts>",
+            "handledByParticipantId": "<uuid>",
+            "handledByKind": "participant",
+            "handleNote": "done",
+            "processingRowVersion": 2,
+            "createdAt": "<ts>",
+            "bodyBytes": 22,
+            "bodyPreview": "Report body\r\nwith CRLF",
+            "bodyPreviewTruncated": false
+          }
+        ],
+        "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "wait-timeout": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [],
+        "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>",
+        "timedOut": true
+      }
+    }
+  },
+  "participant-deactivate": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "role": "worker",
+          "handle": "worker-a",
+          "nativeProvenance": [
+            ""
+          ],
+          "active": false,
+          "deactivatedAt": "<ts>",
+          "registeredAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "participant-deactivate-noop": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "role": "worker",
+          "handle": "worker-a",
+          "nativeProvenance": [
+            ""
+          ],
+          "active": false,
+          "deactivatedAt": "<ts>",
+          "registeredAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "not-found": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_NOT_FOUND",
+        "message": "Unknown Channel UUID",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the UUID with sorage channel list"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "closed": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "channel": {
+          "id": "<uuid>",
+          "title": "Journey",
+          "state": "closed",
+          "creatorKind": "registered_project",
+          "creatorId": "<uuid>",
+          "mainParticipantId": "<uuid>",
+          "closedAt": "<ts>",
+          "closedByParticipantId": "<uuid>",
+          "closedByKind": "participant",
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "participantCount": 3,
+          "messageCount": 1,
+          "unhandledCount": 0,
+          "participants": [
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "main",
+              "handle": "orchestrator",
+              "nativeProvenance": [],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            },
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "worker",
+              "handle": "worker-a",
+              "nativeProvenance": [
+                ""
+              ],
+              "active": false,
+              "deactivatedAt": "<ts>",
+              "registeredAt": "<ts>"
+            },
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "role": "judge",
+              "handle": "judge-x",
+              "nativeProvenance": [
+                "ctx:node"
+              ],
+              "active": true,
+              "deactivatedAt": null,
+              "registeredAt": "<ts>"
+            }
+          ],
+          "assignments": [
+            {
+              "id": "<uuid>",
+              "channelId": "<uuid>",
+              "participantId": "<uuid>",
+              "label": "task",
+              "state": "closed",
+              "createdAt": "<ts>",
+              "closedAt": "<ts>"
+            }
+          ]
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "submit-closed": {
+    "status": 65,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_CLOSED",
+        "message": "The Channel is closed, so submissions are frozen",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Reopen is not offered in M9; use or create another Channel explicitly"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "historical-replay": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "id": "<uuid>",
+          "channelId": "<uuid>",
+          "kind": "report",
+          "senderParticipantId": "<uuid>",
+          "senderHandle": "worker-a",
+          "assignmentId": "<uuid>",
+          "assignmentLate": true,
+          "relayToParticipantId": null,
+          "contextSession": "sess",
+          "contextNode": "",
+          "contextAttempt": null,
+          "handled": false,
+          "handledAt": null,
+          "handledByParticipantId": null,
+          "handledByKind": null,
+          "handleNote": null,
+          "processingRowVersion": 1,
+          "createdAt": "<ts>",
+          "bodyBytes": 22,
+          "bodyPreview": "Report body\r\nwith CRLF",
+          "bodyPreviewTruncated": false
+        },
+        "replayed": true
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "replay-unavailable": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_REPLAY_UNAVAILABLE",
+        "message": "No retained Channel submission receipt; the original outcome is unknown The original submission outcome remains unknown. Retain the original key, exact input/source bytes, Installation, Channel, sender participant, request <uuid> and this output.",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Keep the original key, exact input/source bytes, Installation, Channel and sender participant. Retain request <uuid> and this output for diagnosis; an unknown outcome does not authorize another submission or blind external dispatch."
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "blank-body": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "Channel message body must be nonempty after trimming",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check Channel fields, Unicode, message kind, and expected Row Version"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  }
+}

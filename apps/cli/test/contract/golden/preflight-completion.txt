@@ -1,2 +1,2 @@
     'preflight:inspect the selected installation without initializing or opening it'
-  commands="accept archive backup completion config daemon decline delete doctor events fetch get inbox init memo outbox pin preflight project review revise send token unarchive uninstall unpin vault version web withdraw"
+  commands="accept archive backup channel completion config daemon decline delete doctor events fetch get inbox init memo outbox pin preflight project review revise send token unarchive uninstall unpin vault version web withdraw"

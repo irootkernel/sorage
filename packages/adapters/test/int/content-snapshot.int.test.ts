@@ -92,7 +92,9 @@ function exportedHistory() {
         )
         .all(),
     ).toEqual([]);
-    expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'channel%'").all()).toEqual([]);
+    for (const table of ["channels", "channel_participants", "channel_assignments", "channel_messages"]) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    }
   } finally {
     db.close();
   }
@@ -760,7 +762,9 @@ describe("format-3 historical physical-content snapshots", () => {
           .all(),
       ).toEqual([]);
       expect(db.prepare("SELECT key FROM idempotency_keys").all()).toEqual([]);
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'channel%'").all()).toEqual([]);
+      for (const table of ["channels", "channel_participants", "channel_assignments", "channel_messages"]) {
+        expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+      }
     } finally {
       db.close();
     }
@@ -800,7 +804,7 @@ describe("format-3 historical physical-content snapshots", () => {
     }
   });
 
-  it("refuses a recognized ledger-only Channel domain event as unsupported before import", () => {
+  it("refuses a recognized ledger-only Channel domain event as a supported-family integrity failure before import", () => {
     const source = exportedHistory();
     writeFileSync(
       eventsPath(source),
@@ -825,12 +829,12 @@ describe("format-3 historical physical-content snapshots", () => {
     const config = readFileSync(join(target.home, "config.yaml"));
     expect(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date() })).toMatchObject({
       ok: false,
-      error: { code: "VAULT_SCHEMA_UNSUPPORTED" },
+      error: { code: "VAULT_INTEGRITY_ERROR" },
     });
     for (const dryRun of [true, false]) {
       expect(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun })).toMatchObject({
         ok: false,
-        error: { code: "VAULT_SCHEMA_UNSUPPORTED" },
+        error: { code: "VAULT_INTEGRITY_ERROR" },
       });
       expect(inventory(target)).toEqual(before);
       expect(readFileSync(join(target.home, "config.yaml"))).toEqual(config);

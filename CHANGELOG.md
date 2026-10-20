@@ -12,6 +12,8 @@ This file records concise shipped outcomes and the planned next stable release.
 - Preserve the existing Memo JSON responses and 512 KiB JSON request limit, add multipart create/update for larger bodies, and retain literal search, title-only edits and the Web recovery gate across both storage backends.
 - Normalize Memo references in schema 10 without repacking old inline text or rewriting retained receipts. Extend format-3 backups with selected Memo content files and exact digest validation; restore fresh private records without operational receipts. Disclose configured large-body Git-history growth through the CLI and Web guidance.
 
+- Add CLI-only agent communication Channels: one main participant with registered Worker/Judge participants, attributed messages with exact-bytes bodies through the shared inline/Vault interface, immutable first handling decisions behind a compare-and-set, pending-inclusive waiting, metadata-only retained receipts with replay-only recovery, and format-3 snapshot export/restore of complete Channel runtime records without operational receipts.
+
 M9 has no assigned product version. The intended v0.1.3 scope below remains M8, and published v0.1.2 predates these source changes. [The roadmap](docs/roadmap/README.md) owns delivery status; installation and publication remain separate operations.
 
 ## v0.1.3 - Unreleased

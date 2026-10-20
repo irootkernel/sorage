@@ -126,22 +126,22 @@ describe("dependency-boundary gate", () => {
     expect(result.stderr).toContain("@aquarium/tools");
   });
 
-  it("accepts an app deep-importing an allowlisted adapters composition module", () => {
+  it.each(["home", "channel-command-ports"])("accepts the adapters composition module %s", (module) => {
     const root = makeFixture((r) => {
       writeFileSync(
         join(r, "apps/cli/src/ok.ts"),
-        'import { createNodeHomePaths } from "@sorage/adapters/src/home";\nexport const p = createNodeHomePaths;\n',
+        `import * as ports from "@sorage/adapters/src/${module}";\nexport const p = ports;\n`,
       );
     });
     const result = runScript("check-import-boundaries.ts", root);
     expect(result.exitCode).toBe(0);
   });
 
-  it("fails when the CLI deep-imports an adapters module outside the composition allowlist", () => {
+  it.each(["sqlite/migrator", "channels"])("refuses direct CLI access to adapters storage module %s", (module) => {
     const root = makeFixture((r) => {
       writeFileSync(
         join(r, "apps/cli/src/bad.ts"),
-        'import { migrate } from "@sorage/adapters/src/sqlite/migrator";\nexport const m = migrate;\n',
+        `import * as storage from "@sorage/adapters/src/${module}";\nexport const m = storage;\n`,
       );
     });
     const result = runScript("check-import-boundaries.ts", root);

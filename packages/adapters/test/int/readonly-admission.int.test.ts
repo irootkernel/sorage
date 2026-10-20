@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initializeInstallation, parseConfigurationFile, runDoctor } from "@sorage/core";
+import { initializeInstallation, knownSchemaMaximum, parseConfigurationFile, runDoctor } from "@sorage/core";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { createNodeDoctorPorts } from "../../src/doctor";
 import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
@@ -53,7 +53,7 @@ function edit(database: string, sql: string, journal = "DELETE") {
     db.close();
   }
 }
-const future = "INSERT INTO schema_migrations VALUES(11, 'future', '2026-01-01')";
+const future = `INSERT INTO schema_migrations VALUES(${knownSchemaMaximum() + 1}, 'future', '2026-01-01')`;
 function doctor(home: string) {
   return createNodeDoctorPorts({ env: { SORAGE_HOME: home }, userHome: home, portProbe: () => false });
 }
@@ -200,13 +200,15 @@ describe("readonly admission before operational SQLite settings", () => {
     copyFileSync(database, mainOnly);
     const bare = new DatabaseSync(mainOnly, { readOnly: true });
     try {
-      expect(bare.prepare("SELECT MAX(version) AS n FROM schema_migrations").get()).toMatchObject({ n: 10 });
+      expect(bare.prepare("SELECT MAX(version) AS n FROM schema_migrations").get()).toMatchObject({
+        n: knownSchemaMaximum(),
+      });
     } finally {
       bare.close();
     }
     const reader = connections.openSorageReadonlyAdmission(database);
     try {
-      expect(readAppliedRows(reader).at(-1)?.version).toBe(11);
+      expect(readAppliedRows(reader).at(-1)?.version).toBe(knownSchemaMaximum() + 1);
     } finally {
       reader.close();
     }
@@ -230,7 +232,7 @@ describe("readonly admission before operational SQLite settings", () => {
     // rebuild over the orphan-WAL database, not merely that it succeeded.
     const upgraded = nativeOutcome(database);
     expect(upgraded.alreadyUpToDate).toBe(false);
-    expect(upgraded.appliedVersions).toEqual([8, 9, 10]);
+    expect(upgraded.appliedVersions).toEqual([8, 9, 10, 11]);
     const plan = productionMigrationPlan();
     const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
@@ -242,7 +244,7 @@ describe("readonly admission before operational SQLite settings", () => {
       });
       expect(result.db.prepare("PRAGMA foreign_keys").get()).toMatchObject({ foreign_keys: 1 });
       expect(result.db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()).toMatchObject({
-        version: 10,
+        version: knownSchemaMaximum(),
       });
       expect(result.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {
@@ -265,7 +267,7 @@ describe("readonly admission before operational SQLite settings", () => {
     const plan = productionMigrationPlan();
     const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       expect(result.db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
     } finally {
       result.db.close();
@@ -396,7 +398,7 @@ describe("cold-WAL private history capture", () => {
         copyFileSync(source, target);
       },
     });
-    expect(rows?.at(-1)?.version).toBe(11);
+    expect(rows?.at(-1)?.version).toBe(knownSchemaMaximum() + 1);
     expect(targets).toHaveLength(2);
     expect(targets.every((target) => !existsSync(dirname(target)))).toBe(true);
     expect(readFileSync(database)).toEqual(before);
@@ -504,7 +506,7 @@ it("reads active WAL through native readonly without falling back to a copy", as
       console.log(JSON.stringify({rows:rows.length,appliedAt:row.applied_at}));`;
     const result = spawnSync("bun", ["-e", source], { encoding: "utf8", timeout: 15_000 });
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ rows: 10, appliedAt: "live" });
+    expect(JSON.parse(result.stdout)).toEqual({ rows: knownSchemaMaximum(), appliedAt: "live" });
   });
 });
 

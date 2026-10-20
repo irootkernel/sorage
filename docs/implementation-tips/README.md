@@ -10,6 +10,8 @@ The [preflight qualification map](preflight-qualification.md) connects PFL-001 t
 
 The [M9 shared content qualification map](m9-shared-content-qualification.md) connects the TASK-106 common content store, migration 8 and the guarded rebuild path, the generalized operational seams, and the snapshot format-3 turn, Handoff schema-9 adoption and Memo schema-10 adoption to their production paths, contract classification, migration impact, and owning tests.
 
+The [M9 Channel qualification map](m9-channels-qualification.md) connects the TASK-109 domain-and-storage boundary — the core Channel domain, migration 11, the coherence and preparation discipline, the five-boundary link guards, and the strict stored-receipt parsers — to its production paths and owning tests.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:

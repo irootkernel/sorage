@@ -1,9 +1,12 @@
-import { managedDirectory } from "./managed-paths";
+import { digestManagedFile, managedDirectory, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -40,6 +43,10 @@ import {
   nextDueAt,
   ok,
   parseVersionedSnapshotManifest,
+  channelContentFilePath,
+  channelIdFromSnapshotPath,
+  parseChannelSnapshotShard,
+  proveChannelContentBytes,
   parseMemoSnapshot,
   parseMemoSnapshotV3,
   memoContentFilePath,
@@ -55,6 +62,8 @@ import {
   type SnapshotArtifactV3,
   type SnapshotDataV3,
   type SnapshotHandoffV3,
+  buildContentStorageKey,
+  isManagedContentStorageKey,
   sha256OfText,
   type SnapshotDeletionRequest,
   type SnapshotEvent,
@@ -85,7 +94,14 @@ import {
   readMemoExport,
   type MemoContentReference,
 } from "./memos";
-import { validateMemoContentLinks } from "./content-store";
+import { validateChannelContentLinks, validateMemoContentLinks } from "./content-store";
+import {
+  type ChannelContentFileExport,
+  type SnapshotChannelAssignment,
+  type SnapshotChannelMessage,
+  type SnapshotChannelParticipant,
+  type SnapshotChannelShard,
+} from "@sorage/core";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
@@ -93,6 +109,78 @@ import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./in
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import type { SorageSqlite } from "./sqlite/connection";
+
+/**
+ * Places one file-backed Channel message body's exact carried bytes at a fresh
+ * private `content/channel/<channelId>/<recordId>` managed key in the Vault,
+ * following the identical durability and managed-path discipline as the Memo
+ * content restore: the key is validated by the shared core builder, the path
+ * is resolved through `managedPath` (rejecting ancestor symlinks and unsafe
+ * roots), the file is written exclusively with O_EXCL + O_NOFOLLOW, set
+ * read-only with fchmod 0444, fsync'd, every ancestor directory up to the
+ * canonical managed root is fsync'd, the placed file's identity is read back
+ * and compared against the source bytes, and a failure cleans the owned file
+ * (CHN-009, SHR-004, SHR-005).
+ */
+function placeChannelContentFile(
+  vaultPath: string,
+  channelId: string,
+  recordId: string,
+  bytes: Uint8Array,
+): Result<{ storageKey: string; sizeBytes: number; sha256: string }, AppError> {
+  const key = buildContentStorageKey({ domain: "channel", ownerId: channelId, contentId: recordId });
+  if (!key.ok) return key;
+  const storageKey = key.value;
+  if (!isManagedContentStorageKey(storageKey)) {
+    return err(appError("INTERNAL_ERROR", "The Channel content restore target is not a managed key", { storageKey }));
+  }
+  let destination: string | undefined;
+  let owned = false;
+  try {
+    destination = managedPath(vaultPath, storageKey, true);
+    const handle = openSync(
+      destination,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o644,
+    );
+    owned = true;
+    try {
+      let written = 0;
+      const buffer = Buffer.from(bytes);
+      while (written < buffer.byteLength) {
+        written += writeSync(handle, buffer, written, buffer.byteLength - written, null);
+      }
+      fchmodSync(handle, 0o444);
+      fsyncSync(handle);
+    } finally {
+      closeSync(handle);
+    }
+    // Persist the entry and its ancestors before any SQL row claims that this
+    // file is materialized. The managed path already uses the canonical Vault.
+    const root = managedRoot(vaultPath);
+    for (let directory = dirname(destination); ; directory = dirname(directory)) {
+      fsyncDirectory(directory);
+      if (directory === root) break;
+    }
+    // Read back the placed file and verify its identity against the source.
+    const identity = digestManagedFile(vaultPath, storageKey);
+    const expectedDigest = createHash("sha256").update(bytes).digest("hex");
+    if (identity.sizeBytes !== bytes.byteLength || identity.sha256 !== expectedDigest) {
+      throw new Error("The placed Channel body changed identity");
+    }
+    return ok({ storageKey, ...identity });
+  } catch {
+    if (owned && destination !== undefined) {
+      try {
+        rmSync(destination, { force: true });
+      } catch {
+        /* Owned survivor remains unreachable. */
+      }
+    }
+    return err(appError("INTERNAL_ERROR", "The Channel content restore file could not be placed", { channelId }));
+  }
+}
 import { createNodeApiTokenStore } from "./token-store";
 import { createVaultInitializer, openVault } from "./vault";
 import { createNodeVaultCommandPorts } from "./vault-command-ports";
@@ -215,6 +303,244 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     }
   }
 
+  /** One file-backed Channel message's content reference for the export. */
+  interface ChannelContentReference {
+    channelId: string;
+    messageId: string;
+    contentId: string;
+    contentPath: string;
+    sizeBytes: number;
+    sha256: string;
+    storageKey: string;
+  }
+
+  /**
+   * Reads every Channel with its complete rosters, all assignments, and all
+   * messages as their routed format-3 export records (CHN-009, section 38.8).
+   * The wire `BodyContent` union carries exactly `inline` or the file-backed
+   * triple — no internal discriminator — and the file-backed form's raw bytes
+   * are carried as snapshot content files digested in `contentDigests`. An
+   * unmaterialized file-backed current body fails the export closed with
+   * `CONTENT_MATERIALIZING`.
+   */
+  function readChannelExport(
+    db: SorageSqlite,
+  ): Result<{ channels: SnapshotChannelShard[]; contentFiles: ChannelContentReference[] }, AppError> {
+    try {
+      const channels: SnapshotChannelShard[] = [];
+      const contentFiles: ChannelContentReference[] = [];
+      const channelRows = db.prepare("SELECT * FROM channels ORDER BY id").all() as unknown as Array<
+        Record<string, unknown>
+      >;
+      for (const channelRow of channelRows) {
+        const channelId = channelRow.id as string;
+        const participants: SnapshotChannelParticipant[] = (
+          db
+            .prepare("SELECT * FROM channel_participants WHERE channel_id = ? ORDER BY registered_at, id")
+            .all(channelId) as unknown as Array<Record<string, unknown>>
+        ).map((row) => ({
+          id: row.id as string,
+          role: row.role as SnapshotChannelParticipant["role"],
+          handle: row.handle as string,
+          nativeProvenance: JSON.parse(row.native_provenance_json as string) as string[],
+          active: row.active === 1,
+          registeredAt: row.registered_at as string,
+          deactivatedAt: (row.deactivated_at as string | null) ?? null,
+        }));
+        const assignments: SnapshotChannelAssignment[] = (
+          db
+            .prepare("SELECT * FROM channel_assignments WHERE channel_id = ? ORDER BY created_at, id")
+            .all(channelId) as unknown as Array<Record<string, unknown>>
+        ).map((row) => ({
+          id: row.id as string,
+          participantId: (row.participant_id as string | null) ?? null,
+          label: row.label as string,
+          state: (row.state === "closed" ? "closed" : "open") as SnapshotChannelAssignment["state"],
+          createdAt: row.created_at as string,
+          closedAt: (row.closed_at as string | null) ?? null,
+        }));
+        const messages: SnapshotChannelMessage[] = [];
+        const messageRows = db
+          .prepare(
+            `SELECT m.*, c.inline_text AS c_inline_text, c.storage_key AS c_storage_key,
+               c.size_bytes AS c_size_bytes, c.sha256 AS c_sha256, c.materialized AS c_materialized
+             FROM channel_messages m JOIN content_records c ON c.id = m.content_record_id
+             WHERE m.channel_id = ? ORDER BY m.created_at, m.id`,
+          )
+          .all(channelId) as unknown as Array<Record<string, unknown>>;
+        for (const row of messageRows) {
+          const inlineText = row.c_inline_text as string | null;
+          const contentId = row.content_record_id as string;
+          let bodyContent: SnapshotChannelMessage["bodyContent"];
+          if (inlineText !== null) {
+            bodyContent = { inline: inlineText };
+          } else {
+            if (row.c_materialized === 0) {
+              return err(
+                appError(
+                  "CONTENT_MATERIALIZING",
+                  `Channel message ${String(row.id)} is waiting for its committed activation`,
+                ),
+              );
+            }
+            const contentPath = channelContentFilePath(channelId, contentId);
+            if (!contentPath.ok) {
+              return err(
+                appError(
+                  "STORAGE_INTEGRITY_ERROR",
+                  `Channel message ${String(row.id)} carries a noncanonical content identity.`,
+                  { channelId, contentId },
+                ),
+              );
+            }
+            bodyContent = {
+              contentPath: contentPath.value,
+              sizeBytes: row.c_size_bytes as number,
+              sha256: row.c_sha256 as string,
+            };
+            contentFiles.push({
+              channelId,
+              messageId: row.id as string,
+              contentId,
+              contentPath: contentPath.value,
+              sizeBytes: row.c_size_bytes as number,
+              sha256: row.c_sha256 as string,
+              storageKey: row.c_storage_key as string,
+            });
+          }
+          messages.push({
+            id: row.id as string,
+            senderParticipantId: row.sender_participant_id as string,
+            kind: row.kind as SnapshotChannelMessage["kind"],
+            bodyContent,
+            assignmentId: (row.assignment_id as string | null) ?? null,
+            assignmentLate: row.assignment_late === 1,
+            relayToParticipantId: (row.relay_to_participant_id as string | null) ?? null,
+            contextSession: (row.context_session as string | null) ?? null,
+            contextNode: (row.context_node as string | null) ?? null,
+            contextAttempt: (row.context_attempt as string | null) ?? null,
+            handled: row.handled === 1,
+            handledAt: (row.handled_at as string | null) ?? null,
+            handledByParticipantId: (row.handled_by_participant_id as string | null) ?? null,
+            handledByKind: (row.handled_by_kind as SnapshotChannelMessage["handledByKind"]) ?? null,
+            handleNote: (row.handle_note as string | null) ?? null,
+            createdAt: row.created_at as string,
+          });
+        }
+        channels.push({
+          id: channelId,
+          title: (channelRow.title as string | null) ?? null,
+          state: (channelRow.state === "closed" ? "closed" : "open") as SnapshotChannelShard["state"],
+          creatorKind: channelRow.creator_kind as SnapshotChannelShard["creatorKind"],
+          creatorId: (channelRow.creator_id as string | null) ?? null,
+          createdAt: channelRow.created_at as string,
+          closedAt: (channelRow.closed_at as string | null) ?? null,
+          closedByParticipantId: (channelRow.closed_by_participant_id as string | null) ?? null,
+          closedByKind: (channelRow.closed_by_kind as SnapshotChannelShard["closedByKind"]) ?? null,
+          participants,
+          assignments,
+          messages,
+        });
+      }
+      return ok({ channels, contentFiles });
+    } catch (error) {
+      return err(
+        appError("INTERNAL_ERROR", `Reading the Channels for export failed: ${messageOf(error)}.`, {
+          cause: String(error),
+        }),
+      );
+    }
+  }
+
+  /**
+   * Reads each file-backed Channel message reference's exact raw Vault bytes
+   * through the managed-path safety seams after the consistent export read
+   * commits (CHN-009, SHR-010, W1): a guarded managed open that refuses
+   * symlinked or unsafe files, a full read whose digest, size, and
+   * modification time are re-verified against the opened handle with no extra
+   * byte behind it, and the whole-bytes semantic proof — fatal UTF-8,
+   * NUL-free, and nonempty after trimming — so a valid size and digest alone
+   * never substitutes for the domain's body rules. The carried bytes stay
+   * verbatim: a byte-order mark, CRLF, and the presence or absence of a final
+   * newline are preserved exactly.
+   */
+  function readChannelContentFileBytes(
+    vaultPath: string,
+    references: ChannelContentReference[],
+  ): Result<ChannelContentFileExport[], AppError> {
+    const carried: ChannelContentFileExport[] = [];
+    for (const reference of references) {
+      if (!isManagedContentStorageKey(reference.storageKey)) {
+        return err(
+          appError(
+            "STORAGE_INTEGRITY_ERROR",
+            `The Channel content reference for ${reference.messageId} is not a managed key.`,
+            {
+              messageId: reference.messageId,
+            },
+          ),
+        );
+      }
+      try {
+        const handle = openManagedFile(vaultPath, reference.storageKey);
+        try {
+          const stat = fstatSync(handle);
+          if (stat.size !== reference.sizeBytes)
+            return err(appError("VAULT_INTEGRITY_ERROR", "A Channel content file disagrees with its recorded size."));
+          const buffer = Buffer.alloc(stat.size);
+          let read = 0;
+          while (read < stat.size) {
+            const count = readSync(handle, buffer, read, stat.size - read, null);
+            if (count === 0) break;
+            read += count;
+          }
+          if (read !== stat.size) {
+            return err(
+              appError(
+                "VAULT_INTEGRITY_ERROR",
+                `The Channel content file for ${reference.messageId} changed while being read.`,
+                {
+                  messageId: reference.messageId,
+                },
+              ),
+            );
+          }
+          const digest = createHash("sha256").update(buffer).digest("hex");
+          const after = fstatSync(handle);
+          const extra = Buffer.alloc(1);
+          if (
+            digest !== reference.sha256 ||
+            after.size !== stat.size ||
+            after.mtimeMs !== stat.mtimeMs ||
+            readSync(handle, extra, 0, 1, null) !== 0
+          ) {
+            return err(
+              appError("VAULT_INTEGRITY_ERROR", "A Channel content file disagrees with its recorded digest.", {
+                storageKey: reference.storageKey,
+              }),
+            );
+          }
+          const proof = proveChannelContentBytes(buffer);
+          if (!proof.ok) return proof;
+          carried.push({ channelId: reference.channelId, contentId: reference.contentId, bytes: buffer });
+        } finally {
+          closeSync(handle);
+        }
+      } catch (error) {
+        return err(
+          appError(
+            "STORAGE_INTEGRITY_ERROR",
+            `A Channel content file could not be read from the Vault: ${messageOf(error)}.`,
+            {
+              storageKey: reference.storageKey,
+            },
+          ),
+        );
+      }
+    }
+    return ok(carried);
+  }
+
   /** Reads the complete snapshot set inside one consistent read transaction (BKP-007). */
   function readSnapshotData(): Result<SnapshotDataV3, AppError> {
     return withDatabase((db) => {
@@ -241,6 +567,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       }
       let data: Result<SnapshotDataV3, AppError>;
       let pendingContentFiles: MemoContentReference[] = [];
+      let pendingChannelContentFiles: ChannelContentReference[] = [];
       try {
         const projects = db.prepare("SELECT * FROM projects ORDER BY id").all() as unknown as Row[];
         const bindings = db.prepare("SELECT * FROM project_bindings ORDER BY id").all() as unknown as Row[];
@@ -261,18 +588,40 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           db.exec("ROLLBACK");
           return memoLinks;
         }
+        // The Channel link guard joins the consistent export read under the
+        // same rule: a schema-11 database whose message rows lost their record
+        // references fails the export loudly, never a silently reduced or
+        // empty inventory over broken links (SHR-004, the TASK-109 plan).
+        const channelLinks = validateChannelContentLinks(db);
+        if (!channelLinks.ok) {
+          db.exec("ROLLBACK");
+          return channelLinks;
+        }
         const memosResult = readMemoExport(db);
         if (!memosResult.ok) {
           db.exec("ROLLBACK");
           return memosResult;
         }
+        // The Channel export: every Channel with its complete rosters, all
+        // assignments, and all messages with their content-record identity
+        // (CHN-009, section 38.8). An unmaterialized file-backed current body
+        // fails the export closed: the snapshot cannot carry bytes the Vault
+        // has not yet placed at the managed key, and guessing or discarding
+        // the message would violate the exact-bytes contract.
+        const channelsResult = readChannelExport(db);
+        if (!channelsResult.ok) {
+          db.exec("ROLLBACK");
+          return channelsResult;
+        }
         // Only rows were read inside the transaction; the file-backed bodies'
         // bytes are read from the Vault AFTER the snapshot read commits, so
         // no filesystem I/O rides the read transaction (W1, SHR-012).
         pendingContentFiles = memosResult.value.contentFiles;
+        pendingChannelContentFiles = channelsResult.value.contentFiles;
         data = ok({
           ...mapSnapshotData({ projects, bindings, handoffs, artifacts, reviewNotes, deletionRequests, events }),
           memos: memosResult.value.memos,
+          channels: channelsResult.value.channels,
         });
       } catch (error) {
         db.exec("ROLLBACK");
@@ -283,18 +632,27 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         );
       }
       db.exec("COMMIT");
-      if (pendingContentFiles.length > 0) {
+      if (pendingContentFiles.length > 0 || pendingChannelContentFiles.length > 0) {
         const configRead = store.read();
         if (!configRead.ok || configRead.value === null) {
           return err(appError("NOT_INITIALIZED", "Sorage is not initialized."));
         }
-        const memoFilesResult = readMemoContentFileBytes(
-          expandConfigurationPath(configRead.value.config.vault.path, userHome, home.home),
-          pendingContentFiles,
-        );
-        if (!memoFilesResult.ok) return memoFilesResult;
-        if (data.ok) {
-          data = ok({ ...data.value, memoContentFiles: memoFilesResult.value });
+        const vaultPath = expandConfigurationPath(configRead.value.config.vault.path, userHome, home.home);
+        if (pendingContentFiles.length > 0) {
+          const memoFilesResult = readMemoContentFileBytes(vaultPath, pendingContentFiles);
+          if (!memoFilesResult.ok) return memoFilesResult;
+          if (data.ok) {
+            data = ok({ ...data.value, memoContentFiles: memoFilesResult.value });
+          }
+        }
+        // Channel content file bytes are read from the Vault after the
+        // consistent read commits: each file-backed message body's exact raw
+        // bytes at its managed storage key, digest-verified and semantically
+        // proven over the whole bytes (CHN-009, SHR-010, W1).
+        if (pendingChannelContentFiles.length > 0 && data.ok) {
+          const channelContentFiles = readChannelContentFileBytes(vaultPath, pendingChannelContentFiles);
+          if (!channelContentFiles.ok) return channelContentFiles;
+          data = ok({ ...data.value, channelContentFiles: channelContentFiles.value });
         }
       }
       return data;
@@ -462,24 +820,6 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       if (!channels.ok) return channels;
       const content = snapshotTreeFiles(join(sourcePath, "snapshots", "content"));
       if (!content.ok) return content;
-      // Inspect filesystem safety without applying this build's empty content
-      // inventory assumption to a recognized later representation.
-      if (manifest.value.formatVersion === 3 && manifest.value.counts.channels !== 0) {
-        return err(
-          appError(
-            "VAULT_SCHEMA_UNSUPPORTED",
-            "The snapshot carries a later Channel representation this build cannot import",
-          ),
-        );
-      }
-      if (channels.value.length !== 0) {
-        return err(
-          appError(
-            "VAULT_SCHEMA_UNSUPPORTED",
-            "The snapshot carries Channel shards, a valid later representation this build cannot import",
-          ),
-        );
-      }
       const contentDigests = manifest.value.formatVersion === 3 ? manifest.value.contentDigests : {};
       if (manifest.value.formatVersion !== 3 && content.value.length !== 0)
         return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected content files"));
@@ -519,11 +859,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
         for (const key of mapKeys) {
-          if (!/^content\/memo\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/.test(key)) {
+          if (!/^content\/(memo|channel)\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/.test(key)) {
             return err(
               appError(
                 "VAULT_SCHEMA_UNSUPPORTED",
-                "The snapshot carries shared content outside the Memo content family this build cannot import",
+                "The snapshot carries shared content outside the Memo and Channel content families this build cannot import",
               ),
             );
           }
@@ -684,6 +1024,54 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         if (!parsed.ok) return err(parsed.error);
         events.push(parsed.value as unknown as SnapshotEvent);
       }
+      // Format-3 Channel shard reading: each shard at
+      // `snapshots/channels/<xx>/<id>.json` is parsed by the closed typed
+      // parser — never a cast — so a null, array, unknown-shape, unknown-key,
+      // duplicate-key, or noncanonical shard is a typed VAULT_INTEGRITY_ERROR
+      // before any property access or adoption, and its file-backed messages
+      // reference carried content files under this Channel's own identity
+      // path (section 38.8, CHN-009).
+      const channelShards: SnapshotChannelShard[] = [];
+      const channelContentFileExports: ChannelContentFileExport[] = [];
+      if (manifest.value.formatVersion !== 3 && channels.value.length !== 0)
+        return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected Channel shards"));
+      if (manifest.value.formatVersion === 3) {
+        for (const channelFile of channels.value) {
+          const shardPath = `channels/${channelFile}`;
+          if (!channelIdFromSnapshotPath(shardPath).ok) {
+            return err(appError("VAULT_INTEGRITY_ERROR", `A Channel shard path is malformed: ${channelFile}`));
+          }
+          const bytes = readSnapshotBytes(join(sourcePath, "snapshots"), shardPath);
+          if (!bytes.ok) return err(bytes.error);
+          const shard = parseChannelSnapshotShard(shardPath, bytes.value);
+          if (!shard.ok) return shard;
+          for (const message of shard.value.messages) {
+            if (!("contentPath" in message.bodyContent)) continue;
+            const bytesOfFile = readContentFile(message.bodyContent.contentPath);
+            if (!bytesOfFile.ok) return bytesOfFile;
+            if (bytesOfFile.value.byteLength !== message.bodyContent.sizeBytes) {
+              return err(
+                appError("VAULT_INTEGRITY_ERROR", `A carried Channel content file disagrees with its recorded size.`),
+              );
+            }
+            const contentId = message.bodyContent.contentPath.split("/")[3] as string;
+            channelContentFileExports.push({
+              channelId: shard.value.id,
+              contentId,
+              bytes: bytesOfFile.value,
+            });
+          }
+          channelShards.push(shard.value);
+        }
+        // The manifest's Channel count must match the shard family exactly: a
+        // positive count with zero shards and a zero count with stray shards
+        // are both inventory disagreements (section 38.8).
+        if (manifest.value.counts.channels !== channelShards.length) {
+          return err(
+            appError("VAULT_INTEGRITY_ERROR", `The manifest's Channel count disagrees with the shard family.`),
+          );
+        }
+      }
       const data: SnapshotData | SnapshotDataV3 =
         manifest.value.formatVersion === 3
           ? {
@@ -692,6 +1080,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               events,
               memos: memoExports,
               memoContentFiles,
+              ...(channelShards.length > 0 ? { channels: channelShards } : {}),
+              ...(channelContentFileExports.length > 0 ? { channelContentFiles: channelContentFileExports } : {}),
             }
           : { projects: projects.value as unknown as SnapshotProject[], handoffs: legacyHandoffs, events, memos };
       const valid = validateSnapshot(data, manifest.value);
@@ -765,6 +1155,13 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         "deletion_requests",
         "events",
         "project_memos",
+        // The Channel domain tables join the emptiness census at TASK-109
+        // (CHN-009, section 32): an installation holding only Channel records —
+        // even one whose ledger rows were lost — is not an empty target.
+        "channels",
+        "channel_participants",
+        "channel_assignments",
+        "channel_messages",
       ];
       for (const table of tables) {
         const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as Record<string, unknown> | undefined;
@@ -799,9 +1196,18 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         events: Number(row?.events ?? 0),
         artifacts: Number(row?.artifacts ?? 0),
         memos: Number(row?.memos ?? 0),
-        // The Channel tables arrive with TASK-109; the census stays an honest
-        // zero at this schema (SHR-010).
-        channels: 0,
+        // The Channel census reads the actual Channel count: a schema-11
+        // database with zero channels contributes zero, a database with
+        // channels contributes its true count, and a pre-Channel database
+        // contributes zero through the missing-table check (SHR-010,
+        // CHN-009).
+        channels: (() => {
+          try {
+            return Number((db.prepare("SELECT COUNT(*) AS count FROM channels").get() as { count: number }).count);
+          } catch {
+            return 0;
+          }
+        })(),
         materializing: Number(row?.materializing ?? 0),
         deletedWithArtifact: Number(row?.deleted_with_artifact ?? 0),
       });
@@ -987,6 +1393,15 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         carried.bytes,
       ]),
     );
+    // The carried Channel content bytes, keyed by the exported content path
+    // segment pair for the same pre-transaction placement discipline (CHN-009,
+    // SHR-004, section 38.7).
+    const carriedChannelContent = new Map(
+      ((data as SnapshotDataV3).channelContentFiles ?? []).map((carried) => [
+        `${carried.channelId}:${carried.contentId}`,
+        carried.bytes,
+      ]),
+    );
     const placedFiles: Array<{
       meta: Omit<Memo, "body">;
       recordId: string;
@@ -1044,6 +1459,67 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       });
     }
     const placedByMemo = new Map(placedFiles.map((entry) => [entry.meta.id, entry]));
+    // Channel file-backed content placement: the same digest-verified
+    // pre-transaction discipline, placing each file-backed message body's
+    // exact carried bytes at a fresh private `content/channel/` managed key
+    // BEFORE the SQL transaction opens. A placement failure discards every
+    // placed file of this restore and leaves the database untouched.
+    const placedChannelFiles: Array<{
+      messageId: string;
+      channelId: string;
+      recordId: string;
+      storageKey: string;
+      sizeBytes: number;
+      sha256: string;
+    }> = [];
+    for (const channel of (data as SnapshotDataV3).channels ?? []) {
+      for (const message of channel.messages) {
+        if (!("contentPath" in message.bodyContent)) continue;
+        const exportedContentId = message.bodyContent.contentPath.split("/")[3] as string;
+        const bytes = carriedChannelContent.get(`${channel.id}:${exportedContentId}`);
+        if (bytes === undefined) {
+          discardPlacedFiles();
+          return err(
+            appError("VAULT_INTEGRITY_ERROR", `The Channel message names a content file the snapshot does not carry`, {
+              messageId: message.id,
+            }),
+          );
+        }
+        const recordId = randomUUID();
+        const storageKey = `content/channel/${channel.id}/${recordId}`;
+        const placed = placeChannelContentFile(vaultPath, channel.id, recordId, bytes);
+        if (!placed.ok) {
+          discardPlacedFiles();
+          return placed;
+        }
+        if (
+          placed.value.sizeBytes !== message.bodyContent.sizeBytes ||
+          placed.value.sha256 !== message.bodyContent.sha256
+        ) {
+          placedKeys.push(placed.value.storageKey);
+          discardPlacedFiles();
+          return err(
+            appError(
+              "VAULT_INTEGRITY_ERROR",
+              `The Channel message's carried bytes disagree with its shard's recorded identity`,
+              {
+                messageId: message.id,
+              },
+            ),
+          );
+        }
+        placedKeys.push(placed.value.storageKey);
+        placedChannelFiles.push({
+          messageId: message.id,
+          channelId: channel.id,
+          recordId,
+          storageKey: placed.value.storageKey,
+          sizeBytes: placed.value.sizeBytes,
+          sha256: placed.value.sha256,
+        });
+      }
+    }
+    const placedChannelByMessage = new Map(placedChannelFiles.map((entry) => [entry.messageId, entry]));
     let committed = false;
     let cleanupSafe = true;
     let commitAttempted = false;
@@ -1194,6 +1670,122 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             const placed = placedByMemo.get(memo.id);
             if (placed === undefined) throw new Error("A Memo lost its prepared content placement");
             insertMemoWithFileRecordRows(db, placed.meta, placed.identity, placed.recordId, placed.storageKey);
+          }
+        }
+        // Channel restore (CHN-009, section 38.8): logical IDs, associations,
+        // and the exact metadata ledger are preserved; each message's immutable
+        // record receives a fresh private content UUID; verbatim text fields
+        // bind their exact UTF-8 bytes with CAST; the sender handle is derived
+        // from the preserved roster; and the processing row version is derived
+        // from the immutable handled flag.
+        const channelsData = (data as SnapshotDataV3).channels ?? [];
+        for (const channel of channelsData) {
+          db.prepare(
+            `INSERT INTO channels (id, title, state, creator_kind, creator_id, created_at, updated_at, closed_at, closed_by_participant_id, closed_by_kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            channel.id,
+            channel.title,
+            channel.state,
+            channel.creatorKind,
+            channel.creatorId,
+            channel.createdAt,
+            channel.closedAt ?? channel.createdAt,
+            channel.closedAt,
+            channel.closedByParticipantId,
+            channel.closedByKind,
+          );
+        }
+        const handleByParticipant = new Map<string, string>();
+        for (const channel of channelsData) {
+          for (const participant of channel.participants) {
+            db.prepare(
+              `INSERT INTO channel_participants (id, channel_id, role, handle, native_provenance_json, active, registered_at, deactivated_at)
+               VALUES (?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?)`,
+            ).run(
+              participant.id,
+              channel.id,
+              participant.role,
+              Buffer.from(participant.handle, "utf8"),
+              JSON.stringify(participant.nativeProvenance),
+              participant.active ? 1 : 0,
+              participant.registeredAt,
+              participant.deactivatedAt,
+            );
+            handleByParticipant.set(participant.id, participant.handle);
+          }
+          for (const assignment of channel.assignments) {
+            db.prepare(
+              `INSERT INTO channel_assignments (id, channel_id, participant_id, label, state, created_at, closed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              assignment.id,
+              channel.id,
+              assignment.participantId,
+              assignment.label,
+              assignment.state,
+              assignment.createdAt,
+              assignment.closedAt,
+            );
+          }
+          for (const message of channel.messages) {
+            // Each message's immutable record receives a fresh private content
+            // UUID: snapshots never carry record ids, and restore never reuses
+            // an exported logical id as a record id (SHR-004, section 38.7).
+            let contentRecordId: string;
+            if ("inline" in message.bodyContent) {
+              contentRecordId = randomUUID();
+              db.prepare(
+                `INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+                 VALUES (?, CAST(? AS TEXT), NULL, ?, ?, 1, ?)`,
+              ).run(
+                contentRecordId,
+                Buffer.from(message.bodyContent.inline, "utf8"),
+                Buffer.byteLength(message.bodyContent.inline, "utf8"),
+                createHash("sha256").update(message.bodyContent.inline, "utf8").digest("hex"),
+                message.createdAt,
+              );
+            } else {
+              // The file-backed form: the pre-transaction placement already
+              // placed the carried bytes at a fresh managed key and verified
+              // their size and digest; the SQL transaction inserts only rows.
+              const placed = placedChannelByMessage.get(message.id);
+              if (placed === undefined) throw new Error("A Channel message lost its prepared content placement");
+              contentRecordId = placed.recordId;
+              db.prepare(
+                `INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at)
+                 VALUES (?, NULL, ?, ?, ?, 1, ?)`,
+              ).run(placed.recordId, placed.storageKey, placed.sizeBytes, placed.sha256, message.createdAt);
+            }
+            const senderHandle = handleByParticipant.get(message.senderParticipantId) ?? "";
+            const processingRowVersion = message.handled ? 2 : 1;
+            db.prepare(
+              `INSERT INTO channel_messages (id, channel_id, sender_participant_id, sender_handle, kind, content_record_id,
+                 assignment_id, assignment_late, relay_to_participant_id, context_session, context_node, context_attempt,
+                 handled, handled_at, handled_by_participant_id, handled_by_kind, handle_note, processing_row_version, created_at)
+               VALUES (?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?, ?, CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT),
+                 ?, ?, ?, ?, CAST(? AS TEXT), ?, ?)`,
+            ).run(
+              message.id,
+              channel.id,
+              message.senderParticipantId,
+              Buffer.from(senderHandle, "utf8"),
+              message.kind,
+              contentRecordId,
+              message.assignmentId,
+              message.assignmentLate ? 1 : 0,
+              message.relayToParticipantId,
+              message.contextSession === null ? null : Buffer.from(message.contextSession, "utf8"),
+              message.contextNode === null ? null : Buffer.from(message.contextNode, "utf8"),
+              message.contextAttempt === null ? null : Buffer.from(message.contextAttempt, "utf8"),
+              message.handled ? 1 : 0,
+              message.handledAt,
+              message.handledByParticipantId,
+              message.handledByKind,
+              message.handleNote === null ? null : Buffer.from(message.handleNote, "utf8"),
+              processingRowVersion,
+              message.createdAt,
+            );
           }
         }
         // Operational receipts are deliberately neither read nor reconstructed from snapshots.
@@ -1419,24 +2011,19 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         ensureRepository: () =>
           nodeEnsureVaultGit(vaultPath, view.value.installationId, clock, view.value.backupBranch),
         prepareWritableContent: (): Result<void, AppError> => {
-          // The writable setup of section 26: idempotently prepare the managed
-          // content/ directory inside the validated selected Vault before the
-          // exact Git change test, with no sentinel file and nothing written
-          // outside the Vault root. An unavailable or unsafe target fails
-          // through the validated Vault safety path.
+          // The writable setup of section 26 and the M9 policy reassertion of
+          // VLT-024/SHR-011: the existing guarded initializer idempotently
+          // prepares the managed directories and re-asserts the `.gitattributes`
+          // M9 lines (preserving non-managed lines and order), inside the
+          // validated selected Vault before the exact Git change test, with no
+          // sentinel file. The Result propagates the initializer's typed
+          // filesystem error unchanged — a failed preparation never reaches
+          // Git staging or the backup commit.
           const opened = openVault(vaultPath, view.value.installationId);
           if (!opened.ok) return err(opened.error);
-          try {
-            managedDirectory(vaultPath, "content", true);
-            return ok(undefined);
-          } catch (error) {
-            return err(
-              appError("INTERNAL_ERROR", `Preparing the managed content directory failed: ${messageOf(error)}.`, {
-                vaultPath,
-                cause: String(error),
-              }),
-            );
-          }
+          const initialized = createVaultInitializer(clock).initialize(vaultPath, view.value.installationId);
+          if (!initialized.ok) return initialized;
+          return ok(undefined);
         },
         git,
         gitState: () =>

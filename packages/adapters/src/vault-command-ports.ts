@@ -47,6 +47,7 @@ import {
   sqliteContentReferences,
   sweepFetchCache,
   validateArtifactContentLinks,
+  validateChannelContentLinks,
   validateMemoContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
@@ -280,6 +281,12 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             // (SHR-004, SHR-014).
             const memoLinks = validateMemoContentLinks(db);
             if (!memoLinks.ok) return memoLinks;
+            // The Channel link guard joins the same census boundary under the
+            // same rule: a schema-11 database whose message rows lost their
+            // record references fails the verify proof loudly, never a healthy
+            // census over broken links (SHR-004, the TASK-109 reviewed plan).
+            const channelLinks = validateChannelContentLinks(db);
+            if (!channelLinks.ok) return channelLinks;
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
               .get() as { name: string } | null | undefined;

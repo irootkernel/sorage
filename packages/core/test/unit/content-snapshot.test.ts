@@ -378,10 +378,11 @@ describe("classifySnapshotArtifactBody", () => {
 });
 
 describe("classifySnapshotEvent", () => {
-  it("recognizes Channel domain names in format 3 as the later representation", () => {
-    expect(classifySnapshotEvent("CHANNEL_CREATED", 3)).toBe("later-channel");
-    expect(classifySnapshotEvent("CHANNEL_MESSAGE_HANDLED", 3)).toBe("later-channel");
+  it("admits the Channel domain family in format 3 and keeps earlier formats frozen", () => {
+    expect(classifySnapshotEvent("CHANNEL_CREATED", 3)).toBe("family");
+    expect(classifySnapshotEvent("CHANNEL_MESSAGE_HANDLED", 3)).toBe("family");
     expect(classifySnapshotEvent("CHANNEL_CREATED", 2)).toBe("unknown");
+    expect(classifySnapshotEvent("CHANNEL_CREATED", 1)).toBe("unknown");
   });
 
   it("scopes families per format, adding CONTENT_* only in format 3", () => {
@@ -568,7 +569,7 @@ describe("validateSnapshot format-3 classification", () => {
     expect(accepted.ok).toBe(true);
   });
 
-  it("refuses a recognized Channel domain event even with zero Channel records", () => {
+  it("refuses a ledger-only Channel domain event without its shard as a supported-family integrity failure", () => {
     const data = {
       ...sampleDataV3(),
       events: [
@@ -591,32 +592,29 @@ describe("validateSnapshot format-3 classification", () => {
     if (!built.ok) return;
     const refused = validateSnapshot(format3Data(data), built.value.manifest);
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe("VAULT_SCHEMA_UNSUPPORTED");
+    if (!refused.ok) expect(refused.error.code).toBe("VAULT_INTEGRITY_ERROR");
   });
 
-  it.each(["handoff", "memo"])(
-    "classifies a recognized later Channel family before legacy %s associations",
-    (association) => {
-      const data = sampleDataV3();
-      data.events.push({
-        id: "0123abcd-0000-4000-8000-0000000000ab",
-        handoffId: association === "handoff" ? "0123abcd-0000-4000-8000-0000000000ee" : null,
-        memoId: association === "memo" ? "0123abcd-0000-4000-8000-0000000000ee" : null,
-        eventType: "CHANNEL_CREATED",
-        actorKind: "user",
-        actorId: null,
-        rowVersion: null,
-        metadata: { channelId: "0123abcd-0000-4000-8000-0000000000cd" },
-        createdAt: "2026-01-01T00:00:01.000Z",
-      });
-      const built = snapshotFilesV3(data);
-      if (!built.ok) throw new Error(built.error.message);
-      expect(validateSnapshot(format3Data(data), built.value.manifest)).toMatchObject({
-        ok: false,
-        error: { code: "VAULT_SCHEMA_UNSUPPORTED" },
-      });
-    },
-  );
+  it.each(["handoff", "memo"])("refuses a Channel domain event that carries a legacy %s association", (association) => {
+    const data = sampleDataV3();
+    data.events.push({
+      id: "0123abcd-0000-4000-8000-0000000000ab",
+      handoffId: association === "handoff" ? "0123abcd-0000-4000-8000-0000000000ee" : null,
+      memoId: association === "memo" ? "0123abcd-0000-4000-8000-0000000000ee" : null,
+      eventType: "CHANNEL_CREATED",
+      actorKind: "user",
+      actorId: null,
+      rowVersion: null,
+      metadata: { channelId: "0123abcd-0000-4000-8000-0000000000cd" },
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    const built = snapshotFilesV3(data);
+    if (!built.ok) throw new Error(built.error.message);
+    expect(validateSnapshot(format3Data(data), built.value.manifest)).toMatchObject({
+      ok: false,
+      error: { code: "VAULT_INTEGRITY_ERROR" },
+    });
+  });
 
   it("accepts historical common physical-content events without live owners", () => {
     const identity = {

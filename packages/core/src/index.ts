@@ -4,6 +4,8 @@ export * from "./artifacts";
 export * from "./backup-commands";
 export * from "./backup-schedule";
 export * from "./backup-snapshot";
+export * from "./channels";
+export * from "./channel-snapshot";
 export * from "./config";
 export * from "./config-commands";
 export * from "./content";

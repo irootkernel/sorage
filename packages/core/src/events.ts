@@ -48,10 +48,13 @@ export function isCommonContentEventType(value: string): value is CommonContentE
 }
 
 /**
- * The Channel domain family of TASK-109 (CHN-005, interface section 38.9). This
- * build never appends it; snapshot readers know the names only so a recognized
- * later-generation Channel event fails closed as an unsupported representation
- * before import instead of surfacing as unknown-event corruption.
+ * The Channel domain family of TASK-109 (CHN-005, interface section 38.9). From
+ * the TASK-109 runtime this build appends it to the live ledger behind the
+ * mutation transaction; the frozen per-format snapshot families below still
+ * exclude it until the format-3 Channel family admission of the same Task's
+ * snapshot boundary, so a recognized Channel domain event name in a snapshot
+ * this build reads stays a later representation that fails closed before
+ * import instead of surfacing as unknown-event corruption.
  */
 export const CHANNEL_DOMAIN_EVENT_TYPES = [
   "CHANNEL_CREATED",
@@ -128,7 +131,12 @@ export const LEGACY_EVENT_TYPES = [
 ] as const;
 
 /** The normative event catalog of section 10 of security-reliability.md this build may append. */
-export const EVENT_TYPES = [...LEGACY_EVENT_TYPES, ...MEMO_EVENT_TYPES, ...COMMON_CONTENT_EVENT_TYPES] as const;
+export const EVENT_TYPES = [
+  ...LEGACY_EVENT_TYPES,
+  ...MEMO_EVENT_TYPES,
+  ...COMMON_CONTENT_EVENT_TYPES,
+  ...CHANNEL_DOMAIN_EVENT_TYPES,
+] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
 
@@ -186,8 +194,8 @@ export function encodeEventMetadata(metadata: Record<string, unknown>): Result<s
 /**
  * The frozen per-format snapshot event families (interface section 38.9): formats 1
  * and 2 keep their pre-M9 allowlists however the runtime union grows, and format 3
- * adds exactly the common physical-content family. Channel domain events belong to
- * no format this build reads and are classified before this family check.
+ * adds the common physical-content family and the Channel domain family from the
+ * TASK-109 family admission.
  */
 export function snapshotEventTypeAllowed(formatVersion: 1 | 2 | 3, eventType: string): boolean {
   if (formatVersion === 1) return (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType);
@@ -199,6 +207,7 @@ export function snapshotEventTypeAllowed(formatVersion: 1 | 2 | 3, eventType: st
   return (
     (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType) ||
     (MEMO_EVENT_TYPES as readonly string[]).includes(eventType) ||
-    (COMMON_CONTENT_EVENT_TYPES as readonly string[]).includes(eventType)
+    (COMMON_CONTENT_EVENT_TYPES as readonly string[]).includes(eventType) ||
+    (CHANNEL_DOMAIN_EVENT_TYPES as readonly string[]).includes(eventType)
   );
 }

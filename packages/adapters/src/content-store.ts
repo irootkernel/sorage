@@ -726,6 +726,17 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
             db.exec("ROLLBACK");
             return livingMemoLinks;
           }
+          // The Channel-side link guard joins the same writer transaction and
+          // the same before-first-delete rule: a schema-11 database whose
+          // message rows lost their record references — NULL or dangling —
+          // refuses the proof and rolls the whole cleanup batch back, never
+          // frees the orphaned records before any census could see the damage
+          // (SHR-004, SHR-014, the TASK-109 reviewed plan).
+          const livingChannelLinks = validateChannelContentLinks(db);
+          if (!livingChannelLinks.ok) {
+            db.exec("ROLLBACK");
+            return livingChannelLinks;
+          }
           // Reference providers read inside the writer transaction, so the
           // reference snapshot and the deletions serialize on the write lock.
           const domainIds = references.domainReferencedRecordIds();
@@ -1173,6 +1184,12 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
       // refuses the removal instead of freeing an owned record (SHR-004).
       const livingMemoLinks = validateMemoContentLinks(db);
       if (!livingMemoLinks.ok) return livingMemoLinks;
+      // The Channel link guard joins the same open transaction under the same
+      // rule: a schema-11 Channel reference fault — a NULL or dangling message
+      // reference — refuses the removal before any row changes and the caller
+      // aborts its enclosing transaction (SHR-004, the TASK-109 reviewed plan).
+      const livingChannelLinks = validateChannelContentLinks(db);
+      if (!livingChannelLinks.ok) return livingChannelLinks;
       const domainIds = options.references.domainReferencedRecordIds();
       if (!domainIds.ok) return domainIds;
       const receiptIds = options.references.receiptReferencedRecordIds(options.now);
@@ -2144,6 +2161,90 @@ export function validateMemoContentLinks(db: SorageSqlite): Result<void, AppErro
   }
 }
 
+/** The applied-history-aware Channel storage layouts the Channel link guard understands. */
+export type ChannelStorageLayout = "pre-channel" | "channel-records" | "inconsistent";
+
+/** The Channel domain schema version; at or above it the Channel tables and their reference are required (SHR-009). */
+export const CHANNEL_CONTENT_ADOPTION_SCHEMA_VERSION = 11;
+
+/**
+ * Inspects the Channel storage layout against the applied migration history: a
+ * database below version 11 legitimately has no Channel tables, and a database
+ * at or above the Channel version must carry the `channel_messages` table with
+ * its `content_record_id` reference — its absence is inconsistency, never a
+ * legacy layout (SHR-004, SHR-014, interface section 38.7).
+ */
+export function inspectChannelStorageLayout(db: SorageSqlite): ChannelStorageLayout {
+  const columns = db.prepare("PRAGMA table_info(channel_messages)").all() as Array<{ name: string }>;
+  if (columns.length === 0) {
+    return appliedSchemaMaximum(db) >= CHANNEL_CONTENT_ADOPTION_SCHEMA_VERSION ? "inconsistent" : "pre-channel";
+  }
+  if (columns.some((column) => column.name === "content_record_id")) return "channel-records";
+  return "inconsistent";
+}
+
+/**
+ * The Channel-side metadata guard, the third twin of the Artifact and Memo
+ * guards (SHR-004, SHR-014, the TASK-109 reviewed plan): a legitimate
+ * pre-Channel database contributes no references, a schema-11 database missing
+ * the required table or reference column is an integrity refusal, and every
+ * message row must carry a non-NULL reference that resolves to an existing
+ * content record — a NULL or dangling reference never passes as a healthy
+ * empty proof that frees owned records. Bounded metadata queries only; never a
+ * body read, never filesystem I/O. Called inside both deletion writer
+ * transactions before the first delete, and at the Vault-verify census, Doctor
+ * census, and consistent-export boundaries before any healthy-empty
+ * conclusion.
+ */
+export function validateChannelContentLinks(db: SorageSqlite): Result<void, AppError> {
+  try {
+    const layout = inspectChannelStorageLayout(db);
+    if (layout === "pre-channel") return ok(undefined);
+    if (layout === "inconsistent") {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The applied schema is at or above version ${String(CHANNEL_CONTENT_ADOPTION_SCHEMA_VERSION)} but the channel_messages table is missing or has no content_record_id column; the Channel content links could not be verified.`,
+          { cause: "channel-storage-layout-inconsistent" },
+        ),
+      );
+    }
+    const recordTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
+      .get() as { name: string } | null | undefined;
+    if (recordTable === null || recordTable === undefined) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The applied schema is at or above version ${String(CHANNEL_CONTENT_ADOPTION_SCHEMA_VERSION)} but the content_records table is missing; the Channel content links could not be verified.`,
+          { cause: "content-records-table-missing" },
+        ),
+      );
+    }
+    const dangling = db
+      .prepare(
+        "SELECT m.id AS message_id, m.content_record_id AS content_record_id FROM channel_messages m LEFT JOIN content_records c ON c.id = m.content_record_id WHERE c.id IS NULL OR m.content_record_id IS NULL LIMIT 1",
+      )
+      .get() as { message_id: string; content_record_id: string | null } | null | undefined;
+    if (dangling !== null && dangling !== undefined) {
+      return err(
+        appError(
+          "STORAGE_INTEGRITY_ERROR",
+          `The Channel message ${dangling.message_id} references content record ${String(dangling.content_record_id)}, which is missing; the Channel content links could not be verified.`,
+          { messageId: dangling.message_id, contentRecordId: dangling.content_record_id },
+        ),
+      );
+    }
+    return ok(undefined);
+  } catch (error) {
+    return err(
+      appError("INTERNAL_ERROR", `Verifying the Channel content links failed: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+}
+
 /**
  * The living-Handoff half of the normalized metadata guard (SHR-004,
  * SHR-014): every non-tombstone Handoff that names a current Artifact must
@@ -2239,9 +2340,10 @@ function validateLivingHandoffArtifactLinks(db: SorageSqlite): Result<void, AppE
 
 /**
  * The default SQL reference provider. `domainReferencedRecordIds` reads the
- * Artifact record references through the verified Artifact storage layout and
- * the Memo record references through the verified Memo layout: a legitimate
- * pre-adoption database contributes no references of either domain, the actual
+ * Artifact record references through the verified Artifact storage layout, the
+ * Memo record references through the verified Memo layout, and the Channel
+ * message references through the verified Channel layout: a legitimate
+ * pre-adoption database contributes no references of any domain, the actual
  * references are read on adoption-version databases, and a database whose
  * applied history demands a layout it does not carry is a visible integrity
  * refusal — an inconsistent current database must never pass as an empty
@@ -2300,7 +2402,29 @@ export function sqliteContentReferences(db: SorageSqlite): ContentReferences {
                   .all() as unknown as Array<{ content_record_id: string }>
               ).map((row) => row.content_record_id)
             : [];
-        return ok([...artifactIds, ...memoIds]);
+        // The Channel layout is verified the same way: a legitimate pre-Channel
+        // database contributes no Channel references, while a schema-11
+        // database whose message table lost its reference column is
+        // inconsistent and must surface, never pass as empty (SHR-004).
+        const channelLayout = inspectChannelStorageLayout(db);
+        if (channelLayout === "inconsistent") {
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The applied schema is at or above version ${String(CHANNEL_CONTENT_ADOPTION_SCHEMA_VERSION)} but the channel_messages table is missing or has no content_record_id column; the Channel content references could not be read.`,
+              { cause: "channel-storage-layout-inconsistent" },
+            ),
+          );
+        }
+        const channelIds =
+          channelLayout === "channel-records"
+            ? (
+                db
+                  .prepare("SELECT content_record_id FROM channel_messages WHERE content_record_id IS NOT NULL")
+                  .all() as unknown as Array<{ content_record_id: string }>
+              ).map((row) => row.content_record_id)
+            : [];
+        return ok([...artifactIds, ...memoIds, ...channelIds]);
       } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Reading the content references failed: ${messageOf(error)}.`, {

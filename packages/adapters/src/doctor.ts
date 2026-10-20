@@ -24,7 +24,12 @@ import {
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createConfigStore } from "./config-store";
-import { inspectArtifactStorageLayout, validateArtifactContentLinks, validateMemoContentLinks } from "./content-store";
+import {
+  inspectArtifactStorageLayout,
+  validateArtifactContentLinks,
+  validateChannelContentLinks,
+  validateMemoContentLinks,
+} from "./content-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { launchAgentPlistPath, launchAgentsDirectory, launchAgentUid, plistPointsAtBinary } from "./launchagent-ports";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
@@ -491,6 +496,12 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             // the refusal path releases this check's own connection.
             const memoLinks = validateMemoContentLinks(db);
             if (!memoLinks.ok) return blocking(memoLinks.error.message);
+            // The Channel link guard joins the same census boundary: a
+            // schema-11 database whose message rows lost their record
+            // references is a blocking finding under the same rule, never a
+            // healthy empty census (SHR-004, the TASK-109 reviewed plan).
+            const channelLinks = validateChannelContentLinks(db);
+            if (!channelLinks.ok) return blocking(channelLinks.error.message);
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
               .get() as { name: string } | null | undefined;

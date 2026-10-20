@@ -12,7 +12,7 @@ import {
   type SnapshotHandoff,
 } from "./backup-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { isChannelDomainEventType, isCommonContentEventType, snapshotEventTypeAllowed } from "./events";
+import { isCommonContentEventType, snapshotEventTypeAllowed } from "./events";
 import {
   CONTENT_INLINE_MAX_UTF8_BYTES,
   isUtf8ExactText,
@@ -33,16 +33,22 @@ import type { Memo } from "./memos";
 import { isMemoTimestamp, isMemoUuid } from "./memos";
 import { isValidStorageKeySegment } from "./artifacts";
 import { REVIEW_STATES } from "./handoffs";
+import {
+  channelContentFilePath,
+  channelSnapshotPath,
+  proveChannelContentBytes,
+  validateSnapshotChannelShard,
+} from "./channel-snapshot";
 
 /**
  * The format-3 snapshot generation of M9 (SHR-010, interface section 38.8): one
- * coherent global snapshot whose single manifest counts the Channel family this
- * build exports as zero and digests the shared-content files this build exports
- * as none. The writer keeps the determinism, purity, redaction, and canonical
- * JSON conventions of formats 1 and 2; the reader accepts exactly the format-3
- * representations this schema can faithfully import and refuses a valid
- * later-generation structure before import with `VAULT_SCHEMA_UNSUPPORTED`
- * rather than as corruption, partial restore, fallback, or silent omission.
+ * coherent global snapshot whose single manifest counts the Channel family and
+ * digests the shared-content files this build exports. The writer keeps the
+ * determinism, purity, redaction, and canonical JSON conventions of formats 1
+ * and 2; the reader accepts exactly the format-3 representations this schema
+ * can faithfully import and refuses a valid later-generation structure before
+ * import with `VAULT_SCHEMA_UNSUPPORTED` rather than as corruption, partial
+ * restore, fallback, or silent omission.
  */
 
 function corrupt(message: string): Result<never, AppError> {
@@ -117,16 +123,16 @@ export function classifySnapshotArtifactBody(
   return corrupt("A format-3 Artifact record does not carry exactly one of storageKey and inlineBody");
 }
 
-export type SnapshotEventClassification = "family" | "later-channel" | "unknown";
+export type SnapshotEventClassification = "family" | "unknown";
 
 /**
- * Classifies one snapshot event name for a format: a recognized Channel domain
- * name in format 3 is the unsupported later representation; membership in the
- * format's frozen family follows `snapshotEventTypeAllowed`; everything else is
- * an unknown name and stays an integrity failure (section 38.9).
+ * Classifies one snapshot event name for a format: the format-3 family admits
+ * the Channel domain family alongside the complete existing ledger (section
+ * 38.9, the TASK-109 family admission); formats 1 and 2 keep their frozen
+ * pre-M9 allowlists, so a Channel domain name in those formats is an unknown
+ * name and stays an integrity failure.
  */
 export function classifySnapshotEvent(eventType: string, formatVersion: 1 | 2 | 3): SnapshotEventClassification {
-  if (formatVersion === 3 && isChannelDomainEventType(eventType)) return "later-channel";
   return snapshotEventTypeAllowed(formatVersion, eventType) ? "family" : "unknown";
 }
 
@@ -472,8 +478,11 @@ export function validateSnapshotMemoContent(
       return corrupt("Memo snapshot content digest disagrees with its recorded identity");
     used.add(ownedPath.value);
   }
-  if (used.size !== carried.size || (digests !== undefined && Object.keys(digests).length !== used.size))
-    return corrupt("Memo snapshot content inventory disagrees with its records");
+  // The exact `contentDigests` key-set agreement is the composed format-3
+  // union check over the Memo and Channel families (channel-snapshot.ts); the
+  // Memo side here proves its own carried-versus-referenced exactness and each
+  // referenced file's recorded digest, never the whole map alone.
+  if (used.size !== carried.size) return corrupt("Memo snapshot content inventory disagrees with its records");
   return ok(undefined);
 }
 
@@ -608,12 +617,80 @@ export interface SnapshotArtifactV3 {
 /** The format-3-only Handoff record: the legacy shape over the V3 Artifact. */
 export type SnapshotHandoffV3 = Omit<SnapshotHandoff, "artifact"> & { artifact: SnapshotArtifactV3 | null };
 
-/** The format-3 export input: the legacy snapshot data over the V3 Handoff records and routed Memo bodies. */
+/** One exported Channel message's closed snapshot record (section 38.8). */
+export interface SnapshotChannelMessage {
+  id: string;
+  senderParticipantId: string;
+  kind: "report" | "question" | "relay_request";
+  bodyContent: SnapshotBodyContent;
+  assignmentId: string | null;
+  assignmentLate: boolean;
+  relayToParticipantId: string | null;
+  contextSession: string | null;
+  contextNode: string | null;
+  contextAttempt: string | null;
+  handled: boolean;
+  handledAt: string | null;
+  handledByParticipantId: string | null;
+  handledByKind: "participant" | "user" | null;
+  handleNote: string | null;
+  createdAt: string;
+}
+
+/** One exported participant's closed snapshot record (section 38.8). */
+export interface SnapshotChannelParticipant {
+  id: string;
+  role: "main" | "worker" | "judge";
+  handle: string;
+  nativeProvenance: string[];
+  active: boolean;
+  registeredAt: string;
+  deactivatedAt: string | null;
+}
+
+/** One exported assignment's closed snapshot record (section 38.8). */
+export interface SnapshotChannelAssignment {
+  id: string;
+  participantId: string | null;
+  label: string;
+  state: "open" | "closed";
+  createdAt: string;
+  closedAt: string | null;
+}
+
+/** One exported Channel's closed snapshot shard (section 38.8). */
+export interface SnapshotChannelShard {
+  id: string;
+  title: string | null;
+  state: "open" | "closed";
+  creatorKind: "registered_project" | "unregistered_workspace" | "user";
+  creatorId: string | null;
+  createdAt: string;
+  closedAt: string | null;
+  closedByParticipantId: string | null;
+  closedByKind: "participant" | "user" | null;
+  participants: SnapshotChannelParticipant[];
+  assignments: SnapshotChannelAssignment[];
+  messages: SnapshotChannelMessage[];
+}
+
+/** One carried Channel content file for export: the record's exact raw bytes (SHR-010). */
+export interface ChannelContentFileExport {
+  channelId: string;
+  contentId: string;
+  bytes: Uint8Array;
+}
+
+/** The format-3 export input: the legacy snapshot data over the V3 Handoff records, routed Memo bodies, and Channel shards. */
 export type SnapshotDataV3 = Omit<SnapshotData, "handoffs" | "memos"> & {
   handoffs: SnapshotHandoffV3[];
   memos?: SnapshotMemoV3[];
   /** The exact raw bytes of each file-backed Memo body, carried as snapshot content files (SHR-010). */
   memoContentFiles?: MemoContentFileExport[];
+  /** The exported Channel shards with their complete rosters and messages (CHN-009, SHR-010). */
+  channels?: SnapshotChannelShard[];
+  /** The exact raw bytes of each file-backed Channel message body, carried as snapshot content files (SHR-010). */
+  channelContentFiles?: ChannelContentFileExport[];
 };
 
 /** The workspace-path redaction over the V3 shape: the same fields, honestly typed. */
@@ -621,6 +698,8 @@ export function redactSnapshotDataV3(data: SnapshotDataV3): SnapshotDataV3 {
   return {
     ...(data.memos === undefined ? {} : { memos: data.memos }),
     ...(data.memoContentFiles === undefined ? {} : { memoContentFiles: data.memoContentFiles }),
+    ...(data.channels === undefined ? {} : { channels: data.channels }),
+    ...(data.channelContentFiles === undefined ? {} : { channelContentFiles: data.channelContentFiles }),
     projects: data.projects.map((project) => ({
       ...project,
       bindings: project.bindings.map(({ directory: _directory, ...binding }) => binding),
@@ -637,10 +716,11 @@ export function redactSnapshotDataV3(data: SnapshotDataV3): SnapshotDataV3 {
  * pair, an inline body's exact stored text being the authoritative bytes —
  * Memo shards carrying inline or file-backed `bodyContent` with each
  * file-backed body's exact raw bytes carried as a snapshot content file and
- * digested in `contentDigests`, and a manifest whose Channel count is zero. A
- * file-backed Artifact's bytes keep arriving through the committed
- * `artifacts/` tree outside `contentDigests`, which never covers Handoff
- * Artifact files at any M9 build.
+ * digested in `contentDigests`, and the Channel shards of TASK-109 with their
+ * complete rosters, assignments, messages, and file-backed body bytes under
+ * the shared content inventory. A file-backed Artifact's bytes keep arriving
+ * through the committed `artifacts/` tree outside `contentDigests`, which
+ * never covers Handoff Artifact files at any M9 build.
  */
 export function snapshotFilesV3(
   data: SnapshotDataV3,
@@ -690,19 +770,64 @@ export function snapshotFilesV3(
       files.push({ path: memo.bodyContent.contentPath, content: bytes });
     }
   }
-  // Every carried content file must be named by exactly one shard: an orphan
-  // file is an inventory disagreement, never a silent extra.
-  for (const contentPath of contentCarried.keys()) {
-    if (
-      !memos.some((memo) => memo.bodyContent.kind === "file-backed" && memo.bodyContent.contentPath === contentPath)
-    ) {
-      return corrupt("The export carries a Memo content file no shard names");
+  // Channel content files join the same contentDigests map: each file-backed
+  // Channel message body's exact raw bytes, digested over those bytes (CHN-009,
+  // SHR-010).
+  for (const carried of data.channelContentFiles ?? []) {
+    const carriedPath = channelContentFilePath(carried.channelId, carried.contentId);
+    if (!carriedPath.ok) return carriedPath;
+    if (contentCarried.has(carriedPath.value)) return corrupt("Duplicate Channel content file identity");
+    const proof = proveChannelContentBytes(carried.bytes);
+    if (!proof.ok) return proof;
+    contentCarried.set(carriedPath.value, carried.bytes);
+    contentDigests[carriedPath.value] = createHash("sha256").update(carried.bytes).digest("hex");
+  }
+  const channels = data.channels ?? [];
+  const referencedContent = new Set<string>();
+  for (const memo of memos) {
+    if (memo.bodyContent.kind === "file-backed") referencedContent.add(memo.bodyContent.contentPath);
+  }
+  const channelIds = new Set<string>();
+  for (const channel of [...channels].sort((a, b) => compareSnapshotStrings(a.id, b.id))) {
+    // Every shard is validated against its closed wire contract before the
+    // export writes a single byte of it: an invalid record is refused here,
+    // never serialized into a snapshot (section 38.8).
+    const shard = validateSnapshotChannelShard(channel);
+    if (!shard.ok) return shard;
+    if (channelIds.has(channel.id)) return corrupt("Duplicate Channel snapshot ID");
+    channelIds.add(channel.id);
+    const shardPath = channelSnapshotPath(channel.id);
+    if (!shardPath.ok) return shardPath;
+    files.push({ path: shardPath.value, content: canonicalJson(channel) });
+    // A file-backed Channel message's shard must name exactly one carried
+    // content file whose bytes match the shard's recorded size and digest.
+    for (const message of channel.messages) {
+      if (!("contentPath" in message.bodyContent)) continue;
+      const body = message.bodyContent;
+      if (referencedContent.has(body.contentPath)) return corrupt("Two file-backed records name one content file");
+      referencedContent.add(body.contentPath);
+      const bytes = contentCarried.get(body.contentPath);
+      if (bytes === undefined) {
+        return corrupt("A file-backed Channel message names a content file the export does not carry");
+      }
+      if (bytes.byteLength !== body.sizeBytes || contentDigests[body.contentPath] !== body.sha256) {
+        return corrupt("A file-backed Channel message disagrees with its carried content file");
+      }
+      files.push({ path: body.contentPath, content: bytes });
     }
+  }
+  // The carried set and the referenced set must agree exactly across both
+  // families: an orphan file is an inventory disagreement, never a silent
+  // extra (section 38.8).
+  if (contentCarried.size !== referencedContent.size)
+    return corrupt("The export carries a content file no shard names");
+  for (const contentPath of contentCarried.keys()) {
+    if (!referencedContent.has(contentPath)) return corrupt("The export carries a content file no shard names");
   }
   const events = data.events.map((event) => ({ ...event, memoId: event.memoId ?? null }));
   const manifest: ContentSnapshotManifest = {
     formatVersion: 3,
-    counts: { ...snapshotCounts(data), memos: memos.length, channels: 0 },
+    counts: { ...snapshotCounts(data), memos: memos.length, channels: channels.length },
     memoDigests,
     contentDigests,
   };

@@ -469,9 +469,9 @@ export interface StageContentRequest {
    * The symbolic code a mid-stream bound crossing surfaces as; the shared bound's
    * existing code is `ARTIFACT_TOO_LARGE`, and a domain surface with its own
    * code in this build's catalogue passes it here. Channel ingestion selects
-   * its accepted error mapping when TASK-109 implements that surface.
+   * `CHN_TOO_LARGE` from TASK-109 on.
    */
-  tooLargeCode?: "ARTIFACT_TOO_LARGE" | "MEMO_TOO_LARGE";
+  tooLargeCode?: "ARTIFACT_TOO_LARGE" | "MEMO_TOO_LARGE" | "CHN_TOO_LARGE";
 }
 
 export interface StagedContentFile {

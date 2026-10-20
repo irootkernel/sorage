@@ -35,6 +35,7 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
     "src/vault-command-ports",
     "src/import-source",
     "src/memo-command-ports",
+    "src/channel-command-ports",
     "src/memo-body-file",
     "src/preflight",
     "src/send-recovery",

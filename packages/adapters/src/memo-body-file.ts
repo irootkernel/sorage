@@ -35,10 +35,30 @@ import {
 
 const READ_CHUNK_BYTES = 64 * 1024;
 
+/**
+ * The surface error mapping one capture pass reports: the Memo codes are the
+ * defaults every existing Memo and HTTP multipart caller keeps, and the
+ * Channel surface passes its own codes for the same single algorithm — no
+ * second ingest path exists (SHR-012, the TASK-109 reviewed plan).
+ */
+export interface AcceptedBodyCaptureCodes {
+  invalidInput: "MEMO_INVALID_INPUT" | "CHN_INVALID_INPUT";
+  tooLarge: "MEMO_TOO_LARGE" | "CHN_TOO_LARGE";
+  fileReadFailed: "MEMO_FILE_READ_FAILED" | "CHN_INVALID_INPUT";
+}
+
+const MEMO_BODY_CAPTURE_CODES: AcceptedBodyCaptureCodes = {
+  invalidInput: "MEMO_INVALID_INPUT",
+  tooLarge: "MEMO_TOO_LARGE",
+  fileReadFailed: "MEMO_FILE_READ_FAILED",
+};
+
 export interface MemoBodyCaptureOptions {
   maxBytes: number;
   stateDir: string;
   spoolId: string;
+  /** The surface's error mapping; the Memo codes are the defaults. */
+  codes?: AcceptedBodyCaptureCodes;
 }
 
 /**
@@ -59,6 +79,7 @@ export interface AcceptedBodyCapture {
 }
 
 export function createAcceptedBodyCapture(options: MemoBodyCaptureOptions): AcceptedBodyCapture {
+  const codes = options.codes ?? MEMO_BODY_CAPTURE_CODES;
   const hash = createHash("sha256");
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const textParts: string[] = [];
@@ -107,22 +128,38 @@ export function createAcceptedBodyCapture(options: MemoBodyCaptureOptions): Acce
     push(chunk) {
       if (chunk.includes(0)) {
         release();
-        return { error: appError("MEMO_INVALID_INPUT", "Memo body must be valid Unicode without NUL") };
+        return {
+          error: appError(
+            codes.invalidInput,
+            codes.invalidInput === "MEMO_INVALID_INPUT"
+              ? "Memo body must be valid Unicode without NUL"
+              : "Channel message body must be valid Unicode without NUL",
+          ),
+        };
       }
       let decoded: string;
       try {
         decoded = decoder.decode(chunk, { stream: true });
       } catch {
         release();
-        return { error: appError("MEMO_INVALID_INPUT", "Memo body must contain valid UTF-8") };
+        return {
+          error: appError(
+            codes.invalidInput,
+            codes.invalidInput === "MEMO_INVALID_INPUT"
+              ? "Memo body must contain valid UTF-8"
+              : "Channel message body must contain valid UTF-8",
+          ),
+        };
       }
       total += chunk.byteLength;
       if (total > options.maxBytes) {
         release();
         return {
           error: appError(
-            "MEMO_TOO_LARGE",
-            `The Memo body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`,
+            codes.tooLarge,
+            codes.invalidInput === "MEMO_INVALID_INPUT"
+              ? `The Memo body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`
+              : `The Channel body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`,
             {
               maxBytes: options.maxBytes,
               sizeBytes: total,
@@ -154,7 +191,14 @@ export function createAcceptedBodyCapture(options: MemoBodyCaptureOptions): Acce
         tail = decoder.decode();
       } catch {
         release();
-        return err(appError("MEMO_INVALID_INPUT", "Memo body must contain valid UTF-8"));
+        return err(
+          appError(
+            codes.invalidInput,
+            codes.invalidInput === "MEMO_INVALID_INPUT"
+              ? "Memo body must contain valid UTF-8"
+              : "Channel message body must contain valid UTF-8",
+          ),
+        );
       }
       if (!spilled) {
         return ok({
@@ -188,16 +232,29 @@ export function createAcceptedBodyCapture(options: MemoBodyCaptureOptions): Acce
 /** Captures the selected regular file as the operation's accepted input through the one capture primitive. */
 export function captureMemoBodyFile(path: string, options: MemoBodyCaptureOptions): Result<AcceptedMemoBody> {
   const capture = createAcceptedBodyCapture(options);
+  const codes = options.codes ?? MEMO_BODY_CAPTURE_CODES;
+  const memoWording = codes.invalidInput === "MEMO_INVALID_INPUT";
   let source: number | undefined;
   try {
     const resolved = realpathSync(path);
     const before = statSync(resolved);
-    if (!before.isFile()) return err(appError("MEMO_INVALID_INPUT", "Memo body file must be a readable regular file"));
+    if (!before.isFile()) {
+      return err(
+        appError(
+          codes.invalidInput,
+          memoWording
+            ? "Memo body file must be a readable regular file"
+            : "Channel body file must be a readable regular file",
+        ),
+      );
+    }
     if (before.size > options.maxBytes) {
       return err(
         appError(
-          "MEMO_TOO_LARGE",
-          `The Memo body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`,
+          codes.tooLarge,
+          memoWording
+            ? `The Memo body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`
+            : `The Channel body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`,
           {
             maxBytes: options.maxBytes,
             sizeBytes: before.size,
@@ -208,12 +265,19 @@ export function captureMemoBodyFile(path: string, options: MemoBodyCaptureOption
     source = openSync(resolved, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     const opened = fstatSync(source);
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino)
-      return err(appError("MEMO_INVALID_INPUT", "Memo body file changed while opening"));
+      return err(
+        appError(
+          codes.invalidInput,
+          memoWording ? "Memo body file changed while opening" : "Channel body file changed while opening",
+        ),
+      );
     if (opened.size > options.maxBytes) {
       return err(
         appError(
-          "MEMO_TOO_LARGE",
-          `The Memo body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`,
+          codes.tooLarge,
+          memoWording
+            ? `The Memo body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`
+            : `The Channel body crossed the accepted bound artifact.maxBytes ${String(options.maxBytes)} bytes`,
           {
             maxBytes: options.maxBytes,
             sizeBytes: opened.size,
@@ -233,7 +297,14 @@ export function captureMemoBodyFile(path: string, options: MemoBodyCaptureOption
     // Every thrown exit — source read, spool write, fsync, or close — releases
     // the partial spool so no orphan survives a failed capture.
     capture.abort();
-    return err(appError("MEMO_FILE_READ_FAILED", "The selected Memo body file could not be read"));
+    return err(
+      appError(
+        codes.fileReadFailed,
+        memoWording
+          ? "The selected Memo body file could not be read"
+          : "The selected Channel body file could not be read",
+      ),
+    );
   } finally {
     closeDescriptor(source);
   }
@@ -241,11 +312,18 @@ export function captureMemoBodyFile(path: string, options: MemoBodyCaptureOption
 
 /** Captures an already-in-memory body string, spilling it only when it exceeds the inline threshold. */
 export function captureMemoBodyText(text: string, options: MemoBodyCaptureOptions): Result<AcceptedMemoBody> {
+  const codes = options.codes ?? MEMO_BODY_CAPTURE_CODES;
   // Scalar and NUL validation precedes every encode or spool side effect: a
   // lone surrogate would silently encode as U+FFFD replacement bytes and a NUL
   // is forbidden content, so neither may reach an accepted input (SHR-003).
-  const validated = validateMemoBody(text, options.maxBytes);
-  if (!validated.ok) return validated;
+  // The Memo surface keeps its validating prelude; a Channel surface skips it
+  // because the same single capture pass rejects NUL and invalid UTF-8 with
+  // the Channel codes and the Channel blank rule runs later on the accepted
+  // text, so no second ingest algorithm exists.
+  if (codes.invalidInput === "MEMO_INVALID_INPUT") {
+    const validated = validateMemoBody(text, options.maxBytes);
+    if (!validated.ok) return validated;
+  }
   const capture = createAcceptedBodyCapture(options);
   try {
     // Encode bounded UTF-16 slices; four bytes per code unit is a conservative

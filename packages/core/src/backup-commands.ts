@@ -20,6 +20,7 @@ import {
   validateSnapshotMemoContent,
 } from "./content-snapshot";
 import { parseMemoEventAssociation, validateMemoInventory, type VersionedSnapshotManifest } from "./memo-snapshot";
+import { validateSnapshotChannelContent, validateSnapshotChannelHistory } from "./channel-snapshot";
 import { type Configuration, isValidTimezone, SCHEDULE_AT_PATTERN } from "./config";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { isMemoUuid } from "./memos";
@@ -145,42 +146,31 @@ function snapshotProblem(message: string): Result<never, AppError> {
  * every Project reference resolves, the ledger only names known Handoffs, the
  * manifest counts match what was parsed, and the format-3 record families stay
  * inside what this schema can faithfully import — a recognized later
- * representation (a Vault-backed Memo body, nonempty
- * Channel structure, or a Channel domain event, ledger-only input included)
- * fails closed with `VAULT_SCHEMA_UNSUPPORTED` before import rather than as
- * corruption, partial restore, fallback, or silent omission — so a truncated or
- * hand-edited snapshot fails as `VAULT_INTEGRITY_ERROR` rather than as a
- * foreign-key error halfway through the rebuild.
+ * representation fails closed with `VAULT_SCHEMA_UNSUPPORTED` before import
+ * rather than as corruption, partial restore, fallback, or silent omission,
+ * while a malformed record of a supported family, the Channel family included
+ * with its shards, content inventory, and complete ledger reconciliation at
+ * TASK-109, fails as `VAULT_INTEGRITY_ERROR` — so a truncated or hand-edited
+ * snapshot fails before the rebuild rather than as a foreign-key error
+ * halfway through it.
  */
 export function validateSnapshot(
   data: SnapshotData | SnapshotDataV3,
   manifest: VersionedSnapshotManifest,
 ): Result<{ reviewNotes: number }, AppError> {
-  if (manifest.formatVersion === 3 && manifest.counts.channels !== 0) {
-    return err(
-      appError(
-        "VAULT_SCHEMA_UNSUPPORTED",
-        `The snapshot counts ${String(manifest.counts.channels)} Channel record(s), a valid later representation this build cannot import`,
-      ),
-    );
-  }
   if (manifest.formatVersion === 3) {
     const content = validateSnapshotMemoContent(data as SnapshotDataV3, manifest.contentDigests);
     if (!content.ok) return content;
-    // Refuse recognized later ledger families before the legacy Memo inventory
-    // or supported-family associations can interpret their rows.
-    for (const event of data.events) {
-      if (typeof event.eventType !== "string")
-        return snapshotProblem("The format-3 snapshot event type must be a string.");
-      if (classifySnapshotEvent(event.eventType, 3) === "later-channel") {
-        return err(
-          appError(
-            "VAULT_SCHEMA_UNSUPPORTED",
-            `The snapshot ledger carries the Channel domain event ${event.eventType}, a valid later representation this build cannot import`,
-          ),
-        );
-      }
-    }
+    // The Channel family joins the format-3 inventory at TASK-109 (SHR-010,
+    // section 38.9): the manifest's Channel count, the globally unique record
+    // identities, the closed shard contracts, the exact Memo-and-Channel
+    // content inventory with the whole-bytes body proofs, and the complete
+    // Channel-domain ledger reconciliation all run before any association,
+    // count, or adoption step can accept the snapshot.
+    const channelContent = validateSnapshotChannelContent(data as SnapshotDataV3, manifest);
+    if (!channelContent.ok) return channelContent;
+    const channelHistory = validateSnapshotChannelHistory(data.events, (data as SnapshotDataV3).channels ?? []);
+    if (!channelHistory.ok) return channelHistory;
     const ids = new Set<string>();
     const slugs = new Set<string>();
     for (const project of data.projects) {
@@ -279,9 +269,7 @@ export function validateSnapshot(
   for (const event of data.events) {
     const classification = classifySnapshotEvent(event.eventType, manifest.formatVersion);
     if (classification === "unknown") {
-      return snapshotProblem(
-        `The snapshot ledger carries event ${String(event.eventType)}, which this format does not define.`,
-      );
+      return snapshotProblem("The snapshot ledger carries an event type this format does not define.");
     }
     if (manifest.formatVersion === 3) {
       const row = parseMemoEventAssociation(event, manifest.formatVersion, memoOwners);
