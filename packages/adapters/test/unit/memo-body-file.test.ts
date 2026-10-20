@@ -126,7 +126,7 @@ describe("bounded text encoding of in-memory bodies", () => {
     // The first slice would otherwise end between the pair's two code units;
     // the exact spool comparison fails on U+FFFD replacement bytes if the
     // boundary ever splits it.
-    const input = "a".repeat(16_383) + "🙂" + "b".repeat(84_000);
+    const input = `${"a".repeat(16_383)}🙂${"b".repeat(84_000)}`;
     const reference = Buffer.from(input, "utf8");
     const referenceSha = createHash("sha256").update(reference).digest("hex");
     const result = captureMemoBodyText(input, options());

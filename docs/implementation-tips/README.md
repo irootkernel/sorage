@@ -324,7 +324,7 @@ Use an isolated temporary home, Vault, git repository, and database per test, cr
 
 `testkit` lives in `adapters` and is owned by the foundation Epic before any test depends on it; it provides the fake `Clock` and `IdGenerator`, the fault-injection filesystem adapter that reproduces the enumerated crash points, the fault-injection git adapter, disk-full and read-only-Vault injection, bare-remote plus clone git fixtures, and the ten-thousand-Handoff seed generator.
 
-Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun and product version assertions, and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; and `make test` as the single gate.
+Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun and product version assertions, and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; and `make test` as the single gate. The lint step runs Biome with `--error-on-warnings`, so a lint warning fails `make test-prepare` and stops `make test` before any test stage runs.
 
 Those same targets run on the developer's macOS machine, so a check that cannot run on macOS cannot be a gate.
 

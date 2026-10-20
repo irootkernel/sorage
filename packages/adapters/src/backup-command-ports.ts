@@ -1,4 +1,4 @@
-import { digestManagedFile, managedDirectory, managedPath, managedRoot, openManagedFile } from "./managed-paths";
+import { digestManagedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -95,12 +95,12 @@ import {
   type MemoContentReference,
 } from "./memos";
 import { validateChannelContentLinks, validateMemoContentLinks } from "./content-store";
-import {
-  type ChannelContentFileExport,
-  type SnapshotChannelAssignment,
-  type SnapshotChannelMessage,
-  type SnapshotChannelParticipant,
-  type SnapshotChannelShard,
+import type {
+  ChannelContentFileExport,
+  SnapshotChannelAssignment,
+  SnapshotChannelMessage,
+  SnapshotChannelParticipant,
+  SnapshotChannelShard,
 } from "@sorage/core";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import { createNodeGitClient } from "./git-client";
@@ -1486,7 +1486,6 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
         const recordId = randomUUID();
-        const storageKey = `content/channel/${channel.id}/${recordId}`;
         const placed = placeChannelContentFile(vaultPath, channel.id, recordId, bytes);
         if (!placed.ok) {
           discardPlacedFiles();

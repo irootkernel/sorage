@@ -369,7 +369,7 @@ describe("channel CLI surface", () => {
         ).stdout,
       ).data.participant;
       const original = join(h, "original.txt");
-      writeFileSync(original, "\uFEFF" + "body ".repeat(1_600_000) + "tail");
+      writeFileSync(original, `\uFEFF${"body ".repeat(1_600_000)}tail`);
       const submit = [
         "channel",
         "submit",

@@ -149,8 +149,7 @@ describe("vault-backed Memo bodies", () => {
     for (const size of [OVER - 3, OVER, OVER + 3]) {
       const prefix = `\uFEFF${String(size)}\r\ne\u0301`;
       const emojiOffset = Math.min(size - 4, OVER - 2);
-      const body =
-        prefix + "a".repeat(emojiOffset - Buffer.byteLength(prefix)) + "😀" + "z".repeat(size - emojiOffset - 4);
+      const body = `${prefix}${"a".repeat(emojiOffset - Buffer.byteLength(prefix))}😀${"z".repeat(size - emojiOffset - 4)}`;
       expect(Buffer.byteLength(body)).toBe(size);
       const accepted = acceptedOf(ports, home, body);
       const created = addMemo(
@@ -908,7 +907,7 @@ describe("large-content Git-history disclosure (WR2/WR3, SHR-011)", () => {
       configPath,
       config
         .replace(/largeArtifactWarningBytes:\s*\d+/, "largeArtifactWarningBytes: 70000")
-        .replace(/gitBackup:\n  enabled: false/, "gitBackup:\n  enabled: true"),
+        .replace(/gitBackup:\n {2}enabled: false/, "gitBackup:\n  enabled: true"),
       "utf8",
     );
     const ports = portsOf(home);
@@ -949,7 +948,7 @@ describe("large-content Git-history disclosure (WR2/WR3, SHR-011)", () => {
       configPath,
       config
         .replace(/largeArtifactWarningBytes:\s*\d+/, "largeArtifactWarningBytes: 70000")
-        .replace(/gitBackup:\n  enabled: false/, "gitBackup:\n  enabled: true"),
+        .replace(/gitBackup:\n {2}enabled: false/, "gitBackup:\n  enabled: true"),
       "utf8",
     );
     const ports = portsOf(home);
@@ -992,7 +991,7 @@ describe("large-content Git-history disclosure (WR2/WR3, SHR-011)", () => {
       configPath,
       config
         .replace(/largeArtifactWarningBytes:\s*\d+/, "largeArtifactWarningBytes: 70000")
-        .replace(/gitBackup:\n  enabled: false/, "gitBackup:\n  enabled: true"),
+        .replace(/gitBackup:\n {2}enabled: false/, "gitBackup:\n  enabled: true"),
       "utf8",
     );
     const ports = portsOf(home);
@@ -1074,7 +1073,7 @@ describe("large-content Git-history disclosure (WR2/WR3, SHR-011)", () => {
       configPath,
       config
         .replace(/largeArtifactWarningBytes:\s*\d+/, "largeArtifactWarningBytes: 70000")
-        .replace(/gitBackup:\n  enabled: false/, "gitBackup:\n  enabled: true"),
+        .replace(/gitBackup:\n {2}enabled: false/, "gitBackup:\n  enabled: true"),
       "utf8",
     );
     const ports = portsOf(home);

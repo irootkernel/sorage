@@ -11,7 +11,14 @@ import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { captureMemoBodyText } from "../../src/memo-body-file";
 import { openSorageDatabase } from "../../src/sqlite/connection";
 import { FakeClock } from "../../src/testkit/fakes";
-import { MEMO_ID, MEMO_TIME, memoInstallation, seedMemoInstallation, unwrap } from "../fixtures/memo-installation";
+import {
+  MEMO_ID,
+  MEMO_TIME,
+  memoInstallation,
+  required,
+  seedMemoInstallation,
+  unwrap,
+} from "../fixtures/memo-installation";
 
 // Observe real SQLite and directory-sync operations; faults affect only the
 // selected temporary target and never substitute for the restore implementation.
@@ -123,7 +130,7 @@ function fileHistory() {
     userHome: f.home,
     clock: new FakeClock(Date.parse(MEMO_TIME) + 1000),
   });
-  const body = "\uFEFF" + "x".repeat(65532) + "😀\r\nlone\rfinal";
+  const body = `\uFEFF${"x".repeat(65532)}😀\r\nlone\rfinal`;
   const accepted = unwrap(
     captureMemoBodyText(body, { maxBytes: ports.maxBytes, stateDir: ports.stateDir, spoolId: randomUUID() }),
   );
@@ -162,7 +169,7 @@ describe("file-backed Memo backup and restore", () => {
       const f = installation();
       seedMemoInstallation(f, true);
       const ports = createNodeMemoPorts({ env: { SORAGE_HOME: f.home }, userHome: f.home });
-      const body = "\uFEFF" + "Pending 😀\r\n".repeat(7000) + "\rfinal";
+      const body = `\uFEFF${"Pending 😀\r\n".repeat(7000)}\rfinal`;
       const accepted = unwrap(
         captureMemoBodyText(body, { maxBytes: ports.maxBytes, stateDir: ports.stateDir, spoolId: randomUUID() }),
       );
@@ -206,7 +213,7 @@ describe("file-backed Memo backup and restore", () => {
         const manifest = JSON.parse(readFileSync(join(f.vault, "snapshots", "manifest.json"), "utf8"));
         const paths = Object.keys(manifest.contentDigests);
         expect(paths).toHaveLength(1);
-        expect(readFileSync(join(f.vault, "snapshots", paths[0]!))).toEqual(Buffer.from(body));
+        expect(readFileSync(join(f.vault, "snapshots", required(paths[0])))).toEqual(Buffer.from(body));
       } finally {
         ports.releaseAcceptedBody(accepted);
         ports.close();
@@ -222,7 +229,7 @@ describe("file-backed Memo backup and restore", () => {
     const manifest = JSON.parse(readFileSync(join(source.vault, "snapshots", "manifest.json"), "utf8"));
     const keys = Object.keys(manifest.contentDigests);
     expect(keys).toHaveLength(1);
-    const key = keys[0]!;
+    const key = required(keys[0]);
     const bytes = readFileSync(join(source.vault, "snapshots", key));
     expect(bytes).toEqual(Buffer.from(source.body));
     expect(manifest.contentDigests[key]).toBe(createHash("sha256").update(bytes).digest("hex"));
@@ -246,7 +253,7 @@ describe("file-backed Memo backup and restore", () => {
     }
     const records = rows(target, "content_records");
     expect(records).toHaveLength(1);
-    expect(records[0]!.id).not.toBe(key.split("/")[3]);
+    expect(required(records[0]).id).not.toBe(key.split("/")[3]);
     expect(bodyFiles(target).map((path) => readFileSync(path))).toEqual([bytes]);
     expect(rows(target, "idempotency_keys")).toEqual([]);
     const memoEvents = (f: Installation) =>
@@ -324,7 +331,7 @@ describe("file-backed Memo backup and restore", () => {
       expect(rows(target, "project_memos")).toHaveLength(committed ? 1 : 0);
       expect(bodyFiles(target)).toHaveLength(committed ? 1 : 0);
       if (committed) {
-        expect(readFileSync(bodyFiles(target)[0]!)).toEqual(Buffer.from(source.body));
+        expect(readFileSync(required(bodyFiles(target)[0]))).toEqual(Buffer.from(source.body));
         if (!result.ok) expect(result.error.message).toContain(mode === "close" ? "committed" : "uncertain");
       }
       if (mode !== "sync") {

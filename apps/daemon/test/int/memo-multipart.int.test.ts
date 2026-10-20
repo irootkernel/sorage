@@ -54,7 +54,7 @@ function cap(f: Fixture, maxBytes: number) {
 describe("authenticated Memo multipart transport", () => {
   it("streams exact large UTF-8 bytes, replays through the native CLI, and keeps an omitted PATCH body", async () => {
     const f = await fixture();
-    const body = "\uFEFF" + "😀한글\r\n".repeat(52000) + `literal--${boundary}XX\rlast byte`;
+    const body = `\uFEFF${"😀한글\r\n".repeat(52000)}literal--${boundary}XX\rlast byte`;
     const bytes = wire({ projectId: f.projectId, title: "Large wire" }, body);
     const key = randomUUID();
     const first = await f.call("/api/v1/memos", {
@@ -208,7 +208,7 @@ describe("authenticated Memo multipart transport", () => {
     const exactFrame = Buffer.concat([base, Buffer.alloc(65536 - framing, 0x78)]);
     expect((await f.call("/api/v1/memos", { method: "POST", headers, raw: exactFrame })).status).toBe(200);
     const invalid = [
-      Buffer.concat([part("meta", exactMeta + " "), end]),
+      Buffer.concat([part("meta", `${exactMeta} `), end]),
       wire(JSON.parse(meta), "x".repeat(1025)),
       Buffer.concat([exactFrame, Buffer.from("x")]),
       Buffer.alloc(1024 + 589825, 0x78),

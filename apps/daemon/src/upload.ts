@@ -54,7 +54,7 @@ export function consumeMultipartUpload(
     textFieldTooLargeError: appError("CONFIG_INVALID", "a text form field exceeded its bound"),
     headerBoundBytes: HEADER_BOUND_BYTES,
     headerTooLargeError: appError("CONFIG_INVALID", "the multipart part headers are too large"),
-    totalRawTooLargeError: (sizeBytes: number) =>
+    totalRawTooLargeError: () =>
       appError("ARTIFACT_TOO_LARGE", `the upload crossed artifact.maxBytes and was aborted mid-stream`),
     framingTooLargeError: (framingBytes: number) =>
       appError("CONFIG_INVALID", "the multipart framing exceeded its bound", { framingBytes }),

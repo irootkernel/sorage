@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { type SnapshotChannelShard, type SnapshotDataV3, snapshotFilesV3 } from "../../src/content-snapshot";
@@ -415,8 +416,9 @@ describe("validateSnapshotChannelShard wire semantics", () => {
   it("refuses rosters without exactly one main, duplicate identities or handles, and inactive mains", () => {
     const twoMains = validShard();
     (twoMains.participants[1] as { role: string }).role = "main";
-    twoMains.participants[1]!.nativeProvenance = [];
-    twoMains.participants[1]!.registeredAt = twoMains.createdAt;
+    assert(twoMains.participants[1]);
+    twoMains.participants[1].nativeProvenance = [];
+    twoMains.participants[1].registeredAt = twoMains.createdAt;
     expect(validateSnapshotChannelShard(twoMains).ok).toBe(false);
     const noMain = validShard();
     (noMain.participants[0] as { role: string }).role = "worker";
@@ -484,7 +486,8 @@ describe("validateSnapshotChannelShard wire semantics", () => {
 
   it("refuses file-backed bodies outside their own Channel identity path", () => {
     const foreign = validShard();
-    foreign.messages[2]!.bodyContent = {
+    assert(foreign.messages[2]);
+    foreign.messages[2].bodyContent = {
       contentPath: `content/channel/${OTHER_CHANNEL}/${CONTENT_ID}`,
       sizeBytes: FILE_BODY.length,
       sha256: FILE_SHA,
@@ -503,14 +506,14 @@ describe("validateSnapshotChannelShard wire semantics", () => {
 
   it("refuses rosters outside their deterministic order", () => {
     const swapped = validShard();
-    swapped.participants = [swapped.participants[1]!, swapped.participants[0]!, swapped.participants[2]!];
+    const [main, worker, judge] = swapped.participants;
+    assert(main && worker && judge);
+    swapped.participants = [worker, main, judge];
     expect(validateSnapshotChannelShard(swapped).ok).toBe(false);
     const messagesSwapped = validShard();
-    messagesSwapped.messages = [
-      messagesSwapped.messages[1]!,
-      messagesSwapped.messages[0]!,
-      messagesSwapped.messages[2]!,
-    ];
+    const [relay, handled, file] = messagesSwapped.messages;
+    assert(relay && handled && file);
+    messagesSwapped.messages = [handled, relay, file];
     expect(validateSnapshotChannelShard(messagesSwapped).ok).toBe(false);
   });
 
@@ -700,7 +703,9 @@ describe("validateSnapshotChannelContent", () => {
         channels: [{ ...(data.channels?.[0] as SnapshotChannelShard) }],
         channelContentFiles: [{ channelId: CHANNEL, contentId: CONTENT_ID, bytes }],
       };
-      invalid.channels[0]!.messages[2]!.bodyContent = {
+      const message = invalid.channels[0]?.messages[2];
+      assert(message);
+      message.bodyContent = {
         contentPath: CONTENT_PATH,
         sizeBytes: bytes.length,
         sha256: sha,
@@ -746,7 +751,10 @@ describe("validateSnapshotChannelHistory", () => {
   });
 
   it("refuses duplicate creation, creation actor mismatch, and creation main mismatch", () => {
-    const duplicate = [...validEvents(), validEvents()[0]!];
+    const events = validEvents();
+    const creation = events[0];
+    assert(creation);
+    const duplicate = [...events, creation];
     expect(validateSnapshotChannelHistory(duplicate, [validShard()]).ok).toBe(false);
     const actorMismatch = validEvents().map((row) =>
       row.eventType === "CHANNEL_CREATED" ? { ...row, actorKind: "user", actorId: null } : row,
@@ -805,7 +813,10 @@ describe("validateSnapshotChannelHistory", () => {
       row.eventType === "CHANNEL_MESSAGE_SUBMITTED" ? { ...row, rowVersion: 2 } : row,
     );
     expect(validateSnapshotChannelHistory(wrongSubmissionVersion, [validShard()]).ok).toBe(false);
-    const duplicateSubmission = [...validEvents(), validEvents()[7]!];
+    const events = validEvents();
+    const submission = events[7];
+    assert(submission);
+    const duplicateSubmission = [...events, submission];
     expect(validateSnapshotChannelHistory(duplicateSubmission, [validShard()]).ok).toBe(false);
     const handledOnUnhandled = validEvents().map((row) =>
       row.eventType === "CHANNEL_MESSAGE_HANDLED"

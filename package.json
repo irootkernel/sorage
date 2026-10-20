@@ -16,7 +16,7 @@
     "check:toolchain": "bun run scripts/check-toolchain.ts",
     "check:version": "bun run scripts/check-version.ts",
     "check:format": "biome format .",
-    "check:lint": "biome lint .",
+    "check:lint": "biome lint . --error-on-warnings",
     "check:typecheck": "bun run scripts/check-typecheck.ts",
     "check:import-boundaries": "bun run scripts/check-import-boundaries.ts",
     "check:dependency-boundaries": "bun run scripts/check-dependency-boundaries.ts",

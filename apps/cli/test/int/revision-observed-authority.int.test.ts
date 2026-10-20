@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,7 +24,9 @@ describe("revision verification against superseded authority", () => {
       const sent = cliData<{ handoffs: Array<{ handoffId: string }> }>(
         f.run(["send", "--as-user", "--to", "other", "--title", "Authority race", "--body", "Original", "--json"]),
       );
-      const id = sent.handoffs[0]!.handoffId;
+      const handoff = sent.handoffs[0];
+      assert(handoff);
+      const id = handoff.handoffId;
       if (phase === "no-change")
         cliData(f.run(["review", "set", id, "--as", "other", "--text", "Revise this", "--json"]));
       const beforeVersion = phase === "no-change" ? 2 : 1;
@@ -132,7 +135,7 @@ describe("revision verification against superseded authority", () => {
           .prepare(
             "SELECT inline_text FROM content_records WHERE id = (SELECT content_record_id FROM artifacts WHERE handoff_id = ?)",
           )
-          .get(id)!.inline_text,
+          .get(id)?.inline_text,
       ).toBe("Winner bytes\n");
     },
   );

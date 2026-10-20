@@ -1194,7 +1194,6 @@ describe("channel domain on real SQLite and filesystem", () => {
     const seed = seedChannel(f.ports);
     let closed = false;
     try {
-      const before = eventCount(f.home);
       // The bounded wrapper injects real owned conflicting bytes at the exact
       // managed destination after the SQL commit and before the production
       // activation runs; the shared executor then commits its destination-

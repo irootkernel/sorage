@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildContentStorageKey, utf8ByteLength } from "./content";
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { type ActorRef, type ChannelDomainEventType, type NewDomainEvent } from "./events";
+import type { ActorRef, ChannelDomainEventType, NewDomainEvent } from "./events";
 import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { MEMO_PREVIEW_BYTES } from "./memos";
 import type { AcceptedMemoBody } from "./memo-commands";
@@ -2426,8 +2426,6 @@ const PARTICIPANT_VIEW_KEYS = [
   "deactivatedAt",
   "registeredAt",
 ] as const;
-
-const ASSIGNMENT_VIEW_KEYS = ["id", "channelId", "participantId", "label", "state", "createdAt", "closedAt"] as const;
 
 function closedObject(value: unknown, keys: readonly string[]): Result<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

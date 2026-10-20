@@ -669,7 +669,7 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
   // per fan-out copy — before any activation runs, so a later activation
   // failure still disclosed the growth (SHR-011, WR2). A racing-replay return
   // above never reaches this point, so a replayed send never notifies.
-  if (ports.disclosures !== undefined && ports.disclosures.backupEnabled) {
+  if (ports.disclosures?.backupEnabled) {
     const sourceBytes = preparedBodies[0]?.prepared.sizeBytes;
     if (sourceBytes !== undefined && sourceBytes > ports.disclosures.thresholdBytes) {
       try {

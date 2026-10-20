@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -64,7 +65,8 @@ async function prepareTextarea(page: Page, label: string, value: string) {
   await browserExpect(target).toBeVisible();
   await browserExpect(target).toBeEditable();
   await target.evaluate((node, text) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    if (!setter) throw new Error("Expected the native textarea value setter");
     setter.call(node, text);
     node.dispatchEvent(new Event("input", { bubbles: true }));
     node.dispatchEvent(new Event("change", { bubbles: true }));
@@ -88,7 +90,7 @@ function rowVersionOf(page: Page) {
 async function installationIdOf(page: Page): Promise<string> {
   return page.evaluate(async () => {
     const response = await fetch("/api/v1/health", {
-      headers: { authorization: "Bearer " + sessionStorage.getItem("sorage-session") },
+      headers: { authorization: `Bearer ${sessionStorage.getItem("sorage-session")}` },
     });
     return String((await response.json()).data.installationId);
   });
@@ -136,7 +138,7 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     const f = await fixture();
     await f.list();
     const smallBody = "small\nbody";
-    const bigBody = "\uFEFF" + "Large browser body 😀 line\n".repeat(19000);
+    const bigBody = `\uFEFF${"Large browser body 😀 line\n".repeat(19000)}`;
     expect(Buffer.byteLength(bigBody)).toBeGreaterThan(JSON_CAP);
     type Wire = { contentType: string; data: Buffer; mode: string | undefined };
     const wires: Wire[] = [];
@@ -161,8 +163,9 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await f.page.getByLabel("Memo title", { exact: true }).fill("Small JSON");
     await f.page.getByLabel("Memo body", { exact: true }).fill(smallBody);
     await settledResponse(f.page, () => f.page.getByRole("button", { name: "Create Memo", exact: true }).click());
-    expect(wires[0]!.contentType).toBe("application/json");
-    expect((JSON.parse(wires[0]!.data.toString("utf8")) as Record<string, unknown>).body).toBe(smallBody);
+    assert(wires[0]);
+    expect(wires[0].contentType).toBe("application/json");
+    expect((JSON.parse(wires[0].data.toString("utf8")) as Record<string, unknown>).body).toBe(smallBody);
     // Wait for the completed create's navigation before starting another editor.
     await f.page.waitForURL(/#\/memo\//);
     await f.page.getByRole("button", { name: "Save Memo", exact: true }).waitFor();
@@ -170,7 +173,7 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     // The large creation is prepared synthetically, then genuinely edited
     // with one trusted native keypress; every later expectation uses the
     // resulting value as its single source.
-    const expected = bigBody + "x";
+    const expected = `${bigBody}x`;
     expect(Buffer.byteLength(expected)).toBe(Buffer.byteLength(bigBody) + 1);
     await f.page.getByLabel("Memo title", { exact: true }).fill("Large multipart");
     await prepareTextarea(f.page, "Memo body", bigBody);
@@ -202,7 +205,8 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     );
     await gateSettled(f.page);
     await f.page.waitForURL(/#\/memo\//);
-    const replayWire = wires[wires.length - 1]!;
+    const replayWire = wires.at(-1);
+    assert(replayWire);
     expect(replayWire.mode).toBe("replay-only");
     expectMultipartWire(replayWire, expected);
     const id = new URL(f.page.url()).hash.split("/").at(-1) as string;
@@ -216,11 +220,11 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await f.list();
     const installationId = await installationIdOf(f.page);
     const variants = [
-      { title: "Wire BOM", body: "\uFEFF" + "bom wire line\n".repeat(60000) },
+      { title: "Wire BOM", body: `\uFEFF${"bom wire line\n".repeat(60000)}` },
       { title: "Wire lone LF", body: "lf wire line\n".repeat(42000) },
       { title: "Wire lone CR", body: "cr wire line\r".repeat(42000) },
       { title: "Wire CRLF", body: "crlf wire line\r\n".repeat(36000) },
-      { title: "Wire no final LF", body: "nfl wire line\r\n".repeat(36000) + "tail without final newline" },
+      { title: "Wire no final LF", body: `${"nfl wire line\r\n".repeat(36000)}tail without final newline` },
     ];
     for (const variant of variants) expect(Buffer.byteLength(variant.body)).toBeGreaterThan(JSON_CAP);
     const wires: Array<{ contentType: string; data: Buffer; mode: string | undefined }> = [];
@@ -267,7 +271,8 @@ describe("AJ-27: Memo large bodies in the Web", () => {
         f.page.getByRole("button", { name: "Inspect original request (replay-only)", exact: true }).click(),
       );
       await gateSettled(f.page);
-      const wire = wires[wires.length - 1]!;
+      const wire = wires.at(-1);
+      assert(wire);
       expect(wire.mode).toBe("replay-only");
       expectMultipartWire(wire, variant.body);
       expect(f.show(created.memo.id).body).toBe(variant.body);
@@ -315,8 +320,9 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await settledResponse(f.page, () => f.page.getByRole("button", { name: "Save Memo", exact: true }).click());
     await browserExpect(rowVersionOf(f.page)).toHaveText("2");
     expect(wires).toHaveLength(1);
-    expect(wires[0]!.contentType).toBe("application/json");
-    const titleOnly = JSON.parse(wires[0]!.data.toString("utf8")) as Record<string, unknown>;
+    assert(wires[0]);
+    expect(wires[0].contentType).toBe("application/json");
+    const titleOnly = JSON.parse(wires[0].data.toString("utf8")) as Record<string, unknown>;
     expect(Object.hasOwn(titleOnly, "body")).toBe(false);
     expect(titleOnly.title).toBe("Renamed only");
     expect(f.show(created.memo.id).body).toBe(historic);
@@ -330,7 +336,8 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await settledResponse(f.page, () => f.page.getByRole("button", { name: "Save Memo", exact: true }).click());
     await browserExpect(rowVersionOf(f.page)).toHaveText("3");
     expect(wires).toHaveLength(2);
-    expect((JSON.parse(wires[1]!.data.toString("utf8")) as Record<string, unknown>).body).toBe(
+    assert(wires[1]);
+    expect((JSON.parse(wires[1].data.toString("utf8")) as Record<string, unknown>).body).toBe(
       "Edited while away\nsecond line",
     );
     expect(f.show(created.memo.id).body).toBe("Edited while away\nsecond line");
@@ -348,11 +355,13 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await f.page.getByRole("button", { name: "Save Memo", exact: true }).waitFor();
     await browserExpect(f.page.getByLabel("Memo body", { exact: true })).toHaveValue("Changed while pending\n");
     expect(wires).toHaveLength(3);
-    expect((JSON.parse(wires[2]!.data.toString("utf8")) as Record<string, unknown>).body).toBe("Pending body draft\n");
+    assert(wires[2]);
+    expect((JSON.parse(wires[2].data.toString("utf8")) as Record<string, unknown>).body).toBe("Pending body draft\n");
     await settledResponse(f.page, () => f.page.getByRole("button", { name: "Save Memo", exact: true }).click());
     await browserExpect(rowVersionOf(f.page)).toHaveText("5");
     expect(wires).toHaveLength(4);
-    expect((JSON.parse(wires[3]!.data.toString("utf8")) as Record<string, unknown>).body).toBe(
+    assert(wires[3]);
+    expect((JSON.parse(wires[3].data.toString("utf8")) as Record<string, unknown>).body).toBe(
       "Changed while pending\n",
     );
     expect(f.show(created.memo.id).body).toBe("Changed while pending\n");
@@ -371,7 +380,7 @@ describe("AJ-27: Memo large bodies in the Web", () => {
       try {
         for (let index = 0; index < 512; index++) {
           const chunk = "q".repeat(65536);
-          sessionStorage.setItem("sorage-aj27-filler-" + index, chunk);
+          sessionStorage.setItem(`sorage-aj27-filler-${index}`, chunk);
           stored += chunk.length;
         }
       } catch (error) {
@@ -440,7 +449,7 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     const mutations: string[] = [];
     await f.page.route("**/api/v1/memos**", (route) => {
       const request = route.request();
-      if (request.method() !== "GET") mutations.push(request.method() + " " + request.url());
+      if (request.method() !== "GET") mutations.push(`${request.method()} ${request.url()}`);
       return route.continue();
     });
     await f.page.getByLabel("Memo title", { exact: true }).fill("Settle persist fails");
@@ -516,7 +525,7 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await f.page.route("**/api/v1/memos**", (route) => {
       const request = route.request();
       if (request.method() === "GET") return route.continue();
-      mutations.push(request.method() + " " + request.url());
+      mutations.push(`${request.method()} ${request.url()}`);
       wires.push({
         contentType: request.headers()["content-type"] || "",
         data: request.postDataBuffer() || Buffer.alloc(0),
@@ -543,7 +552,8 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await settledResponse(f.page, () => f.page.getByRole("button", { name: "Save Memo", exact: true }).click());
     await browserExpect(rowVersionOf(f.page)).toHaveText("3");
     expect(mutations).toHaveLength(1);
-    const titleOnly = JSON.parse(wires[0]!.data.toString("utf8")) as Record<string, unknown>;
+    assert(wires[0]);
+    const titleOnly = JSON.parse(wires[0].data.toString("utf8")) as Record<string, unknown>;
     expect(Object.hasOwn(titleOnly, "body")).toBe(false);
     expect(f.show(historic.id).title).toBe("Renamed under cap");
     expect(f.show(historic.id).body).toBe(bigBody);
@@ -618,7 +628,7 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     await f.list();
     const bigBody = "config fallback body line 😀\n".repeat(18000);
     expect(Buffer.byteLength(bigBody)).toBeGreaterThan(JSON_CAP);
-    const expected = bigBody + "x";
+    const expected = `${bigBody}x`;
     expect(Buffer.byteLength(expected)).toBe(Buffer.byteLength(bigBody) + 1);
     const wires: Array<{ contentType: string; data: Buffer }> = [];
     await f.page.route("**/api/v1/memos**", (route) => {
@@ -641,7 +651,8 @@ describe("AJ-27: Memo large bodies in the Web", () => {
     expect(limits?.match(/\/\d+ body bytes/)).toBeNull();
     await settledResponse(f.page, () => f.page.getByRole("button", { name: "Create Memo", exact: true }).click());
     expect(wires).toHaveLength(1);
-    expectMultipartWire(wires[0]!, expected);
+    assert(wires[0]);
+    expectMultipartWire(wires[0], expected);
     await f.page.waitForURL(/#\/memo\//);
     const id = new URL(f.page.url()).hash.split("/").at(-1) as string;
     expect(f.show(id).body).toBe(expected);

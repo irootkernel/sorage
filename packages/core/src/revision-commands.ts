@@ -529,7 +529,7 @@ function reviseContent(
   // the prepared replacement body before any activation runs (SHR-011, WR2).
   // A `--no-change` resolution never prepared a body, and a replayed revise
   // returned earlier, so neither reaches this notification.
-  if (ports.disclosures !== undefined && ports.disclosures.backupEnabled) {
+  if (ports.disclosures?.backupEnabled) {
     const replacementBytes = prepared.value.sizeBytes;
     if (replacementBytes > ports.disclosures.thresholdBytes) {
       try {

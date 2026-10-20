@@ -53,7 +53,7 @@ import {
   type AssignmentView,
   type Result,
 } from "@sorage/core";
-import { Command, InvalidArgumentError } from "commander";
+import { type Command, InvalidArgumentError } from "commander";
 
 /**
  * The Channel command group of TASK-109 B2 (CHN-001 to CHN-011, interface

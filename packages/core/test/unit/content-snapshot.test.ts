@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -449,10 +450,11 @@ function sampleDataV3(): SnapshotDataV3 {
 describe("snapshotFilesV3", () => {
   it("round-trips a file-backed Memo's exact historical bytes and reconciles its digest inventory", () => {
     const data = sampleDataV3();
-    const memo = data.memos![0]!;
+    const memo = data.memos?.[0];
+    assert(memo);
     const contentId = "0123abcd-0000-4000-8000-0000000000ff";
     const contentPath = `content/memo/${memo.id}/${contentId}`;
-    const bytes = Buffer.from("\uFEFF" + "x".repeat(65532) + "😀\r\nno-final-LF");
+    const bytes = Buffer.from(`\uFEFF${"x".repeat(65532)}😀\r\nno-final-LF`);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     memo.bodyContent = { kind: "file-backed", contentPath, sizeBytes: bytes.length, sha256 };
     data.memoContentFiles = [{ memoId: memo.id, contentId, bytes }];
