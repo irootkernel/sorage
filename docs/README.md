@@ -41,6 +41,8 @@ This adoption changes documents only. It does not implement commands, rewrite th
 
 The TASK-105 adoption was design only; implementation and qualification belong to its subsequent owning Tasks. M9 allocates no product release and leaves the intended v0.1.3 release as M8-only scope. The checker's dynamic requirement parsing recognizes the SHR and CHN identifiers without further checker changes, and dependency, requirement-coverage and reverse-index guards keep operating unchanged.
 
+[EPIC-017](roadmap/README.md#epic-017-channel-adoption-hardening-and-v013-release-readiness) registers release-blocking Channel adoption corrections and the readiness of a shared v0.1.3 release, motivated by Aquarium's 2026-10-20 Channel adoption request. Its [execution dossier](todo/channel-adoption-hardening.md) maps the confirmed findings to TASK-111 through TASK-116, and [ADR-0033](architecture-decision-records/README.md#adr-0033-channel-adoption-hardening-and-the-shared-v013-release) is Proposed. The release statement above stays in force until TASK-111 accepts the shared v0.1.3 allocation and adopts the detailed contracts; registration changes no product behavior, specification or release record.
+
 ## Source of Truth precedence
 
 When documents conflict, apply this order:

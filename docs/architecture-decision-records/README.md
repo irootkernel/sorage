@@ -1134,3 +1134,59 @@ Alternatives considered and rejected: a new symbolic code, a larger public contr
 Compatibility impact: an additive surface use of an existing Section 15 row, with the Memo and send-replay meanings and their historical acceptance preserved, no new error enum, ADR number, exit-code category, or DTO, and no HTTP or Web surface change. Migration impact: none, because this is a documentation-only error-contract clarification.
 
 Required Source of Truth edits: the `STORAGE_INSPECTION_UNAVAILABLE` row clause in interface Section 15, the Channel coherence paragraph of interface Section 38, and this dated amendment. New or amended architecture decision: this amendment extends ADR-0032 in place because this record owns the error family, while ADR-0030 remains the Channel design owner. Roadmap impact: none; no Task, dependency, or lifecycle change and no release allocation is made.
+
+## ADR-0033: Channel adoption hardening and the shared v0.1.3 release
+
+- **Status:** Proposed (2026-10-21)
+- **Date:** 2026-10-21
+- **Design owner:** TASK-111 under [EPIC-017](../roadmap/README.md#epic-017-channel-adoption-hardening-and-v013-release-readiness).
+
+### Problem
+
+Aquarium plans to deliver every Executor and Evaluator report in its Epic Squad workflow to a Coordinator through Sorage Channels, with several roles submitting concurrently against one Installation. Its 2026-10-20 adoption request, confirmed by Sorage against `63291a9`, showed that the M9 Channel surface does not yet behave predictably under that load. Expected storage contention escapes as an exit-2 usage message without an envelope. Long waits end at the first retryable listing failure. Committed submissions and handling decisions can be reported as failures without their identities. Channel conflicts reuse Handoff recovery text. Unknown filter IDs wait silently to the timeout despite interface section 38.4. The shipped policy leaves a main-directed new attempt after an unknown outcome undefined, and no document lists the storage that reads and waits write. The [execution dossier](../todo/channel-adoption-hardening.md) maps each finding to its evidence and owning Task.
+
+Separately, ADR-0030 allocated no release to M9 and kept the intended v0.1.3 release M8-only, while Aquarium needs one published release containing M8 and M9 before it can adopt Channels and the installation preflight.
+
+### Decision
+
+Proposed: register EPIC-017 in M9 as the release-blocking correction Epic, and publish M8, M9 and EPIC-017 together as v0.1.3 on the v0.1.x line, as Master decided on 2026-10-21. Publication follows a verified local candidate shared with Aquarium for rehearsal and Aquarium's confirmation that its v0.1.21 adoption is ready, because a published v0.1.x release is immediately eligible for Aquarium's global setup resolver.
+
+TASK-111 settles exact codes, fields, exit statuses and wording for these contract directions:
+
+- Classify database open, migration and actor-resolution failures in the shared CLI and adapter layers, so that expected contention returns a typed, retryable envelope for Channel, Handoff and Project commands. The error-family choice is made under ADR-0032.
+- Keep Channel waits and the Handoff `inbox --wait` loop polling across retryable listing failures until the deadline.
+- Never report a committed submission or handling decision as a plain failure.
+- Give Channel errors Channel-specific, state-aware recovery text.
+- Enforce the not-found filter codes that interface section 38.4 already requires.
+- Document the paths each Channel command writes, and state that reads and waits are non-mutating for domain records only.
+
+For a new attempt after an unknown outcome, a new direct main-participant assignment for a new attempt is a genuinely new intent. The assigned role may submit its existing result once under a new idempotency key bound to the new `--context-attempt`. Authority comes only from the main participant through the role's own direct instruction surface; message bodies, recovery hints, replay results and changed context fields confer none. The earlier outcome stays unknown and may still commit. Main treats a message bound to a superseded attempt as stale, and a role never retries on its own initiative (CHN-006).
+
+Until TASK-111 accepts or revises this record, the current specifications, ADR-0030's release statement and the release-gate table remain authoritative.
+
+### Alternatives considered
+
+- Publish M8 alone as v0.1.3 from the M8 closeout and M9 later as v0.2.0 | not selected by Master: it needs a release branch and two release cycles, although it would keep M9's breaking data contract and one-way upgrade out of a patch version.
+- Publish M8 and M9 together as v0.2.0 | not selected by Master: it delays the preflight interface and requires Aquarium to change its version line before adopting either milestone.
+- Publish M8 and M9 without these corrections | rejected: concurrent Coordinator waits would end early or fail as non-retryable usage errors, and committed outcomes would be reported as failures.
+- Catch failures only in Channel actions | rejected: Handoff and Project commands share the same untyped path and missing contention classification, so a Channel-only catch would leave the defect elsewhere.
+- Keep the strict rule that a lost report can never be resubmitted | rejected: a role could not deliver its result even after main inspected the Channel and assigned a new attempt, although a direct main-participant assignment is already a recognized source of authority.
+- Let a role resubmit with a fresh key on its own after an unknown outcome | rejected: CHN-006 forbids treating an unknown outcome as permission for a blind repeat.
+- Add a non-mutating read and wait path now | deferred to future work: documenting the writable paths answers the request, and skipping startup recovery needs its own safety design.
+- Push messages or wake signals into the Coordinator's prompt | rejected for this release: ADR-0030 separates reports from user instructions, and automatic wake-up stays deferred under CHN-010.
+
+### Compatibility impact
+
+Previously untyped exit-2 failures become typed envelopes in a retryable exit category. Committed `handle` results that failed only in preview become successes, error details gain committed identifiers, recovery text changes, and unknown filters fail instead of waiting. TASK-111 classifies each change and its golden snapshots as breaking or non-breaking, and no existing DTO field is removed. The shared v0.1.3 release also carries ADR-0030's deliberately breaking nullable `storageKey` field in a patch version, which the release notes must state.
+
+### Migration impact
+
+No schema, snapshot-format, Vault-layout or receipt migration is planned for EPIC-017; TASK-111 must confirm that or justify any exception. The release inherits M9's one-way upgrade from schema 7 through 11 for v0.1.2 homes, with the old-binary backup, restore drill and absence of in-place downgrade described in [the operations guide](../ops/README.md#m9-shared-content-upgrade-and-rollback).
+
+### Required Source of Truth edits and roadmap impact
+
+Executed at registration: EPIC-017 and TASK-111 through TASK-116 in the roadmap with Requirements cells set to None, the [execution dossier](../todo/channel-adoption-hardening.md) and its TODO index entry, the documentation index, [the governance registration boundary](../governance/README.md#15-m9-adoption-hardening-registration-boundary), a traceability note, and a future-work candidate. To be executed by TASK-111 at acceptance: accept or revise this record; add a dated ADR-0030 amendment for the shared release; update the M8 and M9 release-gate rows and the CHANGELOG; adopt the contracts in the required specification, interface sections 13 to 16 and 38, security-reliability, testing-and-acceptance and traceability; and populate every EPIC-017 Requirements cell. TASK-115 owns the shipped skill text.
+
+### Consequences
+
+M9 gains a release-blocking correction Epic, and v0.1.3 becomes the first published release containing Channels and shared content. Concurrent Channel consumers receive typed, retryable results and committed identities, at the cost of reviewed contract changes and new golden snapshots. Publication timing becomes a coordination point with Aquarium. Product implementation, independent review, installation, publication and every broker operation retain their own authorization.
