@@ -28,6 +28,17 @@ describe("the standalone shipped use-sorage resources", () => {
     expect(text).toContain("Mentioning Sorage or developing its code does not trigger broker operations");
   });
 
+  it("ships one required reference per domain and links each from the entrypoint", () => {
+    for (const reference of ["handoffs.md", "project-memos.md", "channels.md"]) {
+      const referencePath = join(copy, "references", reference);
+      expect(existsSync(referencePath), reference).toBe(true);
+      expect(readFileSync(referencePath, "utf8").trim().length, reference).toBeGreaterThan(0);
+    }
+    for (const target of ["references/handoffs.md", "references/project-memos.md", "references/channels.md"]) {
+      expect(links, target).toContain(target);
+    }
+  });
+
   it("resolves every local Markdown resource entirely inside the standalone copy", () => {
     const visit = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
