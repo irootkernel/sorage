@@ -16,6 +16,7 @@ import {
   type Result,
 } from "@sorage/core";
 import { createConfigStore } from "./config-store";
+import { managedRoot } from "./managed-paths";
 import {
   activateCommonFile,
   completeCommonIntentTx,
@@ -288,7 +289,12 @@ function relativeStaged(
   sizeBytes: number,
   sha256: string,
 ): Result<{ stagedPath: string; sizeBytes: number; sha256: string }, AppError> {
-  const stagedPath = relative(vaultPath, stagingPath);
+  let stagedPath: string;
+  try {
+    stagedPath = relative(managedRoot(vaultPath), stagingPath);
+  } catch (error) {
+    return err(appError("INTERNAL_ERROR", "The bound Memo Vault root could not be resolved", { cause: String(error) }));
+  }
   if (stagedPath.startsWith("..") || stagedPath.length === 0) {
     return { ok: false, error: appError("INTERNAL_ERROR", "The staged Memo body escaped the bound Vault") };
   }

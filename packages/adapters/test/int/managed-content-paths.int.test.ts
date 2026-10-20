@@ -245,7 +245,7 @@ describe("the managed content filesystem boundary", () => {
         sweepContentWithoutRegistry: true,
       }),
     );
-    expect(result.sweptContent).toEqual([orphan]);
+    expect(result.sweptContent).toEqual([join(realpathSync(f.vault), "content/orphan")]);
     expect(existsSync(orphan)).toBe(false);
     expect(readFileSync(canary)).toEqual(BODY);
   });

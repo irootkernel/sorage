@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   readlinkSync,
   renameSync,
   rmSync,
@@ -978,6 +979,7 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
       renameSync(savedConfig, configPath);
     }
 
+    const canonicalConfigPath = realpathSync(configPath);
     for (const code of ["EACCES", "EPERM", "unexpected"]) {
       const preload = join(configObservation, `deny-config-${code}.mjs`);
       const marker = join(configObservation, `denied-${code}.txt`);
@@ -987,7 +989,7 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
 import * as fs from "node:fs";
 const original = fs.readFileSync;
 mock.module("node:fs", () => ({ ...fs, readFileSync(path, options) {
-  if (String(path) === ${JSON.stringify(configPath)}) {
+  if (String(path) === ${JSON.stringify(canonicalConfigPath)}) {
     fs.writeFileSync(${JSON.stringify(marker)}, "denied");
     throw ${code === "unexpected" ? 'new Error("unexpected configuration reader defect")' : `Object.assign(new Error("config read denied"), { code: ${JSON.stringify(code)} })`};
   }
@@ -1023,7 +1025,7 @@ const original = fs.readFileSync;
 let changed = false;
 mock.module("node:fs", () => ({ ...fs, readFileSync(path, options) {
   const bytes = original(path, options);
-  if (!changed && String(path) === ${JSON.stringify(configPath)}) {
+  if (!changed && String(path) === ${JSON.stringify(canonicalConfigPath)}) {
     changed = true;
     fs.writeFileSync(${JSON.stringify(configPath)}, ${JSON.stringify(changedConfig)});
     fs.writeFileSync(${JSON.stringify(changedMarker)}, "changed after first actual read");

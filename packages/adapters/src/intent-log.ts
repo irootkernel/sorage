@@ -642,13 +642,35 @@ export function executeIntent(
     }
     const destinationPath = join(vaultPath, intent.toPath);
     const parentKey = intent.toPath.slice(0, intent.toPath.lastIndexOf("/"));
-    if (sourceStat?.isFile()) {
-      if (destinationStat !== undefined) {
-        // Both ends present: overwriting the destination would violate the
-        // no-overwrite invariant the store enforces, so the row stays recorded
-        // as a failure instead of silently replacing bytes a record may name.
-        return "destination-conflict";
+    if (sourceStat?.isFile() && destinationStat !== undefined) {
+      // The source and destination were observed in two separate calls, so a
+      // competing executor of this same intent may have renamed the staged
+      // source into the destination between them: the files never physically
+      // coexisted, and a stale source sample must not report a conflict. One
+      // refresh through the same managed validation settles which world is
+      // real. A still-present staged source keeps the genuine both-present
+      // conflict — overwriting would replace bytes a record may name. A
+      // consumed source re-reads the destination and falls through with the
+      // refreshed truth: the existing destination-present completion applies,
+      // or the ordinary both-gone assessment meets the completion
+      // transaction's already-cleared guard after a deep competitor.
+      let refreshedSource: ReturnType<typeof managedLstat>;
+      try {
+        refreshedSource = managedFile(vaultPath, intent.fromPath as string).stat;
+      } catch (error) {
+        if (error instanceof UnsafeManagedPathError) return "unsafe-path";
+        throw error;
       }
+      if (refreshedSource !== undefined) return "destination-conflict";
+      try {
+        destinationStat = managedFile(vaultPath, intent.toPath).stat;
+      } catch (error) {
+        if (error instanceof UnsafeManagedPathError) return "unsafe-path";
+        throw error;
+      }
+      sourceStat = undefined;
+    }
+    if (sourceStat?.isFile()) {
       try {
         managedDirectory(vaultPath, parentKey, true);
       } catch (error) {

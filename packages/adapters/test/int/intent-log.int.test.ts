@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  realpathSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SYSTEM_ACTOR, type NewPendingFsOp, type PendingFsOp } from "@sorage/core";
@@ -318,8 +327,8 @@ describe("collectVaultGarbage", () => {
       });
       expect(collected.ok).toBe(true);
       if (!collected.ok) return;
-      expect(collected.value.sweptStaging).toEqual([stagedOld]);
-      expect(collected.value.sweptUnreferenced).toEqual([orphan]);
+      expect(collected.value.sweptStaging).toEqual([join(realpathSync(vault), "staging", "staged-old")]);
+      expect(collected.value.sweptUnreferenced).toEqual([join(realpathSync(vault), "artifacts/h-1/a-3/orphan.md")]);
       expect(existsSync(stagedYoung)).toBe(true);
       expect(existsSync(live)).toBe(true);
       expect(existsSync(pendingTarget)).toBe(true);
@@ -383,7 +392,7 @@ describe("record fencing and conservative garbage collection (epic audit round 2
       });
       expect(collected.ok).toBe(true);
       if (!collected.ok) return;
-      expect(collected.value.sweptStaging).toEqual([staged]);
+      expect(collected.value.sweptStaging).toEqual([join(realpathSync(fixture.vaultPath), "staging", "old-staged")]);
       expect(collected.value.sweptUnreferenced).toEqual([]);
       expect(existsSync(orphan)).toBe(true);
     } finally {
@@ -421,7 +430,7 @@ describe("staging sweep guard (epic audit round 3)", () => {
       });
       expect(collected.ok).toBe(true);
       if (!collected.ok) return;
-      expect(collected.value.sweptStaging).toEqual([oldStaged]);
+      expect(collected.value.sweptStaging).toEqual([join(realpathSync(fixture.vaultPath), "staging", "abandoned")]);
       expect(existsSync(guardedStaged)).toBe(true);
     } finally {
       fixture.cleanup();

@@ -122,6 +122,25 @@ describe("AJ-13 web administration", () => {
     const firstId = /([0-9a-f-]{36})/.exec(fanOut[0] ?? "")?.[1] ?? "";
     expect(firstId).not.toBe("");
 
+    const confirmationInput = 'input[placeholder^="type the Handoff id"]';
+    function actionResponse(action: string) {
+      const query = action === "deletion-approve" ? "?asUser=true&confirm=true" : "?asUser=true";
+      const url = `http://127.0.0.1:${port}/api/v1/handoffs/${firstId}/${action}${query}`;
+      return page.waitForResponse((response) => response.url() === url && response.request().method() === "POST");
+    }
+    async function settledAction(label: string, action: string) {
+      const previousInput = await page.$(confirmationInput);
+      if (previousInput === null) throw new Error("The Actions card must be present before the mutation.");
+      const response = actionResponse(action);
+      await page.click(`button:text("${label}")`);
+      expect((await (await response).json()).ok).toBe(true);
+      // Successful actions replace the detail asynchronously. Wait for that
+      // replacement before typing into or clicking the next Actions card.
+      await page.waitForFunction((input) => !input.isConnected, previousInput);
+      await page.waitForSelector(confirmationInput);
+      await previousInput.dispose();
+    }
+
     // 4. The detail view opens with a Markdown preview that escapes markup.
     await page.goto(`http://127.0.0.1:${port}/#/handoff/${firstId}`);
     await page.waitForSelector("dl.meta");
@@ -155,24 +174,32 @@ describe("AJ-13 web administration", () => {
     // The timeline renders metadata events with their actor kinds (WEB-004).
     await page.waitForSelector(".card.timeline ul li");
     expect(await page.textContent(".card.timeline")).toContain("user");
-    await page.click('button:text("Pin")');
+    await settledAction("Pin", "pin");
     await page.waitForFunction(() => document.body.textContent?.includes("Unpin"));
-    await page.click('button:text("Archive")');
-    await page.waitForTimeout(800);
-    await page.click('button:text("Unarchive")');
-    await page.waitForTimeout(800);
+    await settledAction("Archive", "archive");
+    await settledAction("Unarchive", "unarchive");
 
     // 7. Deletion: request, reject, request again, and approve pinned with the
     //    distinct confirmation; the empty confirmation fails with the pinned code.
-    await page.click('button:text("Request deletion")');
-    await page.waitForSelector('button:text("Reject deletion")');
-    await page.click('button:text("Reject deletion")');
-    await page.waitForFunction(() => document.body.textContent?.includes("Actions"));
-    await page.click('button:text("Request deletion")');
+    await settledAction("Request deletion", "deletion-request");
+    await settledAction("Reject deletion", "deletion-reject");
+    await settledAction("Request deletion", "deletion-request");
+    const emptyApproval = actionResponse("deletion-approve");
     await page.click('button:text("Approve deletion")');
-    await page.waitForFunction(() => document.body.textContent?.includes("PINNED_DELETE_CONFIRMATION"));
-    await page.fill('input[placeholder^="type the Handoff id"]', firstId);
+    const refused = await emptyApproval;
+    expect(refused.status()).toBe(422);
+    expect((await refused.json()).error.code).toBe("PINNED_DELETE_CONFIRMATION");
+    // The static explanation also names this code; only the dynamic action
+    // status proves that the actual empty-confirmation request was refused.
+    await page.waitForFunction(() =>
+      document.querySelector(".danger-zone + p")?.textContent?.includes("PINNED_DELETE_CONFIRMATION"),
+    );
+    await page.fill(confirmationInput, firstId);
+    const confirmedApproval = actionResponse("deletion-approve");
     await page.click('button:text("Approve deletion")');
+    const approved = await confirmedApproval;
+    expect(approved.request().postDataJSON().confirmPinned).toBe(firstId);
+    expect((await approved.json()).ok).toBe(true);
     await page.waitForSelector(".tombstone");
     expect(await page.textContent(".tombstone")).toContain("tombstone");
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { realpathSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { backupRestore, canonicalJson, exportSnapshot, mutateMemo, showMemo } from "@sorage/core";
@@ -310,6 +310,7 @@ describe("file-backed Memo backup and restore", () => {
       const source = fileHistory();
       const data = unwrap(unwrap(backup(source).exportPorts()).readSnapshotData());
       const target = installation();
+      const canonicalVault = realpathSync(target.vault);
       const targetPorts = unwrap(backup(target, source).restorePorts());
       const marker = JSON.parse(readFileSync(join(source.vault, ".sorage-vault.json"), "utf8"));
       fault.target = target.database;
@@ -329,8 +330,8 @@ describe("file-backed Memo backup and restore", () => {
       if (mode !== "sync") {
         const begin = trace.indexOf("begin");
         expect(begin).toBeGreaterThan(0);
-        expect(trace.slice(0, begin)).toContain(`sync:${join(target.vault, "content", "memo", MEMO_ID)}`);
-        expect(trace.slice(0, begin)).toContain(`sync:${target.vault}`);
+        expect(trace.slice(0, begin)).toContain(`sync:${join(canonicalVault, "content", "memo", MEMO_ID)}`);
+        expect(trace.slice(0, begin)).toContain(`sync:${canonicalVault}`);
         expect(trace.slice(begin).some((entry) => entry.startsWith("sync:"))).toBe(false);
       }
     },

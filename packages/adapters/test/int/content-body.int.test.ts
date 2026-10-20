@@ -1,4 +1,5 @@
 import {
+  realpathSync,
   appendFileSync,
   chmodSync,
   existsSync,
@@ -408,7 +409,7 @@ describe("materializeLocalPath: one local-path surface for both representations"
     const bytes = Buffer.from("vault-backed body", "utf8");
     const { recordId, storageKey } = writeCommonFile(f, bytes);
     const path = f.store.materializeLocalPath(recordId, { stateDir: f.stateDir });
-    expect(path.ok && path.value).toBe(join(f.vaultPath, storageKey));
+    expect(path.ok && path.value).toBe(join(realpathSync(f.vaultPath), storageKey));
     expect(existsSync(join(f.stateDir, "fetch-cache"))).toBe(false);
   });
 

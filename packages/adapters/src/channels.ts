@@ -34,6 +34,7 @@ import {
   type StoredChannelSubmitReceipt,
 } from "@sorage/core";
 import { createConfigStore } from "./config-store";
+import { managedRoot } from "./managed-paths";
 import {
   activateCommonFile,
   completeCommonIntentTx,
@@ -919,7 +920,16 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
             tooLargeCode: "CHN_TOO_LARGE",
           });
           if (!staged.ok) return staged;
-          const stagedPath = relative(binding.vaultPath, staged.value.stagingPath);
+          let stagedPath: string;
+          try {
+            stagedPath = relative(managedRoot(binding.vaultPath), staged.value.stagingPath);
+          } catch (error) {
+            return err(
+              appError("INTERNAL_ERROR", "The bound Channel Vault root could not be resolved", {
+                cause: String(error),
+              }),
+            );
+          }
           if (stagedPath.startsWith("..") || stagedPath.length === 0) {
             return err(appError("INTERNAL_ERROR", "The staged Channel body escaped the bound Vault"));
           }

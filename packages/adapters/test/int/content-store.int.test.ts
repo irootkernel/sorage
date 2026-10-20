@@ -1,4 +1,5 @@
 import {
+  realpathSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -343,6 +344,117 @@ describe("destination conflicts and verification", () => {
       expect(second.value.resolved).not.toContain("0123abcd-0000-4000-8000-0000000000e3");
       expect(second.value.commonFailures.map((failure) => failure.reason)).toContain("checksum_mismatch");
     }
+  });
+
+  it("completes an epoch-mismatched both-present common activation through the verified retry", () => {
+    const f = fixture();
+    const bytes = Buffer.from("causal", "utf8");
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const contentId = "0123abcd-0000-4000-8000-0000000000c9";
+    const intentId = "0123abcd-0000-4000-8000-0000000000e9";
+    const key = `content/memo/${OWNER}/${contentId}`;
+    mkdirSync(join(f.vaultPath, "staging"), { recursive: true });
+    mkdirSync(join(f.vaultPath, "content", "memo", OWNER), { recursive: true });
+    writeFileSync(join(f.vaultPath, "staging", "staged-force"), bytes);
+    f.db
+      .prepare(
+        "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, NULL, ?, ?, ?, 0, ?)",
+      )
+      .run(contentId, key, bytes.byteLength, sha, "2026-01-01T00:00:00.000Z");
+    f.db
+      .prepare(
+        "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, owner_domain, owner_id, content_id, created_at, attempts) VALUES (?, 'activate', 'staging/staged-force', ?, NULL, 'memo', ?, ?, ?, 0)",
+      )
+      .run(intentId, key, OWNER, contentId, "2026-01-01T00:00:00.000Z");
+
+    // A fresh native Bun process narrows a `node:fs` mock to lstat only: the
+    // wrapper reads the real present stat of the staged source, performs the
+    // real competing rename of that same file into the managed key, and
+    // returns the captured observation, so the executor's two observations
+    // come from different epochs exactly like a real concurrent drain while
+    // the files never physically coexist.
+    const scriptFile = join(f.vaultPath, "..", "forced-common-child.ts");
+    writeFileSync(
+      scriptFile,
+      `
+      const { mock } = await import("bun:test");
+      const fs = await import("node:fs");
+      const { join } = await import("node:path");
+      const real = { ...fs };
+      const vaultPath = ${JSON.stringify(f.vaultPath)};
+      const key = ${JSON.stringify(key)};
+      const source = join(fs.realpathSync(vaultPath), "staging", "staged-force");
+      const destination = join(fs.realpathSync(vaultPath), key);
+      let injected = false;
+      mock.module("node:fs", () => ({ ...real, lstatSync: (path, ...rest) => {
+        const stat = real.lstatSync(path, ...rest);
+        if (!injected && String(path) === source) {
+          injected = true;
+          real.renameSync(source, destination);
+        }
+        return stat;
+      }}));
+      const { createSqliteIntentLog } = await import(${JSON.stringify(fileURLToPath(new URL("../../src/intent-log.ts", import.meta.url)))});
+      const { createSqliteEventLedger } = await import(${JSON.stringify(fileURLToPath(new URL("../../src/events.ts", import.meta.url)))});
+      const { openSorageDatabase } = await import(${JSON.stringify(fileURLToPath(new URL("../../src/sqlite/connection.ts", import.meta.url)))});
+      const db = openSorageDatabase(${JSON.stringify(f.databasePath)});
+      try {
+        const log = createSqliteIntentLog({
+          db,
+          installationId: ${JSON.stringify(INSTALLATION)},
+          events: createSqliteEventLedger(db),
+        });
+        const drained = log.drain(vaultPath);
+        const counts = {};
+        for (const row of db
+          .prepare("SELECT event_type, COUNT(*) AS c FROM events WHERE event_type LIKE 'CONTENT_%' GROUP BY event_type")
+          .all()) {
+          counts[row.event_type] = row.c;
+        }
+        const materialized = db.prepare("SELECT materialized FROM content_records WHERE id = ?").get(${JSON.stringify(contentId)}).materialized;
+        const pending = db.prepare("SELECT id FROM pending_fs_ops ORDER BY id").all();
+        console.log("FORCED " + JSON.stringify({
+          injected,
+          ok: drained.ok,
+          code: drained.ok ? null : drained.error.code,
+          resolved: drained.ok ? drained.value.resolved : null,
+          commonFailures: drained.ok ? drained.value.commonFailures : null,
+          counts,
+          materialized,
+          pending,
+          sourceExists: real.existsSync(source),
+          destinationExists: real.existsSync(destination),
+        }));
+      } finally {
+        db.close();
+      }
+    `,
+    );
+    try {
+      const child = spawnSync("bun", [scriptFile], { encoding: "utf8", timeout: 20_000 });
+      expect(child.error).toBeUndefined();
+      expect(child.status, child.stderr).toBe(0);
+      const line = (child.stdout ?? "").split("\n").find((candidate) => candidate.startsWith("FORCED "));
+      expect(line, child.stdout).toBeDefined();
+      const payload = JSON.parse((line as string).slice("FORCED ".length)) as Record<string, unknown>;
+      // The refreshed source observation routes the consumed activation into
+      // the recorded size-and-hash verified completion: one success event, no
+      // false integrity failure, the record materialized, nothing pending.
+      expect(payload.injected).toBe(true);
+      expect(payload.ok).toBe(true);
+      expect(payload.code).toBeNull();
+      expect(payload.resolved).toEqual([intentId]);
+      expect(payload.commonFailures).toEqual([]);
+      expect(payload.counts).toEqual({ CONTENT_ACTIVATED: 1 });
+      expect(payload.materialized).toBe(1);
+      expect(payload.pending).toEqual([]);
+      expect(payload.sourceExists).toBe(false);
+      expect(payload.destinationExists).toBe(true);
+    } finally {
+      rmSync(scriptFile, { force: true });
+    }
+    expect(readFileSync(join(f.vaultPath, key), "utf8")).toBe("causal");
+    expect(f.db.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
   });
 
   it("preserves an unresolved activation through cleanup and converges after explicit repair", () => {
@@ -762,7 +874,7 @@ describe("reference-aware cleanup", () => {
       now,
     });
     expect(swept.ok).toBe(true);
-    if (swept.ok) expect(swept.value.sweptContent).toEqual([join(f.vaultPath, orphanKey)]);
+    if (swept.ok) expect(swept.value.sweptContent).toEqual([join(realpathSync(f.vaultPath), orphanKey)]);
     expect(existsSync(join(f.vaultPath, fileKey))).toBe(true);
 
     const released = f.store.cleanup(references, expires);
@@ -965,7 +1077,7 @@ describe("the derived fetch cache", () => {
     materializeFetchCacheFile(stateDir, createHash("sha256").update(oldBytes).digest("hex"), oldBytes);
     materializeFetchCacheFile(stateDir, createHash("sha256").update(youngBytes).digest("hex"), youngBytes);
     const cacheDir = join(stateDir, "fetch-cache");
-    const oldPath = join(cacheDir, createHash("sha256").update(oldBytes).digest("hex"));
+    const oldPath = join(realpathSync(cacheDir), createHash("sha256").update(oldBytes).digest("hex"));
     utimesSync(oldPath, new Date(Date.now() - 48 * 3_600_000), new Date(Date.now() - 48 * 3_600_000));
     const swept = sweepFetchCache(stateDir, { graceHours: 24, now: new Date() });
     expect(swept).toEqual([oldPath]);

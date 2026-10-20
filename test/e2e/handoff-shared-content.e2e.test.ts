@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -106,7 +115,7 @@ describe("compiled Handoff producers and readable paths", () => {
       const sender = f.run(["fetch", item.handoffId]).data;
       expect(readFileSync(sender.localPath)).toEqual(bytes);
       if (inline) {
-        expect(sender.localPath).toBe(join(f.home, "state", "fetch-cache", row.sha256));
+        expect(sender.localPath).toBe(join(realpathSync(f.home), "state", "fetch-cache", row.sha256));
         expect(statSync(sender.localPath).mode & 0o777).toBe(0o444);
         chmodSync(sender.localPath, 0o600);
         writeFileSync(sender.localPath, "damaged derived bytes");

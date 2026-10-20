@@ -1491,8 +1491,20 @@ export function activateCommonFile(input: {
   try {
     const source = managedFile(input.vaultPath, input.fromPath);
     const destination = managedFile(input.vaultPath, input.toPath);
-    if (source.stat !== undefined && destination.stat !== undefined)
-      return { status: "failed", reason: "destination_conflict" };
+    if (source.stat !== undefined && destination.stat !== undefined) {
+      // The source and destination were observed in two separate calls, so a
+      // competing executor of this same intent may have renamed the staged
+      // source into the destination between them: the files never physically
+      // coexisted, and a stale source sample must not report a conflict. One
+      // refresh through the same managed validation settles which world is
+      // real: a still-present staged source keeps the genuine both-present
+      // conflict with both files untouched, while a consumed source completes
+      // through the same verified destination retry — recorded size and hash
+      // plus the parent fsync — never a synthesized success.
+      const refreshedSource = managedFile(input.vaultPath, input.fromPath);
+      if (refreshedSource.stat !== undefined) return { status: "failed", reason: "destination_conflict" };
+      return durableVerifiedDestination(input.vaultPath, input.toPath, input.expect);
+    }
     if (source.stat !== undefined) {
       const target = managedPath(input.vaultPath, input.toPath, true);
       try {

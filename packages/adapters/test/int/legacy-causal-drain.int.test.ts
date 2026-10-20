@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
@@ -574,5 +574,261 @@ describe("the causal legacy drain (section 3)", () => {
     expect(eventsOf(f.db, "ARTIFACT_UNLINKED")).toHaveLength(0);
     expect(existsSync(join(f.vaultPath, KEY))).toBe(false);
     expect(existsSync(join(f.vaultPath, otherKey))).toBe(true);
+  });
+
+  // The remaining two regressions force the exact physical interleaving of the
+  // real gate failure deterministically: a fresh native Bun process narrows a
+  // `node:fs` mock to lstat only, so every other filesystem call stays real.
+  // The wrapper performs the real competing rename of the very staged file
+  // between the executor's two observations, which no probability-only repeat
+  // can schedule on demand; the drain, SQLite, schema, and Vault are real.
+  const moduleUrl = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
+  const forcedChildUrl = {
+    intentLog: "../../src/intent-log.ts",
+    events: "../../src/events.ts",
+    connection: "../../src/sqlite/connection.ts",
+  };
+
+  function runForcedChild(scriptFile: string): { code: number | null; output: string; stderr: string } {
+    const child = spawnSync("bun", [scriptFile], { encoding: "utf8", timeout: 20_000 });
+    return { code: child.status, output: child.stdout ?? "", stderr: child.stderr ?? "" };
+  }
+
+  function forcedPayload(result: { code: number | null; output: string; stderr: string }) {
+    expect(result.code, result.stderr).toBe(0);
+    const line = result.output.split("\n").find((candidate) => candidate.startsWith("FORCED "));
+    expect(line, result.output).toBeDefined();
+    return JSON.parse((line as string).slice("FORCED ".length)) as Record<string, unknown>;
+  }
+
+  it("completes an epoch-mismatched both-present activation instead of recording a false conflict", () => {
+    const f = fixture("sorage-causal-forced-");
+    writeFileSync(join(f.vaultPath, "staging", "staged-force"), "forced bytes");
+    mkdirSync(join(f.vaultPath, KEY, ".."), { recursive: true });
+    expect(
+      f.log.record([
+        intent("a-unlink", "unlink", KEY, null),
+        intent("z-activate", "activate", KEY, "staging/staged-force"),
+      ]).ok,
+    ).toBe(true);
+    const scriptFile = join(f.vaultPath, "..", "forced-interleave-child.ts");
+    writeFileSync(
+      scriptFile,
+      `
+      const { mock } = await import("bun:test");
+      const fs = await import("node:fs");
+      const { join } = await import("node:path");
+      const real = { ...fs };
+      const vaultPath = ${JSON.stringify(f.vaultPath)};
+      const key = ${JSON.stringify(KEY)};
+      const source = join(fs.realpathSync(vaultPath), "staging", "staged-force");
+      const destination = join(fs.realpathSync(vaultPath), key);
+      let injected = false;
+      // Only lstat is intercepted, and only the executor's first observation of
+      // the staged source: the wrapper reads the real present stat, performs
+      // the real competing rename of that same file, and returns the captured
+      // observation — the two production observations then come from different
+      // epochs exactly like the real two-process race, while the files never
+      // physically coexist.
+      mock.module("node:fs", () => ({ ...real, lstatSync: (path, ...rest) => {
+        const stat = real.lstatSync(path, ...rest);
+        if (!injected && String(path) === source) {
+          injected = true;
+          real.renameSync(source, destination);
+        }
+        return stat;
+      }}));
+      const { createSqliteIntentLog } = await import(${JSON.stringify(moduleUrl(forcedChildUrl.intentLog))});
+      const { createSqliteEventLedger } = await import(${JSON.stringify(moduleUrl(forcedChildUrl.events))});
+      const { openSorageDatabase } = await import(${JSON.stringify(moduleUrl(forcedChildUrl.connection))});
+      const db = openSorageDatabase(${JSON.stringify(f.databasePath)});
+      try {
+        const log = createSqliteIntentLog({
+          db,
+          installationId: ${JSON.stringify(INSTALLATION)},
+          events: createSqliteEventLedger(db),
+        });
+        const drained = log.drain(vaultPath);
+        const counts = {};
+        for (const row of db
+          .prepare("SELECT event_type, COUNT(*) AS c FROM events WHERE event_type LIKE 'ARTIFACT_%' GROUP BY event_type")
+          .all()) {
+          counts[row.event_type] = row.c;
+        }
+        const pending = db.prepare("SELECT id FROM pending_fs_ops ORDER BY id").all();
+        console.log("FORCED " + JSON.stringify({
+          injected,
+          ok: drained.ok,
+          code: drained.ok ? null : drained.error.code,
+          resolved: drained.ok ? drained.value.resolved : null,
+          integrityFailed: drained.ok ? drained.value.integrityFailed : null,
+          counts,
+          pending,
+          sourceExists: real.existsSync(source),
+          destinationExists: real.existsSync(destination),
+        }));
+      } finally {
+        db.close();
+      }
+    `,
+    );
+    try {
+      const payload = forcedPayload(runForcedChild(scriptFile));
+      // The refreshed observations complete the activation, release the causal
+      // unlink, and record exactly one success per physical effect with no
+      // false failure event, nothing pending, and the key retired.
+      expect(payload.injected).toBe(true);
+      expect(payload.ok).toBe(true);
+      expect(payload.code).toBeNull();
+      expect((payload.resolved as string[]).slice().sort()).toEqual(["a-unlink", "z-activate"]);
+      expect(payload.integrityFailed).toEqual([]);
+      expect(payload.counts).toEqual({ ARTIFACT_ACTIVATED: 1, ARTIFACT_UNLINKED: 1 });
+      expect(payload.pending).toEqual([]);
+      expect(payload.sourceExists).toBe(false);
+      expect(payload.destinationExists).toBe(false);
+    } finally {
+      rmSync(scriptFile, { force: true });
+    }
+    const verify = openSorageDatabase(f.databasePath);
+    try {
+      expect(verify.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
+      expect(verify.prepare("SELECT materialized FROM content_records WHERE id = ?").get(RECORD)).toMatchObject({
+        materialized: 1,
+      });
+    } finally {
+      verify.close();
+    }
+    expect(existsSync(join(f.vaultPath, KEY))).toBe(false);
+  });
+
+  it("records nothing when the deep competitor settled and unlinked before the refreshed destination observation", () => {
+    const f = fixture("sorage-causal-forced-deep-");
+    writeFileSync(join(f.vaultPath, "staging", "staged-deep"), "deep bytes");
+    mkdirSync(join(f.vaultPath, KEY, ".."), { recursive: true });
+    expect(
+      f.log.record([
+        intent("a-unlink", "unlink", KEY, null),
+        intent("z-activate", "activate", KEY, "staging/staged-deep"),
+      ]).ok,
+    ).toBe(true);
+    const scriptFile = join(f.vaultPath, "..", "forced-deep-child.ts");
+    writeFileSync(
+      scriptFile,
+      `
+      const { mock } = await import("bun:test");
+      const fs = await import("node:fs");
+      const { join } = await import("node:path");
+      const real = { ...fs };
+      const vaultPath = ${JSON.stringify(f.vaultPath)};
+      const key = ${JSON.stringify(KEY)};
+      const source = join(fs.realpathSync(vaultPath), "staging", "staged-deep");
+      const destination = join(fs.realpathSync(vaultPath), key);
+      let injected = false;
+      let destinationObservations = 0;
+      let competitorInvoked = false;
+      let competitor = null;
+      // The first source observation is answered with the real competing
+      // rename. The SECOND observation of the destination — the fresh look the
+      // epoch-mismatched both-present sample takes — runs a complete real
+      // competitor drain over the same database, Vault, and ledger: its
+      // activation completes through the ordinary winner transaction and its
+      // released causal unlink retires the key, all through authentic
+      // completion APIs. After that one invocation the interceptor passes
+      // every observation through untouched.
+      mock.module("node:fs", () => ({ ...real, lstatSync: (path, ...rest) => {
+        if (!injected && String(path) === source) {
+          const stat = real.lstatSync(path, ...rest);
+          injected = true;
+          real.renameSync(source, destination);
+          return stat;
+        }
+        if (String(path) === destination) {
+          destinationObservations += 1;
+        }
+        if (String(path) === destination && destinationObservations === 2 && !competitorInvoked) {
+          competitorInvoked = true;
+          competitor = competitorLog().drain(vaultPath);
+        }
+        return real.lstatSync(path, ...rest);
+      }}));
+      const { createSqliteIntentLog } = await import(${JSON.stringify(moduleUrl(forcedChildUrl.intentLog))});
+      const { createSqliteEventLedger } = await import(${JSON.stringify(moduleUrl(forcedChildUrl.events))});
+      const { openSorageDatabase } = await import(${JSON.stringify(moduleUrl(forcedChildUrl.connection))});
+      const db = openSorageDatabase(${JSON.stringify(f.databasePath)});
+      const makeLog = () => createSqliteIntentLog({
+        db,
+        installationId: ${JSON.stringify(INSTALLATION)},
+        events: createSqliteEventLedger(db),
+      });
+      let competitorLog = makeLog;
+      const log = makeLog();
+      try {
+        const drained = log.drain(vaultPath);
+        const counts = {};
+        for (const row of db
+          .prepare("SELECT event_type, COUNT(*) AS c FROM events WHERE event_type LIKE 'ARTIFACT_%' GROUP BY event_type")
+          .all()) {
+          counts[row.event_type] = row.c;
+        }
+        const pending = db.prepare("SELECT id FROM pending_fs_ops ORDER BY id").all();
+        console.log("FORCED " + JSON.stringify({
+          injected,
+          competitorInvoked,
+          ok: drained.ok,
+          code: drained.ok ? null : drained.error.code,
+          resolved: drained.ok ? drained.value.resolved : null,
+          integrityFailed: drained.ok ? drained.value.integrityFailed : null,
+          competitor: competitor === null ? null : {
+            ok: competitor.ok,
+            resolved: competitor.ok ? competitor.value.resolved.slice().sort() : null,
+            integrityFailed: competitor.ok ? competitor.value.integrityFailed : null,
+          },
+          counts,
+          pending,
+          sourceExists: real.existsSync(source),
+          destinationExists: real.existsSync(destination),
+        }));
+      } finally {
+        db.close();
+      }
+    `,
+    );
+    try {
+      const payload = forcedPayload(runForcedChild(scriptFile));
+      // The real competitor completed both effects through authentic
+      // completion transactions: one activation success with the record
+      // materialized and one causal unlink success.
+      expect(payload.injected).toBe(true);
+      expect(payload.competitorInvoked).toBe(true);
+      expect(payload.competitor).toMatchObject({
+        ok: true,
+        resolved: ["a-unlink", "z-activate"],
+        integrityFailed: [],
+      });
+      // The victim's refreshed destination observation found the competitor's
+      // settled world: its both-gone assessment meets the already-cleared
+      // guard, so it records no duplicate success, no false failure, no
+      // attempt, and no duplicated unlink effect.
+      expect(payload.ok).toBe(true);
+      expect(payload.code).toBeNull();
+      expect(payload.resolved).toEqual([]);
+      expect(payload.integrityFailed).toEqual([]);
+      expect(payload.counts).toEqual({ ARTIFACT_ACTIVATED: 1, ARTIFACT_UNLINKED: 1 });
+      expect(payload.pending).toEqual([]);
+      expect(payload.sourceExists).toBe(false);
+      expect(payload.destinationExists).toBe(false);
+    } finally {
+      rmSync(scriptFile, { force: true });
+    }
+    const verify = openSorageDatabase(f.databasePath);
+    try {
+      expect(verify.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get()).toMatchObject({ c: 0 });
+      expect(verify.prepare("SELECT materialized FROM content_records WHERE id = ?").get(RECORD)).toMatchObject({
+        materialized: 1,
+      });
+    } finally {
+      verify.close();
+    }
+    expect(existsSync(join(f.vaultPath, KEY))).toBe(false);
   });
 });
