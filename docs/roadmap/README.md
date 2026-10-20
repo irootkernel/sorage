@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** EPIC-016
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -96,7 +96,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-013` | Project Memos | M7 | Completed | `TASK-087` to `TASK-094` |
 | `EPIC-014` | Non-mutating installation preflight | M8 | Completed | `TASK-096` to `TASK-100` |
 | `EPIC-015` | Safe Handoff recovery and agent policy | M8 | Completed | `TASK-101` to `TASK-104` |
-| `EPIC-016` | Agent communication channels and shared content storage | M9 | In Progress | `TASK-105` to `TASK-110` |
+| `EPIC-016` | Agent communication channels and shared content storage | M9 | Completed | `TASK-105` to `TASK-110` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -415,10 +415,10 @@ The source-design registration added the M7 documentation vocabulary and checker
 
 ## EPIC-016: Agent communication channels and shared content storage
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M9
 - **Objective:** Provide one attributed upstream communication channel per orchestration invocation and one hybrid SQLite/Vault content interface shared by Handoffs, Project Memos and Channel messages.
-- **Detailed SOT:** [Agent communication channels and shared content storage](../todo/agent-communication-channels.md)
+- **Canonical Outcomes:** [Shared-content and Channel contract](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9), [shared-content qualification and migration impact](../implementation-tips/m9-shared-content-qualification.md), [Channel qualification](../implementation-tips/m9-channels-qualification.md), [independent consumer observations](../implementation-tips/use-sorage-acceptance.md#m9-independent-observations-2026-10-20), and [upgrade and rollback operations](../ops/README.md#m9-shared-content-upgrade-and-rollback).
 - **Design basis:** Master's approved planning direction and accepted [ADR-0030](../architecture-decision-records/README.md#adr-0030-agent-communication-channels-and-shared-content-storage-in-m9), whose contracts TASK-105 adopted into required-specification section 21 and interface section 38.
 - **Request context:** A separate test pilot delivered Worker/Judge messages through the Orchestrator's prompt input. This motivates preventive integration with an unreleased Aquarium candidate; it is not a reproduced defect in the published Aquarium or Sorage release.
 - **Prerequisite:** EPIC-015 must be Completed before TASK-105 starts. No existing Task is reopened, and this registration does not consume an active implementation or review slot.

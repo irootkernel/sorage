@@ -995,7 +995,7 @@ Three decisions were settled at acceptance beyond the proposal. First, the norma
 
 Two further revisions were adopted in the TASK-105 correction pass. The inline Handoff `storageKey` revision is deliberately breaking: the field stays present in the affected DTOs and carries JSON `null` for inline text Artifacts, string-only consumers must migrate with the Handoff adoption Task, and the existing response envelope, protocol version 1, and `/api/v1` routing are kept because NFR-003 requires versioned, contract-tested public contracts without specifying a mandatory envelope or API bump per data-field change. And domain rebuild migrations follow the official SQLite generalized `ALTER TABLE` procedure on a dedicated connection rather than any defer-only drop recipe, for the mechanism recorded in `Migration impact`.
 
-[The execution dossier](../todo/agent-communication-channels.md) records the approved planning direction and Task boundaries, and [interface section 38](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9) owns the settled contracts.
+[The canonical roadmap](../roadmap/README.md#epic-016-agent-communication-channels-and-shared-content-storage) records the Task boundaries and links their lasting outcomes, and [interface section 38](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9) owns the settled contracts.
 
 ### Alternatives considered
 
