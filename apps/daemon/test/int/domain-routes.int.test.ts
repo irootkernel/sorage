@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import * as handoffCommandPorts from "@sorage/adapters/src/handoff-command-ports";
+import { openNodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
 import * as sqliteConnections from "@sorage/adapters/src/sqlite/connection";
 import {
   createNodeApiTokenStore,
@@ -29,6 +30,7 @@ import { appError, err, initializeInstallation, knownSchemaMaximum } from "@sora
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSessionService } from "../../src/auth";
 import { createDomainRoutes } from "../../src/domain-routes";
+import type { RouteEntryInternal } from "../../src/route-kit";
 import { createDaemonConfigService } from "../../src/runtime";
 import { createDaemonServer } from "../../src/server";
 
@@ -109,6 +111,80 @@ function call(
 
 function json(response: TestResponse) {
   return JSON.parse(response.body);
+}
+
+/** A second server on its own port, for one self-contained describe's routes. */
+async function serveRoutes(
+  routes: RouteEntryInternal[],
+): Promise<{ address: string; portNumber: number; close: () => Promise<void> }> {
+  const freePortNumber = await freePort();
+  const stateDir = join(home, "state");
+  const tokenStore = createNodeApiTokenStore({ stateDir });
+  tokenStore.ensure();
+  const sessionAuth = createSessionService({
+    token: tokenStore,
+    webSecret: createNodeWebSecretStore({ stateDir, clock: { now: () => new Date() } }),
+    entropy: createNodeTokenEntropy(),
+  });
+  const server = createDaemonServer({
+    host: "127.0.0.1",
+    port: freePortNumber,
+    endpoints: { installationId: "x", version: "9.9.99-contention" },
+    auth: sessionAuth,
+    tokenRotate: () => tokenStore.rotate(),
+    config: createDaemonConfigService({
+      host: "127.0.0.1",
+      port: freePortNumber,
+      startedAt: "2026-08-30T00:00:00.000Z",
+    }),
+    domainRoutes: routes,
+  });
+  await new Promise<void>((resolve) => server.listen(freePortNumber, "127.0.0.1", resolve));
+  return {
+    portNumber: freePortNumber,
+    address: "127.0.0.1",
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  };
+}
+
+function callPort(
+  portNumber: number,
+  path: string,
+  init?: { method?: string; bearer?: string | null; body?: unknown },
+): Promise<TestResponse> {
+  return new Promise((resolve, reject) => {
+    const payload = init?.body === undefined ? null : JSON.stringify(init.body);
+    const outgoing = httpRequest(
+      {
+        host: "127.0.0.1",
+        port: portNumber,
+        path,
+        method: init?.method ?? "GET",
+        agent: false,
+        headers: {
+          ...(init?.bearer !== undefined && init?.bearer !== null ? { authorization: `Bearer ${init.bearer}` } : {}),
+          ...(payload !== null ? { "content-type": "application/json" } : {}),
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      },
+    );
+    outgoing.on("error", reject);
+    if (payload !== null) outgoing.write(payload);
+    outgoing.end();
+  });
 }
 
 beforeAll(async () => {
@@ -1409,6 +1485,161 @@ describe("the serving boundary over authenticated HTTP", () => {
       const neighbor = await call(`/api/v1/handoffs/${neighborId}/artifact/content?as=web-app`, { bearer: apiToken });
       expect(neighbor.status).toBe(200);
       expect(neighbor.body).toBe("# Neighbor intact\n");
+    },
+  );
+});
+
+describe("the SHR-015 shared-adapter classification on daemon routes", () => {
+  it(
+    "returns the documented 503 refusal with nothing committed when a write route meets a held write lock",
+    { timeout: 30_000 },
+    async () => {
+      // Production wires the daemon's Handoff and Project routes over one
+      // already-open database; this route set reproduces that composition.
+      mkdirSync(join(home, "contended"), { recursive: true });
+      const database = openNodeDaemonDatabase(join(home, "state"));
+      try {
+        const routes = createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined, database });
+        const served = await serveRoutes(routes);
+        try {
+          const holder = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+          const projectsBefore = (holder.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
+          const eventsBefore = (holder.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n;
+          holder.exec("BEGIN IMMEDIATE");
+          try {
+            const refused = await callPort(served.portNumber, "/api/v1/projects", {
+              method: "POST",
+              bearer: apiToken,
+              body: { name: "Contended", dir: join(home, "contended"), asUser: true },
+            });
+            expect(refused.status).toBe(503);
+            expect(json(refused)).toMatchObject({ ok: false, error: { code: "STORAGE_INSPECTION_UNAVAILABLE" } });
+            expect(json(refused).error.message).toContain("Project storage is contended");
+            expect(json(refused).error.recovery.suggestedCommand).toBe(
+              "Retry the same command when storage is quieter; it committed none of the changes it was asked to make.",
+            );
+            expect((holder.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n).toBe(
+              projectsBefore,
+            );
+            expect((holder.prepare("SELECT COUNT(*) AS n FROM events").get() as { n: number }).n).toBe(eventsBefore);
+          } finally {
+            holder.exec("ROLLBACK");
+            holder.close();
+          }
+          const created = await callPort(served.portNumber, "/api/v1/projects", {
+            method: "POST",
+            bearer: apiToken,
+            body: { name: "Contended", dir: join(home, "contended"), asUser: true },
+          });
+          expect(created.status).toBe(201);
+        } finally {
+          await served.close();
+        }
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it(
+    "returns the normal success with a server-side warning when a committed send's completion fails",
+    { timeout: 30_000 },
+    async () => {
+      mkdirSync(join(home, "contended"), { recursive: true });
+      const warnings: Array<{ text: string; code: string }> = [];
+      const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(((text: unknown, code?: unknown) => {
+        warnings.push({ text: String(text), code: String(code ?? "") });
+      }) as typeof process.emitWarning);
+      const realSend = handoffCommandPorts.createNodeSendPorts;
+      const sendSpy = vi.spyOn(handoffCommandPorts, "createNodeSendPorts").mockImplementation((options = {}) => {
+        const ports = realSend(options);
+        ports.handoffs.completeActivations = () =>
+          err(appError("INTERNAL_ERROR", "injected daemon completion failure"));
+        return ports;
+      });
+      try {
+        // Register the recipient through the routes so the case is order-independent.
+        const registered = await call("/api/v1/projects", {
+          method: "POST",
+          bearer: apiToken,
+          body: { name: "Web App", dir: recipientDir, asUser: true },
+        });
+        if (registered.status === 409 || json(registered).error?.code === "PROJECT_SLUG_CONFLICT") {
+          // Already registered by an earlier describe; the conflict is expected.
+        } else {
+          expect(registered.status, registered.body).toBe(201);
+        }
+        const created = await call("/api/v1/handoffs/import-path", {
+          method: "POST",
+          bearer: apiToken,
+          body: {
+            to: ["web-app"],
+            title: "Contended brief",
+            body: `# brief\n${"x".repeat(70_000)}\n`,
+            senderPath: senderDir,
+            asUser: true,
+          },
+        });
+        expect(created.status, created.body).toBe(201);
+        const payload = json(created);
+        expect(payload.ok).toBe(true);
+        expect(payload.data.handoffs).toHaveLength(1);
+        expect(
+          warnings.some(
+            (warning) => warning.code === "SORAGE_COMPLETION" && warning.text.includes("The Handoff fan-out committed"),
+          ),
+        ).toBe(true);
+      } finally {
+        sendSpy.mockRestore();
+        emitWarning.mockRestore();
+      }
+    },
+  );
+
+  it(
+    "keeps the committed route response unchanged when the warning sink itself throws",
+    { timeout: 30_000 },
+    async () => {
+      const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation((() => {
+        throw new Error("injected emitWarning failure");
+      }) as typeof process.emitWarning);
+      const realSend = handoffCommandPorts.createNodeSendPorts;
+      const sendSpy = vi.spyOn(handoffCommandPorts, "createNodeSendPorts").mockImplementation((options = {}) => {
+        const ports = realSend(options);
+        ports.handoffs.completeActivations = () =>
+          err(appError("INTERNAL_ERROR", "injected daemon completion failure"));
+        return ports;
+      });
+      try {
+        const registered = await call("/api/v1/projects", {
+          method: "POST",
+          bearer: apiToken,
+          body: { name: "Web App", dir: recipientDir, asUser: true },
+        });
+        if (registered.status === 409 || json(registered).error?.code === "PROJECT_SLUG_CONFLICT") {
+          // Already registered by an earlier describe; the conflict is expected.
+        } else {
+          expect(registered.status, registered.body).toBe(201);
+        }
+        const created = await call("/api/v1/handoffs/import-path", {
+          method: "POST",
+          bearer: apiToken,
+          body: {
+            to: ["web-app"],
+            title: "Throwing sink brief",
+            body: `# brief\n${"y".repeat(70_000)}\n`,
+            senderPath: senderDir,
+            asUser: true,
+          },
+        });
+        expect(created.status, created.body).toBe(201);
+        const payload = json(created);
+        expect(payload.ok).toBe(true);
+        expect(payload.data.handoffs).toHaveLength(1);
+      } finally {
+        sendSpy.mockRestore();
+        emitWarning.mockRestore();
+      }
     },
   );
 });

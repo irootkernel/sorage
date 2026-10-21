@@ -29,6 +29,7 @@ import {
   type ChannelRunOptions,
   type ChannelTransaction,
   type MessageListCapture,
+  type ProjectCommandPorts,
   type Result,
   type StoredChannelCreateReceipt,
   type StoredChannelSubmitReceipt,
@@ -50,6 +51,8 @@ import {
   type AcceptedBodyCaptureCodes,
 } from "./memo-body-file";
 import { releaseMemoInputSpool, sweepMemoInputSpool } from "./memo-input-spool";
+import { createNodeProjectPorts } from "./project-command-ports";
+import { AppCommandError, asAppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
 import { appendStructuredLog } from "./structured-log";
 import type { SorageSqlite } from "./sqlite/connection";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
@@ -72,9 +75,15 @@ import { readRecoveryConfiguration, withInstallationInspection } from "./preflig
  * gate (SHR-004, SHR-005, P3 steps 3 to 5).
  */
 
-/** Keeps database admission details inside the composition boundary. */
+/** Keeps database admission details inside the composition boundary (SHR-015 unwrap seam). */
 export function channelStorageError(error: unknown): AppError {
-  return asSchemaAdmission(error) ?? appError("INTERNAL_ERROR", "Channel storage could not be opened");
+  const carried = asAppCommandError(error);
+  if (carried !== null) return carried.error;
+  const admission = asSchemaAdmission(error);
+  if (admission !== null) return admission;
+  const contention = storageContentionOf(error, "channel");
+  if (contention !== null) return contention;
+  return appError("INTERNAL_ERROR", "Channel storage could not be opened");
 }
 
 /**
@@ -268,6 +277,10 @@ function databaseResult<T>(work: () => Result<T>): Result<T> {
   try {
     return work();
   } catch (error) {
+    // The channels adapter is Channel-family by construction, so a busy
+    // signature in any repository transaction becomes the stamped refusal.
+    const contention = storageContentionOf(error, "channel");
+    if (contention !== null) return err(contention);
     return err(
       appError(
         "INTERNAL_ERROR",
@@ -801,7 +814,12 @@ export function sweepChannelAcceptedInputs(options: NodeChannelPortsOptions = {}
   const env: HomeEnvironment = options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME };
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const current = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome }).read();
+  // An operational read at an advisory seam: the sweep itself is void and
+  // skips on any read failure, and the command's factory read — which runs
+  // immediately afterwards — refuses CONFIG_INVALID on an unreadable file, so
+  // the operational mode here records the seam's kind without changing the
+  // sweep's silent-skip behavior (SHR-015).
+  const current = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome }).readForOperation();
   if (!current.ok || !current.value) return;
   sweepMemoInputSpool(home.stateDir, {
     graceHours: current.value.config.gc.graceHours,
@@ -819,21 +837,43 @@ export interface NodeChannelPorts extends ChannelCommandPorts {
   stateDir: string;
   /** The configured `gc.graceHours` window the shared accepted-input spool sweep honors. */
   graceHours: number;
+  /**
+   * The actor-resolution ports on this composition's own open-and-migrated
+   * connection: one open-and-migrate serves the operational and the
+   * actor-resolution work, and `close()` closes it (SHR-015).
+   */
+  projectPorts: ProjectCommandPorts;
 }
 
 export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): NodeChannelPorts {
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths(options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME }, userHome);
   const plan = productionMigrationPlan();
-  const db =
-    options.database ??
-    openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-      rebuilds: plan.rebuilds,
-    }).db;
+  let db: SorageSqlite;
+  try {
+    db =
+      options.database ??
+      openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+        rebuilds: plan.rebuilds,
+      }).db;
+  } catch (error) {
+    // A schema admission refusal keeps its public code; contention becomes the
+    // stamped Channel refusal (SHR-015).
+    if (asSchemaAdmission(error) !== null || error instanceof AppCommandError) throw error;
+    const contention = storageContentionOf(error, "channel");
+    if (contention !== null) throw carriedAppError(contention);
+    throw error;
+  }
   try {
     const configStore = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-    const read = configStore.read();
-    if (!read.ok || read.value === null) throw new Error("Channel configuration could not be read");
+    const read = configStore.readForOperation();
+    if (!read.ok || read.value === null) {
+      throw carriedAppError(
+        read.ok
+          ? appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile })
+          : read.error,
+      );
+    }
     const config = read.value.config;
     const clock = options.clock ?? new SystemClock();
     const ledger = createSqliteEventLedger(db);
@@ -867,6 +907,12 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
       clock,
       ids: new UuidGenerator(),
       channels: repository,
+      projectPorts: createNodeProjectPorts({
+        env: options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME },
+        userHome,
+        database: db,
+        contentionSurface: "channel",
+      }),
       disclosures: {
         backupEnabled: config.gitBackup.enabled,
         thresholdBytes: config.gitBackup.largeArtifactWarningBytes,
@@ -890,7 +936,10 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
           if (vaultMoveLockHeld(home.runDir)) {
             return ok("vault-move-held" as const);
           }
-          const current = configStore.read();
+          // An operational re-read: a present-but-unreadable configuration is
+          // the typed CONFIG_INVALID refusal, never a swallowed absence
+          // (SHR-015's W4 clarification).
+          const current = configStore.readForOperation();
           if (!current.ok) return current;
           if (!current.value) return err(appError("INTERNAL_ERROR", "Channel configuration could not be re-read"));
           return {
@@ -905,7 +954,8 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
       },
       staging: {
         freshBinding: () => {
-          const current = configStore.read();
+          // An operational re-read for the same reason (SHR-015, W4).
+          const current = configStore.readForOperation();
           if (!current.ok) return current;
           if (!current.value) return err(appError("INTERNAL_ERROR", "Channel configuration could not be re-read"));
           return ok({ vaultPath: current.value.config.vault.path });

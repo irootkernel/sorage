@@ -103,16 +103,43 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   const configCommandPortsForValidation = createNodeConfigCommandPorts;
   const homeOf = () => createNodeHomePaths().home;
   const databaseOptions = deps.database === undefined ? {} : { database: deps.database };
-  const createNodeProjectPorts = () => createProjectPorts(databaseOptions);
-  const createNodeSendPorts = () => createSendPorts(databaseOptions);
+  // The daemon's Handoff and Project routes share the adapter classification
+  // of SHR-015 through the same surfaced compositions the CLI uses, and their
+  // post-commit completion warnings are logged server-side (interface 38.10).
+  const daemonCompletionWarning = (text: string): void => {
+    try {
+      process.emitWarning(text, "SORAGE_COMPLETION");
+    } catch {
+      // A diagnostic sink failure never changes a committed route outcome.
+    }
+  };
+  const createNodeProjectPorts = () => createProjectPorts({ ...databaseOptions, contentionSurface: "project" });
+  const createNodeSendPorts = () => createSendPorts({ ...databaseOptions, completionWarning: daemonCompletionWarning });
   const createNodeHandoffReadPorts = () => createHandoffReadPorts(databaseOptions);
   const createNodeReviewPorts = () => createReviewPorts(databaseOptions);
-  const createNodeRevisionPorts = () => createRevisionPorts(databaseOptions);
+  const createNodeRevisionPorts = () =>
+    createRevisionPorts({ ...databaseOptions, completionWarning: daemonCompletionWarning });
   const createNodeTerminalPorts = () => createTerminalPorts(databaseOptions);
-  const createNodeRetentionPorts = () => createRetentionPorts(databaseOptions);
+  const createNodeRetentionPorts = () =>
+    createRetentionPorts({ ...databaseOptions, completionWarning: daemonCompletionWarning });
   const refreshBoundMarker = (projectId: string) => {
-    const refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(databaseOptions), projectId);
-    if (!refreshed.ok) process.emitWarning(refreshed.error.message, "SORAGE_INBOX_MARKER");
+    // Advisory derived-view refresh (SHR-015 category (ii)): even the failure
+    // to create the marker ports warns server-side and never changes the
+    // committed route result, and every emission is contained.
+    const emit = (text: string): void => {
+      try {
+        process.emitWarning(text, "SORAGE_INBOX_MARKER");
+      } catch {
+        // A diagnostic sink failure never changes a committed route outcome.
+      }
+    };
+    try {
+      const refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(databaseOptions), projectId);
+      if (!refreshed.ok) emit(refreshed.error.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      emit(`the project inbox marker could not be refreshed: ${message}`);
+    }
   };
   const uploadReplayLimit = () => {
     const current = createNodeConfigCommandPorts().store.read();

@@ -13,6 +13,13 @@ import { appError, err, ok, type AppError, type Result } from "./errors";
  */
 export interface ConfigCommandStore {
   read(): Result<{ config: Configuration; etag: string; revision: number } | null, AppError>;
+  /**
+   * The operational-command read of SHR-015: a present-but-unreadable
+   * configuration is a typed `CONFIG_INVALID` refusal rather than the
+   * swallowed-absence `read()` reports. Covered Handoff and Project commands
+   * gate through this seam; excluded surfaces keep `read()`.
+   */
+  readForOperation(): Result<{ config: Configuration; etag: string; revision: number } | null, AppError>;
   readText(): string | null;
   write(
     config: Configuration,

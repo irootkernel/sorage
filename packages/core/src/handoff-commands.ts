@@ -164,7 +164,23 @@ export interface SendPorts {
     backupEnabled: boolean;
     thresholdBytes: number;
     largeContent(sizeBytes: number, thresholdBytes: number): void;
+    /**
+     * The post-commit completion warning sink of SHR-015's category (i): a
+     * physical activation or completion failure after the committed fan-out is
+     * disclosed here and never fails the command; a throwing sink changes
+     * nothing.
+     */
+    completionWarning?(text: string): void;
   };
+}
+
+/** Discloses one post-commit completion warning; a throwing sink never changes the committed outcome (SHR-015). */
+function warnCompletion(disclosures: SendPorts["disclosures"] | undefined, text: string): void {
+  try {
+    disclosures?.completionWarning?.(text);
+  } catch {
+    // A diagnostic sink failure never changes the committed outcome.
+  }
 }
 
 /** Derives the stored-name slug of a title: the same folding rule a Project slug uses. */
@@ -695,7 +711,16 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
       stagingPath: entry.prepared.stagingPath,
       storageKey: entry.prepared.storageKey,
     });
-    if (!activated.ok) continue;
+    // Post-commit physical completion (SHR-015 category (i)): the fan-out is
+    // committed, so a failed activation is disclosed as a warning and the
+    // pending intent is left to the next process start's drain.
+    if (!activated.ok) {
+      warnCompletion(
+        ports.disclosures,
+        `The Handoff fan-out committed, but activating ${entry.prepared.storageKey} failed: ${activated.error.message}. The pending activation intent remains for the next process start.`,
+      );
+      continue;
+    }
     completions.push({
       intentId: intent.id,
       artifactId: entry.artifactId,
@@ -712,7 +737,12 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
   }
   if (completions.length > 0) {
     const completed = ports.handoffs.completeActivations(completions);
-    if (!completed.ok) return err(completed.error);
+    if (!completed.ok) {
+      warnCompletion(
+        ports.disclosures,
+        `The Handoff fan-out committed, but recording its activation completions failed: ${completed.error.message}. The pending activation intents remain for the next process start.`,
+      );
+    }
   }
   return ok(outcome);
 }

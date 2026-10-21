@@ -62,6 +62,26 @@ export interface RetentionPorts extends HandoffReadPorts {
   artifact: HandoffReadPorts["artifact"] & {
     remove(storageKey: string): Result<void, AppError>;
   };
+  /**
+   * The post-commit completion warning sink of SHR-015's category (i): a
+   * physical unlink or completion failure after the committed deletion
+   * approval is disclosed here and never fails the command; a throwing sink
+   * changes nothing.
+   */
+  disclosures?:
+    | {
+        completionWarning?(text: string): void;
+      }
+    | undefined;
+}
+
+/** Discloses one post-commit completion warning; a throwing sink never changes the committed outcome (SHR-015). */
+function warnCompletion(ports: RetentionPorts, text: string): void {
+  try {
+    ports.disclosures?.completionWarning?.(text);
+  } catch {
+    // A diagnostic sink failure never changes the committed outcome.
+  }
 }
 
 function factsOf(handoff: {
@@ -503,9 +523,17 @@ export function approveDeletion(
   );
   if (!applied.ok) return err(applied.error);
   // Execute the committed unlink, then complete it with its system event (CP-6).
+  // Both steps are post-commit work (SHR-015 category (i)): a failure is
+  // disclosed as a warning and never fails the command, and the pending
+  // intent is left to the next process start's drain.
   if (retiredFile !== null) {
     const removed = ports.artifact.remove(retiredFile.storageKey as string);
-    if (removed.ok) {
+    if (!removed.ok) {
+      warnCompletion(
+        ports,
+        `The deletion approval committed, but unlinking the retired ${retiredFile.storageKey} failed: ${removed.error.message}. The pending unlink intent remains for the next process start.`,
+      );
+    } else {
       const completed = ports.retention.completeUnlink({
         intentId,
         // The authorized retired Artifact this completion may settle, captured
@@ -521,7 +549,12 @@ export function approveDeletion(
           createdAt: ports.clock.now().toISOString(),
         },
       });
-      if (!completed.ok) return err(completed.error);
+      if (!completed.ok) {
+        warnCompletion(
+          ports,
+          `The deletion approval committed, but recording its unlink completion failed: ${completed.error.message}. The pending unlink intent remains for the next process start.`,
+        );
+      }
     }
   }
   return ok(approval);

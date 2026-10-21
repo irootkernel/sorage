@@ -20,6 +20,7 @@ import { createConfigStore } from "./config-store";
 import { validateArtifactContentLinks } from "./content-store";
 import { createNodeHomePaths, type HomePaths } from "./home";
 import { acquireLock, createNodeLockProbePorts, isPidAlive, releaseLock } from "./lockfile";
+import { asAppCommandError } from "./storage-contention";
 import { openSorageDatabase } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
@@ -249,6 +250,11 @@ function basenameOf(path: string): string {
 /** Apps classify only the migrator's typed admission exceptions through composition. */
 export function schemaAdmissionOf(error: unknown): AppError | null {
   return asSchemaAdmission(error);
+}
+
+/** Apps classify the composition carrier through the same admitted seam (SHR-015). */
+export function appCommandErrorOf(error: unknown): AppError | null {
+  return asAppCommandError(error)?.error ?? null;
 }
 
 /** Inspect a coherent private copy without opening the selected DB or its sidecars. */

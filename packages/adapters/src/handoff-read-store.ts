@@ -4,6 +4,7 @@ import type { HandoffContentIntegrity, HandoffListCandidate, LoadedHandoff } fro
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
 import { vaultMoveLockHeld } from "./lockfile";
+import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**
@@ -32,6 +33,12 @@ export interface SqliteHandoffReadStoreOptions {
    * at construction, never an omitted default guard.
    */
   runDir: string | null;
+  /**
+   * The invoking command family of SHR-015: when set, a busy write-lock
+   * acquisition or commit in the first-fetch fence maps to the stamped
+   * `STORAGE_INSPECTION_UNAVAILABLE` refusal with that family's wording.
+   */
+  contentionSurface?: ContentionSurface | undefined;
 }
 
 interface HandoffRow {
@@ -331,6 +338,10 @@ export function createSqliteHandoffReadStore(
           throw transactionError;
         }
       } catch (error) {
+        if (options.contentionSurface !== undefined) {
+          const contention = storageContentionOf(error, options.contentionSurface);
+          if (contention !== null) return err(contention);
+        }
         return err(appError("INTERNAL_ERROR", `Recording the first fetch failed: ${messageOf(error)}`, { handoffId }));
       }
     },

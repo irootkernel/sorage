@@ -97,6 +97,13 @@ export interface WrittenConfiguration {
 export interface ConfigStore {
   /** Reads and fully validates the current file; null when none exists yet. */
   read(): Result<ReadConfiguration | null, AppError>;
+  /**
+   * The operational-command read of SHR-015: an absent file is still null, but
+   * a present file that cannot be read is a typed `CONFIG_INVALID` refusal
+   * instead of the swallowed-absence `read()` reports. Write paths and the
+   * replay-only inspections keep `read()`/their own semantics.
+   */
+  readForOperation(): Result<ReadConfiguration | null, AppError>;
   /** The raw file bytes as text, or null when no file exists. */
   readText(): string | null;
   /** The SHA-256 content hash of the canonical file, or null when absent. */
@@ -203,6 +210,25 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
     read() {
       const text = currentText();
       if (text === null) return ok(null);
+      const loaded = loadConfiguration(text, { userHome: ports.userHome, sorageHome: ports.home.home });
+      if (!loaded.ok) return loaded;
+      return ok({ config: loaded.value.config, etag: contentEtag(text), revision: loaded.value.config.configRevision });
+    },
+
+    readForOperation() {
+      let text: string;
+      try {
+        text = fs.readFile(configFile);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code === "ENOENT") return ok(null);
+        const message = error instanceof Error ? error.message : String(error);
+        return err(
+          appError("CONFIG_INVALID", `the configuration at ${configFile} cannot be read: ${message}`, {
+            expectedConfigPath: configFile,
+          }),
+        );
+      }
       const loaded = loadConfiguration(text, { userHome: ports.userHome, sorageHome: ports.home.home });
       if (!loaded.ok) return loaded;
       return ok({ config: loaded.value.config, etag: contentEtag(text), revision: loaded.value.config.configRevision });

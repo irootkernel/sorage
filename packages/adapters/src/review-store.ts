@@ -1,5 +1,6 @@
 import { appError, err, ok, type ReviewMutationPort, type ReviewNoteView } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
+import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**
@@ -23,7 +24,11 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function createSqliteReviewStore(db: SorageSqlite, ledger: SqliteEventLedger): ReviewMutationPort {
+export function createSqliteReviewStore(
+  db: SorageSqlite,
+  ledger: SqliteEventLedger,
+  options: { contentionSurface?: ContentionSurface | undefined } = {},
+): ReviewMutationPort {
   const toNote = (row: NoteRow): ReviewNoteView => ({
     handoffId: row.handoff_id,
     authorKind: row.author_kind === "user" ? "user" : "registered_project",
@@ -113,6 +118,10 @@ export function createSqliteReviewStore(db: SorageSqlite, ledger: SqliteEventLed
           throw transactionError;
         }
       } catch (error) {
+        if (options.contentionSurface !== undefined) {
+          const contention = storageContentionOf(error, options.contentionSurface);
+          if (contention !== null) return err(contention);
+        }
         return err(
           appError("INTERNAL_ERROR", `Applying the review mutation failed: ${messageOf(error)}`, {
             cause: String(error),

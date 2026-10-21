@@ -60,6 +60,7 @@ import {
   setMoveFenceAndCountPending,
 } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
+import { asAppCommandError, storageContentionOf } from "./storage-contention";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createVaultInitializer, openVault } from "./vault";
@@ -75,6 +76,15 @@ export interface NodeVaultCommandPortsOptions {
   /** Test seam for the injected mid-move failure of AJ-09. */
   afterStagedCopy?: ((relativePath: string) => void) | undefined;
   clock?: { now(): Date } | undefined;
+  /**
+   * The invoking command family of SHR-015: when set, storage-preparation
+   * contention in this composition's open, migration, and drain maps to the
+   * stamped `STORAGE_INSPECTION_UNAVAILABLE` refusal with that family's
+   * wording, and the operational configuration read distinguishes an
+   * unreadable file. Undefined callers (vault, Memo, daemon, backup) keep
+   * today's behavior exactly.
+   */
+  contentionSurface?: "channel" | "handoff" | undefined;
 }
 
 export interface NodeVaultCommandPorts {
@@ -111,7 +121,9 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
   });
 
   function installation(): Result<InstallationView, AppError> {
-    const read = store.read();
+    // A surfaced composition reads operationally: an unreadable configuration
+    // is CONFIG_INVALID rather than the swallowed-absence NOT_INITIALIZED.
+    const read = options.contentionSurface !== undefined ? store.readForOperation() : store.read();
     if (!read.ok) return err(read.error);
     if (read.value === null) {
       return err(
@@ -144,9 +156,16 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       }
     } catch (error) {
       // A schema admission refusal keeps its public code instead of collapsing
-      // into INTERNAL_ERROR (SHR-009).
+      // into INTERNAL_ERROR (SHR-009); a surfaced composition additionally
+      // classifies storage-preparation contention (SHR-015).
       const admission = asSchemaAdmission(error);
       if (admission !== null) return err(admission);
+      if (options.contentionSurface !== undefined) {
+        const carried = asAppCommandError(error);
+        if (carried !== null) return err(carried.error);
+        const contention = storageContentionOf(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
+      }
       return err(
         appError("INTERNAL_ERROR", `Reading the database failed: ${messageOf(error)}.`, { cause: String(error) }),
       );
@@ -546,6 +565,12 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     },
 
     drainAtStart(): Result<DrainReport, AppError> {
+      // A surfaced composition maps a contention-signature drain failure onto
+      // the stamped refusal; every other error result keeps its own code.
+      const classifyDrainError = (error: AppError): AppError =>
+        options.contentionSurface !== undefined
+          ? (storageContentionOf(error, options.contentionSurface) ?? error)
+          : error;
       const view = installation();
       if (!view.ok) return err(view.error);
       return withDatabase((db) => {
@@ -556,7 +581,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           events: createSqliteEventLedger(db),
         });
         const drained = log.drain(view.value.vaultPath);
-        if (!drained.ok) return drained;
+        if (!drained.ok) return err(classifyDrainError(drained.error));
         // The reference-proof cleanup runs in its own single BEGIN IMMEDIATE
         // transaction after the drain and before the protection set is
         // recomputed, so a record the shared proof legitimately removes can no
@@ -583,7 +608,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           // the cleanup atomically included — and neither the physical GC nor
           // the cache sweep runs afterward: a failed proof can never
           // authorize unsafe deletion (SHR-004, SHR-011).
-          return err(cleanup.error);
+          return err(classifyDrainError(cleanup.error));
         }
         // Garbage collection runs only after the drain, over the surviving
         // intents and the recorded storage keys (VLT-013, VLT-014); the M9

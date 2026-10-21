@@ -47,7 +47,10 @@ import { unwrap } from "../fixtures/memo-installation";
 import { initializeInstallation } from "@sorage/core";
 import { FakeClock } from "../../src/testkit/fakes";
 
-const INSTALLATION_TIME = "2026-10-20T00:00:00.000Z";
+// Anchored one hour in the past so receipts written under this clock stay
+// unexpired for the replay-only seams that read with the real system clock; a
+// fixed calendar date crossed its own 24-hour receipt expiry on 2026-10-21.
+const INSTALLATION_TIME = new Date(Date.now() - 3_600_000).toISOString();
 
 const cleanups: Array<() => void> = [];
 afterAll(() => {

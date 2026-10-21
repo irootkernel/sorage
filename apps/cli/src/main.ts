@@ -33,12 +33,15 @@ import {
 } from "@sorage/adapters/src/launchagent-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
+import { appCommandErrorOf } from "@sorage/adapters/src/daemon-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type AddProjectOutcome,
   type AppError,
+  type HandoffListFilters,
+  type Result,
   acceptHandoff,
   addProject,
   appError,
@@ -545,8 +548,8 @@ export function buildProgram(
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const commandPorts = createNodeProjectPorts();
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const commandPorts = createNodeProjectPorts({ contentionSurface: "project" });
       const actor = resolveCommandActor(commandPorts, {
         path: process.cwd(),
         userHome: homedir(),
@@ -583,8 +586,8 @@ export function buildProgram(
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = listProjects(createNodeProjectPorts());
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const result = listProjects(createNodeProjectPorts({ contentionSurface: "project" }));
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -608,8 +611,8 @@ export function buildProgram(
     .action((slug, _options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = showProject(createNodeProjectPorts(), slug);
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const result = showProject(createNodeProjectPorts({ contentionSurface: "project" }), slug);
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -649,8 +652,8 @@ export function buildProgram(
     .action((slug, options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const commandPorts = createNodeProjectPorts();
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const commandPorts = createNodeProjectPorts({ contentionSurface: "project" });
       const actor = resolveCommandActor(commandPorts, {
         path: process.cwd(),
         userHome: homedir(),
@@ -681,8 +684,8 @@ export function buildProgram(
     .action((slug, options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const commandPorts = createNodeProjectPorts();
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const commandPorts = createNodeProjectPorts({ contentionSurface: "project" });
       const actor = resolveCommandActor(commandPorts, {
         path: process.cwd(),
         userHome: homedir(),
@@ -714,8 +717,8 @@ export function buildProgram(
     .action((slug, options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const commandPorts = createNodeProjectPorts();
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const commandPorts = createNodeProjectPorts({ contentionSurface: "project" });
       const actor = resolveCommandActor(commandPorts, {
         path: process.cwd(),
         userHome: homedir(),
@@ -753,8 +756,8 @@ export function buildProgram(
     .action((slug, options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const result = rebindProject(createNodeProjectPorts(), {
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const result = rebindProject(createNodeProjectPorts({ contentionSurface: "project" }), {
         slug,
         from: options.from,
         to: options.to,
@@ -766,16 +769,33 @@ export function buildProgram(
         return;
       }
       if (result.value.changed) {
-        const markerPorts = createNodeInboxMarkerPorts();
-        if (markerPorts.marker.enabled) {
-          const refreshed = reconcileReboundInboxMarker(
-            markerPorts,
-            result.value.binding.projectId,
-            result.value.previousBinding.directory,
-            result.value.binding.directory,
-          );
-          if (!refreshed.ok) {
-            ports.err(`warning: ${refreshed.error.message}\n`);
+        // The direct post-rebind marker reconciliation is advisory derived-view
+        // refresh (SHR-015 category (ii)): a failure — including the failure to
+        // create its ports — warns contained and never changes the committed
+        // rebind's result.
+        try {
+          const markerPorts = createNodeInboxMarkerPorts();
+          if (markerPorts.marker.enabled) {
+            const refreshed = reconcileReboundInboxMarker(
+              markerPorts,
+              result.value.binding.projectId,
+              result.value.previousBinding.directory,
+              result.value.binding.directory,
+            );
+            if (!refreshed.ok) {
+              try {
+                ports.err(`warning: ${refreshed.error.message}\n`);
+              } catch {
+                // A diagnostic sink failure never changes the committed result.
+              }
+            }
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          try {
+            ports.err(`warning: the rebound inbox marker could not be refreshed: ${message}\n`);
+          } catch {
+            // A diagnostic sink failure never changes the committed result.
           }
         }
       }
@@ -801,8 +821,8 @@ export function buildProgram(
       .action((slug: string, _options: unknown, command: Command) => {
         const globals = command.optsWithGlobals();
         const json = globals.json === true;
-        if (!requireInitialized(ports, json, reportExitCode)) return;
-        const result = run(createNodeProjectPorts(), { slug });
+        if (!requireInitialized(ports, json, reportExitCode, true)) return;
+        const result = run(createNodeProjectPorts({ contentionSurface: "project" }), { slug });
         if (!result.ok) {
           reportExitCode(renderAppError(result.error, ports, json));
           return;
@@ -822,8 +842,8 @@ export function buildProgram(
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
-      const resolvePorts = createNodeProjectPorts();
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const resolvePorts = createNodeProjectPorts({ contentionSurface: "project" });
       const result = resolveWorkspaceActor(resolvePorts, {
         path: typeof options.path === "string" && options.path !== "" ? options.path : process.cwd(),
         userHome: homedir(),
@@ -904,7 +924,7 @@ export function buildProgram(
         );
         return;
       }
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if ((options.file === undefined) === (options.body === undefined)) {
         ports.err("sorage: send takes exactly one of --file or --body\n");
         ports.err("Run 'sorage --help' for usage.\n");
@@ -918,13 +938,16 @@ export function buildProgram(
         return;
       }
       // RUN-002: an intent-recording command drains at start before it creates anything.
-      const vaultPorts = createNodeVaultCommandPorts();
+      const vaultPorts = createNodeVaultCommandPorts({ contentionSurface: "handoff" });
       const drained = vaultPorts.drainAtStart();
       if (!drained.ok) {
         reportExitCode(renderAppError(drained.error, ports, json));
         return;
       }
-      const sendPorts = createNodeSendPorts();
+      // Post-commit completion warnings buffer here and flush to stderr after
+      // the committed result (SHR-015 category (i)).
+      const sendCompletionWarnings: string[] = [];
+      const sendPorts = createNodeSendPorts({ completionWarning: (text) => sendCompletionWarnings.push(text) });
       // WR3: the disclosure buffers metadata per invocation and flushes after
       // the result — a JSON failure appends it inside the existing error
       // message so stderr stays exactly one envelope; success prints it as a
@@ -984,6 +1007,15 @@ export function buildProgram(
           // A diagnostic flush failure never changes a committed outcome.
         }
       }
+      // The committed outcome precedes every post-commit diagnostic: the
+      // completion warnings flush to stderr after the result, contained.
+      for (const text of sendCompletionWarnings) {
+        try {
+          ports.err(`warning: ${text}\n`);
+        } catch {
+          // A diagnostic flush failure never changes a committed outcome.
+        }
+      }
       for (const handoff of result.value.handoffs) {
         refreshMarker(handoff.handoffId, ports);
       }
@@ -1023,7 +1055,7 @@ export function buildProgram(
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (options.wait === true && typeof options.interval === "number" && options.interval < 1) {
         ports.err("sorage: inbox --wait polls at whole-second intervals; pass --interval 1 or more\n");
         ports.err("Run 'sorage inbox --help' for usage.\n");
@@ -1040,7 +1072,12 @@ export function buildProgram(
       if (options.wait === true) {
         const intervalSeconds = typeof options.interval === "number" && options.interval >= 0 ? options.interval : 2;
         const timeoutSeconds = typeof options.timeout === "number" && options.timeout >= 0 ? options.timeout : 300;
-        const waited = waitForNewInboxItems(readPorts, actorInputOf(globals), listQueryOf(options, globals), {
+        const query = listQueryOf(options, globals);
+        if (!query.ok) {
+          reportExitCode(renderAppError(query.error, ports, json));
+          return;
+        }
+        const waited = waitForNewInboxItems(readPorts, actorInputOf(globals), query.value, {
           intervalSeconds,
           timeoutSeconds,
           sleepMs: blockingSleepMs,
@@ -1062,7 +1099,12 @@ export function buildProgram(
         reportListing({ handoffs: waited.value.handoffs, nextCursor: null }, ports, json, globals);
         return;
       }
-      const result = listInbox(readPorts, actorInputOf(globals), listQueryOf(options, globals));
+      const inboxQuery = listQueryOf(options, globals);
+      if (!inboxQuery.ok) {
+        reportExitCode(renderAppError(inboxQuery.error, ports, json));
+        return;
+      }
+      const result = listInbox(readPorts, actorInputOf(globals), inboxQuery.value);
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
@@ -1084,11 +1126,17 @@ export function buildProgram(
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      const outboxPorts = createNodeHandoffReadPorts();
+      const outboxQuery = listQueryOf(options, globals);
+      if (!outboxQuery.ok) {
+        reportExitCode(renderAppError(outboxQuery.error, ports, json));
+        return;
+      }
       const result = listOutbox(
-        createNodeHandoffReadPorts(),
+        outboxPorts,
         actorInputOf(globals),
-        listQueryOf(options, globals),
+        outboxQuery.value,
         options.currentWorkspace === true,
       );
       if (!result.ok) {
@@ -1104,7 +1152,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = getHandoff(createNodeHandoffReadPorts(), actorInputOf(globals), id);
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1127,7 +1175,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = fetchHandoff(createNodeHandoffReadPorts(), actorInputOf(globals), id);
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1153,7 +1201,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = readHandoffTimeline(createNodeHandoffReadPorts(), actorInputOf(globals), id);
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1180,7 +1228,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = readReviewNote(createNodeHandoffReadPorts(), actorInputOf(globals), id);
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
@@ -1206,7 +1254,7 @@ export function buildProgram(
     .action((id: string, options: { text?: string; file?: string; targetRevision?: number }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if ((options.text === undefined) === (options.file === undefined)) {
         ports.err("sorage: review set takes exactly one of --text or --file" + "\n");
         ports.err("Run 'sorage --help' for usage." + "\n");
@@ -1247,7 +1295,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = withdrawReviewNote(createNodeReviewPorts(), {
         ...actorInputOf(globals),
         handoffId: id,
@@ -1273,7 +1321,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (globals.asUser !== true) {
         reportExitCode(
           renderAppError(
@@ -1326,7 +1374,7 @@ export function buildProgram(
       ) => {
         const globals = command.optsWithGlobals();
         const json = globals.json === true;
-        if (!requireInitialized(ports, json, reportExitCode)) return;
+        if (!requireInitialized(ports, json, reportExitCode, true)) return;
         // Commander parses --no-change as the negation of a defaulted `change` flag.
         const noChange = (options as { change?: boolean }).change === false;
         if (noChange && options.file !== undefined) {
@@ -1342,7 +1390,7 @@ export function buildProgram(
           return;
         }
         // RUN-002: an intent-recording command drains at start before it revises.
-        const vaultPorts = createNodeVaultCommandPorts();
+        const vaultPorts = createNodeVaultCommandPorts({ contentionSurface: "handoff" });
         const drained = vaultPorts.drainAtStart();
         if (!drained.ok) {
           reportExitCode(renderAppError(drained.error, ports, json));
@@ -1360,7 +1408,12 @@ export function buildProgram(
           resolvedSourcePath = inspected.value.resolvedPath;
           originalName = basename(expanded);
         }
-        const revisionPorts = createNodeRevisionPorts();
+        // Post-commit completion warnings buffer here and flush to stderr after
+        // the committed result (SHR-015 category (i)).
+        const reviseCompletionWarnings: string[] = [];
+        const revisionPorts = createNodeRevisionPorts({
+          completionWarning: (text) => reviseCompletionWarnings.push(text),
+        });
         // WR3: buffered per-invocation disclosure with the same flush rules as
         // send and Memo (SHR-011, WR2).
         const reviseWarnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
@@ -1416,6 +1469,13 @@ export function buildProgram(
             // A diagnostic flush failure never changes a committed outcome.
           }
         }
+        for (const text of reviseCompletionWarnings) {
+          try {
+            ports.err(`warning: ${text}\n`);
+          } catch {
+            // A diagnostic flush failure never changes a committed outcome.
+          }
+        }
         refreshMarker(id, ports);
         if (json) {
           ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
@@ -1434,7 +1494,7 @@ export function buildProgram(
     .action((id: string, options: { expectedRevision: number }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       // --expected-row-version is a root-level global, so its requiredness is
       // enforced here rather than by a subcommand-local requiredOption (CLI-013).
       if (typeof globals.expectedRowVersion !== "number") {
@@ -1470,7 +1530,7 @@ export function buildProgram(
     .action((id: string, options: { reason: string }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (typeof globals.expectedRowVersion !== "number") {
         ports.err("sorage: decline requires --expected-row-version <n>\n");
         ports.err("Run 'sorage decline --help' for usage.\n");
@@ -1503,7 +1563,7 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = withdrawHandoff(createNodeTerminalPorts(), {
         ...actorInputOf(globals),
         handoffId: id,
@@ -1533,7 +1593,7 @@ export function buildProgram(
       .action((id: string, _options: unknown, command: Command) => {
         const globals = command.optsWithGlobals();
         const json = globals.json === true;
-        if (!requireInitialized(ports, json, reportExitCode)) return;
+        if (!requireInitialized(ports, json, reportExitCode, true)) return;
         if (globals.asUser !== true) {
           reportExitCode(
             renderAppError(
@@ -1572,7 +1632,7 @@ export function buildProgram(
       .action((id: string, _options: unknown, command: Command) => {
         const globals = command.optsWithGlobals();
         const json = globals.json === true;
-        if (!requireInitialized(ports, json, reportExitCode)) return;
+        if (!requireInitialized(ports, json, reportExitCode, true)) return;
         if (globals.asUser !== true) {
           reportExitCode(
             renderAppError(
@@ -1610,7 +1670,7 @@ export function buildProgram(
     .action((id: string, options: { reason?: string }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = requestDeletion(createNodeRetentionPorts(), {
         ...actorInputOf(globals),
         handoffId: id,
@@ -1637,7 +1697,7 @@ export function buildProgram(
     .action((id: string, options: { confirmPinned?: string; idempotencyKey?: string }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (globals.asUser !== true) {
         reportExitCode(
           renderAppError(
@@ -1649,23 +1709,36 @@ export function buildProgram(
         return;
       }
       // RUN-002: an intent-recording command drains at start before it approves anything.
-      const vaultPorts = createNodeVaultCommandPorts();
+      const vaultPorts = createNodeVaultCommandPorts({ contentionSurface: "handoff" });
       const drained = vaultPorts.drainAtStart();
       if (!drained.ok) {
         reportExitCode(renderAppError(drained.error, ports, json));
         return;
       }
-      const result = approveDeletion(createNodeRetentionPorts(), {
-        ...actorInputOf(globals),
-        handoffId: id,
-        confirm: globals.confirm === true,
-        confirmPinned: options.confirmPinned,
-        idempotencyKey: options.idempotencyKey,
-        expectedRowVersion: expectedRowVersionOf(globals),
-      });
+      // Post-commit completion warnings buffer here and flush to stderr after
+      // the committed result (SHR-015 category (i)).
+      const approveCompletionWarnings: string[] = [];
+      const result = approveDeletion(
+        createNodeRetentionPorts({ completionWarning: (text) => approveCompletionWarnings.push(text) }),
+        {
+          ...actorInputOf(globals),
+          handoffId: id,
+          confirm: globals.confirm === true,
+          confirmPinned: options.confirmPinned,
+          idempotencyKey: options.idempotencyKey,
+          expectedRowVersion: expectedRowVersionOf(globals),
+        },
+      );
       if (!result.ok) {
         reportExitCode(renderAppError(result.error, ports, json));
         return;
+      }
+      for (const text of approveCompletionWarnings) {
+        try {
+          ports.err(`warning: ${text}\n`);
+        } catch {
+          // A diagnostic flush failure never changes a committed outcome.
+        }
       }
       refreshMarker(id, ports);
       if (json) {
@@ -1685,7 +1758,7 @@ export function buildProgram(
     .action((id: string, options: { reason?: string }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (globals.asUser !== true) {
         reportExitCode(
           renderAppError(
@@ -2227,11 +2300,18 @@ function renderDoctorReport(report: DoctorReport, ports: OutputPorts): void {
 /**
  * The pre-initialization gate (INIT-011, INIT-012): renders the documented human or
  * JSON NOT_INITIALIZED form with the expected configuration path and reports exit 78
- * when the installation does not exist yet.
+ * when the installation does not exist yet. Covered Handoff and Project commands
+ * read operationally, so a present-but-unreadable configuration is CONFIG_INVALID
+ * (SHR-015); excluded commands keep the plain read and NOT_INITIALIZED.
  */
-function requireInitialized(ports: OutputPorts, json: boolean, reportExitCode: (code: number) => void): boolean {
+function requireInitialized(
+  ports: OutputPorts,
+  json: boolean,
+  reportExitCode: (code: number) => void,
+  covered = false,
+): boolean {
   const gate = createNodeConfigCommandPorts();
-  const current = gate.store.read();
+  const current = covered ? gate.store.readForOperation() : gate.store.read();
   if (current.ok && current.value !== null) return true;
   if (!current.ok) {
     // A present but broken configuration is doctor territory, not a gate case.
@@ -2286,6 +2366,11 @@ export function runCli(
   } catch (error) {
     const admission = schemaAdmissionOf(error);
     if (admission !== null) return renderAppError(admission, ports, program.opts().json === true);
+    // A composition-thrown typed error (SHR-015 storage-preparation refusal or
+    // configuration carrier) renders through the envelope path; genuine
+    // commander parse and usage errors keep the exit-2 fallthrough below.
+    const carried = appCommandErrorOf(error);
+    if (carried !== null) return renderAppError(carried, ports, program.opts().json === true);
     const commanderError = error as { code?: string; exitCode?: number; message?: string };
     if (commanderError.code === "commander.invalidArgument") {
       const memoContext = memoNumericErrorContext(program, argv);
@@ -2392,27 +2477,43 @@ function actorInputOf(globals: Record<string, unknown>): {
   };
 }
 
-/** The page-size default of section 13.9: the configured `ui.defaultPageSize`, never a CLI-local constant. */
-function defaultPageSize(): number {
+/**
+ * The page-size default of section 13.9: the configured `ui.defaultPageSize`, never a CLI-local constant.
+ * An operational read: a configuration that cannot be read refuses with the typed `CONFIG_INVALID`
+ * (exit 78, nothing listed), and an absent file follows the factory mapping `NOT_INITIALIZED` (SHR-015).
+ */
+function defaultPageSize(): Result<number, AppError> {
   const gate = createNodeConfigCommandPorts();
-  const current = gate.store.read();
-  return current.ok && current.value !== null ? current.value.config.ui.defaultPageSize : 50;
+  const current = gate.store.readForOperation();
+  if (!current.ok) return err(current.error);
+  if (current.value === null) {
+    return err(
+      appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: gate.configFile }),
+    );
+  }
+  return ok(current.value.config.ui.defaultPageSize);
 }
 
-function listQueryOf(options: Record<string, unknown>, globals: Record<string, unknown>) {
-  return {
-    limit: typeof globals.limit === "number" && globals.limit > 0 ? globals.limit : defaultPageSize(),
-    cursor: typeof globals.cursor === "string" ? globals.cursor : undefined,
-    filters: {
-      state: typeof options.state === "string" ? options.state : undefined,
-      senderSlug: typeof options.sender === "string" ? options.sender : undefined,
-      recipientSlug: typeof options.recipient === "string" ? options.recipient : undefined,
-      updatedSince: typeof options.updatedSince === "string" ? options.updatedSince : undefined,
-      updatedUntil: typeof options.updatedUntil === "string" ? options.updatedUntil : undefined,
-      includeArchived: options.includeArchived === true,
-      includeDeleted: options.includeDeleted === true,
-    },
+function listQueryOf(
+  options: Record<string, unknown>,
+  globals: Record<string, unknown>,
+): Result<{ limit: number; cursor: string | undefined; filters: HandoffListFilters }, AppError> {
+  const cursor = typeof globals.cursor === "string" ? globals.cursor : undefined;
+  const filters: HandoffListFilters = {
+    state: typeof options.state === "string" ? options.state : undefined,
+    senderSlug: typeof options.sender === "string" ? options.sender : undefined,
+    recipientSlug: typeof options.recipient === "string" ? options.recipient : undefined,
+    updatedSince: typeof options.updatedSince === "string" ? options.updatedSince : undefined,
+    updatedUntil: typeof options.updatedUntil === "string" ? options.updatedUntil : undefined,
+    includeArchived: options.includeArchived === true,
+    includeDeleted: options.includeDeleted === true,
   };
+  if (typeof globals.limit === "number" && globals.limit > 0) {
+    return ok({ limit: globals.limit, cursor, filters });
+  }
+  const limit = defaultPageSize();
+  if (!limit.ok) return limit;
+  return ok({ limit: limit.value, cursor, filters });
 }
 
 function reportListing(
@@ -2454,17 +2555,54 @@ function expandTilde(path: string): string {
   return path;
 }
 
-/** Rewrites the derived inbox marker (HND-026); a failure warns and never fails the command. */
+/**
+ * Rewrites the derived inbox marker (HND-026); a failure warns and never fails the command.
+ * The marker is advisory derived-view refresh (SHR-015 category (ii)): even the
+ * failure to create its ports warns contained and never changes the committed
+ * result, and a throwing diagnostic sink changes nothing either.
+ */
 function refreshMarker(handoffId: string, ports: OutputPorts): void {
-  const refreshed = refreshInboxMarker(createNodeInboxMarkerPorts(), handoffId);
+  let refreshed: ReturnType<typeof refreshInboxMarker>;
+  try {
+    refreshed = refreshInboxMarker(createNodeInboxMarkerPorts(), handoffId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      ports.err(`warning: the inbox marker could not be refreshed: ${message}\n`);
+    } catch {
+      // A diagnostic sink failure never changes the committed result.
+    }
+    return;
+  }
   if (!refreshed.ok) {
-    ports.err(`warning: ${refreshed.error.message}\n`);
+    try {
+      ports.err(`warning: ${refreshed.error.message}\n`);
+    } catch {
+      // A diagnostic sink failure never changes the committed result.
+    }
   }
 }
 
 function refreshProjectMarker(projectId: string, ports: OutputPorts): void {
-  const refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(), projectId);
-  if (!refreshed.ok) ports.err(`warning: ${refreshed.error.message}\n`);
+  let refreshed: ReturnType<typeof refreshProjectInboxMarker>;
+  try {
+    refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(), projectId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      ports.err(`warning: the project inbox marker could not be refreshed: ${message}\n`);
+    } catch {
+      // A diagnostic sink failure never changes the committed result.
+    }
+    return;
+  }
+  if (!refreshed.ok) {
+    try {
+      ports.err(`warning: ${refreshed.error.message}\n`);
+    } catch {
+      // A diagnostic sink failure never changes the committed result.
+    }
+  }
 }
 
 function renderUsageError(error: unknown, program: Command, ports: OutputPorts): number {

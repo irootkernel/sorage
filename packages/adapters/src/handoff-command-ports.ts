@@ -4,7 +4,7 @@ import type { ArtifactStore, HandoffDetailReadPorts, HandoffEventView, RevisionP
 import { type AppError, appError, err, ok, type Result, SystemClock, UuidGenerator } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createArtifactBodyPorts } from "./artifact-body-ports";
-import { createConfigStore } from "./config-store";
+import { createConfigStore, type ReadConfiguration } from "./config-store";
 import { createSqliteContentStore, sqliteContentReferences } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createSqliteHandoffReadStore } from "./handoff-read-store";
@@ -20,11 +20,12 @@ import { digestFile, inspectSourceFile } from "./import-source";
 import { executeLegacyIntent } from "./intent-log";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
 import { createNodeProjectPorts } from "./project-command-ports";
+import { AppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
 import { appendStructuredLog } from "./structured-log";
 import { createSqliteReviewStore } from "./review-store";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { openVault } from "./vault";
 
 /**
@@ -43,14 +44,43 @@ export interface NodeHandoffCommandPortsOptions {
   database?: SorageSqlite | undefined;
   /** Shared clock for domain decisions and 24-hour idempotency expiry. */
   clock?: { now(): Date } | undefined;
+  /**
+   * The post-commit completion warning sink of SHR-015's category (i): the
+   * CLI buffers it to stderr after the committed result; the daemon logs it
+   * server-side. A throwing sink never changes the committed outcome.
+   */
+  completionWarning?: ((text: string) => void) | undefined;
 }
 
 function databaseFor(options: NodeHandoffCommandPortsOptions, stateDir: string): SorageSqlite {
   const plan = productionMigrationPlan();
-  return (
-    options.database ??
-    openAndMigrate(resolve(stateDir, "sorage.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds }).db
-  );
+  if (options.database !== undefined) return options.database;
+  try {
+    return openAndMigrate(resolve(stateDir, "sorage.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds }).db;
+  } catch (error) {
+    // A schema admission refusal keeps its public code; storage-preparation
+    // contention becomes the stamped Handoff refusal (SHR-015).
+    if (asSchemaAdmission(error) !== null || error instanceof AppCommandError) throw error;
+    const contention = storageContentionOf(error, "handoff");
+    if (contention !== null) throw carriedAppError(contention);
+    throw error;
+  }
+}
+
+/** Returns the operational configuration, throwing the typed carrier when absent or unreadable (SHR-015). */
+function operableConfiguration(
+  config: ReturnType<typeof createConfigStore>,
+  home: { configFile: string },
+): ReadConfiguration {
+  const read = config.readForOperation();
+  if (!read.ok || read.value === null) {
+    throw carriedAppError(
+      read.ok
+        ? appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile })
+        : read.error,
+    );
+  }
+  return read.value;
 }
 
 function closeOwnedDatabase(options: NodeHandoffCommandPortsOptions, db: SorageSqlite): void {
@@ -212,12 +242,13 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  const read = config.read();
-  if (!read.ok || read.value === null) {
+  let effective: ReturnType<typeof operableConfiguration>["config"];
+  try {
+    effective = operableConfiguration(config, home).config;
+  } catch (error) {
     closeOwnedDatabase(options, db);
-    throw new Error(`the configuration at ${home.configFile} could not be read`);
+    throw error;
   }
-  const effective = read.value.config;
   const ledger = createSqliteEventLedger(db);
   const clock = options.clock ?? new SystemClock();
   const contentStore = createSqliteContentStore({
@@ -227,11 +258,16 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
     runDir: home.runDir,
   });
   return {
-    projectPorts: createNodeProjectPorts({ env: env as HomeEnvironment, userHome, database: db }),
+    projectPorts: createNodeProjectPorts({
+      env: env as HomeEnvironment,
+      userHome,
+      database: db,
+      contentionSurface: "handoff",
+    }),
     handoffs: createSqliteHandoffWriteStore(
       db,
       ledger,
-      { now: () => clock.now() },
+      { now: () => clock.now(), contentionSurface: "handoff" },
       artifactContentBindings(db, ledger, effective.vault.path, effective.installationId, () => clock.now()),
     ),
     artifactStore: legacyExecutorArtifactStore(
@@ -286,6 +322,7 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
           effective.logging,
         );
       },
+      ...(options.completionWarning !== undefined ? { completionWarning: options.completionWarning } : {}),
     },
   };
 }
@@ -304,6 +341,7 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
   artifact: ReturnType<typeof createNodeReviewPorts>["artifact"] & {
     remove: (storageKey: string) => Result<void, AppError>;
   };
+  disclosures?: import("@sorage/core").RetentionPorts["disclosures"];
 } {
   const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
@@ -311,13 +349,15 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  const read = config.read();
-  if (!read.ok || read.value === null) {
+  let read: ReadConfiguration;
+  try {
+    read = operableConfiguration(config, home);
+  } catch (error) {
     closeOwnedDatabase(options, db);
-    throw new Error(`the configuration at ${home.configFile} could not be read`);
+    throw error;
   }
-  const artifactVaultPath = read.value.config.vault.path;
-  const artifactInstallationId = read.value.config.installationId;
+  const artifactVaultPath = read.config.vault.path;
+  const artifactInstallationId = read.config.installationId;
   const retentionLedger = createSqliteEventLedger(db);
   const retentionClock = () => options.clock?.now() ?? new Date();
   return {
@@ -325,14 +365,8 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
     retention: createSqliteRetentionStore(
       db,
       retentionLedger,
-      { now: retentionClock },
-      artifactContentBindings(
-        db,
-        retentionLedger,
-        read.value.config.vault.path,
-        read.value.config.installationId,
-        retentionClock,
-      ),
+      { now: retentionClock, contentionSurface: "handoff" },
+      artifactContentBindings(db, retentionLedger, read.config.vault.path, read.config.installationId, retentionClock),
     ),
     artifact: {
       // The read-side body seam comes from the review ports' production wiring;
@@ -342,6 +376,9 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
       remove: (key: string) =>
         legacyRemoveThroughExecutor(db, artifactVaultPath, artifactInstallationId, home.runDir, key),
     },
+    ...(options.completionWarning !== undefined
+      ? { disclosures: { completionWarning: options.completionWarning } }
+      : {}),
   };
 }
 
@@ -356,7 +393,10 @@ export function createNodeTerminalPorts(options: NodeHandoffCommandPortsOptions 
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const db = databaseFor(options, home.stateDir);
-  return { ...reviews, terminals: createSqliteTerminalStore(db, createSqliteEventLedger(db)) };
+  return {
+    ...reviews,
+    terminals: createSqliteTerminalStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
+  };
 }
 
 /** The production revision wiring of `sorage revise` (TASK-032). */
@@ -377,12 +417,13 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  const read = config.read();
-  if (!read.ok || read.value === null) {
+  let effective: ReturnType<typeof operableConfiguration>["config"];
+  try {
+    effective = operableConfiguration(config, home).config;
+  } catch (error) {
     closeOwnedDatabase(options, db);
-    throw new Error(`the configuration at ${home.configFile} could not be read`);
+    throw error;
   }
-  const effective = read.value.config;
   const artifactStore = createNodeArtifactStore({
     vaultPath: effective.vault.path,
     installationId: effective.installationId,
@@ -407,7 +448,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
     revisions: createSqliteRevisionStore(
       db,
       revisionLedger,
-      { now: revisionClock },
+      { now: revisionClock, contentionSurface: "handoff" },
       artifactContentBindings(db, revisionLedger, effective.vault.path, effective.installationId, revisionClock),
     ),
     // The ordinary revise physical steps run through the same shared legacy
@@ -439,6 +480,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
           effective.logging,
         );
       },
+      ...(options.completionWarning !== undefined ? { completionWarning: options.completionWarning } : {}),
     },
   };
 }
@@ -452,7 +494,10 @@ export function createNodeReviewPorts(
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const db = databaseFor(options, home.stateDir);
-  return { ...read, reviews: createSqliteReviewStore(db, createSqliteEventLedger(db)) };
+  return {
+    ...read,
+    reviews: createSqliteReviewStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
+  };
 }
 
 export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptions = {}): HandoffDetailReadPorts {
@@ -462,21 +507,25 @@ export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptio
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const db = databaseFor(options, home.stateDir);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  const read = config.read();
-  if (!read.ok || read.value === null) {
+  let effective: ReturnType<typeof operableConfiguration>["config"];
+  try {
+    effective = operableConfiguration(config, home).config;
+  } catch (error) {
     closeOwnedDatabase(options, db);
-    throw new Error(`the configuration at ${home.configFile} could not be read`);
+    throw error;
   }
-  const effective = read.value.config;
   return {
     projectPorts: send.projectPorts,
     // The production store carries the first-fetch write fence's known run
     // directory (RUN-014, SHR-011): every CLI and HTTP settlement through these
     // ports pauses on a live vault-move lock or database move fence.
-    handoffs: createSqliteHandoffReadStore(db, createSqliteEventLedger(db), { runDir: home.runDir }),
+    handoffs: createSqliteHandoffReadStore(db, createSqliteEventLedger(db), {
+      runDir: home.runDir,
+      contentionSurface: "handoff",
+    }),
     // The note read the detail surface needs is the same findNote seam the review
     // mutations load through, so the two can never disagree on the current Note.
-    reviews: createSqliteReviewStore(db, createSqliteEventLedger(db)),
+    reviews: createSqliteReviewStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
     events: {
       listRecent(handoffId: string, limit: number): Result<HandoffEventView[], AppError> {
         try {

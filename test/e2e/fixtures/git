@@ -1,0 +1,28 @@
+#!/bin/sh
+# TASK-112 test-only PATH barrier (EPIC-017 plan W2): the Sorage actor
+# resolution runs `git` through PATH after startup and before the command's
+# domain transaction. Placed first on the spawned command's PATH, this wrapper
+# signals its arrival, waits — bounded to at most 3 seconds, well below the
+# resolver's 10-second spawnSync timeout — for the test to hold the database
+# write lock, and then execs the real Git found later on the original PATH.
+# It is a test fixture, never a product test hook.
+SIGNAL="${SORAGE_GIT_BARRIER_SIGNAL:-}"
+RELEASE="${SORAGE_GIT_BARRIER_RELEASE:-}"
+if [ -n "$SIGNAL" ]; then
+  echo "$$" >> "$SIGNAL" 2>/dev/null || true
+fi
+if [ -n "$RELEASE" ]; then
+  waits=0
+  while [ ! -e "$RELEASE" ] && [ "$waits" -lt 300 ]; do
+    sleep 0.01
+    waits=$((waits + 1))
+  done
+fi
+selfdir=$(dirname "$0")
+for dir in $(printf '%s' "$PATH" | tr ':' ' '); do
+  [ "$dir" = "$selfdir" ] && continue
+  if [ -x "$dir/git" ]; then
+    exec "$dir/git" "$@"
+  fi
+done
+exec git "$@"

@@ -22,6 +22,10 @@ function recordingStore(): {
   let expectation: { revision?: number; etag?: string } | undefined;
   const store: ConfigCommandStore = {
     read: () => ({ ok: true, value: { config: parsed.value.config, etag: sha256Of(exampleText), revision: 1 } }),
+    readForOperation: () => ({
+      ok: true,
+      value: { config: parsed.value.config, etag: sha256Of(exampleText), revision: 1 },
+    }),
     readText: () => exampleText,
     write: (_config, expect) => {
       expectation = expect;

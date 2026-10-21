@@ -9,9 +9,10 @@ import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
+import { AppCommandError, carriedAppError, storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
-import { openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 
 /**
  * The production wiring of the `sorage project` commands: the migrated SQLite database,
@@ -29,6 +30,13 @@ export interface NodeProjectPortsOptions {
   fs?: ProjectRepositoryFs | undefined;
   /** Daemon-owned connection; CLI callers omit it and keep process-scoped ownership. */
   database?: SorageSqlite | undefined;
+  /**
+   * The invoking command family of SHR-015: when set, storage-preparation
+   * contention in this composition and its repository maps to the stamped
+   * `STORAGE_INSPECTION_UNAVAILABLE` refusal with that family's wording.
+   * Undefined compositions (Memo, init) keep today's unclassified behavior.
+   */
+  contentionSurface?: ContentionSurface | undefined;
 }
 
 export type GitProbe = (directory: string) => string | null;
@@ -90,21 +98,38 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const plan = productionMigrationPlan();
-  const db =
-    options.database ??
-    openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-      rebuilds: plan.rebuilds,
-    }).db;
+  let db: SorageSqlite;
+  try {
+    db =
+      options.database ??
+      openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+        rebuilds: plan.rebuilds,
+      }).db;
+  } catch (error) {
+    // A schema admission refusal keeps its public code; contention maps to the
+    // stamped refusal only for a surfaced composition; everything else stays raw.
+    if (asSchemaAdmission(error) !== null || error instanceof AppCommandError) throw error;
+    const contention =
+      options.contentionSurface !== undefined ? storageContentionOf(error, options.contentionSurface) : null;
+    if (contention !== null) throw carriedAppError(contention);
+    throw error;
+  }
   const git = options.git ?? nativeGit;
   const isBare = options.gitIsBare ?? nativeIsBare;
   const fs = options.fs ?? { realpath: (path: string) => realpathSync(path) };
   // The canonical installation identity is the generated key in the effective
   // configuration; the repository never trusts a caller-supplied identity.
+  // An operational read distinguishes an unreadable configuration from an
+  // absent one and carries both as typed errors (SHR-015, W7).
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  const read = config.read();
+  const read = config.readForOperation();
   if (!read.ok || read.value === null) {
     if (options.database === undefined) db.close();
-    throw new Error(`the configuration at ${home.configFile} could not be read`);
+    throw carriedAppError(
+      read.ok
+        ? appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile })
+        : read.error,
+    );
   }
   return {
     installationId: read.value.config.installationId,
@@ -114,6 +139,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
       vaultPath: read.value.config.vault.path,
       fs,
       events: createSqliteEventLedger(db),
+      ...(options.contentionSurface !== undefined ? { contentionSurface: options.contentionSurface } : {}),
     }),
     clock: new SystemClock(),
     ids: new UuidGenerator(),

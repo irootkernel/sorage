@@ -23,6 +23,10 @@ const { createChannel, addParticipant, submitMessage, handleChannelMessage, show
 const { createNodeChannelPorts, createNodeChannelRecoveryPorts, captureChannelBodyText } = await import("./packages/adapters/src/channels.ts");
 const { createNodeInitPorts } = await import("./packages/adapters/src/init-ports.ts");
 const { FakeClock } = await import("./packages/adapters/src/testkit/fakes.ts");
+// Anchored one hour in the past so the retained receipt stays unexpired for the
+// replay-only surface that reads with the real system clock; a fixed calendar
+// date crossed its own 24-hour receipt expiry on 2026-10-21.
+const BASE = Date.parse(${JSON.stringify(new Date(Date.now() - 3_600_000).toISOString())});
 const BOM = "\\uFEFF";
 const tail = String.fromCharCode(9, 0) + "tail";
 const session = BOM + "session" + tail;
@@ -38,7 +42,7 @@ try {
   const init = initializeInstallation(createNodeInitPorts({ env: { SORAGE_HOME: home }, userHome: home, clock: new FakeClock() }), { vaultPath: join(home, "vault") });
   if (!ok(init)) fail(10, "initialization failed");
   const actor = projectActor("11111111-2222-4333-8444-555555555555");
-  const first = createNodeChannelPorts({ env: { SORAGE_HOME: home }, userHome: home, clock: new FakeClock(Date.parse("2026-10-20T00:00:00.000Z")) });
+  const first = createNodeChannelPorts({ env: { SORAGE_HOME: home }, userHome: home, clock: new FakeClock(BASE) });
   try {
     const created = unwrap(createChannel(first, { creator: actor, mainHandle: BOM + "main", title: null, idempotencyKey: BOM + "create-key" }), 11, "create");
     const mainId = created.channel.mainParticipantId;
@@ -55,7 +59,7 @@ try {
   } finally {
     first.close();
   }
-  const reopened = createNodeChannelPorts({ env: { SORAGE_HOME: home }, userHome: home, clock: new FakeClock(Date.parse("2026-10-20T00:00:01.000Z")) });
+  const reopened = createNodeChannelPorts({ env: { SORAGE_HOME: home }, userHome: home, clock: new FakeClock(BASE + 1000) });
   try {
     const channels = await import("./packages/core/src/channels.ts");
     const listing = unwrap(channels.listChannels(reopened, {}), 18, "list");
@@ -85,7 +89,7 @@ try {
     const collision = submitMessageReplayOnly(recovery, { installationId: reopened.installationId, maxBytes: reopened.maxBytes, channelId: channel.id, senderParticipantId: detail.senderParticipantId, kind: "report", accepted: body2.value, contextSession: session, contextNode: node, contextAttempt: attempt, idempotencyKey: "key-1" });
     if (ok(collision) || collision.error.code !== "CHN_REPLAY_UNAVAILABLE") fail(34, "plain key collided with the BOM key receipt");
     const { openSorageDatabase } = await import("./packages/adapters/src/sqlite/connection.ts");
-    const expiry = "2026-10-20T00:00:02.000Z";
+    const expiry = new Date(BASE + 2000).toISOString();
     const db = openSorageDatabase(join(home, "state", "sorage.sqlite3"));
     try {
       db.prepare("UPDATE idempotency_keys SET expires_at = ? WHERE key = CAST(? AS TEXT)").run(expiry, Buffer.from(BOM + "key-1", "utf8"));

@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
 import { type AppError, appError, checkVaultContainment, err, ok, UuidGenerator, workspaceRootOf } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
+import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**
@@ -51,6 +52,12 @@ export interface SqliteProjectRepositoryOptions {
   fs?: ProjectRepositoryFs;
   /** The append-only ledger every mutation's event lands in, inside the same transaction. */
   events: SqliteEventLedger;
+  /**
+   * The invoking command family of SHR-015: when set, a busy write-lock
+   * acquisition or commit in this repository maps to the stamped
+   * `STORAGE_INSPECTION_UNAVAILABLE` refusal with that family's wording.
+   */
+  contentionSurface?: ContentionSurface | undefined;
 }
 
 const defaultEventIds = new UuidGenerator();
@@ -61,6 +68,10 @@ export function createSqliteProjectRepository(
 ): ProjectRepositoryPort {
   const fs = options.fs ?? nativeFs;
   const ledger = options.events;
+  // SHR-015: the invoking family's surface decides whether a busy signature
+  // becomes the stamped refusal; unsurfaced compositions keep INTERNAL_ERROR.
+  const repositorySurface = options.contentionSurface;
+  const mapRepositoryError = (error: unknown): AppError => internal(error, repositorySurface);
   const emit = (
     eventType:
       | "PROJECT_REGISTERED"
@@ -119,10 +130,12 @@ export function createSqliteProjectRepository(
             appError("PROJECT_SLUG_CONFLICT", `the slug '${project.slug}' is already taken`, { slug: project.slug }),
           );
         }
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     createProjectWithBinding(project, binding, actor) {
+      let projectRow: ProjectRow | undefined;
+      let bindingRow: BindingRow | undefined;
       try {
         const installationId = options.installationId;
         const directory = fs.realpath(binding.directory);
@@ -156,6 +169,11 @@ export function createSqliteProjectRepository(
             { projectId: project.id, bindingId: binding.id, directory, bindingKind: binding.bindingKind },
             binding.createdAt,
           );
+          // The result rows are read inside the committing transaction, so a read
+          // failure rolls the registration and its events back with nothing
+          // committed instead of misreporting a committed mutation (SHR-015).
+          projectRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as ProjectRow;
+          bindingRow = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(binding.id) as BindingRow;
           db.exec("COMMIT");
         } catch (transactionError) {
           try {
@@ -165,11 +183,9 @@ export function createSqliteProjectRepository(
           }
           throw transactionError;
         }
-        const projectRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as ProjectRow;
-        const bindingRow = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(binding.id) as BindingRow;
         return ok({ project: toProject(projectRow), binding: toBinding(bindingRow) });
       } catch (error) {
-        return err(mapInsertError(error, project.slug, binding.directory));
+        return err(mapInsertError(error, project.slug, binding.directory, repositorySurface));
       }
     },
     findProjectBySlug(slug) {
@@ -185,7 +201,7 @@ export function createSqliteProjectRepository(
           | undefined;
         return ok(row ? toProject(row) : null);
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     listProjects() {
@@ -193,7 +209,7 @@ export function createSqliteProjectRepository(
         const rows = db.prepare("SELECT * FROM projects ORDER BY slug COLLATE NOCASE").all() as unknown as ProjectRow[];
         return ok(rows.map(toProject));
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     addBinding(binding, actor) {
@@ -255,10 +271,11 @@ export function createSqliteProjectRepository(
             ),
           );
         }
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     updateProjectDisplayName(projectId, displayName, updatedAt, actor) {
+      let row: ProjectRow | null | undefined;
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
@@ -270,6 +287,12 @@ export function createSqliteProjectRepository(
             return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
           }
           emit("PROJECT_RENAMED", actor, { projectId, displayName }, updatedAt);
+          // The result row is read inside the committing transaction (SHR-015).
+          row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow | null | undefined;
+          if (!row) {
+            db.exec("ROLLBACK");
+            return err(mapRepositoryError(new Error("the renamed Project row disappeared inside its transaction")));
+          }
           db.exec("COMMIT");
         } catch (transactionError) {
           try {
@@ -279,16 +302,13 @@ export function createSqliteProjectRepository(
           }
           throw transactionError;
         }
-        const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow | null | undefined;
-        if (!row) {
-          return err(internal(new Error("the renamed Project row disappeared mid-transaction")));
-        }
         return ok(toProject(row));
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     updateProjectStatus(projectId, status, updatedAt, actor) {
+      let statusRow: ProjectRow | undefined;
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
@@ -305,6 +325,8 @@ export function createSqliteProjectRepository(
             { projectId, status },
             updatedAt,
           );
+          // The result row is read inside the committing transaction (SHR-015).
+          statusRow = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow;
           db.exec("COMMIT");
         } catch (transactionError) {
           try {
@@ -314,10 +336,9 @@ export function createSqliteProjectRepository(
           }
           throw transactionError;
         }
-        const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as ProjectRow;
-        return ok(toProject(row));
+        return ok(toProject(statusRow));
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     removeBinding(bindingId, actor) {
@@ -352,7 +373,7 @@ export function createSqliteProjectRepository(
         }
         return ok(toBinding(row));
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     replaceBinding(bindingId, expectedDirectory, replacement, actor) {
@@ -445,7 +466,7 @@ export function createSqliteProjectRepository(
             }),
           );
         }
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     listBindings() {
@@ -453,7 +474,7 @@ export function createSqliteProjectRepository(
         const rows = db.prepare("SELECT * FROM project_bindings ORDER BY directory").all() as unknown as BindingRow[];
         return ok(rows.map(toBinding));
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
     listBindingsForProject(projectId) {
@@ -463,14 +484,14 @@ export function createSqliteProjectRepository(
           .all(projectId) as unknown as BindingRow[];
         return ok(rows.map(toBinding));
       } catch (error) {
-        return err(internal(error));
+        return err(mapRepositoryError(error));
       }
     },
   };
 }
 
-/** Maps one insert failure to its published conflict code, or an internal error. */
-function mapInsertError(error: unknown, slug: string, directory: string): AppError {
+/** Maps one insert failure to its published conflict code, the surfaced contention refusal, or an internal error. */
+function mapInsertError(error: unknown, slug: string, directory: string, surface?: ContentionSurface): AppError {
   const conflict = uniqueViolation(error);
   if (conflict === "projects.slug") {
     return appError("PROJECT_SLUG_CONFLICT", `the slug '${slug}' is already taken`, { slug });
@@ -480,7 +501,7 @@ function mapInsertError(error: unknown, slug: string, directory: string): AppErr
       directory,
     });
   }
-  return internal(error);
+  return internal(error, surface);
 }
 
 /** Returns the violated unique constraint's columns, or undefined for any other failure. */
@@ -490,7 +511,11 @@ function uniqueViolation(error: unknown): string | undefined {
   return match === null ? undefined : match[1];
 }
 
-function internal(error: unknown): AppError {
+function internal(error: unknown, surface?: ContentionSurface): AppError {
+  if (surface !== undefined) {
+    const contention = storageContentionOf(error, surface);
+    if (contention !== null) return contention;
+  }
   const message = error instanceof Error ? error.message : String(error);
   return appError("INTERNAL_ERROR", `the project repository failed: ${message}`);
 }

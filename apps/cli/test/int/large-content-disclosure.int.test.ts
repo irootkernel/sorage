@@ -225,7 +225,7 @@ describe("large-content disclosure through the real CLI", () => {
   });
 
   it.each(["send", "revise"] as const)(
-    "keeps a late %s failure parseable and preserves its original code",
+    "discloses a late %s completion failure beside the committed success (SHR-015 category (i))",
     (operation) => {
       const f = fixture();
       let args: string[];
@@ -250,12 +250,20 @@ describe("large-content disclosure through the real CLI", () => {
         ];
       }
       const result = call([...args, "--json"]);
-      expect(result.stdout).toBe("");
-      expect(result.status).toBe(errorSpec("STORAGE_INTEGRITY_ERROR").exitCode);
-      const parsed = JSON.parse(result.stderr);
-      expect(parsed.error.code).toBe("STORAGE_INTEGRITY_ERROR");
-      expect(parsed.error.message.startsWith("Injected post-commit completion refusal")).toBe(true);
-      expect(parsed.error.message).toContain("every committed revision");
+      // The committed outcome is returned as the success it already is; the
+      // physical completion failure and the large-content disclosure are both
+      // disclosed on stderr, and no error envelope replaces the result.
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.ok).toBe(true);
+      expect(result.stderr).not.toContain('"ok"');
+      expect(result.stderr).toContain("Injected post-commit completion refusal");
+      expect(result.stderr).toContain("every committed revision");
+      if (operation === "send") {
+        expect(parsed.data.handoffs).toHaveLength(1);
+      } else {
+        expect(typeof parsed.data.revision).toBe("number");
+      }
     },
   );
 });

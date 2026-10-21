@@ -92,6 +92,13 @@ export interface RevisionPorts extends HandoffReadPorts {
     backupEnabled: boolean;
     thresholdBytes: number;
     largeContent(sizeBytes: number, thresholdBytes: number): void;
+    /**
+     * The post-commit completion warning sink of SHR-015's category (i): a
+     * physical activation, unlink, or completion failure after the committed
+     * revision is disclosed here and never fails the command; a throwing sink
+     * changes nothing.
+     */
+    completionWarning?(text: string): void;
   };
 }
 
@@ -541,13 +548,21 @@ function reviseContent(
   }
 
   // Execute the committed file intents, then complete each with its system
-  // event; an inline replacement has nothing physical to execute.
+  // event; an inline replacement has nothing physical to execute. Every step
+  // after the committed revision is post-commit work (SHR-015 category (i)):
+  // a failure is disclosed as a warning and never fails the command, and the
+  // pending intent is left to the next process start's drain.
   if (activateIntent !== null && prepared.value.kind === "file") {
     const activated = ports.artifactStore.activate({
       stagingPath: prepared.value.stagingPath,
       storageKey: prepared.value.storageKey,
     });
-    if (activated.ok) {
+    if (!activated.ok) {
+      warnCompletion(
+        ports.disclosures,
+        `The revision committed, but activating ${prepared.value.storageKey} failed: ${activated.error.message}. The pending activation intent remains for the next process start.`,
+      );
+    } else {
       const completed = ports.revisions.completeActivations([
         {
           intentId: activateIntent.id,
@@ -563,12 +578,22 @@ function reviseContent(
           },
         },
       ]);
-      if (!completed.ok) return err(completed.error);
+      if (!completed.ok) {
+        warnCompletion(
+          ports.disclosures,
+          `The revision committed, but recording its activation completion failed: ${completed.error.message}. The pending activation intent remains for the next process start.`,
+        );
+      }
     }
   }
   if (unlinkIntent !== null && handoff.currentArtifact !== null && handoff.currentArtifact.storageKey !== null) {
     const removed = ports.artifactStore.remove(handoff.currentArtifact.storageKey);
-    if (removed.ok) {
+    if (!removed.ok) {
+      warnCompletion(
+        ports.disclosures,
+        `The revision committed, but unlinking the retired ${handoff.currentArtifact.storageKey} failed: ${removed.error.message}. The pending unlink intent remains for the next process start.`,
+      );
+    } else {
       const completed = ports.revisions.completeUnlinks([
         {
           intentId: unlinkIntent.id,
@@ -586,10 +611,24 @@ function reviseContent(
           },
         },
       ]);
-      if (!completed.ok) return err(completed.error);
+      if (!completed.ok) {
+        warnCompletion(
+          ports.disclosures,
+          `The revision committed, but recording its unlink completion failed: ${completed.error.message}. The pending unlink intent remains for the next process start.`,
+        );
+      }
     }
   }
   return ok({ ...response, rowVersion: applied.value.rowVersion });
+}
+
+/** Discloses one post-commit completion warning; a throwing sink never changes the committed outcome (SHR-015). */
+function warnCompletion(disclosures: RevisionPorts["disclosures"] | undefined, text: string): void {
+  try {
+    disclosures?.completionWarning?.(text);
+  } catch {
+    // A diagnostic sink failure never changes the committed outcome.
+  }
 }
 
 function replay(ports: RevisionPorts, key: string, requestHash: string): Result<ReviseOutcome | null, AppError> {

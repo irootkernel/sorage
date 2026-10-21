@@ -15,7 +15,6 @@ import {
   type NodeChannelPorts,
 } from "@sorage/adapters/src/channel-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
-import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createHomePaths } from "@sorage/adapters/src/home";
 import {
@@ -120,6 +119,20 @@ export function renderChannelRecoveryError(
   if (options.json) options.err(`${JSON.stringify(errorEnvelope(failure, options.requestId), null, 2)}\n`);
   else options.err(`${failure.code}: ${failure.message}\nRecovery: ${failure.recovery.suggestedCommand}\n`);
   return errorSpec(failure.code).exitCode;
+}
+
+/** Renders one contained warning through the diagnostic sink; a throwing sink never changes the result (SHR-015). */
+function emitContainedWarning(output: ChannelCliOutput, text: string): void {
+  try {
+    output.warn(`warning: ${text}\n`);
+  } catch {
+    // A diagnostic sink failure never changes the command's output or exit code.
+  }
+}
+
+/** The message of an unknown throwable, for warning text only. */
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function registerChannelCommands(program: Command, output: ChannelCliOutput): void {
@@ -403,7 +416,7 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
     }
 
     // Existing native recovery remains separate from the Channel operation's own effects.
-    const drained = createNodeVaultCommandPorts().drainAtStart();
+    const drained = createNodeVaultCommandPorts({ contentionSurface: "channel" }).drainAtStart();
     if (!drained.ok) {
       output.fail(drained.error, json);
       return null;
@@ -431,7 +444,10 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
         };
       }
 
-      const actor = resolveCommandActor(createNodeProjectPorts(), {
+      // SHR-015: the actor resolves on this command's existing open-and-migrated
+      // connection — the Channel ports' own Project composition — so no extra
+      // open-and-migrate and no unclosed connection exist.
+      const actor = resolveCommandActor(ports.projectPorts, {
         path: process.cwd(),
         userHome: homedir(),
         as: typeof globals.as === "string" ? globals.as : undefined,
@@ -631,8 +647,19 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
       emitResult(operation, result.value, json);
       return null;
     } finally {
-      if (accepted !== undefined) releaseAcceptedChannelBody(accepted);
-      ports.close();
+      // Post-commit cleanup (SHR-015 category (iv)): each step is separately
+      // contained so a failure warns and never changes the emitted result or
+      // skips the remaining cleanup.
+      try {
+        if (accepted !== undefined) releaseAcceptedChannelBody(accepted);
+      } catch (error) {
+        emitContainedWarning(output, `the accepted Channel body could not be released: ${errorMessageOf(error)}`);
+      }
+      try {
+        ports.close();
+      } catch (error) {
+        emitContainedWarning(output, `the Channel storage connection could not be closed: ${errorMessageOf(error)}`);
+      }
     }
   }
 

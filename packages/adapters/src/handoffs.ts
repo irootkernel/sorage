@@ -13,10 +13,17 @@ import {
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
+import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
 
 export interface IdempotencyLookupOptions {
   now?: (() => Date) | undefined;
+  /**
+   * The invoking command family of SHR-015: when set, a busy write-lock
+   * acquisition or commit in this store's transactions maps to the stamped
+   * `STORAGE_INSPECTION_UNAVAILABLE` refusal with that family's wording.
+   */
+  contentionSurface?: ContentionSurface | undefined;
 }
 
 /**
@@ -171,6 +178,11 @@ export function createSqliteHandoffRowStore(db: SorageSqlite): SqliteHandoffRowS
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The surfaced contention refusal for a store transaction failure, or null (SHR-015). */
+function contentionRefusal(error: unknown, surface: ContentionSurface | undefined): AppError | null {
+  return surface !== undefined ? storageContentionOf(error, surface) : null;
 }
 
 /**
@@ -408,6 +420,8 @@ export function createSqliteHandoffWriteStore(
           throw transactionError;
         }
       } catch (error) {
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(
           appError("INTERNAL_ERROR", `Creating the Handoff fan-out failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -481,6 +495,12 @@ export function createSqliteHandoffWriteStore(
           .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;
         return ok(row ? { requestHash: row.request_hash, responseJson: row.response_json } : null);
       } catch (error) {
+        // The keyed lookups' expiry cleanup is a write-lock acquisition during
+        // the command's write preparation, so a surfaced composition maps its
+        // busy signature to the stamped refusal rather than INTERNAL_ERROR
+        // (SHR-015).
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(appError("INTERNAL_ERROR", `Reading the idempotency key failed: ${messageOf(error)}`));
       }
     },
@@ -662,6 +682,8 @@ export function createSqliteRevisionStore(
           throw transactionError;
         }
       } catch (error) {
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(
           appError("INTERNAL_ERROR", `Applying the content revision failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -715,6 +737,8 @@ export function createSqliteRevisionStore(
           throw transactionError;
         }
       } catch (error) {
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(
           appError("INTERNAL_ERROR", `Applying the no-change resolution failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -926,6 +950,7 @@ function rollbackWithConflict(
 export function createSqliteTerminalStore(
   db: SorageSqlite,
   ledger: SqliteEventLedger,
+  options: { contentionSurface?: ContentionSurface | undefined } = {},
 ): import("@sorage/core").TerminalMutationPort {
   return {
     applyTerminalTransition(input) {
@@ -953,6 +978,8 @@ export function createSqliteTerminalStore(
           throw transactionError;
         }
       } catch (error) {
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(
           appError("INTERNAL_ERROR", `Applying the terminal transition failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -1090,6 +1117,8 @@ export function createSqliteRetentionStore(
           throw transactionError;
         }
       } catch (error) {
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(
           appError("INTERNAL_ERROR", `Applying the retention decision failed: ${messageOf(error)}.`, {
             cause: String(error),
@@ -1105,6 +1134,11 @@ export function createSqliteRetentionStore(
           .get(key, scope) as { request_hash: string; response_json: string } | null | undefined;
         return ok(row ? { requestHash: row.request_hash, responseJson: row.response_json } : null);
       } catch (error) {
+        // The keyed lookup's expiry cleanup is a write-lock acquisition during
+        // write preparation; a surfaced composition maps its busy signature to
+        // the stamped refusal rather than INTERNAL_ERROR (SHR-015).
+        const contention = contentionRefusal(error, options.contentionSurface);
+        if (contention !== null) return err(contention);
         return err(
           appError("INTERNAL_ERROR", `Reading the idempotency record failed: ${messageOf(error)}`, {
             cause: String(error),
