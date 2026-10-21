@@ -313,6 +313,10 @@ function fakePorts(): FakePorts {
       classifyExternalChange: () => ok("external-commit"),
       moveLockHeld: () => false,
     },
+    backoff: {
+      sleepMs: () => undefined,
+      random: () => 0,
+    },
     staging: {
       freshBinding: () => ok({ vaultPath: "/vault" }),
       stageAccepted: (accepted) =>

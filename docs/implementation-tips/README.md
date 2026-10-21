@@ -12,6 +12,8 @@ The [M9 shared content qualification map](m9-shared-content-qualification.md) co
 
 The [M9 Channel qualification map](m9-channels-qualification.md) connects the TASK-109 domain-and-storage boundary — the core Channel domain, migration 11, the coherence and preparation discipline, the five-boundary link guards, and the strict stored-receipt parsers — to its production paths and owning tests.
 
+The [M9 Channel concurrency qualification map](m9-channel-concurrency-qualification.md) connects TASK-114's multi-process load, overlap and contention evidence, independent reconciliation, permanent compiled regression and conditional retry-policy decision to their production paths and owning commands.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:

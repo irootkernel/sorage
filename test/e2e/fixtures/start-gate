@@ -1,0 +1,37 @@
+#!/bin/sh
+# TASK-114 test-only start gate (EPIC-017 plan r2 section 2.2, decision P2/P3).
+# Every measured load process runs through this wrapper. A submitter appends its
+# PID to the shared readiness file and then blocks until the test opens the gate;
+# a wait or handler is launched with a gate file that already exists, so it takes
+# its exec instant and continues immediately. The wait is bounded to 3,000 x
+# 10 ms (30 s), above the test's 15 s readiness deadline and below the 45 s child
+# timeout, so a dead test can never leave a wrapper blocked forever. The helper
+# records the wrapper's own PID ($$) and the instant immediately before exec; a
+# missing line or a helper failure makes the run invalid (exit 125), and a gate
+# that never opens is exit 124. This is a test fixture, never a product hook.
+READY="${SORAGE_START_GATE_READY:-}"
+GATE="${SORAGE_START_GATE_GATE:-}"
+EXEC_LOG="${SORAGE_START_GATE_EXEC_LOG:-}"
+
+if [ -n "$READY" ]; then
+  echo "$$" >> "$READY" 2>/dev/null || true
+fi
+
+if [ -n "$GATE" ]; then
+  waits=0
+  while [ ! -e "$GATE" ] && [ "$waits" -lt 3000 ]; do
+    sleep 0.01
+    waits=$((waits + 1))
+  done
+  if [ ! -e "$GATE" ]; then
+    exit 124
+  fi
+fi
+
+if [ -n "$EXEC_LOG" ]; then
+  if ! "${SORAGE_START_GATE_RUNTIME}" "${SORAGE_START_GATE_INSTANT}" "$$" "$EXEC_LOG"; then
+    exit 125
+  fi
+fi
+
+exec "$@"

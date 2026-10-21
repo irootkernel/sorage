@@ -45,6 +45,9 @@ export const CHANNEL_PREVIEW_BYTES = MEMO_PREVIEW_BYTES;
 export const CHANNEL_WRITE_ATTEMPTS = 3;
 export const CHANNEL_LIST_ATTEMPTS = 2;
 export const CHANNEL_LIST_BATCH = 200;
+/** The bounded external-commit retry backoff of TASK-114 (full jitter; see plan r2 section 5.3). */
+export const CHANNEL_RETRY_BASE_MS = 100;
+export const CHANNEL_RETRY_MAX_DELAY_MS = 200;
 /** The existing validated list upper bound the Channel listings share with the Memo listing (section 38.4). */
 export const CHANNEL_LIST_MAX_LIMIT = 200;
 /** The original retained-response window; Channel receipts expire 24 hours after their commit. */
@@ -772,6 +775,18 @@ export interface ChannelCoherencePorts {
   moveLockHeld(): boolean;
 }
 
+/**
+ * The injected retry-timing seam of TASK-114 section 5.3: full jitter never
+ * calls a hidden timer or randomness source from core. The adapter composes a
+ * blocking sleep and `Math.random`; tests inject a recording sleep and a
+ * deterministic sequence. A delay is only applied after an `external-commit`
+ * mismatch and only before another attempt, outside every transaction.
+ */
+export interface ChannelBackoffPorts {
+  sleepMs(ms: number): void;
+  random(): number;
+}
+
 export interface ChannelStagingPorts {
   freshBinding(): Result<{ vaultPath: string }, AppError>;
   /** Streams the accepted body's exact bytes into the bound Vault's `staging/` tree; never a whole-body buffer. */
@@ -951,6 +966,7 @@ export interface ChannelCommandPorts {
   channels: ChannelRepository;
   bodies: ChannelBodyPorts;
   coherence: ChannelCoherencePorts;
+  backoff: ChannelBackoffPorts;
   staging: ChannelStagingPorts;
   clock: Clock;
   ids: IdGenerator;
@@ -1109,6 +1125,12 @@ function isCoherenceMismatch(error: AppError): boolean {
   return error.code === "SERVICE_PAUSED" && error.details !== undefined && error.details.coherenceMismatch === true;
 }
 
+/** The full-jitter delay of one `external-commit` retry (TASK-114 section 5.3, base 100 ms). */
+function channelRetryDelayMs(retryIndex: number, random: number): number {
+  const ceiling = Math.min(CHANNEL_RETRY_MAX_DELAY_MS, CHANNEL_RETRY_BASE_MS * 2 ** retryIndex);
+  return Math.floor(random * ceiling);
+}
+
 /**
  * The finite preparation-coherence loop every Channel mutation runs (P3 steps
  * 3 to 6): fence probe, external-version capture, fresh binding before any
@@ -1152,6 +1174,13 @@ function runChannelMutation<T>(
       if (!classified.ok) return classified;
       if (classified.value === "vault-move-held") return err(pausedError());
       lastClass = classified.value === "vault-path-changed" ? "vault-path-changed" : "external-commit";
+      // Only an external-commit restart sleeps, only before another attempt,
+      // and always outside the closed transaction. Full jitter uses the
+      // injected ports; a vault-path-changed retry and the final exhausted
+      // attempt never delay.
+      if (lastClass === "external-commit" && attempt + 1 < CHANNEL_WRITE_ATTEMPTS) {
+        ports.backoff.sleepMs(channelRetryDelayMs(attempt, ports.backoff.random()));
+      }
       continue;
     }
     return run;

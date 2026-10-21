@@ -52,6 +52,7 @@ import {
 } from "./memo-body-file";
 import { releaseMemoInputSpool, sweepMemoInputSpool } from "./memo-input-spool";
 import { createNodeProjectPorts } from "./project-command-ports";
+import { blockingSleepMs } from "./sleep";
 import { AppCommandError, asAppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
 import { appendStructuredLog } from "./structured-log";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -959,6 +960,10 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
           };
         },
         moveLockHeld: () => vaultMoveLockHeld(home.runDir),
+      },
+      backoff: {
+        sleepMs: (ms) => blockingSleepMs(ms),
+        random: () => Math.random(),
       },
       staging: {
         freshBinding: () => {
