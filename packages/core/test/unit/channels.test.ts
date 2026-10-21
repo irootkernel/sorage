@@ -14,7 +14,7 @@ import {
   type StoredChannelSubmitReceipt,
   type AcceptedChannelBody,
 } from "../../src/channels";
-import { ok } from "../../src/errors";
+import { appError, err, ok } from "../../src/errors";
 import { utf8ByteLength } from "../../src/content";
 
 const BODY: AcceptedChannelBody = { kind: "text", text: "report body", sizeBytes: 11, sha256: "0".repeat(64) };
@@ -207,6 +207,7 @@ describe("channel submit replay-only", () => {
           receipts: {
             submitReceipt: () => ok(observation.receipt ?? null),
           },
+          contentState: () => ok({ representation: "file", materialized: true }),
         }),
     };
   }
@@ -244,7 +245,7 @@ describe("channel submit replay-only", () => {
       recovery({ installationId: input.installationId, migrationVersion: 11, receipt }),
       input,
     );
-    expect(outcome.ok && outcome.value.handled).toBe(false);
+    expect(outcome.ok && outcome.value.message.handled).toBe(false);
   });
 
   function validOriginalSummary(): StoredChannelSubmitReceipt["message"] {
@@ -344,6 +345,7 @@ describe("channel submit replay-only", () => {
               });
             },
           },
+          contentState: () => ok({ representation: "file", materialized: true }),
         });
       },
     };
@@ -374,6 +376,7 @@ describe("channel submit replay-only", () => {
               );
             },
           },
+          contentState: () => ok({ representation: "file", materialized: true }),
         });
       },
     };
@@ -422,5 +425,152 @@ describe("channel submit replay-only", () => {
       { ...input, relayToParticipantId: "dddddddd-0000-4000-8000-000000000004" },
     );
     expect(!forbiddenTarget.ok && forbiddenTarget.error.code).toBe("CHN_INVALID_INPUT");
+  });
+
+  it("returns an inline recorded outcome with false and never probes", () => {
+    let probes = 0;
+    const base = recovery({
+      installationId: input.installationId,
+      migrationVersion: 11,
+      receipt: { requestHash: digest, message: validOriginalSummary() },
+    });
+    const ports: ChannelRecoveryPorts = {
+      ...base,
+      inspect: (consume) =>
+        base.inspect((observation) =>
+          consume({
+            ...observation,
+            contentState: () => {
+              probes += 1;
+              return err(appError("STORAGE_INTEGRITY_ERROR", "probe must not run for inline content"));
+            },
+          }),
+        ),
+    };
+    const outcome = submitMessageReplayOnly(ports, input);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.contentActivating).toBe(false);
+      expect(outcome.value.message).toEqual(validOriginalSummary());
+    }
+    expect(probes).toBe(0);
+  });
+
+  it("derives a file-backed recorded outcome read-only and discloses an unobservable state", () => {
+    const spool: AcceptedChannelBody = {
+      kind: "spool",
+      spoolPath: "/spool/original",
+      sizeBytes: 70_000,
+      sha256: "e".repeat(64),
+    };
+    const fields = {
+      senderParticipantId: input.senderParticipantId,
+      kind: "report" as const,
+      assignmentId: null,
+      relayToParticipantId: null,
+      contextSession: null,
+      contextNode: null,
+      contextAttempt: null,
+    };
+    const spoolDigest = composeChannelRequestDigest({
+      operation: "channel-submit",
+      installationId: input.installationId,
+      channelId: input.channelId,
+      fields,
+      body: { sha256: spool.sha256, sizeBytes: spool.sizeBytes },
+    });
+    const recorded = { ...validOriginalSummary(), bodyBytes: 70_000, bodyPreview: "", bodyPreviewTruncated: true };
+    const withState = (
+      state: { representation: "inline" | "file"; materialized: boolean } | null,
+      warnings: string[],
+    ): ChannelRecoveryPorts => {
+      const base = recovery({
+        installationId: input.installationId,
+        migrationVersion: 11,
+        receipt: { requestHash: spoolDigest, message: recorded },
+      });
+      return {
+        ...base,
+        warnings: (text) => warnings.push(text),
+        inspect: (consume) =>
+          base.inspect((observation) =>
+            consume({
+              ...observation,
+              contentState: () =>
+                state === null
+                  ? err(
+                      appError(
+                        "STORAGE_INTEGRITY_ERROR",
+                        "The committed Channel message or its content record is missing.",
+                      ),
+                    )
+                  : ok(state),
+            }),
+          ),
+      };
+    };
+    const observed = [
+      withState({ representation: "file", materialized: true }, []),
+      withState({ representation: "file", materialized: false }, []),
+    ];
+    const materialized = submitMessageReplayOnly(observed[0] as ChannelRecoveryPorts, { ...input, accepted: spool });
+    expect(materialized.ok && materialized.value.contentActivating).toBe(false);
+    const unmaterialized = submitMessageReplayOnly(observed[1] as ChannelRecoveryPorts, { ...input, accepted: spool });
+    expect(unmaterialized.ok && unmaterialized.value.contentActivating).toBe(true);
+    const warnings: string[] = [];
+    const unobservable = submitMessageReplayOnly(withState(null, warnings), { ...input, accepted: spool });
+    expect(unobservable.ok).toBe(true);
+    if (unobservable.ok) {
+      expect(unobservable.value.contentActivating).toBe(true);
+      expect(unobservable.value.message).toEqual(recorded);
+    }
+    expect(warnings).toEqual([
+      `the content-state probe for message ${recorded.id} failed (The committed Channel message or its content record is missing.); activation is not confirmed and contentActivating is reported as true`,
+    ]);
+  });
+
+  it("keeps receipt-validation results without probing the content state", () => {
+    let probes = 0;
+    const withCountingProbe = (ports: ChannelRecoveryPorts): ChannelRecoveryPorts => ({
+      ...ports,
+      inspect: (consume) =>
+        ports.inspect((observation) =>
+          consume({
+            ...observation,
+            contentState: () => {
+              probes += 1;
+              return ok({ representation: "file", materialized: false });
+            },
+          }),
+        ),
+    });
+    const conflict = submitMessageReplayOnly(
+      withCountingProbe(
+        recovery({
+          installationId: input.installationId,
+          migrationVersion: 11,
+          receipt: { requestHash: "f".repeat(64), message: validOriginalSummary() },
+        }),
+      ),
+      input,
+    );
+    expect(!conflict.ok && conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    const missing = submitMessageReplayOnly(
+      withCountingProbe(recovery({ installationId: input.installationId, migrationVersion: 11 })),
+      input,
+    );
+    expect(!missing.ok && missing.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
+    const malformed = submitMessageReplayOnly(
+      withCountingProbe(
+        recovery({
+          installationId: input.installationId,
+          migrationVersion: 11,
+          receipt: { requestHash: digest, message: {} as StoredChannelSubmitReceipt["message"] },
+        }),
+      ),
+      input,
+    );
+    expect(!malformed.ok && malformed.error.code).toBe("STORAGE_INTEGRITY_ERROR");
+    expect(probes).toBe(0);
   });
 });

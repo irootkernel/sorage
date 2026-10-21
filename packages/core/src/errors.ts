@@ -101,6 +101,17 @@ export interface ErrorSpec {
 export const EXIT_USAGE = 2;
 export const EXIT_INTERNAL = 1;
 
+/**
+ * The two listing failures a wait retries until its deadline (CLI-020,
+ * CHN-007, CHN-012): expected storage contention on the read path and a
+ * read-side record whose content is still materializing. Everything else —
+ * corruption, missing state, bad cursors, configuration, internal errors —
+ * fails the wait immediately.
+ */
+export function isRetryableWaitListingFailure(error: AppError): boolean {
+  return error.code === "STORAGE_INSPECTION_UNAVAILABLE" || error.code === "CONTENT_MATERIALIZING";
+}
+
 const RECOVERY: Partial<Record<ErrorCode, string>> = {
   HANDOFF_REPLAY_UNAVAILABLE:
     "The original outcome is unknown; retain the original key, input, Installation and sender context without executing again",

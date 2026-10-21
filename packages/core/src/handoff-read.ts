@@ -1,7 +1,7 @@
 import type { ArtifactReadHandle } from "./artifacts";
 import type { ContentBodyOpenPolicy } from "./content";
 import { decodeCursor, encodeCursor, filterHash } from "./cursor";
-import { type AppError, appError, err, ok, type Result } from "./errors";
+import { type AppError, appError, err, isRetryableWaitListingFailure, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
 import type { ReviewState } from "./handoffs";
 import { type ProjectCommandPorts, resolveWorkspaceActor } from "./project-commands";
@@ -388,46 +388,96 @@ export function waitForNewInboxItems(
   if (!scope.ok) return err(scope.error);
   // The wait began now: no Handoff created after this instant can sort below an
   // item that has not changed since, which is what lets each poll stop paging at
-  // the first item older than the wait.
-  const startedAtIso = ports.clock.now().toISOString();
-  // The known set must cover the whole filtered inbox, not only the first page:
-  // an off-page item that changes state resurfaces at the head of a later poll,
-  // and without the full seed it would falsely wake the wait as new.
-  const initial = pageThrough(ports, scope.value, query.filters, query.limit);
-  if (!initial.ok) return err(initial.error);
-  const known = new Set(initial.value.map((handoff) => handoff.id));
-  const deadlineMs = ports.clock.now().getTime() + options.timeoutSeconds * 1000;
-  for (;;) {
-    const remainingMs = deadlineMs - ports.clock.now().getTime();
-    if (remainingMs <= 0) {
+  // the first item older than the wait. The deadline is measured from this same
+  // invocation instant, so a slow seed consumes the wait's budget (CHN-012).
+  const startedAt = ports.clock.now();
+  const startedAtIso = startedAt.toISOString();
+  const deadlineMs = startedAt.getTime() + options.timeoutSeconds * 1000;
+  const sleepUntil = (): boolean => {
+    const remaining = deadlineMs - ports.clock.now().getTime();
+    if (remaining <= 0) return false;
+    options.sleepMs(Math.min(options.intervalSeconds * 1000, remaining));
+    return true;
+  };
+  let tracked: AppError | null = null;
+  // The initial seed must cover the whole filtered inbox, not only the first
+  // page: an off-page item that changes state resurfaces at the head of a later
+  // poll, and without the full seed it would falsely wake the wait as new. A
+  // retryable listing failure restarts the whole seed at the poll cadence, and a
+  // seed that completes at the deadline still delivers its arrivals.
+  let seed: HandoffView[] | null = null;
+  while (seed === null) {
+    const attempt = pageThrough(ports, scope.value, query.filters, query.limit);
+    if (!attempt.ok) {
+      if (!isRetryableWaitListingFailure(attempt.error)) return err(attempt.error);
+      tracked = attempt.error;
+    } else {
+      seed = attempt.value;
+      tracked = null;
+    }
+    if (seed === null && !sleepUntil()) {
+      if (tracked !== null) return err(tracked);
       return ok({ handoffs: [], timedOut: true });
     }
-    options.sleepMs(Math.min(options.intervalSeconds * 1000, remainingMs));
+  }
+  // The first complete successful seed fixes the baseline: items created
+  // before the invocation instant are known, and items created at or after it
+  // are new and return from that seed immediately, before any sleep.
+  const known = new Set(seed.filter((handoff) => handoff.createdAt < startedAtIso).map((handoff) => handoff.id));
+  const seededArrivals = seed.filter((handoff) => handoff.createdAt >= startedAtIso);
+  if (seededArrivals.length > 0) {
+    return ok({ handoffs: seededArrivals, timedOut: false });
+  }
+  for (;;) {
+    if (!sleepUntil()) {
+      if (tracked !== null) return err(tracked);
+      return ok({ handoffs: [], timedOut: true });
+    }
     // A poll pages past churned known items, because enough of them can fill the
     // first page and hide a genuinely new item one page deeper until the timeout.
-    let afterSortKey: string | null = null;
-    let fresh: HandoffView[] = [];
-    for (;;) {
-      const page = ports.handoffs.listPage(scope.value, query.filters, query.limit, afterSortKey);
-      if (!page.ok) return page;
-      const views = resolveCandidates(page.value.items);
-      if (!views.ok) return views;
-      fresh = fresh.concat(views.value.filter((handoff) => !known.has(handoff.id)));
-      const last = views.value[views.value.length - 1];
-      if (fresh.length > 0 || page.value.items.length < query.limit || page.value.lastSortKey === null) {
-        break;
-      }
-      // The first item last touched before the wait began is a safe cutoff:
-      // nothing sorting below it can be new.
-      if (last !== undefined && last.updatedAt < startedAtIso) {
-        break;
-      }
-      afterSortKey = page.value.lastSortKey;
+    const poll = collectFreshInboxItems(ports, scope.value, query, known, startedAtIso);
+    if (!poll.ok) {
+      if (!isRetryableWaitListingFailure(poll.error)) return poll;
+      tracked = poll.error;
+      continue;
     }
-    if (fresh.length > 0) {
-      return ok({ handoffs: fresh, timedOut: false });
+    // A later successful poll clears an earlier failure: only a failure that
+    // persists at the deadline is reported as its typed error.
+    tracked = null;
+    if (poll.value.length > 0) {
+      return ok({ handoffs: poll.value, timedOut: false });
     }
   }
+}
+
+/** One complete poll of the filtered inbox: every item not in the baseline known set, paging through churned known items. */
+function collectFreshInboxItems(
+  ports: HandoffReadPorts,
+  scope: ListingScope,
+  query: ListQuery,
+  known: ReadonlySet<string>,
+  startedAtIso: string,
+): Result<HandoffView[], AppError> {
+  let afterSortKey: string | null = null;
+  let fresh: HandoffView[] = [];
+  for (;;) {
+    const page = ports.handoffs.listPage(scope, query.filters, query.limit, afterSortKey);
+    if (!page.ok) return page;
+    const views = resolveCandidates(page.value.items);
+    if (!views.ok) return views;
+    fresh = fresh.concat(views.value.filter((handoff) => !known.has(handoff.id)));
+    const last = views.value[views.value.length - 1];
+    if (fresh.length > 0 || page.value.items.length < query.limit || page.value.lastSortKey === null) {
+      break;
+    }
+    // The first item last touched before the wait began is a safe cutoff:
+    // nothing sorting below it can be new.
+    if (last !== undefined && last.updatedAt < startedAtIso) {
+      break;
+    }
+    afterSortKey = page.value.lastSortKey;
+  }
+  return ok(fresh);
 }
 
 export function listOutbox(

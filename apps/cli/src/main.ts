@@ -71,6 +71,7 @@ import {
   listOutbox,
   listProjects,
   largeContentDisclosureMessage,
+  channelError,
   memoError,
   moveVault,
   ok,
@@ -527,7 +528,7 @@ export function buildProgram(
     requestId,
     warn: (text) => ports.err(text),
     fail: (error, json) => {
-      reportExitCode(renderAppError(error, ports, json));
+      reportExitCode(renderAppError(channelError(error), ports, json));
     },
     failReadOnly: (error, json) => {
       reportExitCode(renderChannelRecoveryError(error, { err: ports.err, json, requestId: requestId() }));

@@ -491,7 +491,7 @@ describe("the surfaced Channel composition", () => {
     }
   });
 
-  it("keeps the interim post-commit Channel codes on the real failure paths (interim state)", () => {
+  it("returns the committed Channel outcomes on the real post-commit failure paths", () => {
     const ports = createNodeChannelPorts({ database: quickDb() });
     try {
       const created = createChannel(ports, { creator: USER_ACTOR, mainHandle: "orchestrator", title: undefined });
@@ -499,10 +499,14 @@ describe("the surfaced Channel composition", () => {
       if (!created.ok) return;
       const channelId = created.value.channel.id;
       const mainId = created.value.channel.mainParticipantId;
+      const warnings: string[] = [];
+      const disclosures = ports.disclosures;
+      if (disclosures === undefined) throw new Error("expected the Channel disclosures seam");
+      ports.disclosures = { ...disclosures, completionWarning: (text) => warnings.push(text) };
 
       // A committed submit whose file-backed activation pauses behind a live
-      // move lock keeps CONTENT_MATERIALIZING with its committed-stating text
-      // (the interim state TASK-113 replaces).
+      // move lock returns its committed outcome with `contentActivating` and a
+      // contained warning, never the interim CONTENT_MATERIALIZING failure.
       mkdirSync(join(home, "run"), { recursive: true });
       const lockPath = join(home, "run", "vault-move.lock");
       const placeLock = () => {
@@ -531,16 +535,20 @@ describe("the surfaced Channel composition", () => {
         accepted: captured.value,
         actor: USER_ACTOR,
       });
-      expect(paused.ok).toBe(false);
-      const unmaterialized = errorOf(paused);
-      expect(unmaterialized.code).toBe("CONTENT_MATERIALIZING");
-      expect(unmaterialized.message).toContain("The Channel message is committed; its activation could not complete");
-      expect(unmaterialized.details?.storageContention).toBeUndefined();
+      expect(paused.ok).toBe(true);
+      if (!paused.ok) return;
+      expect(paused.value.contentActivating).toBe(true);
+      expect(warnings).toEqual([
+        "the Channel message committed but its content activation paused behind a held Vault-move lock; the pending intent remains for the next process start",
+      ]);
+      const pausedSummary = paused.value.message;
+      expect(pausedSummary.bodyBytes).toBeGreaterThan(65_536);
       rmSync(lockPath, { force: true });
       ports.staging.activateContent = activate;
 
-      // A committed handle whose post-commit preview read fails keeps its
-      // current code and never becomes the contention refusal.
+      // A committed handle whose post-commit preview read fails returns its
+      // committed decision with the explicit unavailable-preview indicator and
+      // never becomes the contention refusal.
       const submitted = submitMessage(ports, {
         channelId,
         senderParticipantId: mainId,
@@ -557,11 +565,12 @@ describe("the surfaced Channel composition", () => {
         assertion: { actor: USER_ACTOR, asParticipant: mainId },
         expectedRowVersion: 1,
       });
-      expect(handled.ok).toBe(false);
-      const preview = errorOf(handled);
-      expect(preview.code).toBe("INTERNAL_ERROR");
-      expect(preview.message).toContain("injected preview failure");
-      expect(preview.details?.storageContention).toBeUndefined();
+      expect(handled.ok).toBe(true);
+      if (handled.ok) {
+        expect(handled.value.bodyPreviewUnavailable).toBe(true);
+        expect(handled.value.message.bodyPreview).toBe("");
+        expect(handled.value.message.handled).toBe(true);
+      }
       // The decision itself committed: the message is handled in the database.
       const count = independentConnection();
       try {

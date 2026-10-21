@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { buildContentStorageKey, utf8ByteLength } from "./content";
-import { type AppError, appError, err, ok, type Result } from "./errors";
+import { buildContentStorageKey, CONTENT_INLINE_MAX_UTF8_BYTES, utf8ByteLength } from "./content";
+import { type AppError, appError, err, isRetryableWaitListingFailure, ok, type Result } from "./errors";
 import type { ActorRef, ChannelDomainEventType, NewDomainEvent } from "./events";
 import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { MEMO_PREVIEW_BYTES } from "./memos";
@@ -818,6 +818,14 @@ export interface ChannelBodyPorts {
   readRecordPreviewSeed(ref: ChannelBodyRef, binding: { vaultPath: string }): Result<string, AppError>;
   /** Resolves a record's complete exact text outside any transaction, honestly reporting materializing and corrupt bytes. */
   resolveBody(ref: ChannelBodyRef, binding: { vaultPath: string }): Result<string, AppError>;
+  /**
+   * Database-only content-state probe: the message's content representation and
+   * whether the record is materialized. Never reads the filesystem.
+   */
+  messageContentState(
+    channelId: string,
+    messageId: string,
+  ): Result<{ representation: "inline" | "file"; materialized: boolean }, AppError>;
 }
 
 /** The actor assertion one mutation carries: the resolved provenance plus the asserted participant or User context. */
@@ -951,6 +959,8 @@ export interface ChannelCommandPorts {
     backupEnabled: boolean;
     thresholdBytes: number;
     largeContent(sizeBytes: number, thresholdBytes: number): void;
+    /** The contained post-commit warning sink (SHR-015): a throwing sink never changes the result. */
+    completionWarning?(text: string): void;
   };
 }
 
@@ -1619,7 +1629,7 @@ type SubmitOutcome = { kind: "replay"; message: MessageSummary } | FreshSubmitOu
 export function submitMessage(
   ports: ChannelCommandPorts,
   input: SubmitMessageInput & { actor: ActorRef },
-): Result<{ message: MessageSummary; replayed: boolean }> {
+): Result<{ message: MessageSummary; replayed: boolean; contentActivating: boolean }> {
   if (!isChannelUuid(input.channelId)) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
   if (!isChannelUuid(input.senderParticipantId)) {
     return err(appError("CHN_PARTICIPANT_NOT_FOUND", "Unknown participant for this Channel"));
@@ -1688,9 +1698,13 @@ export function submitMessage(
             );
           }
           if (stored.value.requestHash !== hash) {
-            return err(
-              appError("IDEMPOTENCY_CONFLICT", "The retained Channel submission key carries a different request"),
-            );
+            return err({
+              ...appError("IDEMPOTENCY_CONFLICT", "The retained Channel submission key carries a different request"),
+              recovery: {
+                suggestedCommand:
+                  "The key is retained for a different request. Replaying the identical original request returns its original outcome; a new key is legitimate only for a genuinely new intent such as a new main-directed attempt, never as recovery for an unknown outcome",
+              },
+            });
           }
           // A hash-matching receipt must still be this request's original
           // outcome: the input-known sender, kind, assignment, relay target,
@@ -1833,8 +1847,27 @@ export function submitMessage(
   );
   if (!outcome.ok) return outcome;
   const value = outcome.value;
-  if (value.kind === "replay") return ok({ message: value.message, replayed: true });
+  if (value.kind === "replay") {
+    // The recorded outcome keeps its committed summary; a file-backed record's
+    // state is observed read-only, and an unobservable state is disclosed
+    // rather than asserted (CHN-012, ADR-0033's unconfirmed-content note).
+    const warn = (text: string): void => emitChannelCompletionWarning(ports, text);
+    return ok({
+      message: value.message,
+      replayed: true,
+      contentActivating:
+        value.message.bodyBytes > CONTENT_INLINE_MAX_UTF8_BYTES
+          ? contentStateFlagOf(
+              ports.bodies.messageContentState(value.message.channelId, value.message.id),
+              value.message.id,
+              warn,
+            )
+          : false,
+    });
+  }
   discloseLargeContent(ports, value.plan);
+  const warn = (text: string): void => emitChannelCompletionWarning(ports, text);
+  let contentActivating = false;
   if (value.plan.kind === "file") {
     const activation = ports.staging.activateContent(
       {
@@ -1848,24 +1881,99 @@ export function submitMessage(
       },
       value.binding,
     );
+    // Physical completion never changes the committed outcome (SHR-015): a
+    // failed or paused activation leaves the pending intent for the next
+    // process start and is disclosed as a contained warning.
     if (!activation.ok) {
-      return err(committedButUnmaterialized(activation.error.message));
+      warn(activationFailedWarning(activation.error.message));
+    } else if (activation.value.status === "paused") {
+      warn(CHANNEL_ACTIVATION_PAUSED_WARNING);
     }
-    if (activation.value.status === "paused") {
-      return err(committedButUnmaterialized("its activation paused behind a held Vault-move lock"));
-    }
+    contentActivating = contentStateFlagOf(
+      ports.bodies.messageContentState(value.channelId, value.message.id),
+      value.message.id,
+      warn,
+    );
   }
-  return ok({ message: value.message, replayed: false });
+  return ok({ message: value.message, replayed: false, contentActivating });
 }
 
-function committedButUnmaterialized(reason: string): AppError {
-  return {
-    ...appError(
-      "CONTENT_MATERIALIZING",
-      `The Channel message is committed; its activation could not complete: ${reason}`,
-    ),
-    recovery: { suggestedCommand: "Retry the read; the next process start drains the activation intent" },
-  };
+/** The stable opening of the unconfirmed-content-state warning; the CLI selects its human line from it. */
+export const CHANNEL_UNCONFIRMED_CONTENT_WARNING = "the content-state probe for message";
+
+/** The observed-pending activation warning of a committed file-backed submit that paused behind a live fence. */
+const CHANNEL_ACTIVATION_PAUSED_WARNING =
+  "the Channel message committed but its content activation paused behind a held Vault-move lock; the pending intent remains for the next process start";
+
+function activationFailedWarning(reason: string): string {
+  return `the Channel message committed but its content activation failed (${reason}); the pending intent remains for the next process start`;
+}
+
+function unconfirmedContentWarning(messageId: string, reason: string): string {
+  return `${CHANNEL_UNCONFIRMED_CONTENT_WARNING} ${messageId} failed (${reason}); activation is not confirmed and contentActivating is reported as true`;
+}
+
+/**
+ * The observed content-state flag (CHN-012): false only when the database shows
+ * the record materialized, true when it shows it unmaterialized, and true plus
+ * a contained warning when the database-only probe cannot observe it — never
+ * `false`, which would assert a state nobody saw.
+ */
+function contentStateFlagOf(
+  state: Result<{ representation: "inline" | "file"; materialized: boolean }, AppError>,
+  messageId: string,
+  warn: (text: string) => void,
+): boolean {
+  if (!state.ok) {
+    warn(unconfirmedContentWarning(messageId, state.error.message));
+    return true;
+  }
+  return !state.value.materialized;
+}
+
+/** A contained completion warning: the sink's own failure never changes the committed outcome. */
+function emitChannelCompletionWarning(ports: ChannelCommandPorts, text: string): void {
+  const sink = ports.disclosures?.completionWarning;
+  if (sink === undefined) return;
+  try {
+    sink(text);
+  } catch {
+    // A diagnostic sink failure never changes the result.
+  }
+}
+
+/**
+ * The Channel per-surface error hook (interface section 38.4, the twin of the
+ * Memo hook): it carries the state-accurate statements interface section 38.4
+ * requires that no context-free catalogue default can produce. Site messages
+ * and details are preserved; a replay-only surface keeps its own unknown-
+ * outcome framing and never passes through this hook.
+ */
+export function channelError(error: AppError): AppError {
+  if (error.code === "CONTENT_MATERIALIZING") {
+    return {
+      ...appError(
+        "CONTENT_MATERIALIZING",
+        "The message itself is committed and needs no resubmission; its file-backed content has not activated yet",
+        error.details,
+        error.cause,
+      ),
+      recovery: {
+        suggestedCommand:
+          "Retry the read or wait after activation; the next process start retries the pending activation, and the message needs no resubmission",
+      },
+    };
+  }
+  if (error.code === "STORAGE_INTEGRITY_ERROR" && error.recovery === undefined) {
+    return {
+      ...error,
+      recovery: {
+        suggestedCommand:
+          "Diagnose the installation with sorage doctor and sorage vault verify before further Channel work; any committed outcome already reported stands",
+      },
+    };
+  }
+  return error;
 }
 
 function discloseLargeContent(ports: ChannelCommandPorts, plan: ChannelContentPlan): void {
@@ -1896,7 +2004,7 @@ export function handleChannelMessage(
     expectedRowVersion: unknown;
     note?: unknown;
   },
-): Result<MessageSummary> {
+): Result<{ message: MessageSummary; bodyPreviewUnavailable: boolean }> {
   if (!isChannelUuid(input.channelId)) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
   if (!isChannelUuid(input.messageId))
     return err(appError("CHN_MESSAGE_NOT_FOUND", "Unknown message for this Channel"));
@@ -1922,22 +2030,49 @@ export function handleChannelMessage(
     if (!message.ok) return message;
     if (message.value === null) return err(appError("CHN_MESSAGE_NOT_FOUND", "Unknown message for this Channel"));
     if (message.value.handled) {
+      const decided = {
+        handledAt: message.value.handledAt,
+        handledByParticipantId: message.value.handledByParticipantId,
+        handledByKind: message.value.handledByKind,
+      };
+      const immutableRecovery = {
+        suggestedCommand:
+          "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>",
+      };
       if (input.expectedRowVersion === 2) {
         const authority =
           message.value.handledByKind === "user"
             ? "the User"
             : `participant ${message.value.handledByParticipantId ?? "unknown"}`;
-        return invalid(`The message was already handled by ${authority}; the first handling decision is immutable`, {
-          handledAt: message.value.handledAt,
-          handledByParticipantId: message.value.handledByParticipantId,
+        return err({
+          ...appError(
+            "CHN_INVALID_INPUT",
+            `The message was already handled by ${authority}; the first handling decision is immutable`,
+            decided,
+          ),
+          recovery: immutableRecovery,
         });
       }
-      return err(appError("ROW_VERSION_CONFLICT", "Another handling attempt won the compare-and-set on this message"));
+      return err({
+        ...appError(
+          "ROW_VERSION_CONFLICT",
+          "A handling decision has already committed for this message, possibly an earlier attempt of this same caller whose response was lost; the first handling decision is immutable",
+          decided,
+        ),
+        recovery: immutableRecovery,
+      });
     }
     if (input.expectedRowVersion !== 1) {
-      return err(
-        appError("ROW_VERSION_CONFLICT", "The observed processing row version does not match the unhandled message"),
-      );
+      return err({
+        ...appError(
+          "ROW_VERSION_CONFLICT",
+          "The message is unhandled and its processing row version is 1; the supplied expected row version does not match",
+        ),
+        recovery: {
+          suggestedCommand:
+            "List the message with sorage channel messages <channelId> and re-run handle with the observed processing row version",
+        },
+      });
     }
     const changed = transaction.handleMessage(channel.value.id, message.value.id, {
       handledAt: now,
@@ -1967,12 +2102,20 @@ export function handleChannelMessage(
   if (!outcome.ok) return outcome;
   // The summary's preview resolves outside the mutation transaction: an inline
   // record's stored text is its own seed and a file-backed body reads its
-  // bounded head through the body ports (P3: no body read inside SQL).
+  // bounded head through the body ports (P3: no body read inside SQL). The
+  // decision already committed, so a failed binding or preview read returns
+  // the committed summary with the explicit unavailable-preview indicator
+  // instead of a failure (CHN-012, SHR-015).
+  const noPreview = { bodyPreview: "", bodyPreviewTruncated: false };
   const binding = ports.staging.freshBinding();
-  if (!binding.ok) return binding;
+  if (!binding.ok) {
+    return ok({ message: messageSummaryOf(outcome.value, noPreview), bodyPreviewUnavailable: true });
+  }
   const preview = previewOfRecord(ports, outcome.value, binding.value);
-  if (!preview.ok) return preview;
-  return ok(messageSummaryOf(outcome.value, preview.value));
+  if (!preview.ok) {
+    return ok({ message: messageSummaryOf(outcome.value, noPreview), bodyPreviewUnavailable: true });
+  }
+  return ok({ message: messageSummaryOf(outcome.value, preview.value), bodyPreviewUnavailable: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -2124,6 +2267,58 @@ export function listChannelMessages(
     cursor?: unknown;
   },
 ): Result<MessagePage> {
+  const validated = validateMessageListAttributes(ports, channelId, {
+    handling: input.handling,
+    participantId: input.participantId,
+    assignmentId: input.assignmentId,
+    kind: input.kind,
+    limit: input.limit,
+  });
+  if (!validated.ok) return validated;
+  const { filter, limit } = validated.value;
+  let after: { createdAt: string; id: string } | undefined;
+  if (input.cursor !== undefined && input.cursor !== null) {
+    if (typeof input.cursor !== "string")
+      return err(appError("CURSOR_INVALID", "The channel messages cursor is malformed"));
+    const decoded = decodeChannelCursor(
+      input.cursor,
+      "channel-messages",
+      messageFilterFields(filter),
+      ports,
+      limit,
+      channelId as string,
+    );
+    if (!decoded.ok) return decoded;
+    after = decoded.value;
+  }
+  // The supplied filters name Channel roster members (section 38.4, C2): an
+  // unknown participant or assignment fails immediately here rather than
+  // emitting a silently empty page.
+  const existence = validateMessageFilterExistence(ports, channelId as string, {
+    participantId: filter.participantId,
+    assignmentId: filter.assignmentId,
+  });
+  if (!existence.ok) return existence;
+  return captureMessagePage(ports, channelId as string, filter, after, limit);
+}
+
+/**
+ * The listing input both entry points validate before their first read
+ * (section 38.4): the Channel UUID shape, the handling and kind filters, the
+ * two filter UUID shapes, and the bounded page size. The ordinary listing and
+ * the wait share it, so a wait can never poll on input the listing refuses.
+ */
+function validateMessageListAttributes(
+  ports: ChannelCommandPorts,
+  channelId: unknown,
+  input: {
+    handling?: unknown;
+    participantId?: unknown;
+    assignmentId?: unknown;
+    kind?: unknown;
+    limit?: unknown;
+  },
+): Result<{ filter: MessageListFilter; limit: number }> {
   if (!isChannelUuid(channelId)) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
   const handling = input.handling === undefined || input.handling === null ? "unhandled" : input.handling;
   if (handling !== "unhandled" && handling !== "handled" && handling !== "all") {
@@ -2144,29 +2339,52 @@ export function listChannelMessages(
   ) {
     return invalid("The kind filter is report, question, or relay_request");
   }
-  const filter: MessageListFilter = {
-    handling,
-    participantId: (input.participantId as string | null) ?? null,
-    assignmentId: (input.assignmentId as string | null) ?? null,
-    kind: (input.kind as MessageKind | null) ?? null,
-  };
   const limit = boundedLimit(ports, input.limit);
   if (!limit.ok) return limit;
-  let after: { createdAt: string; id: string } | undefined;
-  if (input.cursor !== undefined && input.cursor !== null) {
-    if (typeof input.cursor !== "string")
-      return err(appError("CURSOR_INVALID", "The channel messages cursor is malformed"));
-    const decoded = decodeChannelCursor(
-      input.cursor,
-      "channel-messages",
-      messageFilterFields(filter),
-      ports,
-      limit.value,
-      channelId as string,
-    );
-    if (!decoded.ok) return decoded;
-    after = decoded.value;
+  return ok({
+    filter: {
+      handling,
+      participantId: (input.participantId as string | null) ?? null,
+      assignmentId: (input.assignmentId as string | null) ?? null,
+      kind: (input.kind as MessageKind | null) ?? null,
+    },
+    limit: limit.value,
+  });
+}
+
+/**
+ * The one filter-existence check (section 38.4, C2): a supplied participant or
+ * assignment id absent from the Channel's current rosters is the documented
+ * not-found code. It reuses the `show` aggregate reader; the check runs once
+ * per successful validation, so a wait retries it with its own continuation
+ * while a non-waiting listing reports any failure at once.
+ */
+function validateMessageFilterExistence(
+  ports: ChannelCommandPorts,
+  channelId: string,
+  filter: { participantId: string | null; assignmentId: string | null },
+): Result<void> {
+  if (filter.participantId === null && filter.assignmentId === null) return ok(undefined);
+  const aggregate = ports.channels.inspect((reader) => reader.aggregate(channelId));
+  if (!aggregate.ok) return aggregate;
+  if (aggregate.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
+  if (filter.participantId !== null && !aggregate.value.participants.some((p) => p.id === filter.participantId)) {
+    return err(appError("CHN_PARTICIPANT_NOT_FOUND", "Unknown participant for this Channel"));
   }
+  if (filter.assignmentId !== null && !aggregate.value.assignments.some((a) => a.id === filter.assignmentId)) {
+    return err(appError("CHN_ASSIGNMENT_NOT_FOUND", "Unknown assignment for this Channel"));
+  }
+  return ok(undefined);
+}
+
+/** The bounded coherent message page capture the ordinary listing and the wait share (section 38.4, the M0 coherence clause). */
+function captureMessagePage(
+  ports: ChannelCommandPorts,
+  channelId: string,
+  filter: MessageListFilter,
+  after: { createdAt: string; id: string } | undefined,
+  limit: number,
+): Result<MessagePage> {
   for (let attempt = 0; attempt < CHANNEL_LIST_ATTEMPTS; attempt++) {
     const version = ports.coherence.captureExternalVersion();
     if (!version.ok) return version;
@@ -2176,20 +2394,15 @@ export function listChannelMessages(
     // state instead of mixing a stale snapshot with a new Vault.
     const binding = ports.staging.freshBinding();
     if (!binding.ok) return binding;
-    const capture = ports.channels.captureMessageList(
-      channelId as string,
-      filter,
-      after,
-      Math.max(CHANNEL_LIST_BATCH, limit.value),
-    );
+    const capture = ports.channels.captureMessageList(channelId, filter, after, Math.max(CHANNEL_LIST_BATCH, limit));
     if (!capture.ok) {
       const current = ports.coherence.captureExternalVersion();
       if (current.ok && current.value !== version.value) continue;
       return capture;
     }
-    const page = capture.value.records.slice(0, limit.value);
+    const page = capture.value.records.slice(0, limit);
     const more = capture.value.records.length > page.length || !capture.value.exhausted;
-    const last = page.length === limit.value && more ? page[page.length - 1] : undefined;
+    const last = page.length === limit && more ? page[page.length - 1] : undefined;
     const summaries: MessageSummary[] = [];
     let failure: AppError | null = null;
     for (const record of page) {
@@ -2217,14 +2430,7 @@ export function listChannelMessages(
       nextCursor:
         last === undefined
           ? null
-          : encodeChannelCursor(
-              "channel-messages",
-              messageFilterFields(filter),
-              ports,
-              limit.value,
-              last,
-              channelId as string,
-            ),
+          : encodeChannelCursor("channel-messages", messageFilterFields(filter), ports, limit, last, channelId),
     });
   }
   return err(listExhausted());
@@ -2329,15 +2535,21 @@ export interface ChannelWaitOutcome {
 }
 
 /**
- * The pending-inclusive Channel wait (CHN-007, section 38.5): it returns
- * immediately when at least one unhandled message matches the filter at
+ * The pending-inclusive Channel wait (CHN-007, CHN-012, section 38.5): it
+ * returns immediately when at least one unhandled message matches the filter at
  * invocation, otherwise polls at the bounded interval until an arrival or the
- * timeout, then reports `timedOut` with an empty list. A wait never marks,
- * handles, acknowledges, or otherwise mutates anything, and it returns one
- * bounded page under the same `--limit`, ordering, and preview bounds as the
- * ordinary listing — with the same page-bound `nextCursor`, never a separate
- * unbounded path — so remaining messages are read through the subsequent
- * non-waiting paginated listing.
+ * timeout. The deadline is measured from invocation; a retryable listing
+ * failure (`STORAGE_INSPECTION_UNAVAILABLE` or read-side
+ * `CONTENT_MATERIALIZING`) is retried at the poll cadence, the most recent
+ * failure is reported as its typed error only when it persists at the deadline,
+ * and an ordinary empty timeout reports `timedOut` with an empty list. The
+ * supplied filter is validated once per successful validation inside the same
+ * continuation, so an unknown participant or assignment fails immediately. A
+ * wait never marks, handles, acknowledges, or otherwise mutates anything, and it
+ * returns one bounded page under the same `--limit`, ordering, and preview
+ * bounds as the ordinary listing — with the same page-bound `nextCursor`, never
+ * a separate unbounded path — so remaining messages are read through the
+ * subsequent non-waiting paginated listing.
  */
 export function waitForChannelMessages(
   ports: ChannelCommandPorts,
@@ -2352,20 +2564,52 @@ export function waitForChannelMessages(
   },
 ): Result<ChannelWaitOutcome> {
   const deadline = Date.now() + options.timeoutSeconds * 1000;
+  // The same input validation the ordinary listing runs, before the existence
+  // check and the loop: a wait never polls on a kind, UUID shape, or bound the
+  // listing refuses (section 38.5).
+  const validated = validateMessageListAttributes(ports, channelId, {
+    handling: "unhandled",
+    participantId: filter.participantId,
+    assignmentId: filter.assignmentId,
+    kind: filter.kind,
+    limit: options.limit,
+  });
+  if (!validated.ok) return validated;
+  const pageFilter = validated.value.filter;
+  const limit = validated.value.limit;
+  const participantId = pageFilter.participantId;
+  const assignmentId = pageFilter.assignmentId;
+  let filtersValidated = false;
+  let tracked: AppError | null = null;
   for (;;) {
-    const page = listChannelMessages(ports, channelId, {
-      handling: "unhandled",
-      participantId: filter.participantId ?? undefined,
-      assignmentId: filter.assignmentId ?? undefined,
-      kind: filter.kind ?? undefined,
-      limit: options.limit,
-    });
-    if (!page.ok) return page;
-    if (page.value.items.length > 0) {
-      return ok({ timedOut: false, messages: page.value.items, nextCursor: page.value.nextCursor });
+    if (!filtersValidated) {
+      const existence = validateMessageFilterExistence(ports, channelId, { participantId, assignmentId });
+      if (!existence.ok) {
+        if (!isRetryableWaitListingFailure(existence.error)) return existence;
+        tracked = existence.error;
+      } else {
+        filtersValidated = true;
+        tracked = null;
+      }
+    }
+    if (filtersValidated) {
+      const page = captureMessagePage(ports, channelId, pageFilter, undefined, limit);
+      if (!page.ok) {
+        if (!isRetryableWaitListingFailure(page.error)) return page;
+        tracked = page.error;
+      } else if (page.value.items.length > 0) {
+        return ok({ timedOut: false, messages: page.value.items, nextCursor: page.value.nextCursor });
+      } else {
+        // A later successful poll clears an earlier failure: only a failure
+        // that persists at the deadline is reported.
+        tracked = null;
+      }
     }
     const remaining = deadline - Date.now();
-    if (remaining <= 0) return ok({ timedOut: true, messages: [], nextCursor: null });
+    if (remaining <= 0) {
+      if (tracked !== null) return err(tracked);
+      return ok({ timedOut: true, messages: [], nextCursor: null });
+    }
     options.sleepMs(Math.min(options.intervalSeconds * 1000, remaining));
   }
 }
@@ -2874,11 +3118,21 @@ export interface ChannelReceiptReader {
 /** The replay-only observation the installation-inspection seam produces; no staging, no activation, no migration, no log writes. */
 export interface ChannelRecoveryPorts {
   clock: Clock;
+  /**
+   * The optional contained warning sink for a recorded outcome whose content
+   * state cannot be observed (SHR-015): a throwing sink never changes the result.
+   */
+  warnings?(text: string): void;
   inspect<T>(
     consume: (observation: {
       installationId: string;
       migrationVersion: number;
       receipts: ChannelReceiptReader;
+      /** The same database-only content-state probe the submit paths use, over this captured inspection. */
+      contentState(
+        channelId: string,
+        messageId: string,
+      ): Result<{ representation: "inline" | "file"; materialized: boolean }, AppError>;
     }) => Result<T>,
   ): Result<T>;
   /** The same full accepted-body proofs the execute path runs, over the read-only seam (the F5 and C1 corrections). */
@@ -2916,7 +3170,7 @@ export interface SubmitReplayOnlyInput {
 export function submitMessageReplayOnly(
   ports: ChannelRecoveryPorts,
   input: SubmitReplayOnlyInput,
-): Result<MessageSummary> {
+): Result<{ message: MessageSummary; contentActivating: boolean }> {
   if (!isChannelUuid(input.channelId)) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
   if (!isChannelUuid(input.senderParticipantId)) {
     return err(appError("CHN_PARTICIPANT_NOT_FOUND", "Unknown participant for this Channel"));
@@ -3031,8 +3285,32 @@ export function submitMessageReplayOnly(
       preview: preparedPreview,
     });
     if (!consistent.ok) return consistent;
-    return ok(stored.value.message);
+    // The recorded summary returns verbatim; a file-backed record's current
+    // state is derived read-only through the same database-only probe, and an
+    // unobservable state is disclosed rather than asserted (CHN-012).
+    if (stored.value.message.bodyBytes <= CONTENT_INLINE_MAX_UTF8_BYTES) {
+      return ok({ message: stored.value.message, contentActivating: false });
+    }
+    return ok({
+      message: stored.value.message,
+      contentActivating: contentStateFlagOf(
+        observation.contentState(input.channelId as string, stored.value.message.id),
+        stored.value.message.id,
+        (text) => emitRecoveryWarning(ports, text),
+      ),
+    });
   });
+}
+
+/** A contained replay-only warning: the sink's own failure never changes the recorded outcome. */
+function emitRecoveryWarning(ports: ChannelRecoveryPorts, text: string): void {
+  const sink = ports.warnings;
+  if (sink === undefined) return;
+  try {
+    sink(text);
+  } catch {
+    // A diagnostic sink failure never changes the result.
+  }
 }
 
 export function channelSubmitScope(installationId: string, channelId: string): string {

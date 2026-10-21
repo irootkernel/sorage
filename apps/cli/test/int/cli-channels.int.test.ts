@@ -771,7 +771,7 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
     expect(closeA.status).toBe(0);
     expect(keys(closeA.stdout)).toEqual(["assignment"]);
 
-    // submit → {message, replayed}
+    // submit → {message, replayed, contentActivating}
     const submitArgs = [
       "channel",
       "submit",
@@ -788,11 +788,11 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
     ];
     const submit = cli(submitArgs, h);
     expect(submit.status, submit.stderr).toBe(0);
-    expect(keys(submit.stdout)).toEqual(["message", "replayed"]);
+    expect(keys(submit.stdout)).toEqual(["contentActivating", "message", "replayed"]);
     const messageId = JSON.parse(submit.stdout).data.message.id as string;
     const replay = cli([...submitArgs, "--replay-only"], h);
     expect(replay.status, replay.stderr).toBe(0);
-    expect(keys(replay.stdout)).toEqual(["message", "replayed"]);
+    expect(keys(replay.stdout)).toEqual(["contentActivating", "message", "replayed"]);
     expect(JSON.parse(replay.stdout).data.replayed).toBe(true);
 
     // messages → {items, nextCursor}
@@ -809,13 +809,13 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
     expect(read.status).toBe(0);
     expect(keys(read.stdout)).toEqual(["message"]);
 
-    // handle → {message}
+    // handle → {message, bodyPreviewUnavailable}
     const handle = cli(
       ["channel", "handle", channelId, messageId, "--expected-row-version", "1", "--as-participant", mainId, "--json"],
       h,
     );
     expect(handle.status, handle.stderr).toBe(0);
-    expect(keys(handle.stdout)).toEqual(["message"]);
+    expect(keys(handle.stdout)).toEqual(["bodyPreviewUnavailable", "message"]);
     const timeout = cli(["channel", "messages", channelId, "--wait", "--interval", "1", "--timeout", "1", "--json"], h);
     expect(timeout.status, timeout.stderr).toBe(0);
     expect(keys(timeout.stdout)).toEqual(["items", "nextCursor"]);
@@ -874,6 +874,7 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
     expect(JSON.parse(recovered.stdout).data).toEqual({
       message: JSON.parse(original.stdout).data.message,
       replayed: true,
+      contentActivating: false,
     });
     expect(fingerprint(h)).toEqual(beforeRecovery);
   });

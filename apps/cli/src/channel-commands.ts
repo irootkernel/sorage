@@ -18,6 +18,7 @@ import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createHomePaths } from "@sorage/adapters/src/home";
 import {
+  CHANNEL_UNCONFIRMED_CONTENT_WARNING,
   addAssignment,
   addParticipant,
   appError,
@@ -432,6 +433,7 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
 
     let accepted: AcceptedChannelBody | undefined;
     const warnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
+    let unconfirmedContentState = false;
     try {
       sweepChannelAcceptedInputs();
       if (ports.disclosures !== undefined) {
@@ -440,6 +442,13 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
           ...composed,
           largeContent: (sizeBytes: number, thresholdBytes: number) => {
             warnings.push({ sizeBytes, thresholdBytes });
+          },
+          // The contained post-commit warning sink (SHR-015): the CLI also
+          // remembers an unobservable content state so its human line never
+          // asserts a pending activation nobody observed (CHN-012).
+          completionWarning: (text: string) => {
+            if (text.startsWith(CHANNEL_UNCONFIRMED_CONTENT_WARNING)) unconfirmedContentState = true;
+            emitContainedWarning(output, text);
           },
         };
       }
@@ -644,7 +653,7 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
           // A diagnostic flush failure never changes a committed outcome.
         }
       }
-      emitResult(operation, result.value, json);
+      emitResult(operation, result.value, json, unconfirmedContentState);
       return null;
     } finally {
       // Post-commit cleanup (SHR-015 category (iv)): each step is separately
@@ -766,30 +775,54 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
       }
       accepted = body.value;
       const recovery = createNodeChannelRecoveryPorts();
-      const result = submitMessageReplayOnly(recovery, {
-        installationId: installation.value.installationId,
-        maxBytes: installation.value.maxBytes,
-        channelId,
-        senderParticipantId: options.asParticipant,
-        kind: options.kind,
-        accepted,
-        ...(options.assignment !== undefined ? { assignmentId: options.assignment } : {}),
-        ...(options.relayTo !== undefined ? { relayToParticipantId: options.relayTo } : {}),
-        ...(options.contextSession !== undefined ? { contextSession: options.contextSession } : {}),
-        ...(options.contextNode !== undefined ? { contextNode: options.contextNode } : {}),
-        ...(options.contextAttempt !== undefined ? { contextAttempt: options.contextAttempt } : {}),
-        idempotencyKey: String(options.idempotencyKey),
-      });
+      let unconfirmedContentState = false;
+      const result = submitMessageReplayOnly(
+        {
+          ...recovery,
+          warnings: (text: string) => {
+            if (text.startsWith(CHANNEL_UNCONFIRMED_CONTENT_WARNING)) unconfirmedContentState = true;
+            emitContainedWarning(output, text);
+          },
+        },
+        {
+          installationId: installation.value.installationId,
+          maxBytes: installation.value.maxBytes,
+          channelId,
+          senderParticipantId: options.asParticipant,
+          kind: options.kind,
+          accepted,
+          ...(options.assignment !== undefined ? { assignmentId: options.assignment } : {}),
+          ...(options.relayTo !== undefined ? { relayToParticipantId: options.relayTo } : {}),
+          ...(options.contextSession !== undefined ? { contextSession: options.contextSession } : {}),
+          ...(options.contextNode !== undefined ? { contextNode: options.contextNode } : {}),
+          ...(options.contextAttempt !== undefined ? { contextAttempt: options.contextAttempt } : {}),
+          idempotencyKey: String(options.idempotencyKey),
+        },
+      );
       if (!result.ok) {
         output.failReadOnly(result.error, json);
         return null;
       }
       if (json) {
         output.out(
-          `${JSON.stringify(successEnvelope({ message: result.value, replayed: true }, output.requestId()), null, 2)}\n`,
+          `${JSON.stringify(
+            successEnvelope(
+              { message: result.value.message, replayed: true, contentActivating: result.value.contentActivating },
+              output.requestId(),
+            ),
+            null,
+            2,
+          )}\n`,
         );
       } else {
-        renderMessageSummary(result.value, output.out);
+        renderMessageSummary(result.value.message, output.out);
+        if (result.value.contentActivating) {
+          output.out(
+            unconfirmedContentState
+              ? "Content activation could not be confirmed; the message is committed and needs no resubmission.\n"
+              : "Content activation is pending; the next process start retries it.\n",
+          );
+        }
         output.out("Replayed the original recorded outcome; the original outcome is historical.\n");
       }
       return null;
@@ -810,7 +843,12 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
     return { ok: false, error: appError("CHN_INVALID_INPUT", "A submission requires --body or --body-file") };
   }
 
-  function emitResult(operation: ChannelOperation, value: unknown, json: boolean): void {
+  function emitResult(
+    operation: ChannelOperation,
+    value: unknown,
+    json: boolean,
+    unconfirmedContentState: boolean,
+  ): void {
     if (json) {
       // F1: every operation returns its exact closed JSON data wrapper from
       // section 38.4 line 1710 — no flat or extra fields.
@@ -833,10 +871,15 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
           break;
         case "submit":
           data = value;
-          break; // {message, replayed} — already the exact shape
+          break; // {message, replayed, contentActivating} — already the exact shape
         case "read":
-        case "handle":
           data = { message: value };
+          break;
+        case "handle":
+          data = {
+            message: (value as { message: MessageSummary }).message,
+            bodyPreviewUnavailable: (value as { bodyPreviewUnavailable: boolean }).bodyPreviewUnavailable,
+          };
           break;
         case "list":
         case "messages":
@@ -904,9 +947,22 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
         break;
       }
       case "submit": {
-        const { message, replayed } = value as { message: MessageSummary; replayed: boolean };
+        const { message, replayed, contentActivating } = value as {
+          message: MessageSummary;
+          replayed: boolean;
+          contentActivating: boolean;
+        };
         renderMessageSummary(message, output.out);
         if (replayed) output.out("Replayed the original recorded outcome.\n");
+        if (contentActivating) {
+          // The unconfirmed-state warning selects the line: never assert a
+          // pending activation when the state could not be observed (CHN-012).
+          output.out(
+            unconfirmedContentState
+              ? "Content activation could not be confirmed; the message is committed and needs no resubmission.\n"
+              : "Content activation is pending; the next process start retries it.\n",
+          );
+        }
         break;
       }
       case "read": {
@@ -916,7 +972,16 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
         break;
       }
       case "handle": {
-        renderMessageSummary(value as MessageSummary, output.out);
+        const { message, bodyPreviewUnavailable } = value as {
+          message: MessageSummary;
+          bodyPreviewUnavailable: boolean;
+        };
+        renderMessageSummary(message, output.out);
+        if (bodyPreviewUnavailable) {
+          output.out(
+            "Body preview unavailable after the committed decision; read the full body with sorage channel read <channel> <message>.\n",
+          );
+        }
         break;
       }
     }

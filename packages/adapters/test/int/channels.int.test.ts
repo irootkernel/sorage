@@ -1,15 +1,18 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import {
   addAssignment,
   addParticipant,
+  appError,
   closeAssignment,
   closeChannel,
   createChannel,
   deactivateParticipant,
+  err,
   handleChannelMessage,
   listChannelMessages,
   listChannels,
@@ -136,6 +139,57 @@ function accepted(ports: NodeChannelPorts, text: string) {
       spoolId: randomUUID(),
     }),
   );
+}
+
+/** Wires the contained post-commit warning sink the CLI composition wires. */
+function captureWarnings(ports: NodeChannelPorts): string[] {
+  const warnings: string[] = [];
+  const current = ports.disclosures;
+  if (current === undefined) throw new Error("expected the Channel disclosures seam");
+  ports.disclosures = { ...current, completionWarning: (text) => warnings.push(text) };
+  return warnings;
+}
+
+/**
+ * A real database connection whose probe read throws the engine's busy
+ * signature; every other statement still runs, so the command itself works.
+ */
+function busyProbeDatabase(real: ReturnType<typeof openSorageDatabase>): ReturnType<typeof openSorageDatabase> {
+  return new Proxy(real, {
+    get(target, property) {
+      if (property === "prepare") {
+        return (sql: string) => {
+          if (sql.includes("cr.materialized")) {
+            throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+          }
+          return target.prepare(sql);
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as ReturnType<typeof openSorageDatabase>;
+}
+
+/** Hides the probed column behind the real probe's SQL, so the real connection throws. */
+function hideContentRecords(home: string): void {
+  const side = openSorageDatabase(join(home, "state", "sorage.sqlite3"));
+  try {
+    side.exec("PRAGMA foreign_keys = OFF");
+    side.exec("ALTER TABLE content_records RENAME COLUMN materialized TO materialized_hidden");
+  } finally {
+    side.close();
+  }
+}
+
+function restoreContentRecords(home: string): void {
+  const side = openSorageDatabase(join(home, "state", "sorage.sqlite3"));
+  try {
+    side.exec("PRAGMA foreign_keys = OFF");
+    side.exec("ALTER TABLE content_records RENAME COLUMN materialized_hidden TO materialized");
+  } finally {
+    side.close();
+  }
 }
 
 describe("channel domain on real SQLite and filesystem", () => {
@@ -299,8 +353,8 @@ describe("channel domain on real SQLite and filesystem", () => {
         expectedRowVersion: 1,
       }),
     );
-    expect(first.handledByKind).toBe("user");
-    expect(first.handleNote).toBeNull();
+    expect(first.message.handledByKind).toBe("user");
+    expect(first.message.handleNote).toBeNull();
     const stale = handleChannelMessage(f.ports, {
       channelId: seed.channelId,
       messageId: submission.message.id,
@@ -414,7 +468,7 @@ describe("channel domain on real SQLite and filesystem", () => {
         note: "processed after close",
       }),
     );
-    expect(handledAfterClose.handled).toBe(true);
+    expect(handledAfterClose.message.handled).toBe(true);
     expect(unwrap(readChannelMessage(f.ports, seed.channelId, submissionBeforeClose.message.id)).body).toBe(
       "pre-close question",
     );
@@ -447,7 +501,7 @@ describe("channel domain on real SQLite and filesystem", () => {
     const afterHandle = unwrap(listChannelMessages(f.ports, seed.channelId, { handling: "unhandled" }));
     expect(afterHandle.items).toHaveLength(0);
     const all = unwrap(listChannelMessages(f.ports, seed.channelId, { handling: "all" }));
-    expect(all.items.map((item) => item.id)).toEqual([handled.id]);
+    expect(all.items.map((item) => item.id)).toEqual([handled.message.id]);
     f.close();
   });
 
@@ -1125,6 +1179,7 @@ describe("channel domain on real SQLite and filesystem", () => {
         placeLock();
         return activate(input, binding);
       };
+      const warnings = captureWarnings(f.ports);
       const text = "vault body\n".repeat(7000);
       const paused = submitMessage(f.ports, {
         channelId: seed.channelId,
@@ -1134,7 +1189,13 @@ describe("channel domain on real SQLite and filesystem", () => {
         actor: projectActor("11111111-2222-4333-8444-555555555555"),
         idempotencyKey: "paused-submission",
       });
-      expect(!paused.ok && paused.error.code).toBe("CONTENT_MATERIALIZING");
+      expect(paused.ok).toBe(true);
+      if (!paused.ok) return;
+      expect(paused.value.contentActivating).toBe(true);
+      expect(warnings).toEqual([
+        "the Channel message committed but its content activation paused behind a held Vault-move lock; the pending intent remains for the next process start",
+      ]);
+      const pausedMessageId = paused.value.message.id;
       f.close();
       closed = true;
       rmSync(lockPath);
@@ -1147,6 +1208,7 @@ describe("channel domain on real SQLite and filesystem", () => {
           )
           .get(seed.channelId) as { id: string; materialized: number };
         messageId = row.id;
+        expect(messageId).toBe(pausedMessageId);
         expect(row.materialized).toBe(0);
         expect(db.prepare("SELECT id FROM pending_fs_ops WHERE owner_domain = 'channel'").all()).toHaveLength(1);
         const log = createSqliteIntentLog({
@@ -1182,6 +1244,7 @@ describe("channel domain on real SQLite and filesystem", () => {
         );
         expect(replay.replayed).toBe(true);
         expect(replay.message.id).toBe(messageId);
+        expect(replay.contentActivating).toBe(false);
         expect(eventCount(f.home)).toBe(before + 1);
       } finally {
         restarted.close();
@@ -1208,6 +1271,7 @@ describe("channel domain on real SQLite and filesystem", () => {
         writeFileSync(destination, "conflicting bytes");
         return activate(input, binding);
       };
+      const warnings = captureWarnings(f.ports);
       const text = "conflicted vault body\n".repeat(7000);
       const failed = submitMessage(f.ports, {
         channelId: seed.channelId,
@@ -1217,8 +1281,13 @@ describe("channel domain on real SQLite and filesystem", () => {
         actor: projectActor("11111111-2222-4333-8444-555555555555"),
         idempotencyKey: "conflicted-submission",
       });
-      expect(!failed.ok && failed.error.code).toBe("CONTENT_MATERIALIZING");
-      expect(!failed.ok && failed.error.message).toContain("destination_conflict");
+      expect(failed.ok).toBe(true);
+      if (!failed.ok) return;
+      expect(failed.value.contentActivating).toBe(true);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("its content activation failed");
+      expect(warnings[0]).toContain("destination_conflict");
+      expect(warnings[0]).toContain("the pending intent remains for the next process start");
       f.close();
       closed = true;
       const db = openSorageDatabase(join(f.home, "state", "sorage.sqlite3"));
@@ -1294,6 +1363,21 @@ describe("channel domain on real SQLite and filesystem", () => {
         );
         expect(replay.replayed).toBe(true);
         expect(replay.message.id).toBe(messageId);
+        expect(replay.contentActivating).toBe(false);
+        const recovery = createNodeChannelRecoveryPorts({ env: { SORAGE_HOME: f.home }, userHome: f.home });
+        const inspected = unwrap(
+          submitMessageReplayOnly(recovery, {
+            installationId: restarted.installationId,
+            maxBytes: restarted.maxBytes,
+            channelId: seed.channelId,
+            senderParticipantId: seed.worker,
+            kind: "report",
+            accepted: accepted(restarted, text),
+            idempotencyKey: "conflicted-submission",
+          }),
+        );
+        expect(inspected.message.id).toBe(messageId);
+        expect(inspected.contentActivating).toBe(false);
       } finally {
         restarted.close();
       }
@@ -1899,6 +1983,582 @@ describe("channel domain on real SQLite and filesystem", () => {
       );
     } finally {
       anotherInstallation.close();
+      f.close();
+    }
+  });
+
+  it("returns a committed handle decision with the unavailable-preview indicator on post-commit binding and preview failures", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    try {
+      const first = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, "binding failure body"),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+        }),
+      );
+      const binding = f.ports.staging.freshBinding;
+      let bindingCalls = 0;
+      f.ports.staging.freshBinding = () => {
+        bindingCalls += 1;
+        if (bindingCalls > 1) return err(appError("CONFIG_INVALID", "injected post-commit binding failure"));
+        return binding();
+      };
+      const handled = unwrap(
+        handleChannelMessage(f.ports, {
+          channelId: seed.channelId,
+          messageId: first.message.id,
+          assertion: mainAssertion(seed.main),
+          expectedRowVersion: 1,
+        }),
+      );
+      expect(handled.bodyPreviewUnavailable).toBe(true);
+      expect(handled.message.bodyPreview).toBe("");
+      expect(handled.message.bodyPreviewTruncated).toBe(false);
+      expect(handled.message.handled).toBe(true);
+      f.ports.staging.freshBinding = binding;
+
+      const second = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, "preview failure body"),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+        }),
+      );
+      f.ports.bodies.readRecordPreviewSeed = () => err(appError("INTERNAL_ERROR", "injected preview failure"));
+      const previewRefused = unwrap(
+        handleChannelMessage(f.ports, {
+          channelId: seed.channelId,
+          messageId: second.message.id,
+          assertion: userAssertion,
+          expectedRowVersion: 1,
+        }),
+      );
+      expect(previewRefused.bodyPreviewUnavailable).toBe(true);
+      expect(previewRefused.message.bodyPreview).toBe("");
+      const db = openSorageDatabase(join(f.home, "state", "sorage.sqlite3"));
+      try {
+        const rows = db
+          .prepare("SELECT handled FROM channel_messages WHERE channel_id = ? ORDER BY created_at, id")
+          .all(seed.channelId) as Array<{ handled: number }>;
+        expect(rows.map((row) => row.handled)).toEqual([1, 1]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      f.close();
+    }
+  });
+
+  it("keeps a wait polling across an unmaterialized record and converges when activation completes", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    const lockPath = join(f.home, "run", "vault-move.lock");
+    const placeLock = () => {
+      mkdirSync(join(f.home, "run"), { recursive: true });
+      writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: INSTALLATION_TIME, hostname: "test" }));
+    };
+    let db: ReturnType<typeof openSorageDatabase> | undefined;
+    let now = Date.now();
+    const time = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const activate = f.ports.staging.activateContent;
+      f.ports.staging.activateContent = (input, binding) => {
+        placeLock();
+        return activate(input, binding);
+      };
+      const text = "wait activation body\n".repeat(7000);
+      const submitted = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "wait-activation",
+        }),
+      );
+      expect(submitted.contentActivating).toBe(true);
+      let sleeps = 0;
+      const waited = unwrap(
+        waitForChannelMessages(
+          f.ports,
+          seed.channelId,
+          {},
+          {
+            intervalSeconds: 1,
+            timeoutSeconds: 8,
+            sleepMs: () => {
+              sleeps += 1;
+              now += 1_000;
+              // The first poll must meet the unmaterialized record; the second
+              // sleep repairs it and the next poll returns the arrival.
+              if (sleeps === 2) {
+                rmSync(lockPath, { force: true });
+                db = openSorageDatabase(join(f.home, "state", "sorage.sqlite3"));
+                const log = createSqliteIntentLog({
+                  db,
+                  installationId: f.ports.installationId,
+                  events: createSqliteEventLedger(db),
+                });
+                expect(unwrap(log.drain(join(f.home, "vault"))).resolved).toHaveLength(1);
+              }
+            },
+          },
+        ),
+      );
+      expect(sleeps).toBe(2);
+      expect(waited.timedOut).toBe(false);
+      expect(waited.messages.map((message) => message.id)).toEqual([submitted.message.id]);
+    } finally {
+      time.mockRestore();
+      db?.close();
+      rmSync(lockPath, { force: true });
+      f.close();
+    }
+  });
+
+  it("reports a wait failure that persists at the deadline as its typed error", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    const lockPath = join(f.home, "run", "vault-move.lock");
+    let now = Date.now();
+    const time = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const activate = f.ports.staging.activateContent;
+      f.ports.staging.activateContent = (input, binding) => {
+        mkdirSync(join(f.home, "run"), { recursive: true });
+        writeFileSync(lockPath, JSON.stringify({ pid: process.pid, startedAt: INSTALLATION_TIME, hostname: "test" }));
+        return activate(input, binding);
+      };
+      const text = "persistent wait body\n".repeat(7000);
+      const submitted = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+        }),
+      );
+      expect(submitted.contentActivating).toBe(true);
+      let sleeps = 0;
+      const waited = waitForChannelMessages(
+        f.ports,
+        seed.channelId,
+        {},
+        {
+          intervalSeconds: 1,
+          timeoutSeconds: 1,
+          sleepMs: () => {
+            sleeps += 1;
+            now += 1_000;
+          },
+        },
+      );
+      expect(sleeps).toBe(1);
+      expect(!waited.ok && waited.error.code).toBe("CONTENT_MATERIALIZING");
+    } finally {
+      time.mockRestore();
+      rmSync(lockPath, { force: true });
+      f.close();
+    }
+  });
+
+  it("fails unknown participant and assignment filters immediately, with and without a wait", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    try {
+      const unknown = randomUUID();
+      const participant = listChannelMessages(f.ports, seed.channelId, { participantId: unknown });
+      expect(!participant.ok && participant.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
+      const assignment = listChannelMessages(f.ports, seed.channelId, { assignmentId: unknown });
+      expect(!assignment.ok && assignment.error.code).toBe("CHN_ASSIGNMENT_NOT_FOUND");
+      const unknownChannel = listChannelMessages(f.ports, randomUUID(), {});
+      expect(!unknownChannel.ok && unknownChannel.error.code).toBe("CHN_NOT_FOUND");
+      for (const filter of [{ participantId: unknown }, { assignmentId: unknown }]) {
+        let sleeps = 0;
+        const waited = waitForChannelMessages(f.ports, seed.channelId, filter, {
+          intervalSeconds: 1,
+          timeoutSeconds: 30,
+          sleepMs: () => {
+            sleeps += 1;
+          },
+        });
+        expect(sleeps).toBe(0);
+        expect(!waited.ok && waited.error.code).toBe(
+          "participantId" in filter ? "CHN_PARTICIPANT_NOT_FOUND" : "CHN_ASSIGNMENT_NOT_FOUND",
+        );
+      }
+    } finally {
+      f.close();
+    }
+  });
+
+  it("retries a transient existence-stage failure through the wait and reports a persistent one", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    let now = Date.now();
+    const time = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const sleepMs = (): void => {
+      now += 1_000;
+    };
+    try {
+      const inspect = f.ports.channels.inspect;
+      let calls = 0;
+      let sleeps = 0;
+      f.ports.channels.inspect = (work) => {
+        calls += 1;
+        if (calls === 1) return err(appError("STORAGE_INSPECTION_UNAVAILABLE", "injected existence failure"));
+        return inspect(work);
+      };
+      const transient = waitForChannelMessages(
+        f.ports,
+        seed.channelId,
+        { participantId: seed.worker },
+        {
+          intervalSeconds: 1,
+          timeoutSeconds: 5,
+          sleepMs: () => {
+            sleeps += 1;
+            sleepMs();
+          },
+        },
+      );
+      expect(sleeps).toBe(5);
+      expect(transient.ok && transient.value.timedOut).toBe(true);
+      f.ports.channels.inspect = () => err(appError("STORAGE_INSPECTION_UNAVAILABLE", "persistent existence failure"));
+      const persistent = waitForChannelMessages(
+        f.ports,
+        seed.channelId,
+        { participantId: seed.worker },
+        {
+          intervalSeconds: 1,
+          timeoutSeconds: 1,
+          sleepMs,
+        },
+      );
+      expect(!persistent.ok && persistent.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    } finally {
+      time.mockRestore();
+      f.close();
+    }
+  });
+
+  it("absorbs a thrown content-state probe on fresh submit, ordinary replay, and replay-only", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    const warnings = captureWarnings(f.ports);
+    const text = "thrown probe body\n".repeat(7000);
+    const activate = f.ports.staging.activateContent;
+    let hidden = false;
+    try {
+      // The real activation completes, then the probed column disappears behind
+      // the real probe's SQL: prepare/get throws on the live connection.
+      f.ports.staging.activateContent = (input, binding) => {
+        const result = activate(input, binding);
+        if (!hidden) {
+          hidden = true;
+          hideContentRecords(f.home);
+        }
+        return result;
+      };
+      const fresh = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "thrown-probe-key",
+        }),
+      );
+      f.ports.staging.activateContent = activate;
+      expect(fresh.contentActivating).toBe(true);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(`the content-state probe for message ${fresh.message.id} failed`);
+      expect(warnings[0]).toContain("activation is not confirmed and contentActivating is reported as true");
+      // The ordinary same-key replay observes the same thrown failure.
+      const replay = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "thrown-probe-key",
+        }),
+      );
+      expect(replay.replayed).toBe(true);
+      expect(replay.message.id).toBe(fresh.message.id);
+      expect(replay.contentActivating).toBe(true);
+      expect(warnings).toHaveLength(2);
+      // The replay-only observation translates a thrown inspection read too;
+      // the schema stays valid, only the probe's SQL throws inside the reader.
+      restoreContentRecords(f.home);
+      hidden = false;
+      const readonlyWarnings: string[] = [];
+      const recovery = createNodeChannelRecoveryPorts({
+        env: { SORAGE_HOME: f.home },
+        userHome: f.home,
+        inspection: {
+          openPrivateDatabase(path) {
+            const db = new DatabaseSync(path);
+            return {
+              exec: (sql) => db.exec(sql),
+              prepare(sql) {
+                if (sql.includes("cr.materialized")) throw new Error("injected probe SQL failure");
+                return db.prepare(sql);
+              },
+              close() {
+                db.close();
+              },
+            };
+          },
+        },
+      });
+      const readonly = unwrap(
+        submitMessageReplayOnly(
+          { ...recovery, warnings: (warning) => readonlyWarnings.push(warning) },
+          {
+            installationId: f.ports.installationId,
+            maxBytes: f.ports.maxBytes,
+            channelId: seed.channelId,
+            senderParticipantId: seed.worker,
+            kind: "report",
+            accepted: accepted(f.ports, text),
+            idempotencyKey: "thrown-probe-key",
+          },
+        ),
+      );
+      expect(readonly.message.id).toBe(fresh.message.id);
+      expect(readonly.contentActivating).toBe(true);
+      expect(readonlyWarnings).toHaveLength(1);
+      expect(readonlyWarnings[0]).toContain(`the content-state probe for message ${fresh.message.id} failed`);
+    } finally {
+      f.ports.staging.activateContent = activate;
+      if (hidden) restoreContentRecords(f.home);
+      f.close();
+    }
+  });
+
+  it("never reports a busy content-state probe as the pre-commit contention refusal", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    const raw = openSorageDatabase(join(f.home, "state", "sorage.sqlite3"));
+    const ports = createNodeChannelPorts({
+      env: { SORAGE_HOME: f.home },
+      userHome: f.home,
+      clock: new FakeClock(Date.parse(INSTALLATION_TIME)),
+      database: busyProbeDatabase(raw),
+    });
+    const warnings = captureWarnings(ports);
+    const text = "busy probe body\n".repeat(7000);
+    try {
+      const fresh = unwrap(
+        submitMessage(ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "busy-probe-key",
+        }),
+      );
+      const probe = ports.bodies.messageContentState(seed.channelId, fresh.message.id);
+      expect(!probe.ok && probe.error.code).toBe("STORAGE_INTEGRITY_ERROR");
+      if (!probe.ok) {
+        expect(probe.error.message).toContain("content state could not be read");
+        expect(probe.error.message).toContain("database is locked");
+        expect(probe.error.message).not.toContain("committed none of the changes");
+      }
+      expect(fresh.contentActivating).toBe(true);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(`the content-state probe for message ${fresh.message.id} failed`);
+      expect(warnings[0]).toContain("content state could not be read");
+      expect(warnings[0]).toContain("database is locked");
+      expect(warnings[0]).not.toContain("committed none of the changes");
+      const replay = unwrap(
+        submitMessage(ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "busy-probe-key",
+        }),
+      );
+      expect(replay.replayed).toBe(true);
+      expect(replay.message.id).toBe(fresh.message.id);
+      expect(replay.contentActivating).toBe(true);
+      expect(warnings).toHaveLength(2);
+      expect(warnings[1]).not.toContain("committed none of the changes");
+      const readonlyWarnings: string[] = [];
+      const recovery = createNodeChannelRecoveryPorts({
+        env: { SORAGE_HOME: f.home },
+        userHome: f.home,
+        inspection: {
+          openPrivateDatabase(path) {
+            const db = new DatabaseSync(path);
+            return {
+              exec: (sql: string) => db.exec(sql),
+              prepare(sql: string) {
+                if (sql.includes("cr.materialized")) {
+                  throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+                }
+                return db.prepare(sql);
+              },
+              close() {
+                db.close();
+              },
+            };
+          },
+        },
+      });
+      const readonly = unwrap(
+        submitMessageReplayOnly(
+          { ...recovery, warnings: (warning) => readonlyWarnings.push(warning) },
+          {
+            installationId: ports.installationId,
+            maxBytes: ports.maxBytes,
+            channelId: seed.channelId,
+            senderParticipantId: seed.worker,
+            kind: "report",
+            accepted: accepted(ports, text),
+            idempotencyKey: "busy-probe-key",
+          },
+        ),
+      );
+      expect(readonly.message.id).toBe(fresh.message.id);
+      expect(readonly.contentActivating).toBe(true);
+      expect(readonlyWarnings).toHaveLength(1);
+      expect(readonlyWarnings[0]).toContain("content state could not be read");
+      expect(readonlyWarnings[0]).toContain("database is locked");
+      expect(readonlyWarnings[0]).not.toContain("committed none of the changes");
+    } finally {
+      ports.close();
+      raw.close();
+      f.close();
+    }
+  });
+
+  it("keeps the database-only content-state probe honest and never duplicates a committed message", () => {
+    const f = fixture();
+    const seed = seedChannel(f.ports);
+    try {
+      const missing = f.ports.bodies.messageContentState(seed.channelId, randomUUID());
+      expect(!missing.ok && missing.error.code).toBe("STORAGE_INTEGRITY_ERROR");
+      const warnings = captureWarnings(f.ports);
+      const text = "probe seam body\n".repeat(7000);
+      const probe = f.ports.bodies.messageContentState;
+      f.ports.bodies.messageContentState = () => err(appError("STORAGE_INTEGRITY_ERROR", "injected probe failure"));
+      const submitted = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "probe-seam-key",
+        }),
+      );
+      expect(submitted.contentActivating).toBe(true);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("injected probe failure");
+      expect(warnings[0]).toContain("activation is not confirmed and contentActivating is reported as true");
+      const recovery = createNodeChannelRecoveryPorts({ env: { SORAGE_HOME: f.home }, userHome: f.home });
+      const replayOnly = unwrap(
+        submitMessageReplayOnly(
+          {
+            ...recovery,
+            warnings: (warning) => warnings.push(warning),
+            inspect: (consume) =>
+              recovery.inspect((observation) =>
+                consume({
+                  ...observation,
+                  contentState: () => err(appError("STORAGE_INTEGRITY_ERROR", "injected replay probe failure")),
+                }),
+              ),
+          },
+          {
+            installationId: f.ports.installationId,
+            maxBytes: f.ports.maxBytes,
+            channelId: seed.channelId,
+            senderParticipantId: seed.worker,
+            kind: "report",
+            accepted: accepted(f.ports, text),
+            idempotencyKey: "probe-seam-key",
+          },
+        ),
+      );
+      expect(replayOnly.message.id).toBe(submitted.message.id);
+      expect(replayOnly.contentActivating).toBe(true);
+      f.ports.bodies.messageContentState = probe;
+      const replay = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, text),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "probe-seam-key",
+        }),
+      );
+      expect(replay.replayed).toBe(true);
+      expect(replay.message.id).toBe(submitted.message.id);
+      expect(replay.contentActivating).toBe(false);
+      // One committed message and one submission event: no path duplicated the effect.
+      const db = openSorageDatabase(join(f.home, "state", "sorage.sqlite3"));
+      try {
+        const messages = db
+          .prepare("SELECT COUNT(*) AS count FROM channel_messages WHERE channel_id = ?")
+          .get(seed.channelId) as { count: number };
+        expect(messages.count).toBe(1);
+        const events = db
+          .prepare("SELECT COUNT(*) AS count FROM events WHERE event_type = 'CHANNEL_MESSAGE_SUBMITTED'")
+          .get() as { count: number };
+        expect(events.count).toBe(1);
+      } finally {
+        db.close();
+      }
+      // Inline content never probes: a replayed inline message reports false.
+      const inline = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, "inline body"),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "inline-seam-key",
+        }),
+      );
+      expect(inline.contentActivating).toBe(false);
+      let probes = 0;
+      const counting = f.ports.bodies.messageContentState;
+      f.ports.bodies.messageContentState = (channelId, messageId) => {
+        probes += 1;
+        return counting(channelId, messageId);
+      };
+      const inlineReplay = unwrap(
+        submitMessage(f.ports, {
+          channelId: seed.channelId,
+          senderParticipantId: seed.worker,
+          kind: "report",
+          accepted: accepted(f.ports, "inline body"),
+          actor: projectActor("11111111-2222-4333-8444-555555555555"),
+          idempotencyKey: "inline-seam-key",
+        }),
+      );
+      expect(inlineReplay.replayed).toBe(true);
+      expect(inlineReplay.contentActivating).toBe(false);
+      expect(probes).toBe(0);
+      f.ports.bodies.messageContentState = counting;
+    } finally {
       f.close();
     }
   });

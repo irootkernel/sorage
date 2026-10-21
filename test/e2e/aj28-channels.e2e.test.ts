@@ -42,8 +42,8 @@ describe("AJ-28: Channel lifecycle and main-side processing", () => {
         participant: ["participant"],
         assignment: ["assignment"],
         read: ["message"],
-        handle: ["message"],
-        submit: ["message", "replayed"],
+        handle: ["bodyPreviewUnavailable", "message"],
+        submit: ["contentActivating", "message", "replayed"],
         list: ["items", "nextCursor"],
         messages: ["items", "nextCursor"],
       };

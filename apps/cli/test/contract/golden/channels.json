@@ -289,7 +289,8 @@
           "bodyPreview": "Report body\r\nwith CRLF",
           "bodyPreviewTruncated": false
         },
-        "replayed": false
+        "replayed": false,
+        "contentActivating": false
       },
       "meta": {
         "requestId": "<uuid>"
@@ -405,6 +406,23 @@
       }
     }
   },
+  "handle-wrong-version": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "ROW_VERSION_CONFLICT",
+        "message": "The message is unhandled and its processing row version is 1; the supplied expected row version does not match",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "List the message with sorage channel messages <channelId> and re-run handle with the observed processing row version"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
   "forbidden-role": {
     "status": 77,
     "envelope": {
@@ -449,7 +467,8 @@
           "bodyBytes": 22,
           "bodyPreview": "Report body\r\nwith CRLF",
           "bodyPreviewTruncated": false
-        }
+        },
+        "bodyPreviewUnavailable": false
       },
       "meta": {
         "requestId": "<uuid>"
@@ -462,10 +481,35 @@
       "ok": false,
       "error": {
         "code": "ROW_VERSION_CONFLICT",
-        "message": "Another handling attempt won the compare-and-set on this message",
-        "details": {},
+        "message": "A handling decision has already committed for this message, possibly an earlier attempt of this same caller whose response was lost; the first handling decision is immutable",
+        "details": {
+          "handledAt": "<ts>",
+          "handledByParticipantId": "<uuid>",
+          "handledByKind": "participant"
+        },
         "recovery": {
-          "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+          "suggestedCommand": "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "re-handle": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "The message was already handled by participant <uuid>; the first handling decision is immutable",
+        "details": {
+          "handledAt": "<ts>",
+          "handledByParticipantId": "<uuid>",
+          "handledByKind": "participant"
+        },
+        "recovery": {
+          "suggestedCommand": "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>"
         }
       },
       "meta": {
@@ -504,6 +548,23 @@
           }
         ],
         "nextCursor": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages-filter-participant-not-found": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_PARTICIPANT_NOT_FOUND",
+        "message": "Unknown participant for this Channel",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Verify the participant with sorage channel show <channel>"
+        }
       },
       "meta": {
         "requestId": "<uuid>"
@@ -706,7 +767,8 @@
           "bodyPreview": "Report body\r\nwith CRLF",
           "bodyPreviewTruncated": false
         },
-        "replayed": true
+        "replayed": true,
+        "contentActivating": false
       },
       "meta": {
         "requestId": "<uuid>"

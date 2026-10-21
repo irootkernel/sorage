@@ -85,7 +85,7 @@ try {
     if (replay.replayed !== true || replay.message.id !== summary.id) fail(31, "normal BOM-key replay missed: " + JSON.stringify(replay));
     const recovery = createNodeChannelRecoveryPorts({ env: { SORAGE_HOME: home }, userHome: home });
     const readonly = unwrap(submitMessageReplayOnly(recovery, { installationId: reopened.installationId, maxBytes: reopened.maxBytes, channelId: channel.id, senderParticipantId: detail.senderParticipantId, kind: "report", accepted: body2.value, contextSession: session, contextNode: node, contextAttempt: attempt, idempotencyKey: BOM + "key-1" }), 32, "readonly replay");
-    if (readonly.id !== summary.id) fail(33, "readonly BOM-key replay mismatch");
+    if (readonly.message.id !== summary.id) fail(33, "readonly BOM-key replay mismatch");
     const collision = submitMessageReplayOnly(recovery, { installationId: reopened.installationId, maxBytes: reopened.maxBytes, channelId: channel.id, senderParticipantId: detail.senderParticipantId, kind: "report", accepted: body2.value, contextSession: session, contextNode: node, contextAttempt: attempt, idempotencyKey: "key-1" });
     if (ok(collision) || collision.error.code !== "CHN_REPLAY_UNAVAILABLE") fail(34, "plain key collided with the BOM key receipt");
     const { openSorageDatabase } = await import("./packages/adapters/src/sqlite/connection.ts");

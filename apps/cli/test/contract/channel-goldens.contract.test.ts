@@ -166,6 +166,11 @@ describe("Channel CLI additive contracts", () => {
       capture("wait-pending", ["channel", "messages", channelId, "--wait", "--timeout", "0"]);
       capture("read", ["channel", "read", channelId, messageId]);
       capture(
+        "handle-wrong-version",
+        ["channel", "handle", channelId, messageId, "--expected-row-version", "2", "--as-participant", mainId],
+        75,
+      );
+      capture(
         "forbidden-role",
         ["channel", "handle", channelId, messageId, "--expected-row-version", "1", "--as-participant", workerId],
         77,
@@ -187,7 +192,17 @@ describe("Channel CLI additive contracts", () => {
         ["channel", "handle", channelId, messageId, "--expected-row-version", "1", "--as-participant", mainId],
         75,
       );
+      capture(
+        "re-handle",
+        ["channel", "handle", channelId, messageId, "--expected-row-version", "2", "--as-participant", mainId],
+        64,
+      );
       capture("messages-handled", ["channel", "messages", channelId, "--handled"]);
+      capture(
+        "messages-filter-participant-not-found",
+        ["channel", "messages", channelId, "--participant", randomUUID()],
+        66,
+      );
       capture("wait-timeout", ["channel", "messages", channelId, "--wait", "--timeout", "0"]);
       capture("participant-deactivate", [
         "channel",

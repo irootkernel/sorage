@@ -512,9 +512,16 @@ export function createSqliteChannelRepository(
             messageId,
           ) as { changes: number };
         if (changed.changes !== 1) {
-          return err(
-            appError("ROW_VERSION_CONFLICT", "Another handling attempt won the compare-and-set on this message"),
-          );
+          return err({
+            ...appError(
+              "ROW_VERSION_CONFLICT",
+              "A handling decision has already committed for this message; the first handling decision is immutable",
+            ),
+            recovery: {
+              suggestedCommand:
+                "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>",
+            },
+          });
         }
         return ok("changed" as const);
       }),
@@ -929,6 +936,7 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
         proveAcceptedNonBlank: (accepted) => proveSpoolNonBlank(accepted),
         readRecordPreviewSeed: (ref, binding) => readRecordPreviewSeed(boundStore(binding), ref),
         resolveBody: (ref, binding) => resolveRecordBody(boundStore(binding), ref),
+        messageContentState: (channelId, messageId) => channelMessageContentState(db, channelId, messageId),
       },
       coherence: {
         captureExternalVersion: () => ok(externalVersion()),
@@ -1112,6 +1120,56 @@ function resolveRecordBody(
   return ok(decoded);
 }
 
+/** The minimal read capability both the operational connection and the installation inspection expose. */
+interface ChannelContentStateReader {
+  prepare(sql: string): { get(...params: unknown[]): unknown };
+}
+
+/**
+ * The database-only content-state probe behind `contentActivating` (CHN-012,
+ * ADR-0033's unconfirmed-content note): the message's recorded representation
+ * and whether its content record is materialized, from one SQL read and never
+ * the filesystem. A missing message or content row is this probe's own typed
+ * integrity refusal; the submit paths decide how to disclose an unobservable
+ * file-backed state.
+ */
+function channelMessageContentState(
+  database: ChannelContentStateReader,
+  channelId: string,
+  messageId: string,
+): Result<{ representation: "inline" | "file"; materialized: boolean }, AppError> {
+  // The probe runs after the domain commit, so its own failure must never be
+  // the pre-commit contention refusal: every thrown observation error becomes
+  // this probe's typed integrity failure naming the failed read and its cause,
+  // which the submit paths absorb into the unconfirmed-content disclosure.
+  try {
+    const row = database
+      .prepare(
+        `SELECT cr.inline_text IS NOT NULL AS inline, cr.materialized AS materialized
+           FROM channel_messages m JOIN content_records cr ON cr.id = m.content_record_id
+          WHERE m.channel_id = ? AND m.id = ?`,
+      )
+      .get(channelId, messageId) as { inline: number; materialized: number } | null | undefined;
+    if (row === null || row === undefined) {
+      return err(
+        appError("STORAGE_INTEGRITY_ERROR", "The committed Channel message or its content record is missing."),
+      );
+    }
+    return ok({
+      representation: row.inline === 1 ? ("inline" as const) : ("file" as const),
+      materialized: row.materialized === 1,
+    });
+  } catch (error) {
+    return err(
+      appError(
+        "STORAGE_INTEGRITY_ERROR",
+        `the committed Channel message's content state could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: String(error) },
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The replay-only inspection ports (CHN-006, P3 section C)
 
@@ -1195,6 +1253,7 @@ export function createNodeChannelRecoveryPorts(options: NodeChannelRecoveryOptio
           installationId: observation.config.installationId,
           migrationVersion: observation.migrationVersion,
           receipts,
+          contentState: (channelId, messageId) => channelMessageContentState(observation.reader, channelId, messageId),
         });
       });
     },
