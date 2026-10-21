@@ -14,6 +14,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 - Inspect the requested code and its named authorities before changing anything. Resolve discoverable facts before asking Master.
 - Reuse established facts instead of reading or searching for them again. Recheck only the affected information when relevant state changes, evidence conflicts, or missing context makes it unreliable.
 - State material assumptions and surface meaningful trade-offs. Ask when unresolved ambiguity would materially change the result, and push back on conflicts with repository authority, safety, or Master's goal.
+- Before changing a feature, read applicable directory AGENTS.md files and the canonical documents relevant to the change. Respect the selected harness's native instruction scope and precedence.
 
 ### 3. Act on Sufficient Evidence
 
@@ -22,6 +23,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 - Reuse established patterns. Avoid speculative features, abstractions, configurability, compatibility layers, and handling for states repository invariants make impossible. Simplify complexity that the required behavior does not justify.
 - Touch only what the outcome and its verification require. Preserve unrelated user work, match local style, and remove only artifacts made obsolete by this change.
 - Record only independent remaining work in [docs/deferred-feedback/README.md](docs/deferred-feedback/README.md). Promote epic-sized work to a TODO candidate or roadmap unit; never defer current correctness or acceptance work.
+- Read directory-guide adoption coverage in the root documentation index. Maintain affected canonical documents and existing applicable guides, including guides outside that coverage. Within adopted coverage, add guides for new feature boundaries as part of the authorized work. Report uncovered areas without unrelated backfill; guide absence alone adds no workflow blocker. Finish affected documentation before candidate review.
 
 ### 4. Carry Authorization Forward
 

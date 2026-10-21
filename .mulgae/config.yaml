@@ -1,4 +1,4 @@
-version: 4
+version: 5
 project:
   name: "sorage"
   kind: "ui"
@@ -6,8 +6,6 @@ providers:
   zcode: {}
   grok: {}
   codex: {}
-execution:
-  workspace_access: "none"
 roles:
   logic: {enabled: true, primary_provider: "zcode"}
   security: {enabled: true, primary_provider: "zcode"}
@@ -17,7 +15,7 @@ roles:
   testing: {enabled: true, primary_provider: "zcode"}
   artist:
     enabled: true
-    primary_provider: "codex"
+    primary_provider: "zcode"
     inputs:
       task_path: "ux-ui-info.md"
       design_spec_globs:
