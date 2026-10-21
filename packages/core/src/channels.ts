@@ -1241,7 +1241,16 @@ export function createChannel(
       if (!stored.ok) return stored;
       if (stored.value !== null) {
         if (stored.value.requestHash !== hash) {
-          return err(appError("IDEMPOTENCY_CONFLICT", "The retained Channel creation key carries a different request"));
+          return err({
+            ...appError(
+              "IDEMPOTENCY_CONFLICT",
+              "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+            ),
+            recovery: {
+              suggestedCommand:
+                "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
+            },
+          });
         }
         // The retained outcome must be this request's original outcome: the
         // input-known main handle, normalized title, and creator provenance
@@ -1999,6 +2008,15 @@ export function channelError(error: AppError): AppError {
       recovery: {
         suggestedCommand:
           "Diagnose the installation with sorage doctor and sorage vault verify before further Channel work; any committed outcome already reported stands",
+      },
+    };
+  }
+  if (error.code === "STORAGE_SCHEMA_UNSUPPORTED" && error.recovery === undefined) {
+    return {
+      ...error,
+      recovery: {
+        suggestedCommand:
+          "Retain the original Channel command and its input, and for a keyed create or submit its idempotency key; use a Sorage version that supports this storage layout; never downgrade the database",
       },
     };
   }

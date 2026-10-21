@@ -10,10 +10,12 @@ import {
   type ChannelRepository,
   type ChannelTransaction,
   channelError,
+  createChannel,
   handleChannelMessage,
   listChannelMessages,
   type MessageListCapture,
   type MessageKind,
+  type StoredChannelCreateReceipt,
   type StoredChannelSubmitReceipt,
   submitMessage,
   submitMessageReplayOnly,
@@ -95,6 +97,7 @@ interface FakeState {
   messages: Map<string, ChannelMessageRecord>;
   contents: Map<string, { representation: "inline" | "file"; materialized: boolean }>;
   receipts: Map<string, StoredChannelSubmitReceipt>;
+  createReceipts: Map<string, StoredChannelCreateReceipt>;
   events: string[];
   warnings: string[];
   probeCalls: number;
@@ -149,6 +152,7 @@ function fakePorts(): FakePorts {
     messages: new Map(),
     contents: new Map(),
     receipts: new Map(),
+    createReceipts: new Map(),
     events: [],
     warnings: [],
     probeCalls: 0,
@@ -192,7 +196,7 @@ function fakePorts(): FakePorts {
       ok(channelId === CHANNEL_ID ? (assignments.find((item) => item.id === assignmentId) ?? null) : null),
     message: (channelId, messageId) => ok(channelId === CHANNEL_ID ? (state.messages.get(messageId) ?? null) : null),
     submitReceipt: (key) => ok(state.receipts.get(key) ?? null),
-    createReceipt: () => ok(null),
+    createReceipt: (key) => ok(state.createReceipts.get(key) ?? null),
     commitContent: (plan) => {
       state.contents.set(plan.contentId, {
         representation: plan.kind === "inline" ? "inline" : "file",
@@ -885,22 +889,86 @@ describe("state-specific Channel refusals", () => {
   });
 });
 
+describe("channel create recovery text", () => {
+  it("states that the retained key belongs to a different create request and never offers a fresh key", () => {
+    const fake = fakePorts();
+    const first = createChannel(fake.ports, {
+      creator: PROJECT,
+      mainHandle: "orchestrator",
+      title: "Original",
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const eventsAfterCreate = fake.state.events.length;
+    fake.state.createReceipts.set("create-key", {
+      requestHash: "f".repeat(64),
+      channel: first.value.channel,
+    });
+    const conflict = createChannel(fake.ports, {
+      creator: PROJECT,
+      mainHandle: "orchestrator",
+      title: "Changed",
+      idempotencyKey: "create-key",
+    });
+    expect(!conflict.ok).toBe(true);
+    if (!conflict.ok) {
+      expect(conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
+      expect(conflict.error.message).toBe(
+        "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+      );
+      expect(conflict.error.details).toBeUndefined();
+      expect(conflict.error.recovery?.suggestedCommand).toBe(
+        "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
+      );
+      expect(conflict.error.recovery?.suggestedCommand).not.toBe("Use a new key, or replay the identical request");
+      expect(conflict.error.recovery?.suggestedCommand).not.toContain("Use a new key");
+    }
+    expect(fake.state.events.length).toBe(eventsAfterCreate);
+  });
+});
+
 describe("the Channel error surface hook", () => {
-  it("replaces a read-side materializing message and fills integrity recovery", () => {
-    const materializing = channelError(appError("CONTENT_MATERIALIZING", "site text", { record: "content/xx" }));
+  it("replaces a read-side materializing message and fills the Channel recoveries", () => {
+    const cause = new Error("root cause");
+    const materializing = channelError(appError("CONTENT_MATERIALIZING", "site text", { record: "content/xx" }, cause));
     expect(materializing.message).toBe(
       "The message itself is committed and needs no resubmission; its file-backed content has not activated yet",
     );
     expect(materializing.details).toEqual({ record: "content/xx" });
+    expect(materializing.cause).toBe(cause);
     expect(materializing.recovery?.suggestedCommand).toBe(
       "Retry the read or wait after activation; the next process start retries the pending activation, and the message needs no resubmission",
     );
     const withRecovery = { ...appError("STORAGE_INTEGRITY_ERROR", "kept"), recovery: { suggestedCommand: "kept" } };
     expect(channelError(withRecovery)).toBe(withRecovery);
-    const integrity = channelError(appError("STORAGE_INTEGRITY_ERROR", "site damage"));
+    const integrity = channelError(appError("STORAGE_INTEGRITY_ERROR", "site damage", { row: "r1" }, cause));
     expect(integrity.message).toBe("site damage");
+    expect(integrity.details).toEqual({ row: "r1" });
+    expect(integrity.cause).toBe(cause);
     expect(integrity.recovery?.suggestedCommand).toBe(
       "Diagnose the installation with sorage doctor and sorage vault verify before further Channel work; any committed outcome already reported stands",
     );
+    const schema = channelError(
+      appError(
+        "STORAGE_SCHEMA_UNSUPPORTED",
+        "The database schema is at migration 999, newer than this build's known maximum 11; Sorage never downgrades a database.",
+        { appliedVersion: 999, supportedVersion: 11 },
+        cause,
+      ),
+    );
+    expect(schema.message).toBe(
+      "The database schema is at migration 999, newer than this build's known maximum 11; Sorage never downgrades a database.",
+    );
+    expect(schema.details).toEqual({ appliedVersion: 999, supportedVersion: 11 });
+    expect(schema.cause).toBe(cause);
+    expect(schema.recovery?.suggestedCommand).toBe(
+      "Retain the original Channel command and its input, and for a keyed create or submit its idempotency key; use a Sorage version that supports this storage layout; never downgrade the database",
+    );
+    expect(schema.recovery?.suggestedCommand).not.toMatch(/Use a new key|fresh key|--as |--as-user|--confirm/);
+    const schemaWithRecovery = {
+      ...appError("STORAGE_SCHEMA_UNSUPPORTED", "kept"),
+      recovery: { suggestedCommand: "kept" },
+    };
+    expect(channelError(schemaWithRecovery)).toBe(schemaWithRecovery);
   });
 });

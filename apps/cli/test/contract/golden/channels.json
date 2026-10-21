@@ -79,6 +79,23 @@
       }
     }
   },
+  "create-conflict": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "IDEMPOTENCY_CONFLICT",
+        "message": "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
   "participant-add": {
     "status": 0,
     "envelope": {

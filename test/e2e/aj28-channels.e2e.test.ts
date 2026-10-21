@@ -28,6 +28,10 @@ describe("AJ-28: Channel lifecycle and main-side processing", () => {
     return sorage([...args, "--json"], { home: f.home });
   }
 
+  function runHuman(f: { home: string }, args: string[]) {
+    return sorage([...args], { home: f.home });
+  }
+
   function data<T>(f: { home: string }, args: string[]): T {
     const result = run(f, args);
     expect(result.status, result.stderr).toBe(0);
@@ -972,5 +976,111 @@ describe("AJ-28: Channel lifecycle and main-side processing", () => {
       "--replay-only",
     ]);
     expect(lostRecovery.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
+  });
+
+  it("returns the create-specific conflict without creating a second Channel", () => {
+    const f = fixture();
+    const createArgs = [
+      "channel",
+      "create",
+      "--main-handle",
+      "orchestrator",
+      "--title",
+      "Original",
+      "--idempotency-key",
+      "create-key",
+    ];
+    const first = data<{ channel: ChannelView }>(f, createArgs).channel;
+    const replay = data<{ channel: ChannelView }>(f, createArgs).channel;
+    expect(replay.id).toBe(first.id);
+
+    const conflictArgs = [
+      "channel",
+      "create",
+      "--main-handle",
+      "orchestrator",
+      "--title",
+      "Changed",
+      "--idempotency-key",
+      "create-key",
+    ];
+    const conflictRun = run(f, conflictArgs);
+    expect(conflictRun.status).toBe(75);
+    const conflict = errorEnvelopeOf(conflictRun) as {
+      error: {
+        code: string;
+        message: string;
+        details: Record<string, unknown>;
+        recovery: { suggestedCommand: string };
+      };
+    };
+    expect(conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(conflict.error.message).toBe(
+      "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+    );
+    expect(conflict.error.details).toEqual({});
+    expect(conflict.error.recovery.suggestedCommand).toBe(
+      "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
+    );
+    expect(conflict.error.recovery.suggestedCommand).not.toContain("Use a new key");
+
+    const human = runHuman(f, conflictArgs);
+    expect(human.status).toBe(75);
+    expect(human.stdout).toBe("");
+    expect(human.stderr).toContain(
+      "IDEMPOTENCY_CONFLICT: The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+    );
+    expect(human.stderr).toContain(
+      "Recovery: Replay the identical original sorage channel create with the original key and inputs;",
+    );
+
+    const list = data<{ items: Array<{ id: string }> }>(f, ["channel", "list"]);
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]?.id).toBe(first.id);
+  });
+
+  it("renders the Channel database-schema refusal without Handoff send material", () => {
+    const f = fixture();
+    const seeded = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"));
+    try {
+      seeded
+        .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(999, "future", "2026-01-01T00:00:00.000Z");
+    } finally {
+      seeded.close();
+    }
+
+    const schemaRun = run(f, ["channel", "list"]);
+    expect(schemaRun.status).toBe(78);
+    const schema = errorEnvelopeOf(schemaRun) as {
+      error: {
+        code: string;
+        message: string;
+        details: Record<string, unknown>;
+        recovery: { suggestedCommand: string };
+      };
+    };
+    expect(schema.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
+    expect(schema.error.details).toEqual({});
+    expect(schema.error.recovery.suggestedCommand).toBe(
+      "Retain the original Channel command and its input, and for a keyed create or submit its idempotency key; use a Sorage version that supports this storage layout; never downgrade the database",
+    );
+    expect(schema.error.recovery.suggestedCommand).not.toMatch(/Use a new key|fresh key|--as |--as-user|--confirm/);
+
+    const human = runHuman(f, ["channel", "list"]);
+    expect(human.status).toBe(78);
+    expect(human.stdout).toBe("");
+    expect(human.stderr).toContain("STORAGE_SCHEMA_UNSUPPORTED: The database schema is at migration 999");
+    expect(human.stderr).toContain(`Recovery: ${schema.error.recovery.suggestedCommand}`);
+
+    const verified = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"));
+    try {
+      const max = verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+        version: number;
+      };
+      expect(max.version).toBe(999);
+    } finally {
+      verified.close();
+    }
   });
 });

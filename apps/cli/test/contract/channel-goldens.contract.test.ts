@@ -85,6 +85,20 @@ describe("Channel CLI additive contracts", () => {
         "--idempotency-key",
         "create-key",
       ]);
+      capture(
+        "create-conflict",
+        [
+          "channel",
+          "create",
+          "--main-handle",
+          "orchestrator",
+          "--title",
+          "Different",
+          "--idempotency-key",
+          "create-key",
+        ],
+        75,
+      );
       const worker = JSON.parse(
         capture("participant-add", [
           "channel",
@@ -258,6 +272,51 @@ describe("Channel CLI additive contracts", () => {
       const actual = `${JSON.stringify(outputs, null, 2)}\n`;
       if (process.env.SORAGE_UPDATE_GOLDENS === "1") writeFileSync(path, actual);
       expect(actual).toBe(readFileSync(path, "utf8"));
+
+      const conflict = outputs["create-conflict"] as {
+        status: number;
+        envelope: {
+          error: { code: string; message: string; details: unknown; recovery: { suggestedCommand: string } };
+        };
+      };
+      expect(conflict.status).toBe(75);
+      expect(conflict.envelope.error.code).toBe("IDEMPOTENCY_CONFLICT");
+      expect(conflict.envelope.error.message).toBe(
+        "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+      );
+      expect(conflict.envelope.error.details).toEqual({});
+      expect(conflict.envelope.error.recovery.suggestedCommand).toBe(
+        "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
+      );
+      expect(conflict.envelope.error.recovery.suggestedCommand).not.toBe(
+        "Use a new key, or replay the identical request",
+      );
+
+      const forbiddenFreshKey = /Use a new key|mint a replacement key|generate a fresh (?:idempotency )?key/;
+      const authorityFlags = [
+        "--as ",
+        "--as-user",
+        "--confirm",
+        "--confirm-pinned",
+        "--allow-external-source",
+        "--allow-unregistered",
+      ];
+      for (const [name, value] of Object.entries(outputs)) {
+        const entry = value as {
+          envelope: { error?: { recovery?: { suggestedCommand?: string } } };
+        };
+        if (entry.envelope.error === undefined) continue;
+        const recovery = entry.envelope.error.recovery?.suggestedCommand ?? "";
+        expect(recovery, `${name} recovery must not suggest a fresh key`).not.toMatch(forbiddenFreshKey);
+        // The state-required authority flags are the only allowed cases: the
+        // forbidden-role refusal may name --as-user, and an ambiguous-Project
+        // refusal may name --as <project-slug>.
+        const allowedFlags = name === "forbidden-role" ? ["--as-user"] : name === "ambiguous-project" ? ["--as "] : [];
+        for (const flag of authorityFlags) {
+          if (allowedFlags.includes(flag)) continue;
+          expect(recovery, `${name} recovery must not suggest ${flag}`).not.toContain(flag);
+        }
+      }
     } finally {
       f.cleanup();
     }

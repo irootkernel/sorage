@@ -1719,6 +1719,16 @@ describe("channel domain on real SQLite and filesystem", () => {
           idempotencyKey: "c1-create-key",
         });
         expect(!changed.ok && changed.error.code).toBe("IDEMPOTENCY_CONFLICT");
+        if (!changed.ok) {
+          expect(changed.error.message).toBe(
+            "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+          );
+          expect(changed.error.details).toBeUndefined();
+          expect(changed.error.recovery?.suggestedCommand).toBe(
+            "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
+          );
+        }
+        expect((db.prepare("SELECT COUNT(*) AS count FROM channels").get() as { count: number }).count).toBe(1);
       } finally {
         honestPorts.close();
       }

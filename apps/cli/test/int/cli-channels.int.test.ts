@@ -935,6 +935,43 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
       "IDEMPOTENCY_CONFLICT",
       75,
     );
+    const replayConflictArgs = [
+      ...base,
+      "--body",
+      "different original material",
+      "--idempotency-key",
+      "original-key",
+      "--replay-only",
+      ...output,
+    ];
+    const replayConflict = cli(replayConflictArgs, h);
+    expect(replayConflict.status).toBe(75);
+    if (json) {
+      const replayError = (
+        JSON.parse(replayConflict.stderr) as {
+          error: { message: string; recovery: { suggestedCommand: string } };
+        }
+      ).error;
+      expect(replayError.message).toContain("The original submission outcome remains unknown.");
+      expect(
+        replayError.recovery.suggestedCommand.startsWith(
+          "Keep the original key, exact input/source bytes, Installation, Channel and sender participant.",
+        ),
+      ).toBe(true);
+      expect(replayError.recovery.suggestedCommand).toContain(
+        "an unknown outcome does not authorize another submission or blind external dispatch",
+      );
+      expect(replayError.recovery.suggestedCommand).not.toBe("Use a new key, or replay the identical request");
+    } else {
+      expect(replayConflict.stderr).toContain("The original submission outcome remains unknown.");
+      expect(replayConflict.stderr).toContain(
+        "Keep the original key, exact input/source bytes, Installation, Channel and sender participant.",
+      );
+      expect(replayConflict.stderr).toContain(
+        "an unknown outcome does not authorize another submission or blind external dispatch",
+      );
+      expect(replayConflict.stderr).not.toContain("Use a new key, or replay the identical request");
+    }
     refused(
       [...base, "--body-file", join(h, "missing.txt"), "--idempotency-key", "original-key", "--replay-only", ...output],
       "CHN_INVALID_INPUT",
@@ -1095,5 +1132,56 @@ mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
     if (json) expect(JSON.parse(recovered.stdout).data.replayed).toBe(true);
     else expect(recovered.stdout).toContain("Replayed the original recorded outcome");
     expect(fingerprint(h)).toEqual(beforeSuccess);
+  });
+
+  it("preserves the ordinary submit conflict message and recovery", () => {
+    const h = home();
+    expect(cli(["init", "--non-interactive"], h).status).toBe(0);
+    const created = JSON.parse(cli(["channel", "create", "--main-handle", "m", "--json"], h).stdout).data.channel as {
+      id: string;
+      mainParticipantId: string;
+    };
+    const worker = JSON.parse(
+      cli(
+        [
+          "channel",
+          "participant",
+          "add",
+          created.id,
+          "--role",
+          "worker",
+          "--handle",
+          "worker-a",
+          "--as-participant",
+          created.mainParticipantId,
+          "--json",
+        ],
+        h,
+      ).stdout,
+    ).data.participant as { id: string };
+    const base = [
+      "channel",
+      "submit",
+      created.id,
+      "--as-participant",
+      worker.id,
+      "--kind",
+      "report",
+      "--idempotency-key",
+      "submit-key",
+    ];
+    expect(cli([...base, "--body", "original", "--json"], h).status).toBe(0);
+    const conflict = cli([...base, "--body", "changed", "--json"], h);
+    expect(conflict.status).toBe(75);
+    const error = (
+      JSON.parse(conflict.stderr) as {
+        error: { code: string; message: string; recovery: { suggestedCommand: string } };
+      }
+    ).error;
+    expect(error.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(error.message).toBe("The retained Channel submission key carries a different request");
+    expect(error.recovery.suggestedCommand).toBe(
+      "The key is retained for a different request. Replaying the identical original request returns its original outcome; a new key is legitimate only for a genuinely new intent such as a new main-directed attempt, never as recovery for an unknown outcome",
+    );
   });
 });
