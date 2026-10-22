@@ -347,7 +347,9 @@ snapshots/content/** -text -diff
 
 `.gitignore` contains the single line `staging/`.
 
-Git initialization in milestone M3 re-asserts both files idempotently rather than assuming them, so a Vault created by an earlier build is backfilled the first time `sorage init --reconfigure` or Git initialization runs; until then `doctor` reports `vault.gitattributes` and `sorage backup verify` fails the check (BKP-022, which now owns only `core.autocrlf=false` and the verification).
+Initialization never assumes the files on an existing Vault. `init` writes them at creation; `init --reconfigure`, Git initialization when it creates the repository, and `vault move` at the target re-run the same initializer, and every `backup run` re-runs it in its writable setup before the Git change test ([section 26](#26-backup-content)); `vault verify`, `backup verify`, `--dry-run`, and `preflight` never write them. Re-assertion merges the required `.gitattributes` lines in their stated relative order after non-managed rules while preserving non-managed bytes, keeps an already-correct `.gitattributes` byte-identical, and creates a missing `.gitattributes` or `.gitignore`. An existing `.gitignore` without `staging/` keeps its blocking finding until the entry is added by hand.
+
+`vault verify` checks these policy files on every sweep and reports a missing `.gitattributes` file, a missing `.gitignore` file, a missing or disordered required `.gitattributes` line, or a missing `staging/` entry as a blocking finding ([section 6.2](#62-sorage-vault-verify)); a finding that re-assertion repairs persists until an operation that re-asserts runs — after an M9 upgrade, the first `backup run` with the new executable, or `init --reconfigure` — and a missing `staging/` entry in an existing `.gitignore` persists until the entry is added by hand. While a finding remains, `doctor` reports it under `vault.gitattributes` as a warning with the state-specific recovery of [section 35](#35-doctor-check-catalog), and `sorage backup verify` fails the same check together with `core.autocrlf=false` (BKP-022, which now owns only `core.autocrlf=false` and the verification).
 
 Without `.gitattributes` a clone with `core.autocrlf=true` rewrites text Artifact bytes and breaks their recorded SHA-256, which is why the file is milestone M1 and not M3.
 
@@ -373,6 +375,7 @@ When `openVault` cannot open the configured Vault, the `VAULT_INTEGRITY_ERROR` r
 
 - The marker exists, parses, and its `installationId` matches the Installation.
 - The marker `schemaVersion` is supported.
+- `.gitattributes` carries every line VLT-024 requires for the running build in its stated relative order, and `.gitignore` carries `staging/`; additional non-managed lines are allowed, and a missing file, a missing or disordered required line, or a missing entry is a blocking finding.
 - Every live Handoff's current Artifact file exists at its `storageKey` and its recomputed SHA-256 matches (VLT-023).
 - Every managed Artifact file is read-only where the filesystem supports it (VLT-008).
 - No file under `artifacts/` is missing from the `artifacts` table beyond the `gc.graceHours` window, and no path referenced by a pending Intent is reported as an orphan.
