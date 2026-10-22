@@ -10,6 +10,8 @@ The [preflight qualification map](preflight-qualification.md) connects PFL-001 t
 
 The [M9 shared content qualification map](m9-shared-content-qualification.md) connects the TASK-106 common content store, migration 8 and the guarded rebuild path, the generalized operational seams, and the snapshot format-3 turn, Handoff schema-9 adoption and Memo schema-10 adoption to their production paths, contract classification, migration impact, and owning tests.
 
+The same map's [section 12](m9-shared-content-qualification.md#12-shared-v013-candidate-qualification-task-116) records TASK-116's shared v0.1.3 candidate qualification: the exact-candidate identity that keeps the EPIC-017 observations reusable, the journey and regression map with every remaining limit, the isolated v0.1.2-to-candidate upgrade and rollback drill on the corrected procedure, and the package verification with its signing and version-string limits.
+
 The [M9 Channel qualification map](m9-channels-qualification.md) connects the TASK-109 domain-and-storage boundary — the core Channel domain, migration 11, the coherence and preparation discipline, the five-boundary link guards, and the strict stored-receipt parsers — to its production paths and owning tests.
 
 The [M9 Channel concurrency qualification map](m9-channel-concurrency-qualification.md) connects TASK-114's multi-process load, overlap and contention evidence, independent reconciliation, permanent compiled regression and conditional retry-policy decision to their production paths and owning commands.
