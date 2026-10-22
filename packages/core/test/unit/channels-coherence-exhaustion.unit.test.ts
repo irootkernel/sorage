@@ -5,6 +5,7 @@ import {
   type ChannelBodyPorts,
   type ChannelCommandPorts,
   type MessageListCapture,
+  closeChannel,
   submitMessage,
 } from "../../src/channels";
 import { type AppError, appError, err, ok, type Result } from "../../src/errors";
@@ -33,6 +34,8 @@ const EXHAUSTION_MESSAGE =
 interface RunScript {
   calls: number;
   outcomes: Array<Result<never> | null>;
+  /** The per-attempt classification of a coherence mismatch; the default is `external-commit`. */
+  classifications?: Array<"external-commit" | "vault-path-changed">;
 }
 
 function portsWith(script: RunScript): ChannelCommandPorts {
@@ -65,7 +68,7 @@ function portsWith(script: RunScript): ChannelCommandPorts {
     bodies,
     coherence: {
       captureExternalVersion: () => ok(1),
-      classifyExternalChange: () => ok("external-commit"),
+      classifyExternalChange: () => ok(script.classifications?.[script.calls - 1] ?? "external-commit"),
       moveLockHeld: () => false,
     },
     backoff: {
@@ -125,5 +128,79 @@ describe("TASK-114 coherence-budget exhaustion signature", () => {
     if (result.ok) return;
     expect(script.calls).toBe(1);
     expect(result.error.code).toBe("CHN_CLOSED");
+  });
+});
+
+/**
+ * The Epic integration correction separates the keyed and keyless exhaustion
+ * texts: a Channel mutation that carried no idempotency key is told to retry
+ * the identical request without any key wording, in both the external-commit
+ * exhaustion and the binding-change CONFIG_CONFLICT, while every keyed text
+ * stays byte-identical.
+ */
+describe("Epic integration correction: keyless Channel coherence-exhaustion recovery", () => {
+  it("returns the keyless exhaustion recovery when a submit without a key exhausts on external commits", () => {
+    const script: RunScript = { calls: 0, outcomes: [] };
+    const result = submit(portsWith(script));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(script.calls).toBe(CHANNEL_WRITE_ATTEMPTS);
+    expect(result.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(result.error.message).toBe(EXHAUSTION_MESSAGE);
+    expect(result.error.recovery?.suggestedCommand).toBe(
+      "Retry the identical request; this Channel operation committed nothing",
+    );
+  });
+
+  it("returns the keyless exhaustion recovery when a keyless closeChannel exhausts on external commits", () => {
+    const script: RunScript = { calls: 0, outcomes: [] };
+    const result = closeChannel(portsWith(script), {
+      channelId: CHANNEL_ID,
+      assertion: { actor: ACTOR, asUser: true },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(script.calls).toBe(CHANNEL_WRITE_ATTEMPTS);
+    expect(result.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(result.error.message).toBe(EXHAUSTION_MESSAGE);
+    expect(result.error.recovery?.suggestedCommand).toBe(
+      "Retry the identical request; this Channel operation committed nothing",
+    );
+  });
+
+  it("returns the keyless binding-change recovery when a submit without a key exhausts on a changed binding", () => {
+    const script: RunScript = {
+      calls: 0,
+      outcomes: [],
+      classifications: ["vault-path-changed", "vault-path-changed", "vault-path-changed"],
+    };
+    const result = submit(portsWith(script));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(script.calls).toBe(CHANNEL_WRITE_ATTEMPTS);
+    expect(result.error.code).toBe("CONFIG_CONFLICT");
+    expect(result.error.message).toBe(
+      "The configuration or Vault binding changed while this Channel operation was being prepared",
+    );
+    expect(result.error.recovery?.suggestedCommand).toBe("Reload the configuration and retry the identical request");
+  });
+
+  it("keeps the keyed binding-change recovery when a keyed submit exhausts on a changed binding", () => {
+    const script: RunScript = {
+      calls: 0,
+      outcomes: [],
+      classifications: ["vault-path-changed", "vault-path-changed", "vault-path-changed"],
+    };
+    const result = submit(portsWith(script), "e17-int-fix2-binding-key");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(script.calls).toBe(CHANNEL_WRITE_ATTEMPTS);
+    expect(result.error.code).toBe("CONFIG_CONFLICT");
+    expect(result.error.message).toBe(
+      "The configuration or Vault binding changed while this Channel operation was being prepared",
+    );
+    expect(result.error.recovery?.suggestedCommand).toBe(
+      "Reload the configuration and retry the identical request with its original mode, inputs, and key",
+    );
   });
 });

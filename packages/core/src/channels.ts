@@ -1103,8 +1103,9 @@ function coherenceExhausted(keyPresent: boolean, lastClass: "vault-path-changed"
         "The configuration or Vault binding changed while this Channel operation was being prepared",
       ),
       recovery: {
-        suggestedCommand:
-          "Reload the configuration and retry the identical request with its original mode, inputs, and key",
+        suggestedCommand: keyPresent
+          ? "Reload the configuration and retry the identical request with its original mode, inputs, and key"
+          : "Reload the configuration and retry the identical request",
       },
     };
   }
@@ -1140,6 +1141,7 @@ function channelRetryDelayMs(retryIndex: number, random: number): number {
 function runChannelMutation<T>(
   ports: ChannelCommandPorts,
   stagedBody: AcceptedChannelBody | null,
+  keyPresent: boolean,
   work: (
     transaction: ChannelTransaction,
     now: string,
@@ -1185,7 +1187,7 @@ function runChannelMutation<T>(
     }
     return run;
   }
-  return err(coherenceExhausted(true, lastClass));
+  return err(coherenceExhausted(keyPresent, lastClass));
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,7 +1237,7 @@ export function createChannel(
   const scope = channelCreateScope(ports.installationId);
   const key = input.idempotencyKey;
   type CreateOutcome = { kind: "replay"; channel: ChannelView } | { kind: "fresh"; channel: ChannelView };
-  const outcome = runChannelMutation(ports, null, (transaction, now): Result<CreateOutcome> => {
+  const outcome = runChannelMutation(ports, null, key !== undefined, (transaction, now): Result<CreateOutcome> => {
     if (key !== undefined) {
       const stored = transaction.createReceipt(key, scope, now);
       if (!stored.ok) return stored;
@@ -1336,7 +1338,7 @@ export function closeChannel(
   input: { channelId: unknown; assertion: ChannelActorAssertion },
 ): Result<ChannelView> {
   if (!isChannelUuid(input.channelId)) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
-  const outcome = runChannelMutation(ports, null, (transaction, now): Result<undefined> => {
+  const outcome = runChannelMutation(ports, null, false, (transaction, now): Result<undefined> => {
     const channel = transaction.channel(input.channelId as string);
     if (!channel.ok) return channel;
     if (channel.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
@@ -1395,7 +1397,7 @@ export function addParticipant(
   // The narrowed role is hoisted: the unknown-input guard's narrowing does not
   // survive into the transaction callback.
   const registrationRole: "worker" | "judge" = input.role;
-  return runChannelMutation(ports, null, (transaction, now) => {
+  return runChannelMutation(ports, null, false, (transaction, now) => {
     const channel = transaction.channel(input.channelId as string);
     if (!channel.ok) return channel;
     if (channel.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
@@ -1448,7 +1450,7 @@ export function deactivateParticipant(
   if (!isChannelUuid(input.channelId) || !isChannelUuid(input.participantId)) {
     return err(appError("CHN_PARTICIPANT_NOT_FOUND", "Unknown participant for this Channel"));
   }
-  return runChannelMutation(ports, null, (transaction, now) => {
+  return runChannelMutation(ports, null, false, (transaction, now) => {
     const channel = transaction.channel(input.channelId as string);
     if (!channel.ok) return channel;
     if (channel.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
@@ -1499,7 +1501,7 @@ export function addAssignment(
   if (!isChannelUuid(input.channelId)) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
   const label = normalizeAssignmentLabel(input.label);
   if (!label.ok) return label;
-  return runChannelMutation(ports, null, (transaction, now) => {
+  return runChannelMutation(ports, null, false, (transaction, now) => {
     const channel = transaction.channel(input.channelId as string);
     if (!channel.ok) return channel;
     if (channel.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
@@ -1554,7 +1556,7 @@ export function closeAssignment(
   if (!isChannelUuid(input.channelId) || !isChannelUuid(input.assignmentId)) {
     return err(appError("CHN_ASSIGNMENT_NOT_FOUND", "Unknown assignment for this Channel"));
   }
-  return runChannelMutation(ports, null, (transaction, now) => {
+  return runChannelMutation(ports, null, false, (transaction, now) => {
     const channel = transaction.channel(input.channelId as string);
     if (!channel.ok) return channel;
     if (channel.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
@@ -1722,6 +1724,7 @@ export function submitMessage(
   const outcome = runChannelMutation(
     ports,
     fileRouted ? input.accepted : null,
+    key !== undefined,
     (transaction, now, stagedPath, binding): Result<SubmitOutcome> => {
       // The retained receipt outranks live-state eligibility: a closed Channel
       // or a since-deactivated sender never invalidates a historical retained
@@ -2065,7 +2068,7 @@ export function handleChannelMessage(
   }
   const note = validateHandleNote(input.note);
   if (!note.ok) return note;
-  const outcome = runChannelMutation(ports, null, (transaction, now): Result<ChannelMessageRecord> => {
+  const outcome = runChannelMutation(ports, null, false, (transaction, now): Result<ChannelMessageRecord> => {
     const channel = transaction.channel(input.channelId as string);
     if (!channel.ok) return channel;
     if (channel.value === null) return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
