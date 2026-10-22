@@ -208,7 +208,10 @@ describe("doctor severities after initialization", () => {
     const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
     const permissions = report.data.checks.find((check) => check.id === "home.permissions");
     expect(permissions?.severity).toBe("blocking");
-    expect(permissions?.recovery?.suggestedCommand).toContain("sorage init --reconfigure");
+    // TASK-118 Z1: direct permission repair, never reinitialization.
+    expect(permissions?.recovery?.suggestedCommand).toBe(
+      "Restore the home directory with mode 0700 and config.yaml with owner-only 0600 permissions; do not reinitialize an existing installation",
+    );
   });
 
   it("warns through db.pendingIntents only for intents the drain cannot resolve", () => {
@@ -301,5 +304,191 @@ describe("doctor severities after initialization", () => {
     expect(check?.message).toContain("artifacts/h-1/a-3/missing.md");
     expect(check?.message).not.toContain("artifacts/h-1/a-1/good.md");
     expect(check?.recovery?.suggestedCommand).toContain("sorage vault verify");
+  });
+});
+
+describe("the TASK-118 doctor configuration and Vault branches", () => {
+  const CONFIG_REPAIR = "sorage config validate, then repair the reported keys";
+  const HOME_PERMISSIONS =
+    "Restore the home directory with mode 0700 and config.yaml with owner-only 0600 permissions; do not reinitialize an existing installation";
+
+  function checkOf(report: DoctorEnvelope, id: string) {
+    return report.data.checks.find((entry) => entry.id === id);
+  }
+
+  it("classifies a malformed configuration as configuration repair and restores it with config validate", () => {
+    const home = tempHome("sorage-t118-cli-malformed-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const configPath = join(home, "config.yaml");
+    const valid = readFileSync(configPath, "utf8");
+    writeFileSync(configPath, "not: [valid\n");
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    for (const id of [
+      "config.schema",
+      "vault.marker",
+      "vault.gitattributes",
+      "vault.writable",
+      "artifacts.checksums",
+      "content.checksums",
+      "daemon.port",
+      "backup.schedule",
+      "git.state",
+      "platform.tcc",
+    ]) {
+      const check = checkOf(report, id);
+      expect(check, id).toBeDefined();
+      expect(check?.severity, id).not.toBe("ok");
+      expect(check?.recovery?.suggestedCommand, id).toBe(CONFIG_REPAIR);
+    }
+    for (const check of report.data.checks) {
+      const recovery = check.recovery?.suggestedCommand ?? "";
+      expect(recovery, check.id).not.toContain("sorage vault verify");
+      expect(recovery, check.id).not.toContain("sorage init --reconfigure");
+    }
+
+    // K3: the named command actually runs in this state and reports the problem.
+    const validate = capture();
+    expect(runCli(["config", "validate"], validate.ports)).toBe(78);
+    expect(validate.errText()).toContain("CONFIG_INVALID");
+    // Repairing the reported keys restores the check.
+    writeFileSync(configPath, valid);
+    expect(runCli(["config", "validate"], capture().ports)).toBe(0);
+    const repaired = capture();
+    expect(runCli(["doctor", "--json"], repaired.ports)).toBe(0);
+    const repairedReport = JSON.parse(repaired.outText()) as DoctorEnvelope;
+    expect(checkOf(repairedReport, "config.schema")?.severity).toBe("ok");
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "classifies an unreadable configuration as an access failure instead of the pre-init report",
+    () => {
+      const home = tempHome("sorage-t118-cli-unreadable-");
+      expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+      const configPath = join(home, "config.yaml");
+      chmodSync(configPath, 0o000);
+      try {
+        const doctor = capture();
+        expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+        const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+        expect(report.data.checks).toHaveLength(21);
+        const schema = checkOf(report, "config.schema");
+        expect(schema?.message).not.toContain("Sorage is not initialized");
+        expect(schema?.recovery?.suggestedCommand).toBe(HOME_PERMISSIONS);
+        const marker = checkOf(report, "vault.marker");
+        expect(marker?.recovery?.suggestedCommand).toBe(HOME_PERMISSIONS);
+      } finally {
+        chmodSync(configPath, 0o600);
+      }
+      // K3: following the access repair restores the check.
+      const repaired = capture();
+      expect(runCli(["doctor", "--json"], repaired.ports)).toBe(0);
+      const repairedReport = JSON.parse(repaired.outText()) as DoctorEnvelope;
+      expect(checkOf(repairedReport, "config.schema")?.severity).toBe("ok");
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    "classifies a denied home traversal as an access failure instead of the pre-init report",
+    () => {
+      const home = tempHome("sorage-t118-cli-parent-");
+      expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+      chmodSync(home, 0o000);
+      try {
+        const doctor = capture();
+        expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+        const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+        expect(report.data.checks).toHaveLength(21);
+        const schema = checkOf(report, "config.schema");
+        expect(schema?.message).not.toContain("Sorage is not initialized");
+        expect(schema?.message).toBe("config.yaml cannot be read.");
+        expect(schema?.recovery?.suggestedCommand).toBe(HOME_PERMISSIONS);
+      } finally {
+        chmodSync(home, 0o700);
+      }
+      const repaired = capture();
+      expect(runCli(["doctor", "--json"], repaired.ports)).toBe(0);
+      expect(checkOf(JSON.parse(repaired.outText()) as DoctorEnvelope, "config.schema")?.severity).toBe("ok");
+    },
+  );
+
+  it("repairs a directory at the configuration path instead of suggesting 0600", () => {
+    const home = tempHome("sorage-t118-cli-config-path-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const configPath = join(home, "config.yaml");
+    const valid = readFileSync(configPath, "utf8");
+    rmSync(configPath, { force: true });
+    mkdirSync(configPath);
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const schema = checkOf(report, "config.schema");
+    expect(schema?.message).toBe("The configuration path is not a regular config.yaml file.");
+    expect(schema?.recovery?.suggestedCommand).toBe(
+      "Replace the non-regular entry, dangling symlink, or symlink loop at the configuration path with a regular config.yaml file owned by this user, or a symlink to one",
+    );
+    expect(schema?.recovery?.suggestedCommand).not.toContain("0600");
+    // K3: the path repair restores the check.
+    rmSync(configPath, { recursive: true, force: true });
+    writeFileSync(configPath, valid);
+    chmodSync(configPath, 0o600);
+    const repaired = capture();
+    expect(runCli(["doctor", "--json"], repaired.ports)).toBe(0);
+    expect(checkOf(JSON.parse(repaired.outText()) as DoctorEnvelope, "config.schema")?.severity).toBe("ok");
+  });
+
+  it("keeps the database diagnostic and adds the Vault-open recovery for a missing Vault", () => {
+    const home = tempHome("sorage-t118-cli-db-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const vault = join(home, "vault");
+    rmSync(vault, { recursive: true, force: true });
+    // A corrupt database file keeps the database diagnostic while the Vault is missing.
+    writeFileSync(join(home, "state", "sorage.sqlite3"), "not a database");
+    rmSync(join(home, "state", "sorage.sqlite3-wal"), { force: true });
+    rmSync(join(home, "state", "sorage.sqlite3-shm"), { force: true });
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const checksums = checkOf(report, "artifacts.checksums");
+    expect(checksums?.severity).toBe("blocking");
+    expect(checksums?.message).toContain("database");
+    expect(checksums?.recovery?.suggestedCommand).toBe(
+      "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted",
+    );
+    const integrity = checkOf(report, "db.integrity");
+    expect(integrity?.severity).toBe("blocking");
+    expect(integrity?.message).toContain("database");
+    expect(integrity?.recovery?.suggestedCommand).toContain("Restore from ~/.sorage/state/backups/");
+    const marker = checkOf(report, "vault.marker");
+    expect(marker?.message).toBe(`The Vault directory does not exist at ${vault}.`);
+  });
+
+  it("never names sorage vault verify when the Vault is missing and no records exist", () => {
+    const home = tempHome("sorage-t118-cli-v1-empty-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    rmSync(join(home, "vault"), { recursive: true, force: true });
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    for (const check of report.data.checks) {
+      expect(check.recovery?.suggestedCommand ?? "", check.id).not.toContain("sorage vault verify");
+    }
+    const attributes = checkOf(report, "vault.gitattributes");
+    expect(attributes?.severity).toBe("warning");
+    expect(attributes?.recovery?.suggestedCommand).toContain("Do not initialize");
+  });
+
+  it("repairs a loose home permission without suggesting reinitialization", () => {
+    const home = tempHome("sorage-t118-cli-home-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    chmodSync(join(home, "config.yaml"), 0o644);
+    rmSync(join(home, "vault"), { recursive: true, force: true });
+    const doctor = capture();
+    expect(runCli(["doctor", "--json"], doctor.ports)).toBe(1);
+    const report = JSON.parse(doctor.outText()) as DoctorEnvelope;
+    const permissions = checkOf(report, "home.permissions");
+    expect(permissions?.severity).toBe("blocking");
+    expect(permissions?.recovery?.suggestedCommand).toBe(HOME_PERMISSIONS);
   });
 });

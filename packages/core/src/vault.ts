@@ -22,6 +22,33 @@ export const SUPPORTED_VAULT_MARKER_SCHEMA = 1;
 export const VAULT_ADOPTION_COMMAND = "sorage backup restore --from <vault-path> --as-user --confirm";
 
 /**
+ * The state-specific recovery guidance a Vault-open refusal carries (VLT-002,
+ * VLT-003, VLT-019; TASK-118): every action named here can run while the Vault
+ * cannot open, so none of them is `sorage vault verify`, which drains and
+ * refuses identically, and none is plain `sorage init`, which is a no-op on an
+ * existing configuration. Only the empty-uninitialized state may name
+ * `sorage init --reconfigure --non-interactive`, and only for a genuinely new
+ * installation with no prior Vault data.
+ */
+export const VAULT_OPEN_RECOVERY = {
+  missingDirectory:
+    "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted",
+  unreadableDirectory:
+    "Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted",
+  filePath:
+    "Check the configured vault.path with sorage config show; it must name the Vault directory, not a file. If a stray file occupies the intended Vault path, move it aside only after confirming it is not the Vault; do not initialize over it or replace an existing Vault",
+  unreadableMarker:
+    "Confirm the Vault directory and its marker are readable by this user and that the Vault volume is mounted; if the marker is lost, restore a verified backup into a fresh installation. Never replace the marker by hand or initialize over the existing Vault",
+  nonEmptyWithoutMarker:
+    "Check the configured vault.path and confirm its volume is mounted; if this is the intended Vault and its marker was lost, restore a verified backup into a fresh installation. Never create a marker by hand, initialize over a populated directory, or replace a populated Vault",
+  emptyUninitialized:
+    "Check the configured vault.path and confirm its volume is mounted; if this installation has prior data, restore a verified backup into a fresh installation. Only for a genuinely new installation with no prior Vault data may sorage init --reconfigure --non-interactive backfill this empty directory",
+  invalidMarker:
+    "Check the configured vault.path and confirm its volume is mounted; if the marker is damaged, restore a verified backup into a fresh installation. Never rewrite the marker by hand or initialize over the existing Vault",
+  foreignMarker: `Adopt this Vault only by restoring it into a fresh installation with ${VAULT_ADOPTION_COMMAND}; never rewrite the marker in place`,
+} as const;
+
+/**
  * The `.gitattributes` lines Vault initialization writes verbatim (VLT-024, as
  * amended by SHR-011): the managed binary trees carry `-text -diff`, the general
  * snapshot tree normalizes to LF text, and the more-specific raw snapshot-content

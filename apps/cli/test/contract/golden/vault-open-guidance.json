@@ -1,0 +1,523 @@
+[
+  {
+    "state": "V1",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The Vault directory does not exist at <home>/vault.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The Vault directory does not exist at <home>/vault.\nRecovery: Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault directory does not exist at <home>/vault.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault directory does not exist at <home>/vault.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "warning",
+        "message": "The Vault is not readable without a macOS privacy prompt.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show and confirm the Vault directory is present and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      }
+    ]
+  },
+  {
+    "state": "V2",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The Vault directory at <home>/vault cannot be inspected.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The Vault directory at <home>/vault cannot be inspected.\nRecovery: Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault directory at <home>/vault cannot be inspected.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault directory at <home>/vault cannot be inspected.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "warning",
+        "message": "The Vault is not readable without a macOS privacy prompt.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory is readable and reachable without a symlink loop, and, when its marker is missing or unreadable, that its entries can be listed and its volume is mounted; if the Vault is lost, restore a verified backup into a fresh installation. Do not initialize the configured path or replace a Vault that may only be unmounted"
+        }
+      }
+    ]
+  },
+  {
+    "state": "V3",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The Vault path <home>/vault is a file, not a directory.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show; it must name the Vault directory, not a file. If a stray file occupies the intended Vault path, move it aside only after confirming it is not the Vault; do not initialize over it or replace an existing Vault"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The Vault path <home>/vault is a file, not a directory.\nRecovery: Check the configured vault.path with sorage config show; it must name the Vault directory, not a file. If a stray file occupies the intended Vault path, move it aside only after confirming it is not the Vault; do not initialize over it or replace an existing Vault\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault path <home>/vault is a file, not a directory.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show; it must name the Vault directory, not a file. If a stray file occupies the intended Vault path, move it aside only after confirming it is not the Vault; do not initialize over it or replace an existing Vault"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault path <home>/vault is a file, not a directory.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show; it must name the Vault directory, not a file. If a stray file occupies the intended Vault path, move it aside only after confirming it is not the Vault; do not initialize over it or replace an existing Vault"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path with sorage config show; it must name the Vault directory, not a file. If a stray file occupies the intended Vault path, move it aside only after confirming it is not the Vault; do not initialize over it or replace an existing Vault"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  {
+    "state": "V4",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The Vault marker at <home>/vault/.sorage-vault.json cannot be read.",
+        "details": {
+          "vaultPath": "<home>/vault",
+          "entryCount": 6
+        },
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory and its marker are readable by this user and that the Vault volume is mounted; if the marker is lost, restore a verified backup into a fresh installation. Never replace the marker by hand or initialize over the existing Vault"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The Vault marker at <home>/vault/.sorage-vault.json cannot be read.\nRecovery: Confirm the Vault directory and its marker are readable by this user and that the Vault volume is mounted; if the marker is lost, restore a verified backup into a fresh installation. Never replace the marker by hand or initialize over the existing Vault\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault marker at <home>/vault/.sorage-vault.json cannot be read.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory and its marker are readable by this user and that the Vault volume is mounted; if the marker is lost, restore a verified backup into a fresh installation. Never replace the marker by hand or initialize over the existing Vault"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault marker at <home>/vault/.sorage-vault.json cannot be read.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory and its marker are readable by this user and that the Vault volume is mounted; if the marker is lost, restore a verified backup into a fresh installation. Never replace the marker by hand or initialize over the existing Vault"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Confirm the Vault directory and its marker are readable by this user and that the Vault volume is mounted; if the marker is lost, restore a verified backup into a fresh installation. Never replace the marker by hand or initialize over the existing Vault"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  {
+    "state": "V5",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "Refusing to adopt the non-empty directory <home>/vault because it has no Vault marker (VLT-003).",
+        "details": {
+          "vaultPath": "<home>/vault",
+          "entryCount": 5
+        },
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this is the intended Vault and its marker was lost, restore a verified backup into a fresh installation. Never create a marker by hand, initialize over a populated directory, or replace a populated Vault"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: Refusing to adopt the non-empty directory <home>/vault because it has no Vault marker (VLT-003).\nRecovery: Check the configured vault.path and confirm its volume is mounted; if this is the intended Vault and its marker was lost, restore a verified backup into a fresh installation. Never create a marker by hand, initialize over a populated directory, or replace a populated Vault\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "Refusing to adopt the non-empty directory <home>/vault because it has no Vault marker (VLT-003).",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this is the intended Vault and its marker was lost, restore a verified backup into a fresh installation. Never create a marker by hand, initialize over a populated directory, or replace a populated Vault"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "Refusing to adopt the non-empty directory <home>/vault because it has no Vault marker (VLT-003).",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this is the intended Vault and its marker was lost, restore a verified backup into a fresh installation. Never create a marker by hand, initialize over a populated directory, or replace a populated Vault"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this is the intended Vault and its marker was lost, restore a verified backup into a fresh installation. Never create a marker by hand, initialize over a populated directory, or replace a populated Vault"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  {
+    "state": "V6",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The directory <home>/vault is empty and has not been initialized as a Vault.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this installation has prior data, restore a verified backup into a fresh installation. Only for a genuinely new installation with no prior Vault data may sorage init --reconfigure --non-interactive backfill this empty directory"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The directory <home>/vault is empty and has not been initialized as a Vault.\nRecovery: Check the configured vault.path and confirm its volume is mounted; if this installation has prior data, restore a verified backup into a fresh installation. Only for a genuinely new installation with no prior Vault data may sorage init --reconfigure --non-interactive backfill this empty directory\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The directory <home>/vault is empty and has not been initialized as a Vault.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this installation has prior data, restore a verified backup into a fresh installation. Only for a genuinely new installation with no prior Vault data may sorage init --reconfigure --non-interactive backfill this empty directory"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The directory <home>/vault is empty and has not been initialized as a Vault.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this installation has prior data, restore a verified backup into a fresh installation. Only for a genuinely new installation with no prior Vault data may sorage init --reconfigure --non-interactive backfill this empty directory"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if this installation has prior data, restore a verified backup into a fresh installation. Only for a genuinely new installation with no prior Vault data may sorage init --reconfigure --non-interactive backfill this empty directory"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  {
+    "state": "V7",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The Vault marker is not valid JSON.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if the marker is damaged, restore a verified backup into a fresh installation. Never rewrite the marker by hand or initialize over the existing Vault"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The Vault marker is not valid JSON.\nRecovery: Check the configured vault.path and confirm its volume is mounted; if the marker is damaged, restore a verified backup into a fresh installation. Never rewrite the marker by hand or initialize over the existing Vault\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault marker is not valid JSON.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if the marker is damaged, restore a verified backup into a fresh installation. Never rewrite the marker by hand or initialize over the existing Vault"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault marker is not valid JSON.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if the marker is damaged, restore a verified backup into a fresh installation. Never rewrite the marker by hand or initialize over the existing Vault"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Check the configured vault.path and confirm its volume is mounted; if the marker is damaged, restore a verified backup into a fresh installation. Never rewrite the marker by hand or initialize over the existing Vault"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  {
+    "state": "V8",
+    "exit": 73,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_INTEGRITY_ERROR",
+        "message": "The Vault marker belongs to installation <uuid>, not this installation <uuid>; adopt it only through the audited sorage backup restore --from <vault-path> --as-user --confirm.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Adopt this Vault only by restoring it into a fresh installation with sorage backup restore --from <vault-path> --as-user --confirm; never rewrite the marker in place"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_INTEGRITY_ERROR: The Vault marker belongs to installation <uuid>, not this installation <uuid>; adopt it only through the audited sorage backup restore --from <vault-path> --as-user --confirm.\nRecovery: Adopt this Vault only by restoring it into a fresh installation with sorage backup restore --from <vault-path> --as-user --confirm; never rewrite the marker in place\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault marker belongs to installation <uuid>, not this installation <uuid>; adopt it only through the audited sorage backup restore --from <vault-path> --as-user --confirm.",
+        "recovery": {
+          "suggestedCommand": "Adopt this Vault only by restoring it into a fresh installation with sorage backup restore --from <vault-path> --as-user --confirm; never rewrite the marker in place"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault marker belongs to installation <uuid>, not this installation <uuid>; adopt it only through the audited sorage backup restore --from <vault-path> --as-user --confirm.",
+        "recovery": {
+          "suggestedCommand": "Adopt this Vault only by restoring it into a fresh installation with sorage backup restore --from <vault-path> --as-user --confirm; never rewrite the marker in place"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Adopt this Vault only by restoring it into a fresh installation with sorage backup restore --from <vault-path> --as-user --confirm; never rewrite the marker in place"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  },
+  {
+    "state": "V9",
+    "exit": 78,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "VAULT_SCHEMA_UNSUPPORTED",
+        "message": "The Vault marker schemaVersion 2 is newer than this build's 1; Sorage never downgrades a Vault.",
+        "details": {
+          "vaultPath": "<home>/vault"
+        },
+        "recovery": {
+          "suggestedCommand": "Upgrade Sorage; Sorage never downgrades a Vault"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    },
+    "human": "VAULT_SCHEMA_UNSUPPORTED: The Vault marker schemaVersion 2 is newer than this build's 1; Sorage never downgrades a Vault.\nRecovery: Upgrade Sorage; Sorage never downgrades a Vault\n",
+    "doctor": [
+      {
+        "id": "config.schema",
+        "severity": "ok",
+        "message": "config.yaml parses and validates against the schema."
+      },
+      {
+        "id": "vault.marker",
+        "severity": "blocking",
+        "message": "The Vault marker schemaVersion 2 is newer than this build's 1; Sorage never downgrades a Vault.",
+        "recovery": {
+          "suggestedCommand": "Upgrade Sorage; Sorage never downgrades a Vault"
+        }
+      },
+      {
+        "id": "vault.gitattributes",
+        "severity": "warning",
+        "message": "The Vault marker schemaVersion 2 is newer than this build's 1; Sorage never downgrades a Vault.",
+        "recovery": {
+          "suggestedCommand": "Upgrade Sorage; Sorage never downgrades a Vault"
+        }
+      },
+      {
+        "id": "vault.writable",
+        "severity": "blocking",
+        "message": "The Vault root, artifacts/, or staging/ is not writable by this user.",
+        "recovery": {
+          "suggestedCommand": "Upgrade Sorage; Sorage never downgrades a Vault"
+        }
+      },
+      {
+        "id": "platform.tcc",
+        "severity": "ok",
+        "message": "The Vault is readable without a privacy prompt."
+      }
+    ]
+  }
+]

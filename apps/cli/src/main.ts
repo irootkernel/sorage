@@ -1,7 +1,7 @@
 import { schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import { homedir } from "node:os";
@@ -53,6 +53,9 @@ import {
   backupVerify,
   bindProject,
   type Configuration,
+  CONFIG_ACCESS_REPAIR,
+  CONFIG_PATH_REPAIR,
+  configurationPathState,
   configureBackup,
   type DoctorReport,
   declineHandoff,
@@ -76,6 +79,7 @@ import {
   moveVault,
   ok,
   pinHandoff,
+  probeConfigurationPath,
   readHandoffTimeline,
   readReviewNote,
   refreshInboxMarker,
@@ -2645,12 +2649,62 @@ function logCommandFailure(error: AppError, id: string): void {
 
 /** Maps an application error to its envelope rendering and published exit code. */
 /**
+ * Whether the configured Vault currently opens, for the plain-init hint
+ * (TASK-118): the write-free `statusPorts` probe reads configuration only and
+ * never drains, so it can answer in exactly the states where reconfiguration is
+ * unsafe. A successful reconfigure is never taken as proof that the Vault
+ * opens, because the initializer preserves an existing invalid or foreign
+ * marker.
+ */
+function configuredVaultOpens(): boolean {
+  try {
+    const ports = createNodeVaultCommandPorts().statusPorts();
+    if (!ports.ok) return false;
+    return ports.value.openVault().ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The observed state of an existing configuration before initialization writes
+ * anything (TASK-118 K1, Z2): only a confirmed ENOENT is a new installation. An
+ * unreadable file or an untraversable home is an access failure, and a
+ * directory or symlink at the path is a path fault; both stop `init` with the
+ * matching repair instead of rewriting an existing installation.
+ */
+type ExistingConfiguration = "absent" | "present" | "unreadable" | "unsafe-path";
+
+function existingConfiguration(paths: { configFile: string }): ExistingConfiguration {
+  // K15: one path rule — a live symlink to a regular file is accepted, a
+  // non-regular entry or loop is a path fault, only an lstat ENOENT is absence,
+  // and any other inspection failure is access.
+  const state = configurationPathState(
+    probeConfigurationPath(
+      () => statSync(paths.configFile),
+      () => lstatSync(paths.configFile),
+    ),
+  );
+  if (state === "absent") return "absent";
+  if (state === "path-fault") return "unsafe-path";
+  if (state === "access-failure") return "unreadable";
+  try {
+    readFileSync(paths.configFile);
+  } catch {
+    return "unreadable";
+  }
+  return "present";
+}
+
+/**
  * Applies one confirmed set of init choices (INIT-004, section 3.1 and 3.2): the base
  * installation first, then the optional pieces in configuration order — backup
  * schedule, remote push, first Project, LaunchAgent, and daemon start — so a failure
  * in any step reports exactly where the sequence stopped. `vaultOption` is the
  * literal `--vault` value; when the choices keep the documented default the use case
  * receives `undefined` so `config.yaml` records the `~/.sorage/vault` default.
+ * TASK-118 K1: an existing configuration that cannot be read, or whose home cannot
+ * be traversed, stops here before the initializer can treat the installation as new.
  */
 function applyInitChoices(
   ports: OutputPorts,
@@ -2664,6 +2718,21 @@ function applyInitChoices(
   const sentinel = join(homePaths.home, "vault");
   const wizardDefault = vaultOption ?? sentinel;
   const vaultForUseCase = choices.vaultPath === wizardDefault ? vaultOption : choices.vaultPath;
+
+  const existing = existingConfiguration(homePaths);
+  if (existing === "unreadable" || existing === "unsafe-path") {
+    // K1/Z2: never treat an access failure as a new installation. The refusal
+    // leaves the configuration, identity and Vault untouched.
+    const message =
+      existing === "unsafe-path"
+        ? `The configuration path ${homePaths.configFile} is not a regular file.`
+        : `The configuration at ${homePaths.configFile} cannot be read.`;
+    const recovery = existing === "unsafe-path" ? CONFIG_PATH_REPAIR : CONFIG_ACCESS_REPAIR;
+    reportExitCode(
+      renderAppError({ code: "CONFIG_INVALID", message, recovery: { suggestedCommand: recovery } }, ports, json),
+    );
+    return;
+  }
 
   if (!choices.createVault && !existsSync(choices.vaultPath)) {
     ports.err(`${CLI_NAME}: the Vault directory ${choices.vaultPath} does not exist and its creation was declined\n`);
@@ -2705,7 +2774,11 @@ function applyInitChoices(
             : "Initialized the Vault Git repository with core.autocrlf=false.\n",
         );
       } else {
-        ports.out(`Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`);
+        ports.out(
+          configuredVaultOpens()
+            ? `Nothing was changed; run '${CLI_NAME} init --reconfigure --non-interactive' for explicit repair.\n`
+            : "Nothing was changed; the configured Vault cannot be opened, so reconfiguration is not suggested. Resolve the Vault-open refusal first.\n",
+        );
       }
     }
     return;

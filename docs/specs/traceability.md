@@ -17,7 +17,7 @@ Milestone values come from the specification and name the release gate at whose 
 | Requirement group | Milestone | Implementing tasks | Acceptance evidence (AJ ids / test layer) |
 |---|---|---|---|
 | GEN-001 to GEN-015 | M1, M2, M4 | `TASK-001` to `TASK-002`, `TASK-005`, `TASK-008`, `TASK-039` to `TASK-042`, `TASK-051`, `TASK-064` to `TASK-065`, `TASK-080`, `TASK-082`, `TASK-103` | AJ-01, AJ-02, AJ-16, AJ-17, AJ-26; the dependency-boundary check in `make test-prepare` and the clean-home run in `make test-int` |
-| INIT-001 to INIT-017 | M1, M3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069`, `TASK-073`, `TASK-118` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot, and the shared Vault-open guidance correction in TASK-118 |
+| INIT-001 to INIT-017 | M1, M3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069`, `TASK-073`, `TASK-118` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot, and the shared Vault-open guidance correction in TASK-118, including the doctor surface |
 | CFG-001 to CFG-020 | M1 | `TASK-010` to `TASK-013`, `TASK-015`, `TASK-026`, `TASK-045`, `TASK-061`, `TASK-063`, `TASK-072` | AJ-01, AJ-13; `make test-unit` for schema defaults and the comment round-trip, `make test-int` for atomic writes and ETag conflict, `make test-contract` for the schema against the example |
 | RUN-001 to RUN-014 | M1, M2, M3 | `TASK-006` to `TASK-007`, `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-042` to `TASK-045`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-068` to `TASK-069`, `TASK-073` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version |
 | PRJ-001 to PRJ-024 | M1, M6 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050`, `TASK-066`, `TASK-086` | AJ-03, AJ-05, AJ-19; `make test-int` for worktree folding, binding replacement, and archived sends |
@@ -90,7 +90,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `INIT-014` | M1 | `TASK-014` |
 | `INIT-015` | M1 | `TASK-009` |
 | `INIT-016` | M3 | `TASK-059`, `TASK-069` |
-| `INIT-017` | M1 | `TASK-014`, `TASK-020`, `TASK-025`, `TASK-068` |
+| `INIT-017` | M1 | `TASK-014`, `TASK-020`, `TASK-025`, `TASK-068`, `TASK-118` |
 | `CFG-001` | M1 | `TASK-010`, `TASK-063` |
 | `CFG-002` | M1 | `TASK-010`, `TASK-063` |
 | `CFG-003` | M1 | `TASK-010`, `TASK-012` |

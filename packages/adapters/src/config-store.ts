@@ -4,10 +4,12 @@ import {
   closeSync,
   copyFileSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -17,11 +19,15 @@ import {
   appError,
   applyConfigurationToDocument,
   type Configuration,
+  CONFIG_ACCESS_REPAIR,
+  CONFIG_PATH_REPAIR,
+  configurationPathState,
   emptyConfigurationDocument,
   err,
   loadConfiguration,
   ok,
   parseConfigurationFile,
+  probeConfigurationPath,
   type Result,
   serializeConfiguration,
   validateConfiguration,
@@ -48,6 +54,10 @@ export interface ConfigStoreFs {
   fsync(path: string): void;
   copyFile(from: string, to: string): void;
   chmod(path: string, mode: number): void;
+  /** Follows symlinks; a regular file is a valid configuration path (TASK-118 K15). */
+  stat?(path: string): { isFile(): boolean; mode: number };
+  /** Observes the path itself so a dangling symlink can be told from absence. */
+  lstat?(path: string): { isFile(): boolean };
 }
 
 export const realConfigStoreFs: ConfigStoreFs = {
@@ -69,6 +79,8 @@ export const realConfigStoreFs: ConfigStoreFs = {
   },
   copyFile: (from, to) => copyFileSync(from, to),
   chmod: (path, mode) => chmodSync(path, mode),
+  stat: (path) => statSync(path),
+  lstat: (path) => lstatSync(path),
 };
 
 export interface ConfigStorePorts {
@@ -118,6 +130,10 @@ export interface ConfigStore {
   writeRaw(text: string, expect?: { etag?: string }): Result<{ etag: string }, AppError>;
 }
 
+/** The probe-detected refusals of the operational read (TASK-118 K17). */
+const PROBE_PATH_FAULT = "the configuration path is not a regular file";
+const PROBE_UNINSPECTABLE = "the configuration path cannot be inspected";
+
 export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
   const fs = ports.fs ?? realConfigStoreFs;
   const configFile = ports.home.configFile;
@@ -133,6 +149,31 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
 
   function contentEtag(text: string): string {
     return createHash("sha256").update(text, "utf8").digest("hex");
+  }
+
+  /**
+   * The site recovery for a configuration this process cannot read (TASK-118
+   * F3/K9): a read or traversal failure restores owner-only access, while a
+   * non-regular path is repaired instead. The catalogue default stays right for
+   * a readable but malformed file, which never reaches here.
+   */
+  function unreadableConfiguredRecovery(): string {
+    try {
+      const stats = fs.stat?.(configFile);
+      if (stats !== undefined && !stats.isFile()) return CONFIG_PATH_REPAIR;
+    } catch {
+      // The path itself could not be inspected (for example a denied parent).
+    }
+    return CONFIG_ACCESS_REPAIR;
+  }
+
+  function configurationRefusal(recovery: string, reason: string): Result<never, AppError> {
+    return err({
+      ...appError("CONFIG_INVALID", `the configuration at ${configFile} cannot be read: ${reason}`, {
+        expectedConfigPath: configFile,
+      }),
+      recovery: { suggestedCommand: recovery },
+    });
   }
 
   function withConfigLock<T>(body: () => Result<T, AppError>): Result<T, AppError> {
@@ -216,18 +257,44 @@ export function createConfigStore(ports: ConfigStorePorts): ConfigStore {
     },
 
     readForOperation() {
+      const stat = fs.stat;
+      const lstat = fs.lstat;
+      // A fake filesystem port without path inspection keeps the read-only
+      // fallback below; the real store always inspects the path first (K15).
+      const inspectsPath = stat !== undefined && lstat !== undefined;
+      if (inspectsPath) {
+        // K15: one path rule — a regular file is valid whatever the link chain,
+        // a non-regular target or dangling entry is a path fault, only an lstat
+        // ENOENT is absence, and any other inspection failure is access.
+        const path = configurationPathState(
+          probeConfigurationPath(
+            () => stat(configFile),
+            () => lstat(configFile),
+          ),
+        );
+        if (path === "absent") return ok(null);
+        if (path === "path-fault") {
+          return configurationRefusal(CONFIG_PATH_REPAIR, PROBE_PATH_FAULT);
+        }
+        if (path === "access-failure") {
+          return configurationRefusal(CONFIG_ACCESS_REPAIR, PROBE_UNINSPECTABLE);
+        }
+      }
       let text: string;
       try {
         text = fs.readFile(configFile);
       } catch (error) {
-        const code = (error as NodeJS.ErrnoException | null)?.code;
-        if (code === "ENOENT") return ok(null);
         const message = error instanceof Error ? error.message : String(error);
-        return err(
-          appError("CONFIG_INVALID", `the configuration at ${configFile} cannot be read: ${message}`, {
-            expectedConfigPath: configFile,
-          }),
-        );
+        if (!inspectsPath) {
+          // The read is the only probe available: a confirmed ENOENT is absence.
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          if (code === "ENOENT") return ok(null);
+        }
+        // K16/K20: after a successful inspection the path was a regular file, so
+        // any read failure — including a file or symlink target that vanished in
+        // between — is the owner-only access repair. Never re-inspect here: the
+        // path may have changed since, and the observed state is already known.
+        return configurationRefusal(inspectsPath ? CONFIG_ACCESS_REPAIR : unreadableConfiguredRecovery(), message);
       }
       const loaded = loadConfiguration(text, { userHome: ports.userHome, sorageHome: ports.home.home });
       if (!loaded.ok) return loaded;

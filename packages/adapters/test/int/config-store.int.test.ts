@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Configuration, defaultConfiguration, errorSpec } from "@sorage/core";
+import { type Configuration, CONFIG_ACCESS_REPAIR, defaultConfiguration, errorSpec } from "@sorage/core";
 import { describe, expect, it } from "vitest";
 import { type ConfigStoreFs, createConfigStore, realConfigStoreFs } from "../../src/config-store";
 import { createHomePaths, createNodeHomePaths } from "../../src/home";
@@ -343,5 +343,106 @@ describe("the atomic configuration store", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("treats a read ENOENT after a successful probe as an access failure, not absence (K16)", async () => {
+    await withTempHome(async () => {
+      const paths = createNodeHomePaths();
+      const vanished = (): never => {
+        const error = new Error("ENOENT: the configuration vanished") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      };
+      const store = createConfigStore({
+        home: paths,
+        lockPorts: createNodeLockProbePorts(),
+        userHome: "/Users/tester",
+        fs: {
+          writeFile: () => {},
+          readFile: vanished,
+          rename: () => {},
+          unlink: () => {},
+          mkdir: () => {},
+          fsync: () => {},
+          copyFile: () => {},
+          chmod: () => {},
+          // The probe really inspected a regular file; the read then lost it.
+          stat: () => ({ isFile: () => true, mode: 0o600 }),
+          lstat: () => ({ isFile: () => false }),
+        },
+      });
+      const result = store.readForOperation();
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(result.error.message).toContain("cannot be read");
+      expect(result.error.recovery?.suggestedCommand).toBe(CONFIG_ACCESS_REPAIR);
+    });
+  });
+
+  it("does not re-inspect after a successful probe: a read failure keeps the access repair (K20)", async () => {
+    await withTempHome(async () => {
+      const stats = [
+        { isFile: () => true, mode: 0o600 },
+        // A later inspection would report a non-regular entry, but K20 forbids
+        // re-inspecting after the successful probe.
+        { isFile: () => false, mode: 0o755 },
+      ];
+      let statCalls = 0;
+      const store = createConfigStore({
+        home: createNodeHomePaths(),
+        lockPorts: createNodeLockProbePorts(),
+        userHome: "/Users/tester",
+        fs: {
+          writeFile: () => {},
+          readFile: () => {
+            const error = new Error("EACCES: the configuration was replaced") as NodeJS.ErrnoException;
+            error.code = "EACCES";
+            throw error;
+          },
+          rename: () => {},
+          unlink: () => {},
+          mkdir: () => {},
+          fsync: () => {},
+          copyFile: () => {},
+          chmod: () => {},
+          stat: () => stats[Math.min(statCalls++, stats.length - 1)] as { isFile(): boolean; mode: number },
+          lstat: () => ({ isFile: () => true }),
+        },
+      });
+      const result = store.readForOperation();
+      expect(statCalls).toBe(1);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("CONFIG_INVALID");
+      expect(result.error.recovery?.suggestedCommand).toBe(CONFIG_ACCESS_REPAIR);
+    });
+  });
+
+  it("keeps the explicit read-only fallback for a filesystem port without path inspection (K16)", async () => {
+    await withTempHome(async () => {
+      const store = createConfigStore({
+        home: createNodeHomePaths(),
+        lockPorts: createNodeLockProbePorts(),
+        userHome: "/Users/tester",
+        fs: {
+          writeFile: () => {},
+          readFile: () => {
+            const error = new Error("ENOENT: no file") as NodeJS.ErrnoException;
+            error.code = "ENOENT";
+            throw error;
+          },
+          rename: () => {},
+          unlink: () => {},
+          mkdir: () => {},
+          fsync: () => {},
+          copyFile: () => {},
+          chmod: () => {},
+        },
+      });
+      const result = store.readForOperation();
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBeNull();
+    });
   });
 });

@@ -22,6 +22,7 @@ import {
   SUPPORTED_VAULT_MARKER_SCHEMA,
   validateVaultMarkerForInstallation,
   type VaultMarker,
+  VAULT_OPEN_RECOVERY,
   vaultGitignoreContent,
   verifyVaultPolicyFiles,
 } from "@sorage/core";
@@ -168,49 +169,88 @@ export function openVault(vaultPath: string, installationId: string): Result<Ope
   let stat: ReturnType<typeof statSync>;
   try {
     stat = statSync(vaultPath);
-  } catch {
-    return err(
-      appError("VAULT_INTEGRITY_ERROR", `The Vault directory does not exist at ${vaultPath}; run sorage init first.`, {
-        vaultPath,
-      }),
-    );
-  }
-  if (!stat.isDirectory()) {
-    return err(
-      appError("VAULT_INTEGRITY_ERROR", `The Vault path ${vaultPath} is a file, not a directory.`, {
-        vaultPath,
-      }),
-    );
-  }
-  const markerText = readMarkerText(vaultPath);
-  if (markerText === null) {
-    const entries = readdirSync(vaultPath);
-    if (entries.length > 0) {
+  } catch (error) {
+    // Only a confirmed absence is the pre-initialization state; every other
+    // stat failure is an access failure and must not suggest initialization.
+    if (isNotFound(error)) {
       return err(
-        appError(
-          "VAULT_INTEGRITY_ERROR",
-          `Refusing to adopt the non-empty directory ${vaultPath} because it has no Vault marker (VLT-003).`,
-          { vaultPath, entryCount: entries.length },
+        openRefusal(
+          `The Vault directory does not exist at ${vaultPath}.`,
+          { vaultPath },
+          VAULT_OPEN_RECOVERY.missingDirectory,
         ),
       );
     }
     return err(
-      appError(
-        "VAULT_INTEGRITY_ERROR",
-        `The directory ${vaultPath} is empty and has not been initialized as a Vault.`,
-        {
-          vaultPath,
-        },
+      openRefusal(
+        `The Vault directory at ${vaultPath} cannot be inspected.`,
+        { vaultPath },
+        VAULT_OPEN_RECOVERY.unreadableDirectory,
       ),
     );
   }
-  const marker = parseVaultMarker(markerText);
+  if (!stat.isDirectory()) {
+    return err(
+      openRefusal(
+        `The Vault path ${vaultPath} is a file, not a directory.`,
+        { vaultPath },
+        VAULT_OPEN_RECOVERY.filePath,
+      ),
+    );
+  }
+  const markerRead = readMarkerBody(vaultPath);
+  if (markerRead.kind !== "present") {
+    // Listings happen only where the marker is absent or unreadable, so a valid
+    // marker in an execute-only directory still opens.
+    const entries = listEntries(vaultPath);
+    if (entries === null) {
+      return err(
+        openRefusal(
+          `The Vault directory at ${vaultPath} cannot be inspected.`,
+          { vaultPath },
+          VAULT_OPEN_RECOVERY.unreadableDirectory,
+        ),
+      );
+    }
+    if (markerRead.kind === "unreadable") {
+      return err(
+        openRefusal(
+          `The Vault marker at ${vaultPath}/.sorage-vault.json cannot be read.`,
+          { vaultPath, entryCount: entries.length },
+          VAULT_OPEN_RECOVERY.unreadableMarker,
+        ),
+      );
+    }
+    if (entries.length > 0) {
+      return err(
+        openRefusal(
+          `Refusing to adopt the non-empty directory ${vaultPath} because it has no Vault marker (VLT-003).`,
+          { vaultPath, entryCount: entries.length },
+          VAULT_OPEN_RECOVERY.nonEmptyWithoutMarker,
+        ),
+      );
+    }
+    return err(
+      openRefusal(
+        `The directory ${vaultPath} is empty and has not been initialized as a Vault.`,
+        { vaultPath },
+        VAULT_OPEN_RECOVERY.emptyUninitialized,
+      ),
+    );
+  }
+  const marker = parseVaultMarker(markerRead.text);
   if (!marker.ok) {
-    return err(withVaultPath(marker.error, vaultPath));
+    const withPath = withVaultPath(marker.error, vaultPath);
+    // A newer marker schema keeps its own catalogue recovery (VAULT_SCHEMA_UNSUPPORTED).
+    return err(
+      marker.error.code === "VAULT_SCHEMA_UNSUPPORTED"
+        ? withPath
+        : { ...withPath, recovery: { suggestedCommand: VAULT_OPEN_RECOVERY.invalidMarker } },
+    );
   }
   const owned = validateVaultMarkerForInstallation(marker.value, installationId);
   if (!owned.ok) {
-    return err(withVaultPath(owned.error, vaultPath));
+    return err(withVaultOpenRecovery(owned.error, vaultPath, VAULT_OPEN_RECOVERY.foreignMarker));
   }
   const layoutProblems = verifyVaultPolicyFiles(
     readTextIfExists(join(vaultPath, ".gitattributes")),
@@ -219,9 +259,33 @@ export function openVault(vaultPath: string, installationId: string): Result<Ope
   return ok({ marker: owned.value, layoutProblems });
 }
 
-/** Reads the marker body, or null when the file is absent. Exported for doctor. */
-export function readMarkerText(vaultPath: string): string | null {
-  return readTextIfExists(join(vaultPath, ".sorage-vault.json"));
+/** One marker read: present with its body, absent, or present but unreadable. */
+type MarkerRead = { kind: "present"; text: string } | { kind: "absent" } | { kind: "unreadable" };
+
+function readMarkerBody(vaultPath: string): MarkerRead {
+  try {
+    return { kind: "present", text: readFileSync(join(vaultPath, ".sorage-vault.json"), "utf8") };
+  } catch (error) {
+    return isNotFound(error) ? { kind: "absent" } : { kind: "unreadable" };
+  }
+}
+
+/** Lists a directory's entries, or null when the listing itself fails. */
+function listEntries(vaultPath: string): string[] | null {
+  try {
+    return readdirSync(vaultPath);
+  } catch {
+    return null;
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
+/** A `VAULT_INTEGRITY_ERROR` refusal carrying its state's safe action. */
+function openRefusal(message: string, details: Record<string, unknown>, recovery: string): AppError {
+  return { ...appError("VAULT_INTEGRITY_ERROR", message, details), recovery: { suggestedCommand: recovery } };
 }
 
 function readTextIfExists(path: string): string | null {
@@ -230,6 +294,13 @@ function readTextIfExists(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+function withVaultOpenRecovery(error: AppError, vaultPath: string, recovery: string): AppError {
+  return {
+    ...withVaultPath(error, vaultPath),
+    recovery: { suggestedCommand: recovery },
+  };
 }
 
 function withVaultPath(error: AppError, vaultPath: string): AppError {

@@ -1,10 +1,50 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/main";
 
 const homes: string[] = [];
+const cliEntry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
+/** A FIFO needs `mkfifo`; the platform-skipped cases state that reason. */
+const mkfifoAvailable = spawnSync("mkfifo", [], { encoding: "utf8" }).error === undefined;
+
+function makeFifo(path: string): boolean {
+  return spawnSync("mkfifo", [path], { encoding: "utf8" }).status === 0;
+}
+
+/**
+ * Runs the CLI entry in a child process with a parent-enforced timeout (K21):
+ * a regression that blocks on the FIFO is killed by the parent instead of
+ * hanging this worker, and the case then fails on `timedOut`.
+ */
+function runChild(
+  args: string[],
+  home: string,
+): { status: number | null; stdout: string; stderr: string; timedOut: boolean } {
+  const result = spawnSync("bun", [cliEntry, ...args], {
+    encoding: "utf8",
+    timeout: 15_000,
+    env: { ...process.env, SORAGE_HOME: home },
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
+}
 afterEach(() => {
   while (homes.length > 0) {
     const home = homes.pop();
@@ -274,5 +314,178 @@ describe("sorage config", () => {
     const io = capture();
     expect(runCli(["config", "edit"], io.ports)).toBe(77);
     expect(io.errText()).toContain("USER_CONTEXT_REQUIRED");
+  });
+});
+
+describe("the operational configuration-access refusal (TASK-118 F3/K9)", () => {
+  const ACCESS_REPAIR =
+    "Restore the home directory with mode 0700 and config.yaml with owner-only 0600 permissions; do not reinitialize an existing installation";
+  const PATH_REPAIR =
+    "Replace the non-regular entry, dangling symlink, or symlink loop at the configuration path with a regular config.yaml file owned by this user, or a symlink to one";
+
+  function install(prefix: string): { home: string; configPath: string; markerPath: string } {
+    const home = tempHome(prefix);
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    return {
+      home,
+      configPath: join(home, "config.yaml"),
+      markerPath: join(home, "vault", ".sorage-vault.json"),
+    };
+  }
+
+  function expectRefusals(recovery: string): void {
+    for (const args of [
+      ["channel", "list"],
+      ["send", "--to", "no-such-project", "--title", "T118", "--body", "body"],
+      ["inbox"],
+      ["project", "list"],
+    ]) {
+      const io = capture();
+      expect(runCli([...args, "--json"], io.ports), args.join(" ")).toBe(78);
+      expect(io.outText(), args.join(" ")).toBe("");
+      const envelope = JSON.parse(io.errText()) as {
+        error: { code: string; message: string; recovery?: { suggestedCommand: string } };
+      };
+      expect(envelope.error.code, args.join(" ")).toBe("CONFIG_INVALID");
+      expect(envelope.error.message, args.join(" ")).toContain("cannot be read");
+      expect(envelope.error.recovery?.suggestedCommand, args.join(" ")).toBe(recovery);
+    }
+  }
+
+  it.skipIf(process.getuid?.() === 0)(
+    "carries the access repair on Channel, Handoff and Project commands for an unreadable configuration (root reads a mode-000 file, so this case is skipped as root)",
+    () => {
+      const fixture = install("sorage-t118-f3-unreadable-");
+      const configBefore = readFileSync(fixture.configPath, "utf8");
+      const markerBefore = readFileSync(fixture.markerPath, "utf8");
+      chmodSync(fixture.configPath, 0o000);
+      try {
+        expectRefusals(ACCESS_REPAIR);
+      } finally {
+        chmodSync(fixture.configPath, 0o600);
+      }
+      expect(readFileSync(fixture.configPath, "utf8")).toBe(configBefore);
+      expect(readFileSync(fixture.markerPath, "utf8")).toBe(markerBefore);
+    },
+  );
+
+  it("carries the path repair on Channel, Handoff and Project commands for a directory at the configuration path", () => {
+    const fixture = install("sorage-t118-f3-directory-");
+    const valid = readFileSync(fixture.configPath, "utf8");
+    const markerBefore = readFileSync(fixture.markerPath, "utf8");
+    rmSync(fixture.configPath, { force: true });
+    mkdirSync(fixture.configPath);
+    expectRefusals(PATH_REPAIR);
+    expect(readFileSync(fixture.markerPath, "utf8")).toBe(markerBefore);
+    // The path repair restores the installation.
+    rmSync(fixture.configPath, { recursive: true, force: true });
+    writeFileSync(fixture.configPath, valid);
+    chmodSync(fixture.configPath, 0o600);
+    expect(runCli(["project", "list", "--json"], capture().ports)).toBe(0);
+  });
+
+  it("follows a live symlink to a valid configuration on Channel, Handoff and Project commands (K15)", () => {
+    const fixture = install("sorage-t118-f3-live-symlink-");
+    const valid = readFileSync(fixture.configPath, "utf8");
+    const target = join(fixture.home, "config-target.yaml");
+    writeFileSync(target, valid);
+    chmodSync(target, 0o600);
+    rmSync(fixture.configPath, { force: true });
+    symlinkSync(target, fixture.configPath);
+
+    for (const args of [
+      ["channel", "list"],
+      ["inbox", "--as-user"],
+      ["project", "list"],
+    ]) {
+      const io = capture();
+      expect(runCli([...args, "--json"], io.ports), args.join(" ")).toBe(0);
+      expect(io.errText(), args.join(" ")).toBe("");
+    }
+    // A Handoff mutation passes the configuration gate and fails only on its own domain.
+    const send = capture();
+    expect(
+      runCli(["send", "--to", "no-such-project", "--title", "T118", "--body", "body", "--json"], send.ports),
+    ).not.toBe(78);
+    expect(send.errText()).not.toContain("cannot be read");
+  });
+
+  it.skipIf(!mkfifoAvailable)(
+    "refuses a FIFO at the configuration path in child processes without blocking (K18/K21; mkfifo is unavailable on this platform, so this case is skipped)",
+    () => {
+      const fixture = install("sorage-t118-f3-fifo-");
+      const valid = readFileSync(fixture.configPath, "utf8");
+      const markerBefore = readFileSync(fixture.markerPath, "utf8");
+      rmSync(fixture.configPath, { force: true });
+      expect(makeFifo(fixture.configPath)).toBe(true);
+      try {
+        for (const args of [
+          ["channel", "list", "--json"],
+          ["send", "--to", "no-such-project", "--title", "T118", "--body", "body", "--json"],
+          ["inbox", "--json"],
+          ["project", "list", "--json"],
+        ]) {
+          const child = runChild(args, fixture.home);
+          expect(child.timedOut, args.join(" ")).toBe(false);
+          expect(child.status, args.join(" ")).toBe(78);
+          const envelope = JSON.parse(child.stderr) as {
+            error: { code: string; recovery?: { suggestedCommand: string } };
+          };
+          expect(envelope.error.code, args.join(" ")).toBe("CONFIG_INVALID");
+          expect(envelope.error.recovery?.suggestedCommand, args.join(" ")).toBe(PATH_REPAIR);
+        }
+        // Doctor runs in its own child too; it reports the blocking path fault.
+        const doctor = runChild(["doctor", "--json"], fixture.home);
+        expect(doctor.timedOut).toBe(false);
+        expect(doctor.status).toBe(1);
+        const report = JSON.parse(doctor.stdout) as {
+          data: {
+            checks: Array<{ id: string; severity: string; message: string; recovery?: { suggestedCommand: string } }>;
+          };
+        };
+        const schema = report.data.checks.find((check) => check.id === "config.schema");
+        expect(schema?.severity).toBe("blocking");
+        expect(schema?.message).toBe("The configuration path is not a regular config.yaml file.");
+        expect(schema?.recovery?.suggestedCommand).toBe(PATH_REPAIR);
+        expect(readFileSync(fixture.markerPath, "utf8")).toBe(markerBefore);
+      } finally {
+        rmSync(fixture.configPath, { force: true });
+      }
+      writeFileSync(fixture.configPath, valid);
+      chmodSync(fixture.configPath, 0o600);
+      const repaired = runChild(["project", "list", "--json"], fixture.home);
+      expect(repaired.timedOut).toBe(false);
+      expect(repaired.status).toBe(0);
+    },
+    30_000,
+  );
+
+  it("carries the path repair on Channel, Handoff and Project commands for a symlink loop (K15)", () => {
+    const fixture = install("sorage-t118-f3-loop-");
+    const valid = readFileSync(fixture.configPath, "utf8");
+    const markerBefore = readFileSync(fixture.markerPath, "utf8");
+    rmSync(fixture.configPath, { force: true });
+    symlinkSync(fixture.configPath, fixture.configPath);
+    expectRefusals(PATH_REPAIR);
+    expect(readFileSync(fixture.markerPath, "utf8")).toBe(markerBefore);
+    rmSync(fixture.configPath, { force: true });
+    writeFileSync(fixture.configPath, valid);
+    chmodSync(fixture.configPath, 0o600);
+    expect(runCli(["project", "list", "--json"], capture().ports)).toBe(0);
+  });
+
+  it("carries the path repair on Channel, Handoff and Project commands for a dangling symlink (K12)", () => {
+    const fixture = install("sorage-t118-f3-dangling-");
+    const valid = readFileSync(fixture.configPath, "utf8");
+    const markerBefore = readFileSync(fixture.markerPath, "utf8");
+    rmSync(fixture.configPath, { force: true });
+    symlinkSync(join(fixture.home, "missing-config-target"), fixture.configPath);
+    expectRefusals(PATH_REPAIR);
+    expect(readFileSync(fixture.markerPath, "utf8")).toBe(markerBefore);
+    // Only an lstat ENOENT is absence; the path repair restores the installation.
+    rmSync(fixture.configPath, { force: true });
+    writeFileSync(fixture.configPath, valid);
+    chmodSync(fixture.configPath, 0o600);
+    expect(runCli(["project", "list", "--json"], capture().ports)).toBe(0);
   });
 });

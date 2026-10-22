@@ -1,21 +1,25 @@
 import { digestManagedFile } from "./managed-paths";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
 import {
   type BackupRunRow,
   type Configuration,
+  CONFIG_ACCESS_REPAIR,
+  CONFIG_PATH_REPAIR,
+  configurationPathState,
+  errorSpec,
   isManagedContentStorageKey,
   isManagedStorageKey,
   isManagedVaultPath,
   nextDueAt,
   parseConfigurationFile,
-  parseVaultMarker,
   KNOWN_SCHEMA_HISTORY,
-  validateVaultMarkerForInstallation,
+  probeConfigurationPath,
+  VAULT_OPEN_RECOVERY,
   verifyVaultPolicyFiles,
   verifyVaultArtifacts,
   type AppError,
@@ -37,20 +41,43 @@ import { openSorageDatabase, type SorageSqlite } from "./sqlite/connection";
 import { inspectAppliedHistory } from "./sqlite/history-inspection";
 import { SchemaAdmissionError } from "./sqlite/migrator";
 import { admitAppliedHistory } from "@sorage/core";
+import { openVault } from "./vault";
 
 /**
  * The production doctor probes over the live installation: every check the M1
  * snapshot can perform, with the recovery guidance of section 35 attached to every
  * non-ok outcome. Checks whose domain tables arrive with later epics report honest
  * vacuous passes instead of pretending to verify data that cannot exist yet.
+ *
+ * TASK-118 policy: a readable but malformed configuration carries the
+ * configuration-repair text, an unreadable configuration or untraversable home
+ * carries the owner-only access repair, a directory or symlink at the
+ * configuration path carries the path repair, and a check that cannot establish
+ * its result because the Vault cannot open carries that refusal's own recovery.
  */
+const CONFIG_REPAIR = "sorage config validate, then repair the reported keys";
+const VAULT_GITATTRIBUTES =
+  "Backfill both files with sorage init --reconfigure --non-interactive; set the git configuration in the Vault repository";
+const GITIGNORE_ENTRY =
+  "Add the missing staging/ entry to .gitignore by hand; reconfiguration creates only a missing .gitignore";
+const GITATTRIBUTES_AND_GITIGNORE =
+  "Backfill .gitattributes with sorage init --reconfigure --non-interactive, and add the missing staging/ entry to .gitignore by hand; reconfiguration creates only a missing .gitignore";
+const POLICY_PATH_REPAIR =
+  "Repair the policy file path and its permissions; reconfiguration cannot backfill a symlink, directory, or unreadable file";
+const POLICY_PATH_AND_RECONFIGURE =
+  "Repair the unsafe or unreadable policy path and backfill the missing policy file or .gitattributes line with sorage init --reconfigure --non-interactive; reconfiguration cannot backfill a symlink, directory, or unreadable file";
+const POLICY_PATH_AND_GITIGNORE =
+  "Repair the unsafe or unreadable policy path and add the missing staging/ entry to .gitignore by hand";
+const POLICY_PATH_RECONFIGURE_AND_GITIGNORE =
+  "Repair the unsafe or unreadable policy path, backfill the missing policy file or .gitattributes line with sorage init --reconfigure --non-interactive, and add the missing staging/ entry to .gitignore by hand; reconfiguration cannot backfill a symlink, directory, or unreadable file";
+
 const RECOVERIES: Record<DoctorCheckId, string> = {
-  "home.permissions": "sorage init --reconfigure, or restore owner-only permissions",
-  "config.schema": "sorage config validate, then repair the reported keys",
+  "home.permissions": CONFIG_ACCESS_REPAIR,
+  "config.schema": CONFIG_REPAIR,
   "config.lock": "Remove ~/.sorage/run/config.lock once no sorage process is running",
   "vault.marker":
-    "sorage vault verify; adopt a foreign Vault only through sorage backup restore --from <vault-path> --as-user --confirm",
-  "vault.gitattributes": "sorage init --reconfigure backfills both files",
+    "Check the configured vault.path and confirm its volume is mounted; restore a verified backup into a fresh installation; adopt a foreign Vault only through the audited restore",
+  "vault.gitattributes": VAULT_GITATTRIBUTES,
   "vault.writable": "Fix the directory permissions, or remount the volume read-write",
   "db.integrity": "Restore from ~/.sorage/state/backups/, or sorage backup restore into a fresh installation",
   "db.pendingIntents":
@@ -119,8 +146,17 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
   let admission: Admission | null = null;
   function establishAdmission(): Admission {
     if (admission !== null) return admission;
-    if (store.readText() === null) {
-      // Before initialization there is no doctor DB contract to guard.
+    // K15/K18: never open a non-regular configuration path (a FIFO would
+    // block). Only a regular file has a doctor DB contract to guard.
+    const configPath = configurationPathState(
+      probeConfigurationPath(
+        () => statSync(home.configFile),
+        () => lstatSync(home.configFile),
+      ),
+    );
+    if (configPath !== "valid" || store.readText() === null) {
+      // Before initialization (or without a readable regular file) there is no
+      // doctor DB contract to guard.
       admission = { kind: "admitted" };
       return admission;
     }
@@ -176,11 +212,52 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     }
   }
 
-  function configuration(): Configuration | null {
-    const text = store.readText();
-    if (text === null) return null;
+  /**
+   * The configuration state as observed (TASK-118, Z2): only a confirmed ENOENT
+   * is pre-initialization, where `sorage init` is the right action. A
+   * configuration file that cannot be read, or a home directory that cannot be
+   * traversed, is an access failure whose recovery restores owner-only access
+   * and never suggests initialization; a directory or symlink at the
+   * configuration path is a path fault; a readable but invalid file is the
+   * configuration-repair case where `sorage config validate` runs.
+   */
+  type ConfigurationState =
+    | { kind: "valid"; config: Configuration }
+    | { kind: "absent" }
+    | { kind: "unreadable" }
+    | { kind: "unsafe-path" }
+    | { kind: "malformed" };
+
+  function configurationState(): ConfigurationState {
+    const path = configurationPathState(
+      probeConfigurationPath(
+        () => statSync(home.configFile),
+        () => lstatSync(home.configFile),
+      ),
+    );
+    if (path === "absent") return { kind: "absent" };
+    if (path === "access-failure") return { kind: "unreadable" };
+    if (path === "path-fault") return { kind: "unsafe-path" };
+    let text: string;
+    try {
+      text = readFileSync(home.configFile, "utf8");
+    } catch {
+      return { kind: "unreadable" };
+    }
     const parsed = parseConfigurationFile(text);
-    return parsed.ok ? parsed.value.config : null;
+    return parsed.ok ? { kind: "valid", config: parsed.value.config } : { kind: "malformed" };
+  }
+
+  function configuration(): Configuration | null {
+    const state = configurationState();
+    return state.kind === "valid" ? state.config : null;
+  }
+
+  /** The recovery for a configuration a check cannot use, by the observed state. */
+  function configurationRecovery(state: ConfigurationState): string {
+    if (state.kind === "unreadable") return CONFIG_ACCESS_REPAIR;
+    if (state.kind === "unsafe-path") return CONFIG_PATH_REPAIR;
+    return CONFIG_REPAIR;
   }
 
   function vaultPath(config: Configuration | null): string | null {
@@ -191,6 +268,44 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     if (raw.startsWith("~/.sorage/")) return join(home.home, raw.slice("~/.sorage/".length));
     if (raw.startsWith("~/")) return join(userHome, raw.slice(2));
     return raw;
+  }
+
+  /**
+   * The Vault-open state every Vault-dependent check reuses (TASK-118): one
+   * `openVault` call per doctor instance, so every check reports the same
+   * refusal and none of them inspects Vault content the guard would refuse.
+   */
+  type VaultState =
+    | { kind: "opens" }
+    | { kind: "refused"; message: string; recovery: string }
+    | { kind: "unconfigured" };
+  let vaultStateCache: VaultState | null = null;
+
+  function vaultState(): VaultState {
+    if (vaultStateCache !== null) return vaultStateCache;
+    const config = configuration();
+    const vault = vaultPath(config);
+    if (config === null || vault === null) {
+      vaultStateCache = { kind: "unconfigured" };
+      return vaultStateCache;
+    }
+    try {
+      const opened = openVault(vault, config.installationId);
+      vaultStateCache = opened.ok
+        ? { kind: "opens" }
+        : {
+            kind: "refused",
+            message: opened.error.message,
+            recovery: openRefusalRecovery(opened.error) ?? VAULT_OPEN_RECOVERY.unreadableDirectory,
+          };
+    } catch {
+      vaultStateCache = {
+        kind: "refused",
+        message: `The Vault directory at ${vault} cannot be inspected.`,
+        recovery: VAULT_OPEN_RECOVERY.unreadableDirectory,
+      };
+    }
+    return vaultStateCache;
   }
 
   interface ProjectRow {
@@ -280,22 +395,44 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         } catch {
           homeExists = false;
         }
-        let mode: number | null = null;
-        try {
-          mode = statSync(home.configFile).mode & 0o777;
-        } catch {
-          mode = null;
+        const configPathState = configurationPathState(
+          probeConfigurationPath(
+            () => statSync(home.configFile),
+            () => lstatSync(home.configFile),
+          ),
+        );
+        if (!homeExists || configPathState === "absent" || configPathState === "access-failure") {
+          return withRecovery(blocking("The home directory or config.yaml is missing."), CONFIG_ACCESS_REPAIR);
         }
-        if (!homeExists || mode === null) {
-          return blocking("The home directory or config.yaml is missing.");
+        // K15: a live symlink to a regular file is followed; only a directory,
+        // dangling symlink, loop, or other non-regular entry is a path fault.
+        if (configPathState === "path-fault") {
+          return withRecovery(
+            blocking("The configuration path is not a regular config.yaml file."),
+            CONFIG_PATH_REPAIR,
+          );
         }
-        if (mode !== 0o600) {
-          return blocking(`config.yaml is mode ${mode.toString(8)}, expected owner-only 600.`);
+        const configMode = statSync(home.configFile).mode & 0o777;
+        if (configMode !== 0o600) {
+          return withRecovery(
+            blocking(`config.yaml is mode ${configMode.toString(8)}, expected owner-only 600.`),
+            CONFIG_ACCESS_REPAIR,
+          );
         }
         return ok("The home tree exists and config.yaml is owner-only.");
       }
 
       case "config.schema": {
+        const state = configurationState();
+        if (state.kind === "unreadable") {
+          return withRecovery(blocking("config.yaml cannot be read."), CONFIG_ACCESS_REPAIR);
+        }
+        if (state.kind === "unsafe-path") {
+          return withRecovery(
+            blocking("The configuration path is not a regular config.yaml file."),
+            CONFIG_PATH_REPAIR,
+          );
+        }
         const parsed = parseConfigurationFile(store.readText() ?? "");
         if (!parsed.ok) {
           return blocking(`config.yaml is invalid: ${parsed.error.message}`);
@@ -318,51 +455,128 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "vault.marker": {
-        const config = configuration();
-        const vault = vaultPath(config);
-        if (config === null || vault === null) {
-          return blocking("The Vault marker cannot be checked without a valid configuration.");
+        const state = configurationState();
+        if (state.kind !== "valid") {
+          return withRecovery(
+            blocking("The Vault marker cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
         }
-        let body: string;
-        try {
-          body = readFileSync(join(vault, ".sorage-vault.json"), "utf8");
-        } catch {
-          return blocking("The Vault marker is missing or unparseable.");
+        const opened = vaultState();
+        if (opened.kind === "refused") return blocking(opened.message);
+        if (opened.kind === "unconfigured") {
+          return withRecovery(
+            blocking("The Vault marker cannot be checked without a valid configuration."),
+            CONFIG_REPAIR,
+          );
         }
-        const marker = parseVaultMarker(body);
-        if (!marker.ok) return blocking(marker.error.message);
-        const owned = validateVaultMarkerForInstallation(marker.value, config.installationId);
-        if (!owned.ok) return blocking(owned.error.message);
         return ok("The Vault marker matches this installation.");
       }
 
       case "vault.gitattributes": {
-        const vault = vaultPath(configuration());
-        if (vault === null) return warning("The Vault policy files cannot be checked without a valid configuration.");
-        let gitattributes: string | null = null;
-        let gitignore: string | null = null;
-        try {
-          gitattributes = readFileSync(join(vault, ".gitattributes"), "utf8");
-          gitignore = readFileSync(join(vault, ".gitignore"), "utf8");
-        } catch {
-          return warning("The Vault policy files are missing.");
+        const state = configurationState();
+        if (state.kind !== "valid") {
+          return withRecovery(
+            warning("The Vault policy files cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
         }
-        // The required lines and their stated order, exactly as `vault verify`
-        // and `backup verify` assert them (VLT-024, BKP-022, section 6).
-        const problems = verifyVaultPolicyFiles(gitattributes, gitignore);
-        if (problems.length > 0) return warning(problems.join(" "));
-        return ok("The Vault policy files carry every required line in its stated order.");
+        const opened = vaultState();
+        if (opened.kind === "refused") return warning(opened.message);
+        const vault = vaultPath(state.config);
+        if (vault === null) {
+          return withRecovery(
+            warning("The Vault policy files cannot be checked without a valid configuration."),
+            CONFIG_REPAIR,
+          );
+        }
+        const attributes = readPolicyFile(join(vault, ".gitattributes"));
+        const ignore = readPolicyFile(join(vault, ".gitignore"));
+        // K8/K13: collect every finding from both files — including an unsafe or
+        // unreadable path — before choosing one recovery, so each state names
+        // every action it actually needs.
+        const findings: string[] = [];
+        let pathIssue = false;
+        let attributesIssue = false;
+        let ignoreEntryIssue = false;
+        let ignoreMissing = false;
+        if (attributes.kind === "unsafe") {
+          findings.push(".gitattributes is unreadable or unsafe at its path.");
+          pathIssue = true;
+        } else if (attributes.kind === "missing") {
+          findings.push(".gitattributes is missing from the Vault.");
+          attributesIssue = true;
+        } else {
+          // The required lines and their stated order, exactly as `vault verify`
+          // and `backup verify` assert them (VLT-024, BKP-022, section 6).
+          const problems = verifyVaultPolicyFiles(attributes.text, null).filter((problem) =>
+            problem.startsWith(".gitattributes"),
+          );
+          findings.push(...problems);
+          attributesIssue = problems.length > 0;
+        }
+        if (ignore.kind === "unsafe") {
+          findings.push(".gitignore is unreadable or unsafe at its path.");
+          pathIssue = true;
+        } else if (ignore.kind === "missing") {
+          findings.push(".gitignore is missing from the Vault.");
+          ignoreMissing = true;
+        } else {
+          const problems = verifyVaultPolicyFiles(null, ignore.text).filter((problem) =>
+            problem.startsWith(".gitignore"),
+          );
+          findings.push(...problems);
+          ignoreEntryIssue = problems.length > 0;
+        }
+        if (findings.length === 0) {
+          return ok("The Vault policy files carry every required line in its stated order.");
+        }
+        const needsReconfigure = attributesIssue || ignoreMissing;
+        let recovery: string;
+        if (!pathIssue) {
+          recovery =
+            needsReconfigure && ignoreEntryIssue
+              ? GITATTRIBUTES_AND_GITIGNORE
+              : needsReconfigure
+                ? VAULT_GITATTRIBUTES
+                : GITIGNORE_ENTRY;
+        } else if (needsReconfigure && ignoreEntryIssue) {
+          recovery = POLICY_PATH_RECONFIGURE_AND_GITIGNORE;
+        } else if (needsReconfigure) {
+          recovery = POLICY_PATH_AND_RECONFIGURE;
+        } else if (ignoreEntryIssue) {
+          recovery = POLICY_PATH_AND_GITIGNORE;
+        } else {
+          recovery = POLICY_PATH_REPAIR;
+        }
+        return withRecovery(warning(findings.join(" ")), recovery);
       }
 
       case "vault.writable": {
-        const vault = vaultPath(configuration());
-        if (vault === null) return blocking("The Vault cannot be checked without a valid configuration.");
+        const state = configurationState();
+        if (state.kind !== "valid") {
+          return withRecovery(
+            blocking("The Vault cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
+        }
+        const opened = vaultState();
+        if (opened.kind === "refused") {
+          return blocking("The Vault root, artifacts/, or staging/ is not writable by this user.");
+        }
+        const vault = vaultPath(state.config);
+        if (vault === null) {
+          return withRecovery(blocking("The Vault cannot be checked without a valid configuration."), CONFIG_REPAIR);
+        }
         try {
           for (const directory of [vault, join(vault, "artifacts"), join(vault, "staging")]) {
             accessSync(directory, constants.W_OK);
           }
         } catch {
-          return blocking("The Vault root, artifacts/, or staging/ is not writable by this user.");
+          return withRecovery(
+            blocking("The Vault root, artifacts/, or staging/ is not writable by this user."),
+            RECOVERIES["vault.writable"],
+          );
         }
         return ok("The Vault root, artifacts/, and staging/ are writable.");
       }
@@ -478,10 +692,14 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "content.checksums": {
-        const config = configuration();
+        const state = configurationState();
+        const config = state.kind === "valid" ? state.config : null;
         const vault = vaultPath(config);
         if (config === null || vault === null) {
-          return blocking("Content checksums cannot be checked without a valid configuration.");
+          return withRecovery(
+            blocking("Content checksums cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
         }
         const opened = doctorOpenDatabase();
         if (!opened.ok) return blocking(opened.blocking);
@@ -514,6 +732,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             db.close();
           }
           if (records.length === 0) return ok("No content records are recorded yet on this installation.");
+          // A Vault that cannot open is reported as that refusal, never as
+          // missing content bytes (TASK-118, section 3.4).
+          const openedVault = vaultState();
+          if (openedVault.kind === "refused") return blocking(openedVault.message);
           const findings = verifyContentRecords({ vault }, records);
           if (!findings.ok) return blocking(findings.error.message);
           if (findings.value.length > 0) {
@@ -528,10 +750,14 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "artifacts.checksums": {
-        const config = configuration();
+        const state = configurationState();
+        const config = state.kind === "valid" ? state.config : null;
         const vault = vaultPath(config);
         if (config === null || vault === null) {
-          return blocking("Artifact checksums cannot be checked without a valid configuration.");
+          return withRecovery(
+            blocking("Artifact checksums cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
         }
         const opened = doctorOpenDatabase();
         if (!opened.ok) return blocking(opened.blocking);
@@ -587,6 +813,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             db.close();
           }
           if (records.length === 0) return ok("No Artifacts are recorded yet on this installation.");
+          // A Vault that cannot open is reported as that refusal, never as
+          // missing Artifact bytes (TASK-118, section 3.4).
+          const openedVault = vaultState();
+          if (openedVault.kind === "refused") return blocking(openedVault.message);
           const inlineFindings: string[] = [];
           const fileRecords: Array<{ storage_key: string; sha256: string }> = [];
           for (const row of records) {
@@ -740,8 +970,14 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "platform.tcc": {
-        const vault = vaultPath(configuration());
-        if (vault === null) return warning("Platform readability cannot be checked without a valid configuration.");
+        const state = configurationState();
+        const vault = vaultPath(state.kind === "valid" ? state.config : null);
+        if (vault === null) {
+          return withRecovery(
+            warning("Platform readability cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
+        }
         try {
           accessSync(vault, constants.R_OK);
         } catch {
@@ -762,10 +998,14 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (!isPidAlive(daemon.pid)) {
           return warning(`run/daemon.json names pid ${String(daemon.pid)}, which is not running; the record is stale.`);
         }
-        const config = configuration();
-        if (config === null) {
-          return warning("The daemon record cannot be checked without a valid configuration.");
+        const state = configurationState();
+        if (state.kind !== "valid") {
+          return withRecovery(
+            warning("The daemon record cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
         }
+        const config = state.config;
         // The CLI process blocks synchronously (CLI-020), so the health check
         // runs as the command's own subprocess exactly like the web probe; the
         // expected installationId is the configuration's, not the record's.
@@ -800,8 +1040,14 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "daemon.port": {
-        const config = configuration();
-        if (config === null) return warning("The daemon port cannot be checked without a valid configuration.");
+        const state = configurationState();
+        if (state.kind !== "valid") {
+          return withRecovery(
+            warning("The daemon port cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
+        }
+        const config = state.config;
         if (!portProbe(config.server.host, config.server.port)) {
           return ok(`Nothing is listening on ${config.server.host}:${config.server.port} yet.`);
         }
@@ -844,8 +1090,14 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "backup.schedule": {
-        const config = configuration();
-        if (config === null) return warning("The backup schedule cannot be checked without a valid configuration.");
+        const state = configurationState();
+        if (state.kind !== "valid") {
+          return withRecovery(
+            warning("The backup schedule cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
+        }
+        const config = state.config;
         const spec = {
           enabled: config.gitBackup.enabled,
           at: config.gitBackup.schedule.at,
@@ -882,10 +1134,21 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "git.state": {
-        const config = configuration();
-        if (config === null) return warning("The Vault repository cannot be checked without a valid configuration.");
+        const state = configurationState();
+        const config = state.kind === "valid" ? state.config : null;
+        if (config === null) {
+          return withRecovery(
+            warning("The Vault repository cannot be checked without a valid configuration."),
+            configurationRecovery(state),
+          );
+        }
         const vault = vaultPath(config);
-        if (vault === null) return warning("The Vault repository cannot be checked without a valid configuration.");
+        if (vault === null) {
+          return withRecovery(
+            warning("The Vault repository cannot be checked without a valid configuration."),
+            CONFIG_REPAIR,
+          );
+        }
         if (!existsSync(join(vault, ".git"))) return ok("The Vault has no Git repository yet.");
         const completed = spawnSync("git", ["-C", vault, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" });
         const branch = completed.status === 0 ? String(completed.stdout ?? "").trim() : "";
@@ -926,9 +1189,31 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     }
   }
 
+  /**
+   * Section 35 attaches its recovery guidance to every non-ok outcome
+   * (TASK-118): an explicit branch recovery wins, a Vault-dependent check whose
+   * Vault cannot open carries that refusal's own recovery, and otherwise the
+   * static catalog text applies. A static `sorage vault verify` is therefore
+   * only reachable while the Vault actually opens.
+   */
+  function attachRecovery(id: DoctorCheckId, outcome: CheckOutcome): CheckOutcome {
+    if (outcome.severity === "ok") return outcome;
+    if (outcome.recovery !== undefined) return outcome;
+    if (VAULT_DEPENDENT.has(id)) {
+      const opened = vaultState();
+      if (opened.kind === "refused") {
+        return { ...outcome, recovery: { suggestedCommand: opened.recovery } };
+      }
+    }
+    return { ...outcome, recovery: { suggestedCommand: RECOVERIES[id] } };
+  }
+
   return {
+    // TASK-118 K1/Z2: only a confirmed ENOENT is pre-initialization. A present
+    // but unreadable file, a denied parent traversal, or a directory or symlink
+    // at the path all run the catalog with their own repair.
     initialized() {
-      return store.readText() !== null;
+      return configurationState().kind !== "absent";
     },
 
     probe(id: DoctorCheckId): CheckOutcome {
@@ -937,10 +1222,41 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
   };
 }
 
-/** Section 35 attaches its recovery guidance to every non-ok outcome. */
-function attachRecovery(id: DoctorCheckId, outcome: CheckOutcome): CheckOutcome {
+/** One policy-file read: present, absent, or present at an unsafe/unreadable path. */
+type PolicyRead = { kind: "present"; text: string } | { kind: "missing" } | { kind: "unsafe" };
+
+function readPolicyFile(path: string): PolicyRead {
+  try {
+    if (!lstatSync(path).isFile()) return { kind: "unsafe" };
+    return { kind: "present", text: readFileSync(path, "utf8") };
+  } catch (error) {
+    return isNotFound(error) ? { kind: "missing" } : { kind: "unsafe" };
+  }
+}
+
+/** The checks whose result depends on the Vault opening (TASK-118, section 3.4). */
+const VAULT_DEPENDENT = new Set<DoctorCheckId>([
+  "vault.marker",
+  "vault.gitattributes",
+  "vault.writable",
+  "artifacts.checksums",
+  "content.checksums",
+  "platform.tcc",
+]);
+
+/** The recovery a Vault-open refusal carries, or null when it is a different failure. */
+function openRefusalRecovery(error: AppError): string | null {
+  if (typeof error.details?.vaultPath !== "string") return null;
+  return error.recovery?.suggestedCommand ?? errorSpec(error.code).recovery?.suggestedCommand ?? null;
+}
+
+function withRecovery(outcome: CheckOutcome, recovery: string): CheckOutcome {
   if (outcome.severity === "ok") return outcome;
-  return { ...outcome, recovery: { suggestedCommand: RECOVERIES[id] } };
+  return { ...outcome, recovery: { suggestedCommand: recovery } };
+}
+
+function isNotFound(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
 }
 
 /**

@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfiguration } from "@sorage/core";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { initializeInstallation } from "@sorage/core";
+import { openVault } from "../../src/vault";
 import { withTempHome } from "../../src/testkit/temp-home";
 import { FakeClock } from "../../src/testkit/fakes";
 import { makeTempHome } from "../../src/testkit/temp-home";
@@ -159,6 +160,77 @@ describe("initializeInstallation", () => {
       if (second.ok) expect(second.value.outcome).toBe("already-initialized");
       expect(readFileSync(`${home}/config.yaml`, "utf8")).toBe(configBefore);
       expect(readFileSync(`${home}/vault/.gitattributes`, "utf8")).toBe(GITATTRIBUTES);
+    } finally {
+      scratch.cleanup();
+    }
+  });
+
+  it("backfills a genuinely new empty configured Vault directory on reconfigure (V6 evidence)", () => {
+    const scratch = makeTempHome("sorage-test-init-empty-vault-");
+    try {
+      const home = `${scratch.home}/installation`;
+      const ports = portsFor(home);
+      const first = initializeInstallation(ports, {});
+      if (!first.ok) throw new Error("fixture initialization failed");
+      const configBefore = readFileSync(`${home}/config.yaml`, "utf8");
+      // A genuinely new installation: no Projects, Memos or content, and only
+      // the empty configured Vault directory left behind.
+      for (const entry of readdirSync(`${home}/vault`)) {
+        rmSync(`${home}/vault/${entry}`, { recursive: true, force: true });
+      }
+      expect(readdirSync(`${home}/vault`)).toEqual([]);
+
+      const reconfigured = initializeInstallation(ports, { reconfigure: true });
+      expect(reconfigured.ok).toBe(true);
+      if (reconfigured.ok) expect(reconfigured.value.outcome).toBe("already-initialized");
+      for (const entry of [".sorage-vault.json", ".gitattributes", ".gitignore", "artifacts", "staging", "content"]) {
+        expect(existsSync(`${home}/vault/${entry}`), entry).toBe(true);
+      }
+      expect(openVault(`${home}/vault`, first.value.installationId).ok).toBe(true);
+      expect(readFileSync(`${home}/config.yaml`, "utf8")).toBe(configBefore);
+
+      const markerBytes = readFileSync(`${home}/vault/.sorage-vault.json`, "utf8");
+      const layout = readdirSync(`${home}/vault`).sort();
+      const repeated = initializeInstallation(ports, { reconfigure: true });
+      expect(repeated.ok).toBe(true);
+      expect(readFileSync(`${home}/vault/.sorage-vault.json`, "utf8")).toBe(markerBytes);
+      expect(readdirSync(`${home}/vault`).sort()).toEqual(layout);
+    } finally {
+      scratch.cleanup();
+    }
+  });
+
+  it("records the V1 hazard: reconfigure creates a Vault at a missing configured path", () => {
+    const scratch = makeTempHome("sorage-test-init-missing-vault-");
+    try {
+      const home = `${scratch.home}/installation`;
+      const ports = portsFor(home);
+      expect(initializeInstallation(ports, {}).ok).toBe(true);
+      rmSync(`${home}/vault`, { recursive: true, force: true });
+      const reconfigured = initializeInstallation(ports, { reconfigure: true });
+      // The initializer creates the directory, so reconfiguration must never be
+      // named as a recovery for a missing or possibly unmounted Vault (V1).
+      expect(reconfigured.ok).toBe(true);
+      expect(existsSync(`${home}/vault/.sorage-vault.json`)).toBe(true);
+    } finally {
+      scratch.cleanup();
+    }
+  });
+
+  it("records the V5 hazard: reconfigure writes a marker into a populated unmarked directory", () => {
+    const scratch = makeTempHome("sorage-test-init-populated-vault-");
+    try {
+      const home = `${scratch.home}/installation`;
+      const ports = portsFor(home);
+      expect(initializeInstallation(ports, {}).ok).toBe(true);
+      writeFileSync(`${home}/vault/important.txt`, "untouched");
+      rmSync(`${home}/vault/.sorage-vault.json`);
+      const reconfigured = initializeInstallation(ports, { reconfigure: true });
+      // Adopting a populated directory defeats VLT-003, which is why V5's
+      // recovery never names reconfiguration.
+      expect(reconfigured.ok).toBe(true);
+      expect(existsSync(`${home}/vault/.sorage-vault.json`)).toBe(true);
+      expect(readFileSync(`${home}/vault/important.txt`, "utf8")).toBe("untouched");
     } finally {
       scratch.cleanup();
     }

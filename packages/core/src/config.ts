@@ -77,6 +77,84 @@ export interface Configuration {
   };
 }
 
+/**
+ * The recovery for a configuration that exists but cannot be read, or whose
+ * home directory cannot be traversed (TASK-118, Z2). Only a confirmed ENOENT
+ * is pre-initialization; every other read failure is this access repair.
+ */
+export const CONFIG_ACCESS_REPAIR =
+  "Restore the home directory with mode 0700 and config.yaml with owner-only 0600 permissions; do not reinitialize an existing installation";
+
+/** The recovery for a directory or symlink at the configuration path (TASK-118, Z2). */
+export const CONFIG_PATH_REPAIR =
+  "Replace the non-regular entry, dangling symlink, or symlink loop at the configuration path with a regular config.yaml file owned by this user, or a symlink to one";
+
+/** One observed result of inspecting the configuration path (TASK-118 K15). */
+export type ConfigurationPathProbe =
+  | { kind: "regular-file" }
+  | { kind: "not-regular" }
+  | { kind: "missing" }
+  | { kind: "dangling-symlink" }
+  | { kind: "symlink-loop" }
+  | { kind: "access-failure" };
+
+export type ConfigurationPathState = "valid" | "absent" | "path-fault" | "access-failure";
+
+/**
+ * The single configuration-path rule (TASK-118 K15): a regular file is valid
+ * whatever the link chain, a dangling symlink, symlink loop, or other
+ * non-regular target is a path fault, only a confirmed `lstat` ENOENT is
+ * absence, and every other inspection failure is an access failure. The
+ * operational read, doctor and `init` all classify the path this way.
+ */
+export function configurationPathState(probe: ConfigurationPathProbe): ConfigurationPathState {
+  switch (probe.kind) {
+    case "regular-file":
+      return "valid";
+    case "missing":
+      return "absent";
+    case "access-failure":
+      return "access-failure";
+    case "not-regular":
+    case "dangling-symlink":
+    case "symlink-loop":
+      return "path-fault";
+  }
+}
+
+interface ConfigurationPathStats {
+  isFile(): boolean;
+}
+
+/**
+ * Inspects the configuration path without opening it: `stat` follows symlinks,
+ * so a live symlink to a regular file is a valid path, while a FIFO or other
+ * non-regular target is a path fault and is never opened (a FIFO must not
+ * block). On `ENOENT` an `lstat` distinguishes absence from a dangling entry.
+ */
+export function probeConfigurationPath(
+  stat: () => ConfigurationPathStats,
+  lstat: () => ConfigurationPathStats,
+): ConfigurationPathProbe {
+  let stats: ConfigurationPathStats;
+  try {
+    stats = stat();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ELOOP") return { kind: "symlink-loop" };
+    if (code !== "ENOENT") return { kind: "access-failure" };
+    try {
+      lstat();
+      return { kind: "dangling-symlink" };
+    } catch (lstatError) {
+      return (lstatError as NodeJS.ErrnoException | null)?.code === "ENOENT"
+        ? { kind: "missing" }
+        : { kind: "access-failure" };
+    }
+  }
+  return stats.isFile() ? { kind: "regular-file" } : { kind: "not-regular" };
+}
+
 /** The fixed defaults of every leaf except the generated `installationId` (CFG-020). */
 export const CONFIGURATION_DEFAULTS = {
   schemaVersion: 1,
