@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
-/** Packaging/resource checks only. Actual GEN/HND decisions require the separate frozen AJ-26 observer. */
+/** Packaging/resource checks only. Actual GEN/HND and Channel decisions require the separate frozen AJ-26 and AJ-29 observers. */
 const source = fileURLToPath(new URL("../../skills/use-sorage", import.meta.url));
 const checkout = resolve(source, "../..");
 const root = mkdtempSync(join(tmpdir(), "sorage-standalone-skill-"));
@@ -14,6 +14,9 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const skillPath = join(copy, "SKILL.md");
 const text = readFileSync(skillPath, "utf8");
 const links = [...text.matchAll(/\]\(([^)\s]+)\)/g)].map((match) => match[1] as string);
+const references = ["handoffs.md", "project-memos.md", "channels.md"];
+const routing =
+  text.split("\n\n").find((block) => block.startsWith("Before acting on an explicitly requested domain")) ?? "";
 
 describe("the standalone shipped use-sorage resources", () => {
   it("copies only the shipped directory outside the checkout with valid frontmatter", () => {
@@ -29,13 +32,23 @@ describe("the standalone shipped use-sorage resources", () => {
   });
 
   it("ships one required reference per domain and links each from the entrypoint", () => {
-    for (const reference of ["handoffs.md", "project-memos.md", "channels.md"]) {
+    for (const reference of references) {
       const referencePath = join(copy, "references", reference);
       expect(existsSync(referencePath), reference).toBe(true);
-      expect(readFileSync(referencePath, "utf8").trim().length, reference).toBeGreaterThan(0);
+      const body = readFileSync(referencePath, "utf8");
+      expect(body.trim().length, reference).toBeGreaterThan(0);
+      expect(
+        body.split("\n").filter((line) => line.startsWith("# ")),
+        reference,
+      ).toHaveLength(1);
+      expect(body.startsWith("# "), reference).toBe(true);
+      expect(
+        [...body.matchAll(/\]\(([^)\s]+)\)/g)].map((match) => match[1] as string),
+        reference,
+      ).toContain("../SKILL.md");
     }
     for (const target of ["references/handoffs.md", "references/project-memos.md", "references/channels.md"]) {
-      expect(links, target).toContain(target);
+      expect(routing, target).toContain(`](${target})`);
     }
   });
 

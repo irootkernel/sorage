@@ -33,3 +33,13 @@ This Low finding was confirmed during the EPIC-011 validation audit. Current bod
 - **Impact:** `sendHandoffs` already rejects an empty title with `CONFIG_INVALID` before creating a Handoff. The Web compose form always sends a title field. An HTTP body upload that omits `title` or sends it empty is therefore refused, but no upload integration fixture names that path.
 - **Owner:** `docs/deferred-feedback/README.md` (originating requirement WEB-019 / TASK-084)
 - **Re-entry:** Add a focused `POST /api/v1/handoffs/upload` test that a body part with a missing or empty `title` fails with `CONFIG_INVALID` and creates no Handoff. Do not reopen EPIC-011 for this fixture.
+
+## EPIC-017 TASK-115 observation follow-up
+
+The accepted TASK-115 observations disclosed auxiliary inaccuracies that remain as independent guidance work; this entry is not a TASK-115 acceptance condition.
+
+### Observer explanation accuracy
+
+- **Impact:** The accepted run-5 and scoped observations recorded five auxiliary inaccuracies, two in the AJ-29 journey and three in the AJ-26 journey: an improvised "new content" condition on a new submission, a misread body size corrected in the same step, a wrong claim that `delete request` takes no row-version option, a wrong claim that a restored installation holds a different Handoff, and a receipt treated as proof that external work remained undone. Each is disclosed and corrected in the [EPIC-017 independent observations](../implementation-tips/use-sorage-acceptance.md#epic-017-independent-observations-2026-10-23); none failed its step except the last, which failed under the judgment-rule exception and passed scoped re-observation.
+- **Owner:** `docs/deferred-feedback/README.md` (observed during EPIC-017 TASK-115)
+- **Re-entry:** A future guidance pass could add the symmetric receipt sentence — a receipt is neither proof that external work ran nor that it did not — and tighten reference wording where observers improvised conditions. Do not reopen TASK-115 for this; it was not an acceptance condition.
