@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
   accessSync,
+  chmodSync,
   copyFileSync,
   constants as fsConstants,
   lstatSync,
@@ -449,11 +450,17 @@ function stageCopies(
   copyFile(configPath, privateConfig);
   const databasePath = join(copyRoot, "sorage.sqlite3");
   copyFile(listing.databasePath, databasePath);
+  // The copy preserves a write-protected source's mode, and the private
+  // open below needs to write the copy for WAL recovery — so the owned
+  // copy is made owner-writable while the live installation stays untouched
+  // (the same rule as the history inspection's capture).
+  chmodSync(databasePath, 0o600);
   const wal = `${listing.databasePath}-wal`;
   const walLook = pathLook(wal);
   if (walLook.kind === "failed") return undefined;
   if (walLook.kind === "stat" && walLook.stat.isFile() && !walLook.stat.isSymbolicLink()) {
     copyFile(wal, `${databasePath}-wal`);
+    chmodSync(`${databasePath}-wal`, 0o600);
   }
   let markerPath: string | undefined;
   let vaultAbsent = listing.observedVault === "absent";

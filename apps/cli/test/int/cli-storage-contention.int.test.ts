@@ -1,4 +1,5 @@
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -964,5 +965,234 @@ describe("Channel connection accounting", () => {
     expect(openSpy).toHaveBeenCalledTimes(0);
     openAndMigrateSpy.mockRestore();
     openSpy.mockRestore();
+  });
+});
+
+describe("a write-protected installation (TASK-119)", () => {
+  const stateRestores: Array<() => void> = [];
+
+  /**
+   * Protects the installation database and its WAL and returns the restore
+   * function; the restore also removes journal side effects a refused
+   * writable open leaves behind (a read-only `-shm`), returning the state
+   * directory to its pre-protection inventory.
+   */
+  function protect(): () => void {
+    const stateDir = join(home, "state");
+    const before = new Map<string, number>();
+    for (const entry of readdirSync(stateDir)) {
+      const path = join(stateDir, entry);
+      const mode = statSync(path).mode & 0o777;
+      before.set(entry, mode);
+      if (entry.startsWith("sorage.sqlite3")) chmodSync(path, 0o444);
+    }
+    const restore = () => {
+      for (const entry of readdirSync(stateDir)) {
+        const path = join(stateDir, entry);
+        const mode = before.get(entry);
+        if (mode !== undefined) chmodSync(path, mode);
+        else rmSync(path, { force: true });
+      }
+    };
+    stateRestores.push(restore);
+    return restore;
+  }
+
+  /** Registers the sender project and retains one keyed send and one keyed Channel submission. */
+  function retainedReceipts(): { channel: string; main: string; sendKey: string; channelKey: string } {
+    registerProject();
+    const created = capture();
+    expect(
+      runCli(["channel", "create", "--main-handle", "orchestrator", "--as-user", "--json"], created.ports),
+      created.err.join(""),
+    ).toBe(0);
+    const channel = JSON.parse(created.out.join("")).data.channel as { id: string; mainParticipantId: string };
+    const sendKey = `send-key-${randomUUID()}`;
+    const sent = capture();
+    expect(
+      runCli(
+        ["send", "--to", "alpha", "--title", "t", "--body", "b", "--idempotency-key", sendKey, "--json"],
+        sent.ports,
+      ),
+      sent.err.join(""),
+    ).toBe(0);
+    const channelKey = `channel-key-${randomUUID()}`;
+    const submitted = capture();
+    expect(
+      runCli(
+        [
+          "channel",
+          "submit",
+          channel.id,
+          "--as-participant",
+          channel.mainParticipantId,
+          "--kind",
+          "report",
+          "--body",
+          "cb",
+          "--idempotency-key",
+          channelKey,
+          "--json",
+        ],
+        submitted.ports,
+      ),
+      submitted.err.join(""),
+    ).toBe(0);
+    return { channel: channel.id, main: channel.mainParticipantId, sendKey, channelKey };
+  }
+
+  it("returns the typed write-protected refusal for Channel, Handoff, and Project commands", () => {
+    const receipts = retainedReceipts();
+    protect();
+    const channel = capture();
+    expect(runCli(["channel", "list", "--json"], channel.ports)).toBe(75);
+    const channelEnvelope = envelopeOf(channel);
+    expect(channelEnvelope.ok).toBe(false);
+    expect(channelEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(channelEnvelope.error?.details.storageContention).toBe(true);
+    expect(channelEnvelope.error?.message).toBe(
+      "Channel storage is write-protected: the Sorage database cannot be written by this invocation, so this Channel command committed none of the changes it was asked to make.",
+    );
+    expect(channelEnvelope.error?.recovery?.suggestedCommand).toBe(
+      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access.",
+    );
+    expect(channel.out.join("")).toBe("");
+
+    const show = capture();
+    expect(runCli(["channel", "show", receipts.channel, "--json"], show.ports)).toBe(75);
+    expect(envelopeOf(show).error?.message).toContain("Channel storage is write-protected");
+
+    const wait = capture();
+    expect(runCli(["channel", "messages", receipts.channel, "--wait", "--timeout", "1", "--json"], wait.ports)).toBe(
+      75,
+    );
+    expect(envelopeOf(wait).error?.message).toContain("Channel storage is write-protected");
+
+    const human = capture();
+    expect(runCli(["channel", "list"], human.ports)).toBe(75);
+    expect(human.err.join("")).toBe(
+      "STORAGE_INSPECTION_UNAVAILABLE: Channel storage is write-protected: the Sorage database cannot be written by this invocation, so this Channel command committed none of the changes it was asked to make.\n" +
+        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access.\n",
+    );
+
+    const send = capture();
+    expect(runCli(["send", "--to", "alpha", "--title", "t", "--body", "b2", "--json"], send.ports)).toBe(75);
+    const sendEnvelope = envelopeOf(send);
+    expect(sendEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(sendEnvelope.error?.message).toContain("Handoff storage is write-protected");
+    expect(sendEnvelope.error?.recovery?.suggestedCommand).toBe(
+      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.",
+    );
+
+    const sendHuman = capture();
+    expect(runCli(["send", "--to", "alpha", "--title", "t", "--body", "b3"], sendHuman.ports)).toBe(75);
+    expect(sendHuman.err.join("")).toBe(
+      "STORAGE_INSPECTION_UNAVAILABLE: Handoff storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.\n" +
+        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.\n",
+    );
+
+    const project = capture();
+    expect(runCli(["project", "list", "--json"], project.ports)).toBe(75);
+    const projectEnvelope = envelopeOf(project);
+    expect(projectEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(projectEnvelope.error?.message).toContain("Project storage is write-protected");
+    expect(projectEnvelope.error?.recovery?.suggestedCommand).toBe(
+      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.",
+    );
+    expect(projectEnvelope.error?.recovery?.suggestedCommand).not.toContain("idempotency");
+    expect(projectEnvelope.error?.recovery?.suggestedCommand).not.toContain("mode");
+    expect(projectEnvelope.error?.recovery?.suggestedCommand).not.toContain("--replay-only");
+
+    const projectHuman = capture();
+    expect(runCli(["project", "list"], projectHuman.ports)).toBe(75);
+    const projectHumanText = projectHuman.err.join("");
+    expect(projectHumanText).toBe(
+      "STORAGE_INSPECTION_UNAVAILABLE: Project storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.\n" +
+        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.\n",
+    );
+    // Project surfaces take no idempotency key and have no replay-only mode,
+    // so no key, mode, or replay-only guidance appears (S1).
+    expect(projectHumanText).not.toContain("idempotency");
+    expect(projectHumanText).not.toContain("mode");
+    expect(projectHumanText).not.toContain("replay-only");
+
+    // A genuine usage error keeps exit 2 under write protection.
+    const usage = capture();
+    expect(runCli(["channel", "messages", receipts.channel, "--wait", "--interval", "0.5"], usage.ports)).toBe(2);
+  });
+
+  it("returns the normal replay-only results without write access", () => {
+    const receipts = retainedReceipts();
+    protect();
+    const sendReplay = capture();
+    expect(
+      runCli(
+        [
+          "send",
+          "--to",
+          "alpha",
+          "--title",
+          "t",
+          "--body",
+          "b",
+          "--idempotency-key",
+          receipts.sendKey,
+          "--replay-only",
+          "--json",
+        ],
+        sendReplay.ports,
+      ),
+      sendReplay.err.join(""),
+    ).toBe(0);
+    const replayed = JSON.parse(sendReplay.out.join("")).data as { replayed: boolean };
+    expect(replayed.replayed).toBe(true);
+
+    const channelReplay = capture();
+    expect(
+      runCli(
+        [
+          "channel",
+          "submit",
+          receipts.channel,
+          "--as-participant",
+          receipts.main,
+          "--kind",
+          "report",
+          "--body",
+          "cb",
+          "--idempotency-key",
+          receipts.channelKey,
+          "--replay-only",
+          "--json",
+        ],
+        channelReplay.ports,
+      ),
+      channelReplay.err.join(""),
+    ).toBe(0);
+    const message = JSON.parse(channelReplay.out.join("")).data as {
+      replayed: boolean;
+      message: { bodyPreview: string };
+    };
+    expect(message.replayed).toBe(true);
+    expect(message.message.bodyPreview).toContain("cb");
+  });
+
+  it("succeeds again once write access is restored (design c)", () => {
+    retainedReceipts();
+    const restore = protect();
+    expect(runCli(["channel", "list", "--json"], capture().ports)).toBe(75);
+    restore();
+    const recovered = capture();
+    expect(runCli(["channel", "list", "--json"], recovered.ports), recovered.err.join("")).toBe(0);
+  });
+
+  afterEach(() => {
+    for (const restore of stateRestores.splice(0)) {
+      try {
+        restore();
+      } catch {
+        // Teardown is best-effort; afterEach's rmSync finishes the job.
+      }
+    }
   });
 });

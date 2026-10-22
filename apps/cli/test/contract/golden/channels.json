@@ -825,5 +825,25 @@
         "requestId": "<uuid>"
       }
     }
+  },
+  "storage-write-protected": {
+    "status": 75,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "STORAGE_INSPECTION_UNAVAILABLE",
+        "message": "Channel storage is write-protected: the Sorage database cannot be written by this invocation, so this Channel command committed none of the changes it was asked to make.",
+        "details": {
+          "storageContention": true,
+          "cause": "SQLiteError: attempt to write a readonly database"
+        },
+        "recovery": {
+          "suggestedCommand": "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access."
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
   }
 }

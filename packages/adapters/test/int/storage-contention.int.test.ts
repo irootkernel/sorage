@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { homedir } from "node:os";
@@ -11,6 +11,7 @@ import {
   MigrationFailedError,
   MigrationIntegrityError,
   SchemaAdmissionError,
+  openAndMigrate,
 } from "../../src/sqlite/migrator";
 import {
   appError,
@@ -43,12 +44,13 @@ import {
   createNodeTerminalPorts,
   createNodeHandoffReadPorts,
 } from "../../src/handoff-command-ports";
-import { createNodeChannelPorts, captureChannelBodyText } from "../../src/channels";
+import { createNodeChannelPorts, captureChannelBodyText, channelStorageError } from "../../src/channels";
 import { createNodeMemoPorts, memoStorageError } from "../../src/memo-command-ports";
 import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { storageContentionOf, AppCommandError, asAppCommandError } from "../../src/storage-contention";
-import { openSorageDatabase } from "../../src/sqlite/connection";
+import { openSorageDatabase, openSorageInspectionCopy } from "../../src/sqlite/connection";
 import type { SorageSqlite } from "../../src/sqlite/connection";
+import { productionMigrationPlan } from "../../src/sqlite/migrations";
 
 /**
  * The SHR-015 storage-preparation contention contract at the adapter boundary:
@@ -247,6 +249,69 @@ describe("the shared classifier", () => {
       "handoff",
     );
     expect(mappedCause?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+  });
+
+  it("maps the write-protected signature to the state-accurate refusal in every form it surfaces (TASK-119)", () => {
+    for (const surface of ["channel", "handoff", "project"] as const) {
+      const head = surface === "channel" ? "Channel" : surface === "handoff" ? "Handoff" : "Project";
+      const subject = surface === "channel" ? "Channel command" : "command";
+      const byCode = storageContentionOf(
+        Object.assign(new Error("sqlite error"), { code: "SQLITE_READONLY" }),
+        surface,
+      );
+      expect(byCode?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(byCode?.details?.storageContention).toBe(true);
+      expect(byCode?.message).toBe(
+        `${head} storage is write-protected: the Sorage database cannot be written by this invocation, so this ${subject} committed none of the changes it was asked to make.`,
+      );
+      expect(byCode?.recovery?.suggestedCommand).toBe(
+        surface === "channel"
+          ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access."
+          : surface === "handoff"
+            ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access."
+            : "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.",
+      );
+    }
+    // Project surfaces take no idempotency key and have no mode, so their
+    // restore-access retry names neither (S1).
+    const projectReadonly = storageContentionOf(
+      Object.assign(new Error("sqlite error"), { code: "SQLITE_READONLY" }),
+      "project",
+    );
+    const projectRecovery = projectReadonly?.recovery?.suggestedCommand ?? "";
+    expect(projectRecovery).not.toContain("idempotency");
+    expect(projectRecovery).not.toContain("mode");
+    expect(projectRecovery).not.toContain("--replay-only");
+    const byAltCode = storageContentionOf(
+      Object.assign(new Error("sqlite error"), { code: "ERR_SQLITE_READONLY" }),
+      "handoff",
+    );
+    expect(byAltCode?.message).toContain("Handoff storage is write-protected");
+    const byMessage = storageContentionOf(new Error("attempt to write a readonly database"), "project");
+    expect(byMessage?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(byMessage?.message).toContain("Project storage is write-protected");
+    const wrapped = new MigrationFailedError(
+      9,
+      "handoff-shared-content",
+      Object.assign(new Error("attempt to write a readonly database"), { code: "SQLITE_READONLY" }),
+    );
+    expect(storageContentionOf(wrapped, "handoff")?.message).toContain("Handoff storage is write-protected");
+    const mappedReadonlyCause = storageContentionOf(
+      appError("INTERNAL_ERROR", "Reading the database failed.", {
+        cause: String(Object.assign(new Error("attempt to write a readonly database"), { code: "SQLITE_READONLY" })),
+      }),
+      "channel",
+    );
+    expect(mappedReadonlyCause?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    // The write-protection recovery never suggests a quieter-storage retry, a
+    // fresh key, a mode switch, or an authority flag (V1).
+    for (const recovery of [
+      byAltCode?.recovery?.suggestedCommand,
+      byMessage?.recovery?.suggestedCommand,
+      mappedReadonlyCause?.recovery?.suggestedCommand,
+    ]) {
+      expect(recovery).not.toContain("when storage is quieter");
+    }
   });
 
   it("classifies a wrapped migration step failure only when its preserved cause is contention (W3)", () => {
@@ -1053,5 +1118,152 @@ describe("the Channel domain transaction under a failing COMMIT (R2)", () => {
     expect(errorOf(created).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(errorOf(created).message).toContain("Channel storage is contended");
     expect(snapshot(["channels", "channel_participants", "events", "idempotency_keys"])).toEqual(before);
+  });
+});
+
+describe("a write-protected installation (TASK-119)", () => {
+  /**
+   * Protects the installation database and its WAL (and any journal sidecar
+   * files) and returns the restore function. The restore returns the state
+   * directory to its pre-protection inventory: a refused writable open can
+   * leave a read-only `-shm` behind, and that side effect — not the
+   * installation — must not outlive the protected phase.
+   */
+  function protect(): () => void {
+    const stateDir = join(home, "state");
+    const before = new Map<string, number>();
+    for (const entry of readdirSync(stateDir)) {
+      const path = join(stateDir, entry);
+      const mode = statSync(path).mode & 0o777;
+      before.set(entry, mode);
+      if (entry.startsWith("sorage.sqlite3")) chmodSync(path, 0o444);
+    }
+    const restore = () => {
+      for (const entry of readdirSync(stateDir)) {
+        const path = join(stateDir, entry);
+        const mode = before.get(entry);
+        if (mode !== undefined) chmodSync(path, mode);
+        else rmSync(path, { force: true });
+      }
+    };
+    cleanups.push(restore);
+    return restore;
+  }
+
+  it("rethrows the native readonly failure from the raw layers and classifies it at the boundary (V2)", () => {
+    protect();
+    let native: unknown;
+    try {
+      const plan = productionMigrationPlan();
+      openAndMigrate(join(home, "state", "sorage.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds });
+    } catch (error) {
+      native = error;
+    }
+    expect(native).toBeInstanceOf(Error);
+    expect((native as Error).message).toMatch(/readonly/i);
+    expect(asAppCommandError(native)).toBeNull();
+    const refusal = storageContentionOf(native, "channel");
+    expect(refusal?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(refusal?.message).toContain("Channel storage is write-protected");
+    expect(refusal?.recovery?.suggestedCommand).toContain(
+      "After write access to the Sorage home and Vault is restored",
+    );
+  });
+
+  it("recognizes the native readonly failure at the private-copy checkpoint site (V2)", () => {
+    // A live writer keeps committed bytes in the WAL, so the protected copy's
+    // passive checkpoint has real work and fails on the write-protected copy.
+    const source = join(work, "checkpoint.sqlite3");
+    const writer = openSorageDatabase(source);
+    writer.exec("CREATE TABLE probe (id INTEGER PRIMARY KEY)");
+    writer.exec("INSERT INTO probe (id) VALUES (1)");
+    try {
+      const protectedMain = join(work, "protected.sqlite3");
+      copyFileSync(source, protectedMain);
+      copyFileSync(`${source}-wal`, `${protectedMain}-wal`);
+      chmodSync(protectedMain, 0o444);
+      chmodSync(`${protectedMain}-wal`, 0o444);
+      const copy = openSorageInspectionCopy(protectedMain);
+      let native: unknown;
+      try {
+        copy.exec("PRAGMA busy_timeout = 1000");
+        copy.exec("PRAGMA wal_checkpoint(PASSIVE)");
+      } catch (error) {
+        native = error;
+      } finally {
+        copy.close();
+      }
+      expect((native as Error)?.message).toMatch(/readonly/i);
+      expect(storageContentionOf(native, "channel")?.message).toContain("Channel storage is write-protected");
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("refuses the surfaced startup drain with the typed write-protected refusal on both surfaces (V2)", () => {
+    protect();
+    const before = snapshot(["channels", "projects", "events"]);
+    for (const surface of ["channel", "handoff"] as const) {
+      const head = surface === "channel" ? "Channel" : "Handoff";
+      const drained = createNodeVaultCommandPorts({ contentionSurface: surface }).drainAtStart();
+      expect(drained.ok).toBe(false);
+      expect(errorOf(drained).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(errorOf(drained).details?.storageContention).toBe(true);
+      expect(errorOf(drained).message).toContain(`${head} storage is write-protected`);
+      expect(errorOf(drained).recovery?.suggestedCommand).toContain("retry the identical");
+    }
+    // The unflagged (excluded-family) composition keeps its INTERNAL_ERROR contract.
+    const unflagged = createNodeVaultCommandPorts().drainAtStart();
+    expect(unflagged.ok).toBe(false);
+    expect(errorOf(unflagged).code).toBe("INTERNAL_ERROR");
+    expect(errorOf(unflagged).message).toContain("Reading the database failed");
+    expect(snapshot(["channels", "projects", "events"])).toEqual(before);
+  });
+
+  it("refuses the surfaced Project, Handoff, and Channel factories with the typed write-protected refusal (V2)", () => {
+    protect();
+    let projectFailure: unknown;
+    try {
+      createNodeProjectPorts({ contentionSurface: "project" });
+    } catch (error) {
+      projectFailure = error;
+    }
+    const projectRefusal = asAppCommandError(projectFailure)?.error;
+    expect(projectRefusal?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(projectRefusal?.message).toContain("Project storage is write-protected");
+    expect(projectRefusal?.recovery?.suggestedCommand).toContain(
+      "After write access to the Sorage home and Vault is restored",
+    );
+    expect(projectRefusal?.recovery?.suggestedCommand).not.toContain("replay-only");
+
+    let handoffFailure: unknown;
+    try {
+      createNodeSendPorts();
+    } catch (error) {
+      handoffFailure = error;
+    }
+    const handoffRefusal = asAppCommandError(handoffFailure)?.error;
+    expect(handoffRefusal?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(handoffRefusal?.message).toContain("Handoff storage is write-protected");
+    expect(handoffRefusal?.recovery?.suggestedCommand).toContain("sorage send --replay-only");
+
+    let channelFailure: unknown;
+    try {
+      createNodeChannelPorts();
+    } catch (error) {
+      channelFailure = error;
+    }
+    const channelRefusal = asAppCommandError(channelFailure)?.error ?? channelStorageError(channelFailure);
+    expect(channelRefusal.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(channelRefusal.message).toContain("Channel storage is write-protected");
+    expect(channelRefusal.recovery?.suggestedCommand).toContain("runs without write access");
+  });
+
+  it("succeeds again once write access is restored, proving the protection caused the refusals (design c)", () => {
+    const restore = protect();
+    expect(createNodeVaultCommandPorts({ contentionSurface: "channel" }).drainAtStart().ok).toBe(false);
+    restore();
+    const drained = createNodeVaultCommandPorts({ contentionSurface: "channel" }).drainAtStart();
+    expect(drained.ok).toBe(true);
   });
 });

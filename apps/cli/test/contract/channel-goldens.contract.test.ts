@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -267,6 +267,23 @@ describe("Channel CLI additive contracts", () => {
         ["channel", "submit", channelId, "--as-participant", workerId, "--kind", "report", "--body", "   "],
         64,
       );
+
+      // TASK-119 (V8): the write-protected refusal is created inside this
+      // harness's own fixture by write-protecting its database and WAL; the
+      // saved modes are restored before the fixture is cleaned up, and the
+      // write-protected state is created nowhere else.
+      const databasePath = join(f.home, "state", "sorage.sqlite3");
+      const walPath = `${databasePath}-wal`;
+      const savedMode = statSync(databasePath).mode & 0o777;
+      const walSavedMode = existsSync(walPath) ? statSync(walPath).mode & 0o777 : undefined;
+      chmodSync(databasePath, 0o444);
+      if (walSavedMode !== undefined) chmodSync(walPath, 0o444);
+      try {
+        capture("storage-write-protected", ["channel", "list"], 75);
+      } finally {
+        chmodSync(databasePath, savedMode);
+        if (walSavedMode !== undefined) chmodSync(walPath, walSavedMode);
+      }
 
       const path = fileURLToPath(new URL("./golden/channels.json", import.meta.url));
       const actual = `${JSON.stringify(outputs, null, 2)}\n`;
