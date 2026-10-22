@@ -85,7 +85,11 @@ export interface Configuration {
 export const CONFIG_ACCESS_REPAIR =
   "Restore the home directory with mode 0700 and config.yaml with owner-only 0600 permissions; do not reinitialize an existing installation";
 
-/** The recovery for a directory or symlink at the configuration path (TASK-118, Z2). */
+/**
+ * The recovery for a path fault at the configuration path (TASK-118, Z2): a
+ * non-regular entry, a dangling symlink, or a symlink loop. A live symlink to a
+ * regular file is not a fault.
+ */
 export const CONFIG_PATH_REPAIR =
   "Replace the non-regular entry, dangling symlink, or symlink loop at the configuration path with a regular config.yaml file owned by this user, or a symlink to one";
 

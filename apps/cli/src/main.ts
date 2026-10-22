@@ -2670,8 +2670,9 @@ function configuredVaultOpens(): boolean {
  * The observed state of an existing configuration before initialization writes
  * anything (TASK-118 K1, Z2): only a confirmed ENOENT is a new installation. An
  * unreadable file or an untraversable home is an access failure, and a
- * directory or symlink at the path is a path fault; both stop `init` with the
- * matching repair instead of rewriting an existing installation.
+ * non-regular entry, a dangling symlink, or a symlink loop at the path is a
+ * path fault (a live symlink to a regular file is accepted); both stop `init`
+ * with the matching repair instead of rewriting an existing installation.
  */
 type ExistingConfiguration = "absent" | "present" | "unreadable" | "unsafe-path";
 

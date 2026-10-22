@@ -51,9 +51,11 @@ import { openVault } from "./vault";
  *
  * TASK-118 policy: a readable but malformed configuration carries the
  * configuration-repair text, an unreadable configuration or untraversable home
- * carries the owner-only access repair, a directory or symlink at the
- * configuration path carries the path repair, and a check that cannot establish
- * its result because the Vault cannot open carries that refusal's own recovery.
+ * carries the owner-only access repair, a path fault at the configuration path
+ * (a non-regular entry, a dangling symlink, or a symlink loop; a live symlink
+ * to a regular file is accepted) carries the path repair, and a check that
+ * cannot establish its result because the Vault cannot open carries that
+ * refusal's own recovery.
  */
 const CONFIG_REPAIR = "sorage config validate, then repair the reported keys";
 const VAULT_GITATTRIBUTES =
@@ -217,8 +219,9 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
    * is pre-initialization, where `sorage init` is the right action. A
    * configuration file that cannot be read, or a home directory that cannot be
    * traversed, is an access failure whose recovery restores owner-only access
-   * and never suggests initialization; a directory or symlink at the
-   * configuration path is a path fault; a readable but invalid file is the
+   * and never suggests initialization; a non-regular entry, a dangling symlink,
+   * or a symlink loop at the configuration path is a path fault, while a live
+   * symlink to a regular file is accepted; a readable but invalid file is the
    * configuration-repair case where `sorage config validate` runs.
    */
   type ConfigurationState =
@@ -1210,8 +1213,9 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
 
   return {
     // TASK-118 K1/Z2: only a confirmed ENOENT is pre-initialization. A present
-    // but unreadable file, a denied parent traversal, or a directory or symlink
-    // at the path all run the catalog with their own repair.
+    // but unreadable file, a denied parent traversal, or a path fault (a
+    // non-regular entry, a dangling symlink, or a symlink loop) at the path all
+    // run the catalog with their own repair.
     initialized() {
       return configurationState().kind !== "absent";
     },
