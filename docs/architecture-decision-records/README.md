@@ -1224,3 +1224,102 @@ Executed at registration: EPIC-017 and TASK-111 through TASK-116 in the roadmap 
 ### Consequences
 
 M9 gains a release-blocking correction Epic, and v0.1.3 becomes the first published release containing Channels and shared content. Concurrent Channel consumers receive typed, retryable results and committed identities, at the cost of reviewed contract changes and new golden snapshots. Publication timing becomes a coordination point with Aquarium. Product implementation, independent review, installation, publication and every broker operation retain their own authorization.
+
+## ADR-0034: Sorage MCP adapter, zero-write reads and the Channel rebuild
+
+- **Status:** Proposed (2026-10-23)
+- **Date:** 2026-10-23
+- **Design owner:** TASK-121 under [EPIC-018](../roadmap/README.md#epic-018-mcp-access-zero-write-reads-and-channel-rebuild).
+
+### Problem
+
+Agents in sandboxes cannot use Sorage. Every command, reads included, runs startup recovery, the migration path and log writes against the Sorage home, so a caller that cannot write the home cannot read or wait, and writes need the home and sometimes the Vault, which sandboxes deny. EPIC-017 classified that refusal and documented the writable paths instead of removing the limit.
+
+The M9 Channel surface is also hard for agents to use:
+
+- participant UUIDs and role assertions that protect nothing;
+- a row version whose only succeeding value is known in advance;
+- three processes per handled message;
+- retained idempotency material with replay-only recovery;
+- a write path that rolls back and retries on every concurrent commit;
+- guidance dominated by exceptions.
+
+Its acceptance observers ran outside sandboxes. The [execution dossier](../todo/mcp-and-channel-rebuild.md) records the confirmed findings.
+
+On 2026-10-23 Master directed that agents send and read Handoffs, Project Memos and Channel messages from any environment, including a sandbox that cannot write anything, and that the Channel surface be rebuilt in full before the shared v0.1.3 release.
+
+### Decision
+
+Proposed:
+
+- **Add `sorage mcp`.** It is a STDIO MCP server for the messaging domains, registered globally like Mulgae and Gaori. Agent harnesses launch MCP servers outside the shell sandbox, so MCP tool calls send and read from a fully read-only sandbox.
+  - The server executes each tool call as a `sorage … --json` child process of the same executable and returns the CLI envelope.
+  - Bodies are inline, and file arguments are confined to the call's workspace.
+  - Administration and User-admin operations are not exposed.
+  - This lifts ADR-0007's MCP deferral for these domains. The Handoff and Memo contracts are stable and versioned, EPIC-017 hardened the error semantics, real agent usage has been observed, and the Channel contract stabilizes with this Epic.
+- **Make read commands write nothing.** They open the database read-only and perform no startup recovery, migration, cleanup or log write. Writers keep WAL sidecars persistent so that SQLite's read-only WAL access applies. Only a database whose sidecars are absent is read through a coherent in-memory copy of its complete main file.
+- **Rebuild Channels.**
+  - Address by globally unique Channel names, participant handles and per-Channel sequence numbers.
+  - Make create, add, remove, ack and close idempotent.
+  - Make post retries safe by content instead of idempotency keys, receipts and replay-only.
+  - Allow posting upstream only.
+  - List full bodies, with file paths for file-backed bodies.
+  - Give waits an `--after` filter and a 60-second default.
+  - Record User-actor provenance with handles in event metadata.
+  - Replace schema 11 and the format-3 Channel representation in place.
+  - Remove assignments, context options, role assertions, row-version handling, the coherence loop, the result indicators and per-error recovery overrides.
+- **Add `sorage revise --body`.**
+- **Ship v0.1.3 after this Epic**, together with M8, M9 and EPIC-017.
+
+TASK-121 settles exact requirements, codes, fields, tool schemas and wording. Until TASK-121 accepts or revises this record, the current specifications, accepted decisions and the release-gate table remain authoritative.
+
+### Alternatives considered
+
+- Relay sandboxed writes through request files in the workspace and an always-on daemon | rejected: it needs a running broker and workspace discovery, and it cannot serve a sandbox that cannot write its workspace, which the harness-launched MCP server covers with less machinery.
+- Configure each harness's sandbox to allow the Sorage home and Vault | rejected as the product path: it is per-harness configuration outside Sorage, and it widens sandbox write access beyond Sorage operations.
+- Call the daemon's HTTP API from the sandboxed CLI | rejected: default sandboxes deny network access, including loopback.
+- Implement the MCP server in-process on the application layer | rejected: it duplicates each command's open, migrate, drain, close and rendering lifecycle beside the CLI, and it keeps long-lived connections across Vault moves and the daemon's configuration-writer rule.
+- Reconstruct the database from the main file and WAL frames by hand for zero-write reads | rejected: it reimplements SQLite's WAL format, while SQLite already supports read-only WAL access when the sidecars exist.
+- Open live storage with `immutable=1` | rejected, as in ADR-0028: committed data may exist only in the WAL, and a writer can invalidate the assumption.
+- Expose the current Channel surface through MCP | rejected: it freezes the surface that Master decided to replace into a second interface, contrary to ADR-0007's reasoning.
+- Simplify the current Channel implementation in place | not selected by Master: the copied Memo machinery and the defensive structure would remain.
+- Keep idempotency keys and replay-only for Channel posts | rejected: retry by content gives the same safety without material that the agent must retain.
+- Let main post into its own Channel | rejected: main-to-agent dispatch stays consumer-owned under ADR-0030, and main's own posts would wake its waits.
+
+### Compatibility impact
+
+The following are replaced: the Channel CLI and JSON contract, the Channel error codes, schema 11 and the format-3 Channel representation. No published release carries them, because v0.1.2 has no Channels and the v0.1.3 candidate is unpublished. No published consumer breaks, but Aquarium's planned adoption must follow the replacement contract.
+
+Handoff, Memo and Project read commands keep their outputs and exits but lose their side effects: they no longer run startup recovery, migration or cleanup, and write no log. `sorage mcp` and `revise --body` are additive. TASK-121 classifies every interface, golden-snapshot and skill change.
+
+### Migration impact
+
+- Schema 11 is replaced in place under a new migration name. A development home that applied the old schema 11 is refused rather than misread, and no real home holds it.
+- The unreleased format-3 Channel representation is replaced in place, and development snapshots containing old Channel shards are refused.
+- Persistent WAL sidecars stay beside the database after the last connection closes.
+- The v0.1.2-to-candidate upgrade drill is rerun on the new candidate. The M9 one-way upgrade from schema 7 and the old-binary rollback procedure are otherwise unchanged.
+
+### Required Source of Truth edits and roadmap impact
+
+Executed at registration:
+
+- EPIC-018 and TASK-121 through TASK-126 in the roadmap, with Requirements cells set to None;
+- the [execution dossier](../todo/mcp-and-channel-rebuild.md) and its TODO index entry;
+- the documentation index;
+- [the governance registration boundary](../governance/README.md#16-m9-mcp-and-channel-rebuild-registration-boundary);
+- a traceability note;
+- the move of the MCP adapter and non-mutating Channel read candidates from future work into this Epic.
+
+To be executed by TASK-121 at acceptance:
+
+- accept or revise this record;
+- add dated amendments to ADR-0007, ADR-0030 and ADR-0033;
+- adopt the contracts in the required specification, interface sections 15, 16 and 38 and a new MCP section, security-reliability, testing-and-acceptance and traceability;
+- update the M9 release-gate row and the CHANGELOG for v0.1.3;
+- populate every EPIC-018 Requirements cell.
+
+TASK-125 owns the shipped skill text.
+
+### Consequences
+
+Sorage messaging works from sandboxed agents: reads run directly through the CLI, and every messaging operation runs through MCP tool calls. The Channel loop shrinks to five commands, with no identifiers or recovery material beyond names, handles and sequence numbers. Sorage gains an MCP adapter whose tool schemas become a public contract maintained beside the CLI, and v0.1.3 is requalified on a new candidate. Product implementation, independent review, global MCP registration, installation, publication and every broker operation retain their own authorization.

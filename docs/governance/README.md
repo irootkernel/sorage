@@ -174,7 +174,7 @@ A review MUST verify:
 - Every commit is created through `$aquarium:task-commit` once a roadmap file is tracked in this repository, because the Aquarium gate then classifies the whole repository as a roadmap repository and blocks direct shell commits.
 - No session commits, amends, or pushes without an explicit instruction from the user for that exact action.
 - A commit carries either one exact Task relationship with an approved lifecycle edit, or an explicit statement that it is unrelated to every active Task.
-- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. Sections 13 to 15 record the M8 and M9 registration boundaries. Checker support for those milestones does not waive make test, a passing Source of Truth result, independent review, or Contract classification for later implementation.
+- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. Sections 13 to 16 record the M8 and M9 registration boundaries. Checker support for those milestones does not waive make test, a passing Source of Truth result, independent review, or Contract classification for later implementation.
 - `make test` is the single verification gate for code and MUST pass before a Task moves to `In Review`.
 
 ## 12. Release change freeze
@@ -214,3 +214,19 @@ On 2026-10-22 Master further appended `TASK-119` under the same post-commit defe
 On 2026-10-22, under governance section 4, TASK-115 made one canonical precision edit: the security-reliability section 17 sentence about read-only callers now states that every Channel command except `submit --replay-only` writes the home's state database, that any of those commands may also need to write the Vault, and that `submit --replay-only` is the only Channel command that needs no write access to the home or the Vault — with no behavior, code, exit, HTTP or golden change and no migration.
 
 On 2026-10-23, under governance section 4, TASK-120 made one canonical precision edit, from the Epic Evaluator's F-1 ruling on TASK-116's isolated v0.1.2-to-candidate upgrade drill: interface sections 6 and 6.2 now state the `vault verify` Vault policy-file check — the `.gitattributes` lines VLT-024 requires for the running build in their stated relative order, and the `.gitignore` `staging/` entry, each missing or disordered item a blocking finding — name the operations that re-assert the files and `doctor`'s `vault.gitattributes` warning, and the operations runbook's M9 post-upgrade procedure now creates and verifies the new backup before it verifies the Vault, because the first `backup run` with the new executable re-asserts the M9 policy lines — with no behavior, output, exit, HTTP, golden or migration change.
+
+## 16. M9 MCP and Channel rebuild registration boundary
+
+M9 registers the ordered work for [EPIC-018](../roadmap/README.md#epic-018-mcp-access-zero-write-reads-and-channel-rebuild), its [execution dossier](../todo/mcp-and-channel-rebuild.md) and [Proposed ADR-0034](../architecture-decision-records/README.md#adr-0034-sorage-mcp-adapter-zero-write-reads-and-the-channel-rebuild), following Master's 2026-10-23 direction. Agents must send and read Sorage messages from any environment, through a `sorage mcp` adapter and through read commands that write nothing, and the Channel surface must be rebuilt before v0.1.3.
+
+Registration authorizes two things only: these planning records, and moving the MCP adapter and non-mutating Channel read candidates out of future work. It changes no product code, test, checker, shipped skill, normative specification, CHANGELOG, release-gate row or Source of Truth version. It allocates no release by itself and starts no Task. The completed acceptance of EPIC-016 and EPIC-017 is not reopened.
+
+Before TASK-122 begins, TASK-121 must:
+
+- record the dossier's feasibility probes;
+- accept or revise ADR-0034;
+- add the dated ADR-0007, ADR-0030 and ADR-0033 amendments;
+- record the v0.1.3 allocation in the release-gate table and the CHANGELOG;
+- adopt the accepted contracts in their higher-authority owners.
+
+As in the earlier M9 registrations, the registered Tasks temporarily use `None` in their Requirements cells. TASK-121 must replace those placeholders with accepted citations and matching traceability in the same design candidate. Later implementation retains independent review, Contract classification and the full verification gate.

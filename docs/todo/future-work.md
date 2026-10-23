@@ -18,35 +18,6 @@ The Podway `ExternalReference` artifact slot is the named seam today, and a sess
 
 A later automation could attach the reference at `send` time and resolve its current review state when the Podway session is inspected, which requires an agreed reference format and a stable resolution command, and still no source dependency in either direction.
 
-## MCP adapter
-
-Deferred until:
-
-- CLI commands are stable.
-- Local API DTOs are versioned.
-- Domain permissions are validated.
-- Error semantics are stable.
-- Real AI usage patterns are observed.
-
-Potential tools:
-
-```text
-list_inbox
-list_outbox
-get_handoff
-fetch_artifact
-create_handoff
-set_review_note
-withdraw_review_note
-revise_handoff
-accept_handoff
-decline_handoff
-withdraw_handoff
-request_deletion
-```
-
-MCP must call the same application use cases, and the application layer stays free of MCP-specific types so the adapter can be added without a domain change (ADR-0007).
-
 ## Notifications
 
 The MVP closes discovery with the `use-sorage` policy, `inbox --wait`, and the optional `handoff.inboxMarker` file, and nothing beyond those is in scope.
@@ -59,12 +30,6 @@ Possible later adapters:
 - Chat integration
 
 Notifications derive from events and never become a source of truth.
-
-## Non-mutating Channel read and wait path
-
-Every Channel command except `submit --replay-only` runs startup recovery and the migration path, so reads and waits need write access to the Sorage home and the Vault. Aquarium's 2026-10-20 adoption request asked for those writable paths to be documented, which EPIC-017 does, and called a non-mutating fast path for reads and waits welcome but not required.
-
-A later path could skip recovery and migration when no intent, migration or cleanup is pending, letting callers sandboxed to their workspace read and wait. It needs its own design for detecting pending work without the write lock, for proving that skipping recovery cannot hide an incomplete operation, and for falling back to the full path, so it stays outside the v0.1.3 scope.
 
 ## Browser-only administrative actions
 
