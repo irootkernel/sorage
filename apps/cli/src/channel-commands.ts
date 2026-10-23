@@ -109,9 +109,11 @@ export function renderChannelRecoveryError(
     error.code === "INTERNAL_ERROR"
       ? "Channel submission recovery could not complete original-source validation or receipt inspection."
       : error.message;
+  // Most messages omit a final period; the unknown-outcome guidance starts a new sentence.
+  const sentence = /[.!?]$/.test(description) ? description : `${description}.`;
   const failure = appError(
     error.code,
-    `${description} The original submission outcome remains unknown. Retain the original key, exact input/source bytes, Installation, Channel, sender participant, request ${options.requestId} and this output.`,
+    `${sentence} The original submission outcome remains unknown. Retain the original key, exact input/source bytes, Installation, Channel, sender participant, request ${options.requestId} and this output.`,
     error.details,
   );
   failure.recovery = {

@@ -3293,12 +3293,7 @@ export function submitMessageReplayOnly(
       return err(appError("STORAGE_SCHEMA_UNSUPPORTED", "the historical database layout has no Channel domain"));
     }
     if (observation.installationId !== input.installationId) {
-      return err(
-        appError(
-          "CHN_REPLAY_UNAVAILABLE",
-          "The selected Installation differs from the original; the original outcome is unknown",
-        ),
-      );
+      return err(appError("CHN_REPLAY_UNAVAILABLE", "The selected Installation differs from the original"));
     }
     // The lookup Clock is sampled inside the consistent captured inspection,
     // immediately before the receipt read: a capture that took time cannot let
@@ -3308,9 +3303,7 @@ export function submitMessageReplayOnly(
     const stored = observation.receipts.submitReceipt(input.idempotencyKey, scope, now);
     if (!stored.ok) return stored;
     if (stored.value === null) {
-      return err(
-        appError("CHN_REPLAY_UNAVAILABLE", "No retained Channel submission receipt; the original outcome is unknown"),
-      );
+      return err(appError("CHN_REPLAY_UNAVAILABLE", "No Channel submission receipt is retained for this key"));
     }
     if (stored.value.message.channelId !== (input.channelId as string)) {
       return err(appError("STORAGE_INTEGRITY_ERROR", "The retained Channel submission receipt names another Channel."));
