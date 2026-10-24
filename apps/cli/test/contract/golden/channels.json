@@ -6,89 +6,73 @@
       "data": {
         "channel": {
           "id": "<uuid>",
-          "title": "Journey",
+          "name": "aq-golden",
+          "title": "Golden",
           "state": "open",
-          "creatorKind": "registered_project",
-          "creatorId": "<uuid>",
-          "mainParticipantId": "<uuid>",
-          "closedAt": null,
-          "closedByParticipantId": null,
-          "closedByKind": null,
-          "createdAt": "<ts>",
-          "updatedAt": "<ts>",
+          "main": "orchestrator",
           "participantCount": 1,
           "messageCount": 0,
           "unhandledCount": 0,
           "participants": [
             {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "main",
               "handle": "orchestrator",
-              "nativeProvenance": [],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
+              "role": "main",
+              "addedAt": "<ts>",
+              "removedAt": null
             }
           ],
-          "assignments": []
-        }
+          "createdAt": "<ts>",
+          "closedAt": null
+        },
+        "existing": false
       },
       "meta": {
         "requestId": "<uuid>"
       }
     }
   },
-  "create-retained": {
+  "create-existing": {
     "status": 0,
     "envelope": {
       "ok": true,
       "data": {
         "channel": {
           "id": "<uuid>",
-          "title": "Journey",
+          "name": "aq-golden",
+          "title": "Golden",
           "state": "open",
-          "creatorKind": "registered_project",
-          "creatorId": "<uuid>",
-          "mainParticipantId": "<uuid>",
-          "closedAt": null,
-          "closedByParticipantId": null,
-          "closedByKind": null,
-          "createdAt": "<ts>",
-          "updatedAt": "<ts>",
+          "main": "orchestrator",
           "participantCount": 1,
           "messageCount": 0,
           "unhandledCount": 0,
           "participants": [
             {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "main",
               "handle": "orchestrator",
-              "nativeProvenance": [],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
+              "role": "main",
+              "addedAt": "<ts>",
+              "removedAt": null
             }
           ],
-          "assignments": []
-        }
+          "createdAt": "<ts>",
+          "closedAt": null
+        },
+        "existing": true
       },
       "meta": {
         "requestId": "<uuid>"
       }
     }
   },
-  "create-conflict": {
-    "status": 75,
+  "create-different-main": {
+    "status": 64,
     "envelope": {
       "ok": false,
       "error": {
-        "code": "IDEMPOTENCY_CONFLICT",
-        "message": "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
+        "code": "CHN_INVALID_INPUT",
+        "message": "The Channel name aq-golden already exists with main handle orchestrator",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome"
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
         }
       },
       "meta": {
@@ -96,22 +80,33 @@
       }
     }
   },
-  "participant-add": {
+  "create-uuid-name": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "A Channel name must not be UUID-shaped; the UUID addresses an existing Channel",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "add": {
     "status": 0,
     "envelope": {
       "ok": true,
       "data": {
         "participant": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
+          "handle": "worker-1",
           "role": "worker",
-          "handle": "worker-a",
-          "nativeProvenance": [
-            ""
-          ],
-          "active": true,
-          "deactivatedAt": null,
-          "registeredAt": "<ts>"
+          "addedAt": "<ts>",
+          "removedAt": null
         }
       },
       "meta": {
@@ -119,22 +114,50 @@
       }
     }
   },
-  "judge-add": {
+  "add-repeat": {
     "status": 0,
     "envelope": {
       "ok": true,
       "data": {
         "participant": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
+          "handle": "worker-1",
+          "role": "worker",
+          "addedAt": "<ts>",
+          "removedAt": null
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "add-different-role": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "The handle worker-1 is already registered with role worker; a re-add keeps its original role",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "add-judge": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "handle": "judge-1",
           "role": "judge",
-          "handle": "judge-x",
-          "nativeProvenance": [
-            "ctx:node"
-          ],
-          "active": true,
-          "deactivatedAt": null,
-          "registeredAt": "<ts>"
+          "addedAt": "<ts>",
+          "removedAt": null
         }
       },
       "meta": {
@@ -142,19 +165,172 @@
       }
     }
   },
-  "assignment-add": {
+  "post": {
     "status": 0,
     "envelope": {
       "ok": true,
       "data": {
-        "assignment": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "participantId": "<uuid>",
-          "label": "task",
-          "state": "open",
-          "createdAt": "<ts>",
-          "closedAt": null
+        "message": {
+          "seq": 1,
+          "kind": "report",
+          "from": "worker-1",
+          "to": null,
+          "ref": "pr-1",
+          "body": "first report body",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-duplicate": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 1,
+          "kind": "report",
+          "from": "worker-1",
+          "to": null,
+          "ref": "pr-1",
+          "body": "first report body",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": true
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-duplicate-no-ref": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 2,
+          "kind": "report",
+          "from": "worker-1",
+          "to": null,
+          "ref": null,
+          "body": "plain retry body",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-duplicate-no-ref-retry": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 2,
+          "kind": "report",
+          "from": "worker-1",
+          "to": null,
+          "ref": null,
+          "body": "plain retry body",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": true
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-relay": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 3,
+          "kind": "relay_request",
+          "from": "worker-1",
+          "to": "judge-1",
+          "ref": null,
+          "body": "please relay",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-relay-duplicate": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 3,
+          "kind": "relay_request",
+          "from": "worker-1",
+          "to": "judge-1",
+          "ref": null,
+          "body": "please relay",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": true
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-relay-missing-to": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "A relay_request post requires --to naming an active registered participant",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
         }
       },
       "meta": {
@@ -162,20 +338,558 @@
       }
     }
   },
-  "assignment-close": {
+  "post-to-unknown": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_PARTICIPANT_NOT_FOUND",
+        "message": "Unknown or removed --to handle on the Channel aq-golden: ghost",
+        "details": {
+          "channelId": "<uuid>",
+          "handle": "ghost"
+        },
+        "recovery": {
+          "suggestedCommand": "Verify the handle with sorage channel show <channel>; a removed handle is re-added with sorage channel add"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-from-main": {
+    "status": 64,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_INVALID_INPUT",
+        "message": "The main handle never posts: main-to-agent dispatch stays consumer-owned, and workers and judges post upstream only",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "remove": {
     "status": 0,
     "envelope": {
       "ok": true,
       "data": {
-        "assignment": {
-          "id": "<uuid>",
+        "participant": {
+          "handle": "judge-1",
+          "role": "judge",
+          "addedAt": "<ts>",
+          "removedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "remove-repeat": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "handle": "judge-1",
+          "role": "judge",
+          "addedAt": "<ts>",
+          "removedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-from-removed": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_PARTICIPANT_NOT_FOUND",
+        "message": "Unknown or removed sender handle on the Channel aq-golden: judge-1",
+        "details": {
           "channelId": "<uuid>",
-          "participantId": "<uuid>",
-          "label": "task",
+          "handle": "judge-1"
+        },
+        "recovery": {
+          "suggestedCommand": "Verify the handle with sorage channel show <channel>; a removed handle is re-added with sorage channel add"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "readd": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "participant": {
+          "handle": "judge-1",
+          "role": "judge",
+          "addedAt": "<ts>",
+          "removedAt": null
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "seq": 1,
+            "kind": "report",
+            "from": "worker-1",
+            "to": null,
+            "ref": "pr-1",
+            "body": "first report body",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          },
+          {
+            "seq": 2,
+            "kind": "report",
+            "from": "worker-1",
+            "to": null,
+            "ref": null,
+            "body": "plain retry body",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          },
+          {
+            "seq": 3,
+            "kind": "relay_request",
+            "from": "worker-1",
+            "to": "judge-1",
+            "ref": null,
+            "body": "please relay",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          }
+        ]
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "ack": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handled": [
+          1
+        ],
+        "alreadyHandled": [],
+        "note": "reviewed"
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "ack-already-handled": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handled": [],
+        "alreadyHandled": [
+          1
+        ],
+        "note": null
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "ack-unknown-seq": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_MESSAGE_NOT_FOUND",
+        "message": "Unknown sequence number on the Channel aq-golden: 99",
+        "details": {
+          "channelId": "<uuid>",
+          "missing": [
+            99
+          ]
+        },
+        "recovery": {
+          "suggestedCommand": "Verify the sequence number with sorage channel messages <channel> --all"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-after-ack": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 4,
+          "kind": "report",
+          "from": "worker-1",
+          "to": null,
+          "ref": "pr-1",
+          "body": "first report body",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages-all": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "seq": 1,
+            "kind": "report",
+            "from": "worker-1",
+            "to": null,
+            "ref": "pr-1",
+            "body": "first report body",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": true,
+            "handledAt": "<ts>",
+            "handleNote": "reviewed",
+            "createdAt": "<ts>"
+          },
+          {
+            "seq": 2,
+            "kind": "report",
+            "from": "worker-1",
+            "to": null,
+            "ref": null,
+            "body": "plain retry body",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          },
+          {
+            "seq": 3,
+            "kind": "relay_request",
+            "from": "worker-1",
+            "to": "judge-1",
+            "ref": null,
+            "body": "please relay",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          },
+          {
+            "seq": 4,
+            "kind": "report",
+            "from": "worker-1",
+            "to": null,
+            "ref": "pr-1",
+            "body": "first report body",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          }
+        ]
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages-after": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "seq": 3,
+            "kind": "relay_request",
+            "from": "worker-1",
+            "to": "judge-1",
+            "ref": null,
+            "body": "please relay",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          },
+          {
+            "seq": 4,
+            "kind": "report",
+            "from": "worker-1",
+            "to": null,
+            "ref": "pr-1",
+            "body": "first report body",
+            "bodyPath": null,
+            "bodyPending": false,
+            "handled": false,
+            "handledAt": null,
+            "handleNote": null,
+            "createdAt": "<ts>"
+          }
+        ]
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "messages-from-unknown": {
+    "status": 66,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_PARTICIPANT_NOT_FOUND",
+        "message": "Unknown or removed --from handle on the Channel aq-golden: ghost",
+        "details": {
+          "channelId": "<uuid>",
+          "handle": "ghost"
+        },
+        "recovery": {
+          "suggestedCommand": "Verify the handle with sorage channel show <channel>; a removed handle is re-added with sorage channel add"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "close": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "channel": {
+          "id": "<uuid>",
+          "name": "aq-golden",
+          "title": "Golden",
           "state": "closed",
+          "main": "orchestrator",
+          "participantCount": 3,
+          "messageCount": 4,
+          "unhandledCount": 3,
+          "participants": [
+            {
+              "handle": "judge-1",
+              "role": "judge",
+              "addedAt": "<ts>",
+              "removedAt": null
+            },
+            {
+              "handle": "orchestrator",
+              "role": "main",
+              "addedAt": "<ts>",
+              "removedAt": null
+            },
+            {
+              "handle": "worker-1",
+              "role": "worker",
+              "addedAt": "<ts>",
+              "removedAt": null
+            }
+          ],
           "createdAt": "<ts>",
           "closedAt": "<ts>"
         }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "close-repeat": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "channel": {
+          "id": "<uuid>",
+          "name": "aq-golden",
+          "title": "Golden",
+          "state": "closed",
+          "main": "orchestrator",
+          "participantCount": 3,
+          "messageCount": 4,
+          "unhandledCount": 3,
+          "participants": [
+            {
+              "handle": "judge-1",
+              "role": "judge",
+              "addedAt": "<ts>",
+              "removedAt": null
+            },
+            {
+              "handle": "orchestrator",
+              "role": "main",
+              "addedAt": "<ts>",
+              "removedAt": null
+            },
+            {
+              "handle": "worker-1",
+              "role": "worker",
+              "addedAt": "<ts>",
+              "removedAt": null
+            }
+          ],
+          "createdAt": "<ts>",
+          "closedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-closed": {
+    "status": 65,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_CLOSED",
+        "message": "The Channel aq-golden is closed; posting is frozen",
+        "details": {
+          "channelId": "<uuid>"
+        },
+        "recovery": {
+          "suggestedCommand": "Reopen is not offered; use or create another Channel explicitly"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "post-duplicate-after-close": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "message": {
+          "seq": 2,
+          "kind": "report",
+          "from": "worker-1",
+          "to": null,
+          "ref": null,
+          "body": "plain retry body",
+          "bodyPath": null,
+          "bodyPending": false,
+          "handled": false,
+          "handledAt": null,
+          "handleNote": null,
+          "createdAt": "<ts>"
+        },
+        "duplicate": true
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "add-closed": {
+    "status": 65,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_CLOSED",
+        "message": "The Channel aq-golden is closed; participant registration is frozen",
+        "details": {
+          "channelId": "<uuid>"
+        },
+        "recovery": {
+          "suggestedCommand": "Reopen is not offered; use or create another Channel explicitly"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "create-closed-name": {
+    "status": 65,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "CHN_CLOSED",
+        "message": "The Channel name aq-golden belongs to a closed Channel; create uses a new name",
+        "details": {
+          "channelId": "<uuid>"
+        },
+        "recovery": {
+          "suggestedCommand": "Reopen is not offered; use or create another Channel explicitly"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "ack-after-close": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handled": [
+          4
+        ],
+        "alreadyHandled": [],
+        "note": null
       },
       "meta": {
         "requestId": "<uuid>"
@@ -190,14 +904,36 @@
         "items": [
           {
             "id": "<uuid>",
-            "title": "Journey",
-            "state": "open",
-            "mainHandle": "orchestrator",
+            "name": "aq-golden",
+            "title": "Golden",
+            "state": "closed",
+            "main": "orchestrator",
             "createdAt": "<ts>",
-            "closedAt": null
+            "closedAt": "<ts>"
           }
-        ],
-        "nextCursor": null
+        ]
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "list-state": {
+    "status": 0,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "items": [
+          {
+            "id": "<uuid>",
+            "name": "aq-golden",
+            "title": "Golden",
+            "state": "closed",
+            "main": "orchestrator",
+            "createdAt": "<ts>",
+            "closedAt": "<ts>"
+          }
+        ]
       },
       "meta": {
         "requestId": "<uuid>"
@@ -211,436 +947,35 @@
       "data": {
         "channel": {
           "id": "<uuid>",
-          "title": "Journey",
-          "state": "open",
-          "creatorKind": "registered_project",
-          "creatorId": "<uuid>",
-          "mainParticipantId": "<uuid>",
-          "closedAt": null,
-          "closedByParticipantId": null,
-          "closedByKind": null,
-          "createdAt": "<ts>",
-          "updatedAt": "<ts>",
+          "name": "aq-golden",
+          "title": "Golden",
+          "state": "closed",
+          "main": "orchestrator",
           "participantCount": 3,
-          "messageCount": 0,
-          "unhandledCount": 0,
+          "messageCount": 4,
+          "unhandledCount": 2,
           "participants": [
             {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "main",
-              "handle": "orchestrator",
-              "nativeProvenance": [],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
-            },
-            {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "worker",
-              "handle": "worker-a",
-              "nativeProvenance": [
-                ""
-              ],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
-            },
-            {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
+              "handle": "judge-1",
               "role": "judge",
-              "handle": "judge-x",
-              "nativeProvenance": [
-                "ctx:node"
-              ],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
-            }
-          ],
-          "assignments": [
+              "addedAt": "<ts>",
+              "removedAt": null
+            },
             {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "participantId": "<uuid>",
-              "label": "task",
-              "state": "closed",
-              "createdAt": "<ts>",
-              "closedAt": "<ts>"
+              "handle": "orchestrator",
+              "role": "main",
+              "addedAt": "<ts>",
+              "removedAt": null
+            },
+            {
+              "handle": "worker-1",
+              "role": "worker",
+              "addedAt": "<ts>",
+              "removedAt": null
             }
-          ]
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "submit": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "message": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "kind": "report",
-          "senderParticipantId": "<uuid>",
-          "senderHandle": "worker-a",
-          "assignmentId": "<uuid>",
-          "assignmentLate": true,
-          "relayToParticipantId": null,
-          "contextSession": "sess",
-          "contextNode": "",
-          "contextAttempt": null,
-          "handled": false,
-          "handledAt": null,
-          "handledByParticipantId": null,
-          "handledByKind": null,
-          "handleNote": null,
-          "processingRowVersion": 1,
-          "createdAt": "<ts>",
-          "bodyBytes": 22,
-          "bodyPreview": "Report body\r\nwith CRLF",
-          "bodyPreviewTruncated": false
-        },
-        "replayed": false,
-        "contentActivating": false
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "messages-unhandled": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "items": [
-          {
-            "id": "<uuid>",
-            "channelId": "<uuid>",
-            "kind": "report",
-            "senderParticipantId": "<uuid>",
-            "senderHandle": "worker-a",
-            "assignmentId": "<uuid>",
-            "assignmentLate": true,
-            "relayToParticipantId": null,
-            "contextSession": "sess",
-            "contextNode": "",
-            "contextAttempt": null,
-            "handled": false,
-            "handledAt": null,
-            "handledByParticipantId": null,
-            "handledByKind": null,
-            "handleNote": null,
-            "processingRowVersion": 1,
-            "createdAt": "<ts>",
-            "bodyBytes": 22,
-            "bodyPreview": "Report body\r\nwith CRLF",
-            "bodyPreviewTruncated": false
-          }
-        ],
-        "nextCursor": null
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "wait-pending": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "items": [
-          {
-            "id": "<uuid>",
-            "channelId": "<uuid>",
-            "kind": "report",
-            "senderParticipantId": "<uuid>",
-            "senderHandle": "worker-a",
-            "assignmentId": "<uuid>",
-            "assignmentLate": true,
-            "relayToParticipantId": null,
-            "contextSession": "sess",
-            "contextNode": "",
-            "contextAttempt": null,
-            "handled": false,
-            "handledAt": null,
-            "handledByParticipantId": null,
-            "handledByKind": null,
-            "handleNote": null,
-            "processingRowVersion": 1,
-            "createdAt": "<ts>",
-            "bodyBytes": 22,
-            "bodyPreview": "Report body\r\nwith CRLF",
-            "bodyPreviewTruncated": false
-          }
-        ],
-        "nextCursor": null
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "read": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "message": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "kind": "report",
-          "senderParticipantId": "<uuid>",
-          "senderHandle": "worker-a",
-          "assignmentId": "<uuid>",
-          "assignmentLate": true,
-          "relayToParticipantId": null,
-          "contextSession": "sess",
-          "contextNode": "",
-          "contextAttempt": null,
-          "handled": false,
-          "handledAt": null,
-          "handledByParticipantId": null,
-          "handledByKind": null,
-          "handleNote": null,
-          "processingRowVersion": 1,
-          "createdAt": "<ts>",
-          "bodyBytes": 22,
-          "bodyPreview": "Report body\r\nwith CRLF",
-          "bodyPreviewTruncated": false,
-          "body": "Report body\r\nwith CRLF"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "handle-wrong-version": {
-    "status": 75,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "ROW_VERSION_CONFLICT",
-        "message": "The message is unhandled and its processing row version is 1; the supplied expected row version does not match",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "List the message with sorage channel messages <channelId> and re-run handle with the observed processing row version"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "forbidden-role": {
-    "status": 77,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "CHN_FORBIDDEN_ROLE",
-        "message": "The operation requires the main participant or the User",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Run as the main participant or with --as-user"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "handle": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "message": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "kind": "report",
-          "senderParticipantId": "<uuid>",
-          "senderHandle": "worker-a",
-          "assignmentId": "<uuid>",
-          "assignmentLate": true,
-          "relayToParticipantId": null,
-          "contextSession": "sess",
-          "contextNode": "",
-          "contextAttempt": null,
-          "handled": true,
-          "handledAt": "<ts>",
-          "handledByParticipantId": "<uuid>",
-          "handledByKind": "participant",
-          "handleNote": "done",
-          "processingRowVersion": 2,
-          "createdAt": "<ts>",
-          "bodyBytes": 22,
-          "bodyPreview": "Report body\r\nwith CRLF",
-          "bodyPreviewTruncated": false
-        },
-        "bodyPreviewUnavailable": false
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "handle-stale": {
-    "status": 75,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "ROW_VERSION_CONFLICT",
-        "message": "A handling decision has already committed for this message, possibly an earlier attempt of this same caller whose response was lost; the first handling decision is immutable",
-        "details": {
-          "handledAt": "<ts>",
-          "handledByParticipantId": "<uuid>",
-          "handledByKind": "participant"
-        },
-        "recovery": {
-          "suggestedCommand": "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "re-handle": {
-    "status": 64,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "CHN_INVALID_INPUT",
-        "message": "The message was already handled by participant <uuid>; the first handling decision is immutable",
-        "details": {
-          "handledAt": "<ts>",
-          "handledByParticipantId": "<uuid>",
-          "handledByKind": "participant"
-        },
-        "recovery": {
-          "suggestedCommand": "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "messages-handled": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "items": [
-          {
-            "id": "<uuid>",
-            "channelId": "<uuid>",
-            "kind": "report",
-            "senderParticipantId": "<uuid>",
-            "senderHandle": "worker-a",
-            "assignmentId": "<uuid>",
-            "assignmentLate": true,
-            "relayToParticipantId": null,
-            "contextSession": "sess",
-            "contextNode": "",
-            "contextAttempt": null,
-            "handled": true,
-            "handledAt": "<ts>",
-            "handledByParticipantId": "<uuid>",
-            "handledByKind": "participant",
-            "handleNote": "done",
-            "processingRowVersion": 2,
-            "createdAt": "<ts>",
-            "bodyBytes": 22,
-            "bodyPreview": "Report body\r\nwith CRLF",
-            "bodyPreviewTruncated": false
-          }
-        ],
-        "nextCursor": null
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "messages-filter-participant-not-found": {
-    "status": 66,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "CHN_PARTICIPANT_NOT_FOUND",
-        "message": "Unknown participant for this Channel",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Verify the participant with sorage channel show <channel>"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "wait-timeout": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "items": [],
-        "nextCursor": null
-      },
-      "meta": {
-        "requestId": "<uuid>",
-        "timedOut": true
-      }
-    }
-  },
-  "participant-deactivate": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "participant": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "role": "worker",
-          "handle": "worker-a",
-          "nativeProvenance": [
-            ""
           ],
-          "active": false,
-          "deactivatedAt": "<ts>",
-          "registeredAt": "<ts>"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "participant-deactivate-noop": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "participant": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "role": "worker",
-          "handle": "worker-a",
-          "nativeProvenance": [
-            ""
-          ],
-          "active": false,
-          "deactivatedAt": "<ts>",
-          "registeredAt": "<ts>"
+          "createdAt": "<ts>",
+          "closedAt": "<ts>"
         }
       },
       "meta": {
@@ -654,154 +989,10 @@
       "ok": false,
       "error": {
         "code": "CHN_NOT_FOUND",
-        "message": "Unknown Channel UUID",
+        "message": "Unknown Channel name or UUID: ghost",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Verify the UUID with sorage channel list"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "closed": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "channel": {
-          "id": "<uuid>",
-          "title": "Journey",
-          "state": "closed",
-          "creatorKind": "registered_project",
-          "creatorId": "<uuid>",
-          "mainParticipantId": "<uuid>",
-          "closedAt": "<ts>",
-          "closedByParticipantId": "<uuid>",
-          "closedByKind": "participant",
-          "createdAt": "<ts>",
-          "updatedAt": "<ts>",
-          "participantCount": 3,
-          "messageCount": 1,
-          "unhandledCount": 0,
-          "participants": [
-            {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "main",
-              "handle": "orchestrator",
-              "nativeProvenance": [],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
-            },
-            {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "worker",
-              "handle": "worker-a",
-              "nativeProvenance": [
-                ""
-              ],
-              "active": false,
-              "deactivatedAt": "<ts>",
-              "registeredAt": "<ts>"
-            },
-            {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "role": "judge",
-              "handle": "judge-x",
-              "nativeProvenance": [
-                "ctx:node"
-              ],
-              "active": true,
-              "deactivatedAt": null,
-              "registeredAt": "<ts>"
-            }
-          ],
-          "assignments": [
-            {
-              "id": "<uuid>",
-              "channelId": "<uuid>",
-              "participantId": "<uuid>",
-              "label": "task",
-              "state": "closed",
-              "createdAt": "<ts>",
-              "closedAt": "<ts>"
-            }
-          ]
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "submit-closed": {
-    "status": 65,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "CHN_CLOSED",
-        "message": "The Channel is closed, so submissions are frozen",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Reopen is not offered in M9; use or create another Channel explicitly"
-        }
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "historical-replay": {
-    "status": 0,
-    "envelope": {
-      "ok": true,
-      "data": {
-        "message": {
-          "id": "<uuid>",
-          "channelId": "<uuid>",
-          "kind": "report",
-          "senderParticipantId": "<uuid>",
-          "senderHandle": "worker-a",
-          "assignmentId": "<uuid>",
-          "assignmentLate": true,
-          "relayToParticipantId": null,
-          "contextSession": "sess",
-          "contextNode": "",
-          "contextAttempt": null,
-          "handled": false,
-          "handledAt": null,
-          "handledByParticipantId": null,
-          "handledByKind": null,
-          "handleNote": null,
-          "processingRowVersion": 1,
-          "createdAt": "<ts>",
-          "bodyBytes": 22,
-          "bodyPreview": "Report body\r\nwith CRLF",
-          "bodyPreviewTruncated": false
-        },
-        "replayed": true,
-        "contentActivating": false
-      },
-      "meta": {
-        "requestId": "<uuid>"
-      }
-    }
-  },
-  "replay-unavailable": {
-    "status": 75,
-    "envelope": {
-      "ok": false,
-      "error": {
-        "code": "CHN_REPLAY_UNAVAILABLE",
-        "message": "No Channel submission receipt is retained for this key. The original submission outcome remains unknown. Retain the original key, exact input/source bytes, Installation, Channel, sender participant, request <uuid> and this output.",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Keep the original key, exact input/source bytes, Installation, Channel and sender participant. Retain request <uuid> and this output for diagnosis; an unknown outcome does not authorize another submission or blind external dispatch."
+          "suggestedCommand": "Verify the Channel name or UUID with sorage channel list"
         }
       },
       "meta": {
@@ -818,7 +1009,7 @@
         "message": "Channel message body must be nonempty after trimming",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Check Channel fields, Unicode, message kind, and expected Row Version"
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
         }
       },
       "meta": {
@@ -838,7 +1029,7 @@
           "cause": "SQLiteError: attempt to write a readonly database"
         },
         "recovery": {
-          "suggestedCommand": "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access."
+          "suggestedCommand": "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make."
         }
       },
       "meta": {

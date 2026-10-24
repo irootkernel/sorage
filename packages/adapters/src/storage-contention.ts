@@ -147,10 +147,10 @@ function refusalMessage(surface: ContentionSurface, kind: ContentionKind): strin
  */
 const RECOVERY: Record<ContentionSurface, Record<ContentionKind, string>> = {
   channel: {
-    lock: "Retry the same channel command with its original mode, input, and idempotency key when storage is quieter; a replay-only retry stays replay-only, and after an unknown submission outcome inspect with --replay-only first.",
-    open: "Retry the same channel command with its original mode, input, and idempotency key when storage is quieter; a replay-only retry stays replay-only, and after an unknown submission outcome inspect with --replay-only first.",
+    lock: "Retry the same channel command when storage is quieter; it committed none of the changes it was asked to make.",
+    open: "Retry the same channel command when storage is quieter; it committed none of the changes it was asked to make.",
     readonly:
-      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access.",
+      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make.",
   },
   handoff: {
     lock: "Retry the same command with its original mode, input, and idempotency key when storage is quieter; after an unknown send outcome inspect with sorage send --replay-only first.",

@@ -16,6 +16,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { knownSchemaMaximum } from "@sorage/core";
 import { MIGRATIONS } from "@sorage/adapters/src/sqlite/migrations";
 import { openAndMigrate } from "@sorage/adapters/src/sqlite/migrator";
+import {
+  assertWindowConnectionsClosed,
+  connectionsOpenedSince,
+  openWindow,
+  settleConnections,
+} from "../fixtures/connection-window";
 import { runCli, withCoveredRead } from "../../src/main";
 
 /**
@@ -71,7 +77,7 @@ function logWritten(home: string): boolean {
   return existsSync(join(home, "logs", "sorage.log"));
 }
 
-/** Size, nanosecond mtime and bytes of every file under the home (the Vault included). */
+/** Size, nanosecond mtime and bytes of every file under the home (the Vault included), captured raw. */
 function homeInventory(home: string): Record<string, string> {
   const out: Record<string, string> = {};
   const walk = (dir: string) => {
@@ -87,6 +93,26 @@ function homeInventory(home: string): Record<string, string> {
   };
   walk(home);
   return out;
+}
+
+/**
+ * An inventory window (c2-decision item 3): the fixture's leaked connections
+ * are settled once, before the baseline; `after` asserts that no connection
+ * opened inside the window is still open and then captures the raw inventory,
+ * never closing anything first.
+ */
+function openInventoryWindow(home: string) {
+  settleConnections();
+  const mark = openWindow();
+  const before = homeInventory(home);
+  return {
+    before,
+    mark,
+    after(label: string): Record<string, string> {
+      assertWindowConnectionsClosed(mark, label);
+      return homeInventory(home);
+    },
+  };
 }
 
 function errorCode(result: { err: string }): string {
@@ -283,7 +309,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
     expect(backed.code, backed.err).toBe(0);
     const backedId = (JSON.parse(backed.out) as { data: { memo: { id: string } } }).data.memo.id;
     // The intact Vault serves the normal page and both kinds' `show`, writing nothing.
-    const intactBefore = homeInventory(f.home);
+    const intact = openInventoryWindow(f.home);
     const intactPage = run(["memo", "list", "--json"], f.work);
     expect(intactPage.code, intactPage.err).toBe(0);
     expect((JSON.parse(intactPage.out) as { data: { items: unknown[] } }).data.items).toHaveLength(3);
@@ -292,7 +318,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
     const intactBackedShow = run(["memo", "show", backedId, "--json"], f.work);
     expect(intactBackedShow.code, intactBackedShow.err).toBe(0);
     expect((JSON.parse(intactBackedShow.out) as { data: { body: string } }).data.body.length).toBe(70_000);
-    expect(homeInventory(f.home)).toEqual(intactBefore);
+    expect(intact.after("intact Memo reads")).toEqual(intact.before);
 
     // The broken-Vault state (the TASK-118 V1 shape) refuses the covered Memo
     // reads with the same envelope `vault verify` reports, writing nothing —
@@ -300,7 +326,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
     rmSync(vault, { recursive: true, force: true });
     const verify = run(["vault", "verify", "--json"]);
     expect(verify.code).toBe(73);
-    const before = homeInventory(f.home);
+    const broken = openInventoryWindow(f.home);
     for (const args of [
       ["memo", "list", "--json"],
       ["memo", "show", f.memoId, "--json"],
@@ -315,7 +341,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
       const verifyError = (JSON.parse(verify.err) as { error: Record<string, unknown> }).error;
       expect(envelope.error, args.join(" ")).toEqual(verifyError);
     }
-    expect(homeInventory(f.home)).toEqual(before);
+    expect(broken.after("broken-Vault Memo reads")).toEqual(broken.before);
     expect(logWritten(f.home)).toBe(false);
     expect(existsSync(vault)).toBe(false);
   });
@@ -346,7 +372,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
     // writing nothing. Handoff and Project reads never ran the drain and keep
     // serving.
     writeLock(process.pid);
-    const before = homeInventory(f.home);
+    const live = openInventoryWindow(f.home);
     for (const [label, args, json] of [
       ["memo list json", ["memo", "list", "--json"], true],
       ["memo show json", ["memo", "show", f.memoId, "--json"], true],
@@ -376,7 +402,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
         );
       }
     }
-    expect(homeInventory(f.home)).toEqual(before);
+    expect(live.after("live-lock Memo reads")).toEqual(live.before);
     expect(logWritten(f.home)).toBe(false);
     const inboxUnderLock = run(["inbox", "--json"], f.work);
     expect(inboxUnderLock.code, "the Handoff read never ran the drain").toBe(0);
@@ -385,7 +411,7 @@ describe("covered-read failures render without the log (RDR-001)", () => {
     // normal output in both forms, the stale lock stays in place, and nothing
     // is written.
     writeLock(999_999_999);
-    const staleBefore = homeInventory(f.home);
+    const stale = openInventoryWindow(f.home);
     for (const [label, args, json] of [
       ["memo list json", ["memo", "list", "--json"], true],
       ["memo show json", ["memo", "show", f.memoId, "--json"], true],
@@ -401,9 +427,47 @@ describe("covered-read failures render without the log (RDR-001)", () => {
         expect(result.err, label).toBe("");
       }
     }
-    expect(homeInventory(f.home)).toEqual(staleBefore);
+    expect(stale.after("stale-lock Memo reads")).toEqual(stale.before);
     expect(existsSync(lockPath), "the stale lock itself stays in place").toBe(true);
     expect(logWritten(f.home)).toBe(false);
+  });
+
+  it("negative control: a connection opened inside the window and left open fails the connection assertion (c2-decision item 3)", () => {
+    const f = installation("sorage-zero-write-control-connection-");
+    const window = openInventoryWindow(f.home);
+    const leaked = new DatabaseSync(f.database);
+    try {
+      leaked.exec("PRAGMA user_version");
+      expect(connectionsOpenedSince(window.mark)).toHaveLength(1);
+      expect(() => window.after("leaked connection")).toThrowError(/connections opened inside the window still open/);
+    } finally {
+      leaked.close();
+    }
+    // Once the leak is closed, the same window's connection assertion passes.
+    expect(connectionsOpenedSince(window.mark)).toHaveLength(0);
+    window.after("closed again");
+  });
+
+  it("negative control: a sidecar-creating writer open inside the window fails the inventory comparison (c2-decision item 3)", () => {
+    const f = installation("sorage-zero-write-control-sidecar-");
+    const window = openInventoryWindow(f.home);
+    expect(existsSync(`${f.database}-wal`), "precondition: the settled baseline holds no sidecars").toBe(false);
+    const writer = new DatabaseSync(f.database);
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      // The raw capture, as `after` would take it past the connection
+      // assertion: the open writer's sidecars make the comparison fail.
+      const raw = homeInventory(f.home);
+      expect(raw).not.toEqual(window.before);
+      const added = Object.keys(raw)
+        .filter((path) => window.before[path] === undefined)
+        .sort();
+      expect(added).toEqual([`${f.database}-shm`, `${f.database}-wal`]);
+      expect(connectionsOpenedSince(window.mark)).toHaveLength(1);
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
   });
 });
 

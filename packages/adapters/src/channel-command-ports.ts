@@ -4,8 +4,6 @@ export {
   captureChannelBodyText,
   channelStorageError,
   createNodeChannelPorts,
-  createNodeChannelRecoveryPorts,
-  readChannelRecoveryConfiguration,
   releaseAcceptedChannelBody,
   sweepChannelAcceptedInputs,
   type NodeChannelPorts,

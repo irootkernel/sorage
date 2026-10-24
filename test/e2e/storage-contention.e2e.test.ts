@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
+import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { once } from "node:events";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BINARY, makeTempDir, registerCleanup, runCleanups, sorage } from "./helpers";
@@ -99,7 +99,7 @@ afterAll(() => {
 });
 
 describe("startup-site contention on the compiled binary", () => {
-  it("refuses channel create, send, and project add at the drain or migration, proves no change, and retries successfully", () => {
+  it("refuses channel create, send, and project add at the drain, proves no change, and retries successfully", () => {
     const home = makeTempDir("sorage-e2e-contention-");
     const work = makeTempDir("sorage-e2e-contention-work-");
     const projectDir = join(work, "b");
@@ -118,16 +118,15 @@ describe("startup-site contention on the compiled binary", () => {
       const projectTables = ["projects", "project_bindings", "events"];
 
       const channelBefore = snapshot(holder, channelTables);
-      const channel = sorage(
-        ["channel", "create", "--main-handle", "orchestrator", "--idempotency-key", "startup-create-key", "--json"],
-        { home, cwd: work },
-      );
+      const channel = sorage(["channel", "create", "aq-startup", "--json"], { home, cwd: work });
       expect(channel.status, channel.stderr).toBe(75);
       const channelEnvelope = envelope(channel.stderr);
       expect(channelEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
       expect(channelEnvelope.error?.details.storageContention).toBe(true);
       expect(channelEnvelope.error?.message).toContain("Channel storage is contended");
-      expect(channelEnvelope.error?.recovery?.suggestedCommand).toContain("a replay-only retry stays replay-only");
+      expect(channelEnvelope.error?.recovery?.suggestedCommand).toBe(
+        "Retry the same channel command when storage is quieter; it committed none of the changes it was asked to make.",
+      );
       expect(snapshot(holder, channelTables)).toEqual(channelBefore);
 
       const sendBefore = snapshot(holder, sendTables);
@@ -170,10 +169,7 @@ describe("startup-site contention on the compiled binary", () => {
 
     // Retryability: with the lock released, the identical requests succeed for
     // every family, preserving the original mode, input, and idempotency key.
-    const channelRetry = sorage(
-      ["channel", "create", "--main-handle", "orchestrator", "--idempotency-key", "startup-create-key", "--json"],
-      { home, cwd: work },
-    );
+    const channelRetry = sorage(["channel", "create", "aq-startup", "--json"], { home, cwd: work });
     expect(channelRetry.status, channelRetry.stderr).toBe(0);
     const sendRetry = sorage(
       ["send", "--to", "alpha", "--title", "t", "--body", "b", "--idempotency-key", sendKey, "--json"],
@@ -191,7 +187,7 @@ describe("startup-site contention on the compiled binary", () => {
 
 describe("domain-transaction contention through the Git PATH barrier (W2)", () => {
   it(
-    "refuses channel submit, send, and project add inside their own domain transactions, proves no change, and retries",
+    "refuses send and project add inside their own domain transactions, proves no change, and retries",
     { timeout: 120_000 },
     async () => {
       const home = mkdtempSync(join(tmpdir(), "sorage-e2e-barrier-"));
@@ -207,33 +203,6 @@ describe("domain-transaction contention through the Git PATH barrier (W2)", () =
       // file-backed; it lives inside the sender workspace.
       const bodyFile = join(repo, "large-body.txt");
       writeFileSync(bodyFile, `# report\n${"x".repeat(70_000)}\n`);
-
-      // An existing Channel with its main participant for the submit case.
-      const created = sorage(["channel", "create", "--main-handle", "orchestrator", "--json"], { home, cwd: repo });
-      expect(created.status, created.stderr).toBe(0);
-      const createdEnvelope = JSON.parse(created.stdout) as {
-        data: { channel: { id: string; mainParticipantId: string } };
-      };
-      const channelId = createdEnvelope.data.channel.id;
-      const mainId = createdEnvelope.data.channel.mainParticipantId;
-      const worker = sorage(
-        [
-          "channel",
-          "participant",
-          "add",
-          channelId,
-          "--as-participant",
-          mainId,
-          "--role",
-          "worker",
-          "--handle",
-          "worker",
-          "--json",
-        ],
-        { home, cwd: repo },
-      );
-      expect(worker.status, worker.stderr).toBe(0);
-      const workerId = (JSON.parse(worker.stdout) as { data: { participant: { id: string } } }).data.participant.id;
 
       const runOne = async (args: string[], proofTables: string[], expectText: string): Promise<void> => {
         const signal = join(home, "barrier.signal");
@@ -280,25 +249,11 @@ describe("domain-transaction contention through the Git PATH barrier (W2)", () =
         }
       };
 
-      const submitArgs = [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId,
-        "--kind",
-        "report",
-        "--body",
-        "barrier report body",
-        "--idempotency-key",
-        "barrier-submit-key",
-        "--json",
-      ];
-      await runOne(
-        submitArgs,
-        ["channel_messages", "events", "idempotency_keys", "content_records", "pending_fs_ops"],
-        "Channel storage is contended",
-      );
+      // The rebuilt Channel mutation resolves no working-directory Project
+      // (CHN-013), so its startup no longer runs the actor-resolution Git
+      // probe this barrier sequences on; the channel's in-transaction
+      // COMMIT-busy refusal is pinned by the adapter suite's failing-COMMIT
+      // case, and the drain-site refusal by this file's first test.
 
       const sendArgs = [
         "send",
@@ -328,9 +283,6 @@ describe("domain-transaction contention through the Git PATH barrier (W2)", () =
 
       // Retryability with the lock free: the identical requests succeed for
       // every family, preserving the original mode, input, and idempotency key.
-      const submitRetry = sorage(submitArgs, { home, cwd: repo });
-      expect(submitRetry.status, submitRetry.stderr).toBe(0);
-      expect(JSON.parse(submitRetry.stdout).data.replayed).toBe(false);
       const sendRetry = sorage(sendArgs, { home, cwd: repo });
       expect(sendRetry.status, sendRetry.stderr).toBe(0);
       expect(JSON.parse(sendRetry.stdout).data.handoffs).toHaveLength(1);

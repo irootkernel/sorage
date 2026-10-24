@@ -31,7 +31,7 @@ The commands that require `--as-user` are `review remove`, `pin`, `unpin`, `arch
 
 ### 1.3 Channel attribution boundary, milestone M9
 
-[CHN-002](required-specification.md#212-agent-communication-channels) and [interface section 38](interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9) add Channel participant attribution for orchestration communication. Participant identity and native-handle provenance answer "which registered participant sent this", exactly as working-directory resolution answers "where did this come from": they keep reports attributable and are not a permission check or a process boundary. Any process running as this operating-system user can assert any participant of any Channel (SEC-013), message bodies and Judge verdicts are untrusted data that grant no tool, network, commit, deletion, or publication authority (CHN-004, CHN-011), logs and event metadata exclude message bodies, and one Channel's records are not disclosed through another Channel's operations. Main-side dispatch and external-effect reconciliation stay with the consumer.
+[CHN-002](required-specification.md#212-agent-communication-channels) and [interface section 38](interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9) add Channel participant attribution for orchestration communication. Participant handles answer "which registered participant sent this", exactly as working-directory resolution answers "where did this come from": they keep reports attributable and are not a permission check or a process boundary. Any process running as this operating-system user can post as any registered non-main handle of any Channel (SEC-013), message bodies and Judge verdicts are untrusted data that grant no tool, network, commit, deletion, or publication authority (CHN-004, CHN-011), logs and event metadata exclude message bodies, and one Channel's records are not disclosed through another Channel's operations. Main-side dispatch and external-effect reconciliation stay with the consumer.
 
 A Memo body is untrusted text, even when written as a command or attributed to the User. Reading or storing it does not authorize execution, network access, commits, or deletion. No session-start scanning, stop hooks, automatic completion, or sibling-tool mutation is introduced. Safe Markdown rendering must not execute raw HTML, accept unsafe link schemes, or fetch remote images automatically.
 
@@ -316,14 +316,12 @@ The table below is the normative event catalog for Sorage; other documents cite 
 | `CONTENT_ACTIVATED` | `system` | M9 |
 | `CONTENT_UNLINKED` | `system` | M9 |
 | `CONTENT_INTEGRITY_FAILED` | `system` | M9 |
-| `CHANNEL_CREATED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_CLOSED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_PARTICIPANT_REGISTERED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_PARTICIPANT_DEACTIVATED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_ASSIGNMENT_CREATED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_ASSIGNMENT_CLOSED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_MESSAGE_SUBMITTED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
-| `CHANNEL_MESSAGE_HANDLED` | `registered_project`, `unregistered_workspace`, `user` | M9 |
+| `CHANNEL_CREATED` | `user` | M9 |
+| `CHANNEL_CLOSED` | `user` | M9 |
+| `CHANNEL_PARTICIPANT_ADDED` | `user` | M9 |
+| `CHANNEL_PARTICIPANT_REMOVED` | `user` | M9 |
+| `CHANNEL_MESSAGE_POSTED` | `user` | M9 |
+| `CHANNEL_MESSAGE_ACKED` | `user` | M9 |
 
 `REVIEW_NOTE_RESOLVED` is appended in the same transaction as `HANDOFF_REVISED` or `HANDOFF_NO_CHANGE_RESOLVED` whenever that sender operation removed a Review Note; `REVIEW_NOTE_WITHDRAWN` means the recipient withdrew the current Note, and `REVIEW_NOTE_REMOVED` means the User removed it administratively.
 
@@ -335,20 +333,18 @@ Path fields are redacted on export while `gitBackup.snapshot.redactWorkspacePath
 
 ### 10.1 M9 event metadata
 
-SEC-012 and BKP-023 apply to the shared store and Channel domain. This subsection owns their exact event metadata; [interface section 38.9](interfaces-and-operations.md#389-m9-event-snapshot-inventory) owns the per-build snapshot inventory. Every object below is closed: all listed keys are present, no additional keys are accepted, and unqualified IDs are canonical UUIDs. The event row retains the existing ActorRef provenance: a registered Project UUID, an unregistered workspace key, or null for the User/system; a participant ID never replaces `actorId`. For a main-role operation `actingParticipantId` is that Channel's main participant UUID, or null when the User performs the operation. Submission records its sender participant separately from the row actor. No body, preview, title, label, handle, native provenance, handling note, context string, raw exception, or other free text is copied into these objects.
+SEC-012 and BKP-023 apply to the shared store and Channel domain. This subsection owns their exact event metadata; [interface section 38.9](interfaces-and-operations.md#389-m9-event-snapshot-inventory) owns the per-build snapshot inventory. Every object below is closed: all listed keys are present, no additional keys are accepted, and unqualified IDs are canonical UUIDs. From EPIC-018 every Channel event records the User actor: `actorKind` is exactly `user` with a null `actorId`, and no Channel surface asserts a participant role (CHN-013). The acting participant handle lives in the closed metadata: a post's `actingHandle` is its sender handle, and every User-performed operation — create, add, remove, ack and close — carries the Channel's main handle; `add` and `remove` additionally carry the subject `handle` they concern. No body, preview, title, `--ref` reference, handling note, raw exception, or other free text beyond those handles is copied into these objects.
 
 | Channel event | Exact metadata keys and values | Event row `rowVersion` |
 |---|---|---|
-| `CHANNEL_CREATED` | `{channelId, mainParticipantId}` | null |
-| `CHANNEL_CLOSED` | `{channelId, actingParticipantId, fromState: "open", toState: "closed"}` | null |
-| `CHANNEL_PARTICIPANT_REGISTERED` | `{channelId, actingParticipantId, participantId, role: "worker" \| "judge"}` | null |
-| `CHANNEL_PARTICIPANT_DEACTIVATED` | `{channelId, actingParticipantId, participantId, fromActive: true, toActive: false}` | null |
-| `CHANNEL_ASSIGNMENT_CREATED` | `{channelId, actingParticipantId, assignmentId, participantId: UUID-or-null}` | null |
-| `CHANNEL_ASSIGNMENT_CLOSED` | `{channelId, actingParticipantId, assignmentId, fromState: "open", toState: "closed"}` | null |
-| `CHANNEL_MESSAGE_SUBMITTED` | `{channelId, participantId, messageId, kind, assignmentId: UUID-or-null, assignmentLate: boolean, relayToParticipantId: UUID-or-null, processingRowVersion: 1}` | 1 |
-| `CHANNEL_MESSAGE_HANDLED` | `{channelId, actingParticipantId, messageId, processingRowVersion: 2}` | 2 |
+| `CHANNEL_CREATED` | `{channelId, actingHandle, mainHandle}` — both handles are the main handle | null |
+| `CHANNEL_CLOSED` | `{channelId, actingHandle}` | null |
+| `CHANNEL_PARTICIPANT_ADDED` | `{channelId, actingHandle, handle, role: "worker" \| "judge"}` | null |
+| `CHANNEL_PARTICIPANT_REMOVED` | `{channelId, actingHandle, handle}` | null |
+| `CHANNEL_MESSAGE_POSTED` | `{channelId, actingHandle, seq, kind, toHandle: handle-or-null}` — `actingHandle` is the sender | null |
+| `CHANNEL_MESSAGE_ACKED` | `{channelId, actingHandle, seq}` | null |
 
-The `kind` value and relay-target null rules are exactly the Channel message contract. Every Channel event has `handoffId = null` and `memoId = null`; associations live in typed metadata, with no new association column or top-level snapshot field. Channel creation includes initial main registration in its one event. The application validates existence, same-Channel membership, roles, and the relevant state/version before appending in the mutation transaction; failure rolls both back. Reads, listing, waiting, failed operations, retained duplicate replay, replay-only inspection, and unchanged no-ops append nothing. A currently inactive participant or closed Channel does not invalidate a historical valid submission or its retained outcome. Restore reconciles Channel creation/closure, participant registration/deactivation, assignment creation/closure, and message submission/first handling against their retained records, preserving original IDs, timestamps, actors, and links. It checks corresponding decisions and versions without treating wall-clock ordering as authentication or claiming an external effect.
+The `kind` value and relay-target null rules are exactly the Channel message contract. Every Channel event has `handoffId = null`, `memoId = null` and `rowVersion = null`; associations live in typed metadata, with no new association column or top-level snapshot field. Channel creation includes initial main registration in its one event. The application validates existence, same-Channel membership and the relevant state before appending in the mutation transaction; failure rolls both back. Reads, listing, waiting, failed operations, duplicate posts, and unchanged no-ops append nothing. A removed participant or closed Channel does not invalidate a historical valid post. Restore reconciles Channel creation/closure, participant add/remove, and message posting/first handling against their retained records, preserving original IDs, timestamps, actors and links; its checks are referential and order-independent, without treating timestamp or UUID order as mutation order or claiming an external effect.
 
 The common physical-content events apply to Memo/Channel-owned file content only. Their actor is `system`, with null `actorId`, `rowVersion`, `handoffId`, and `memoId`. Artifact-owned work keeps the existing `ARTIFACT_*` family and legacy metadata interpretations after adoption; one operation never emits both families. Inline content has no physical activation/unlink event, and unowned staging/cache/orphan cleanup never fabricates an owner or identifier.
 

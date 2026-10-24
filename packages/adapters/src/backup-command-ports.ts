@@ -97,7 +97,6 @@ import {
 import { validateChannelContentLinks, validateMemoContentLinks } from "./content-store";
 import type {
   ChannelContentFileExport,
-  SnapshotChannelAssignment,
   SnapshotChannelMessage,
   SnapshotChannelParticipant,
   SnapshotChannelShard,
@@ -181,6 +180,7 @@ function placeChannelContentFile(
     return err(appError("INTERNAL_ERROR", "The Channel content restore file could not be placed", { channelId }));
   }
 }
+
 import { createNodeApiTokenStore } from "./token-store";
 import { createVaultInitializer, openVault } from "./vault";
 import { createNodeVaultCommandPorts } from "./vault-command-ports";
@@ -306,7 +306,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   /** One file-backed Channel message's content reference for the export. */
   interface ChannelContentReference {
     channelId: string;
-    messageId: string;
+    seq: number;
     contentId: string;
     contentPath: string;
     sizeBytes: number;
@@ -315,8 +315,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /**
-   * Reads every Channel with its complete rosters, all assignments, and all
-   * messages as their routed format-3 export records (CHN-009, section 38.8).
+   * Reads every Channel with its complete participant roster and all messages
+   * as their routed format-3 export records (CHN-009, section 38.8, ADR-0034).
    * The wire `BodyContent` union carries exactly `inline` or the file-backed
    * triple — no internal discriminator — and the file-backed form's raw bytes
    * are carried as snapshot content files digested in `contentDigests`. An
@@ -336,36 +336,22 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         const channelId = channelRow.id as string;
         const participants: SnapshotChannelParticipant[] = (
           db
-            .prepare("SELECT * FROM channel_participants WHERE channel_id = ? ORDER BY registered_at, id")
+            .prepare("SELECT * FROM channel_participants WHERE channel_id = ? ORDER BY handle COLLATE BINARY")
             .all(channelId) as unknown as Array<Record<string, unknown>>
         ).map((row) => ({
-          id: row.id as string,
-          role: row.role as SnapshotChannelParticipant["role"],
           handle: row.handle as string,
-          nativeProvenance: JSON.parse(row.native_provenance_json as string) as string[],
-          active: row.active === 1,
-          registeredAt: row.registered_at as string,
-          deactivatedAt: (row.deactivated_at as string | null) ?? null,
+          role: row.role as SnapshotChannelParticipant["role"],
+          addedAt: row.added_at as string,
+          removedAt: (row.removed_at as string | null) ?? null,
         }));
-        const assignments: SnapshotChannelAssignment[] = (
-          db
-            .prepare("SELECT * FROM channel_assignments WHERE channel_id = ? ORDER BY created_at, id")
-            .all(channelId) as unknown as Array<Record<string, unknown>>
-        ).map((row) => ({
-          id: row.id as string,
-          participantId: (row.participant_id as string | null) ?? null,
-          label: row.label as string,
-          state: (row.state === "closed" ? "closed" : "open") as SnapshotChannelAssignment["state"],
-          createdAt: row.created_at as string,
-          closedAt: (row.closed_at as string | null) ?? null,
-        }));
+        const main = participants.find((participant) => participant.role === "main");
         const messages: SnapshotChannelMessage[] = [];
         const messageRows = db
           .prepare(
             `SELECT m.*, c.inline_text AS c_inline_text, c.storage_key AS c_storage_key,
                c.size_bytes AS c_size_bytes, c.sha256 AS c_sha256, c.materialized AS c_materialized
              FROM channel_messages m JOIN content_records c ON c.id = m.content_record_id
-             WHERE m.channel_id = ? ORDER BY m.created_at, m.id`,
+             WHERE m.channel_id = ? ORDER BY m.seq`,
           )
           .all(channelId) as unknown as Array<Record<string, unknown>>;
         for (const row of messageRows) {
@@ -379,7 +365,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               return err(
                 appError(
                   "CONTENT_MATERIALIZING",
-                  `Channel message ${String(row.id)} is waiting for its committed activation`,
+                  `Channel ${channelId} message ${String(row.seq)} is waiting for its committed activation`,
                 ),
               );
             }
@@ -388,7 +374,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               return err(
                 appError(
                   "STORAGE_INTEGRITY_ERROR",
-                  `Channel message ${String(row.id)} carries a noncanonical content identity.`,
+                  `Channel ${channelId} message ${String(row.seq)} carries a noncanonical content identity.`,
                   { channelId, contentId },
                 ),
               );
@@ -400,7 +386,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             };
             contentFiles.push({
               channelId,
-              messageId: row.id as string,
+              seq: Number(row.seq),
               contentId,
               contentPath: contentPath.value,
               sizeBytes: row.c_size_bytes as number,
@@ -409,36 +395,27 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             });
           }
           messages.push({
-            id: row.id as string,
-            senderParticipantId: row.sender_participant_id as string,
+            seq: Number(row.seq),
+            senderHandle: row.sender_handle as string,
             kind: row.kind as SnapshotChannelMessage["kind"],
+            toHandle: (row.to_handle as string | null) ?? null,
+            ref: (row.ref as string | null) ?? null,
             bodyContent,
-            assignmentId: (row.assignment_id as string | null) ?? null,
-            assignmentLate: row.assignment_late === 1,
-            relayToParticipantId: (row.relay_to_participant_id as string | null) ?? null,
-            contextSession: (row.context_session as string | null) ?? null,
-            contextNode: (row.context_node as string | null) ?? null,
-            contextAttempt: (row.context_attempt as string | null) ?? null,
             handled: row.handled === 1,
             handledAt: (row.handled_at as string | null) ?? null,
-            handledByParticipantId: (row.handled_by_participant_id as string | null) ?? null,
-            handledByKind: (row.handled_by_kind as SnapshotChannelMessage["handledByKind"]) ?? null,
             handleNote: (row.handle_note as string | null) ?? null,
             createdAt: row.created_at as string,
           });
         }
         channels.push({
           id: channelId,
+          name: channelRow.name as string,
           title: (channelRow.title as string | null) ?? null,
           state: (channelRow.state === "closed" ? "closed" : "open") as SnapshotChannelShard["state"],
-          creatorKind: channelRow.creator_kind as SnapshotChannelShard["creatorKind"],
-          creatorId: (channelRow.creator_id as string | null) ?? null,
+          main: main === undefined ? "" : main.handle,
           createdAt: channelRow.created_at as string,
           closedAt: (channelRow.closed_at as string | null) ?? null,
-          closedByParticipantId: (channelRow.closed_by_participant_id as string | null) ?? null,
-          closedByKind: (channelRow.closed_by_kind as SnapshotChannelShard["closedByKind"]) ?? null,
           participants,
-          assignments,
           messages,
         });
       }
@@ -474,9 +451,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         return err(
           appError(
             "STORAGE_INTEGRITY_ERROR",
-            `The Channel content reference for ${reference.messageId} is not a managed key.`,
+            `The Channel content reference for ${reference.channelId} message ${String(reference.seq)} is not a managed key.`,
             {
-              messageId: reference.messageId,
+              channelId: reference.channelId,
+              seq: reference.seq,
             },
           ),
         );
@@ -498,9 +476,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             return err(
               appError(
                 "VAULT_INTEGRITY_ERROR",
-                `The Channel content file for ${reference.messageId} changed while being read.`,
+                `The Channel content file for ${reference.channelId} message ${String(reference.seq)} changed while being read.`,
                 {
-                  messageId: reference.messageId,
+                  channelId: reference.channelId,
+                  seq: reference.seq,
                 },
               ),
             );
@@ -1155,12 +1134,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         "deletion_requests",
         "events",
         "project_memos",
-        // The Channel domain tables join the emptiness census at TASK-109
-        // (CHN-009, section 32): an installation holding only Channel records —
-        // even one whose ledger rows were lost — is not an empty target.
+        // The Channel domain tables join the emptiness census (CHN-009,
+        // section 32): an installation holding only Channel records — even one
+        // whose ledger rows were lost — is not an empty target.
         "channels",
         "channel_participants",
-        "channel_assignments",
         "channel_messages",
       ];
       for (const table of tables) {
@@ -1465,8 +1443,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     // BEFORE the SQL transaction opens. A placement failure discards every
     // placed file of this restore and leaves the database untouched.
     const placedChannelFiles: Array<{
-      messageId: string;
       channelId: string;
+      seq: number;
       recordId: string;
       storageKey: string;
       sizeBytes: number;
@@ -1481,7 +1459,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           discardPlacedFiles();
           return err(
             appError("VAULT_INTEGRITY_ERROR", `The Channel message names a content file the snapshot does not carry`, {
-              messageId: message.id,
+              channelId: channel.id,
+              seq: message.seq,
             }),
           );
         }
@@ -1502,15 +1481,16 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               "VAULT_INTEGRITY_ERROR",
               `The Channel message's carried bytes disagree with its shard's recorded identity`,
               {
-                messageId: message.id,
+                channelId: channel.id,
+                seq: message.seq,
               },
             ),
           );
         }
         placedKeys.push(placed.value.storageKey);
         placedChannelFiles.push({
-          messageId: message.id,
           channelId: channel.id,
+          seq: message.seq,
           recordId,
           storageKey: placed.value.storageKey,
           sizeBytes: placed.value.sizeBytes,
@@ -1518,7 +1498,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         });
       }
     }
-    const placedChannelByMessage = new Map(placedChannelFiles.map((entry) => [entry.messageId, entry]));
+    const placedChannelByMessage = new Map(
+      placedChannelFiles.map((entry) => [`${entry.channelId}:${String(entry.seq)}`, entry]),
+    );
     let committed = false;
     let cleanupSafe = true;
     let commitAttempted = false;
@@ -1680,51 +1662,28 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         const channelsData = (data as SnapshotDataV3).channels ?? [];
         for (const channel of channelsData) {
           db.prepare(
-            `INSERT INTO channels (id, title, state, creator_kind, creator_id, created_at, updated_at, closed_at, closed_by_participant_id, closed_by_kind)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO channels (id, name, title, state, created_at, closed_at)
+             VALUES (?, CAST(? AS TEXT), ?, ?, ?, ?)`,
           ).run(
             channel.id,
+            Buffer.from(channel.name, "utf8"),
             channel.title,
             channel.state,
-            channel.creatorKind,
-            channel.creatorId,
             channel.createdAt,
-            channel.closedAt ?? channel.createdAt,
             channel.closedAt,
-            channel.closedByParticipantId,
-            channel.closedByKind,
           );
         }
-        const handleByParticipant = new Map<string, string>();
         for (const channel of channelsData) {
           for (const participant of channel.participants) {
             db.prepare(
-              `INSERT INTO channel_participants (id, channel_id, role, handle, native_provenance_json, active, registered_at, deactivated_at)
-               VALUES (?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?)`,
+              `INSERT INTO channel_participants (channel_id, handle, role, added_at, removed_at)
+               VALUES (?, CAST(? AS TEXT), ?, ?, ?)`,
             ).run(
-              participant.id,
               channel.id,
-              participant.role,
               Buffer.from(participant.handle, "utf8"),
-              JSON.stringify(participant.nativeProvenance),
-              participant.active ? 1 : 0,
-              participant.registeredAt,
-              participant.deactivatedAt,
-            );
-            handleByParticipant.set(participant.id, participant.handle);
-          }
-          for (const assignment of channel.assignments) {
-            db.prepare(
-              `INSERT INTO channel_assignments (id, channel_id, participant_id, label, state, created_at, closed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            ).run(
-              assignment.id,
-              channel.id,
-              assignment.participantId,
-              assignment.label,
-              assignment.state,
-              assignment.createdAt,
-              assignment.closedAt,
+              participant.role,
+              participant.addedAt,
+              participant.removedAt,
             );
           }
           for (const message of channel.messages) {
@@ -1748,7 +1707,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               // The file-backed form: the pre-transaction placement already
               // placed the carried bytes at a fresh managed key and verified
               // their size and digest; the SQL transaction inserts only rows.
-              const placed = placedChannelByMessage.get(message.id);
+              const placed = placedChannelByMessage.get(`${channel.id}:${String(message.seq)}`);
               if (placed === undefined) throw new Error("A Channel message lost its prepared content placement");
               contentRecordId = placed.recordId;
               db.prepare(
@@ -1756,33 +1715,21 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
                  VALUES (?, NULL, ?, ?, ?, 1, ?)`,
               ).run(placed.recordId, placed.storageKey, placed.sizeBytes, placed.sha256, message.createdAt);
             }
-            const senderHandle = handleByParticipant.get(message.senderParticipantId) ?? "";
-            const processingRowVersion = message.handled ? 2 : 1;
             db.prepare(
-              `INSERT INTO channel_messages (id, channel_id, sender_participant_id, sender_handle, kind, content_record_id,
-                 assignment_id, assignment_late, relay_to_participant_id, context_session, context_node, context_attempt,
-                 handled, handled_at, handled_by_participant_id, handled_by_kind, handle_note, processing_row_version, created_at)
-               VALUES (?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?, ?, CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT),
-                 ?, ?, ?, ?, CAST(? AS TEXT), ?, ?)`,
+              `INSERT INTO channel_messages (channel_id, seq, sender_handle, kind, to_handle, ref, content_record_id,
+                 handled, handled_at, handle_note, created_at)
+               VALUES (?, ?, CAST(? AS TEXT), ?, CAST(? AS TEXT), CAST(? AS TEXT), ?, ?, ?, CAST(? AS TEXT), ?)`,
             ).run(
-              message.id,
               channel.id,
-              message.senderParticipantId,
-              Buffer.from(senderHandle, "utf8"),
+              message.seq,
+              Buffer.from(message.senderHandle, "utf8"),
               message.kind,
+              message.toHandle === null ? null : Buffer.from(message.toHandle, "utf8"),
+              message.ref === null ? null : Buffer.from(message.ref, "utf8"),
               contentRecordId,
-              message.assignmentId,
-              message.assignmentLate ? 1 : 0,
-              message.relayToParticipantId,
-              message.contextSession === null ? null : Buffer.from(message.contextSession, "utf8"),
-              message.contextNode === null ? null : Buffer.from(message.contextNode, "utf8"),
-              message.contextAttempt === null ? null : Buffer.from(message.contextAttempt, "utf8"),
               message.handled ? 1 : 0,
               message.handledAt,
-              message.handledByParticipantId,
-              message.handledByKind,
               message.handleNote === null ? null : Buffer.from(message.handleNote, "utf8"),
-              processingRowVersion,
               message.createdAt,
             );
           }

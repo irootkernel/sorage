@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 
 const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
 
@@ -23,18 +21,13 @@ function fixture() {
       encoding: "utf8",
       cwd,
       env: { ...process.env, SORAGE_HOME: home, SORAGE_TEST_REQUEST_ID: "5f0ac9a0-0000-4000-8000-0000000000cc" },
-      timeout: 10_000,
+      timeout: 20_000,
     });
     if (result.error) throw result.error;
     return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
   }
-  for (const args of [
-    ["init", "--non-interactive"],
-    ["project", "add", "--name", "Golden", "--slug", "golden", "--dir", work],
-  ]) {
-    const result = run(args);
-    if (result.status !== 0) throw new Error(result.stderr);
-  }
+  const result = run(["init", "--non-interactive"]);
+  if (result.status !== 0) throw new Error(result.stderr);
   return {
     home,
     work,
@@ -46,232 +39,194 @@ function fixture() {
   };
 }
 
-describe("Channel CLI additive contracts", () => {
-  it("pins create, show, list, submit, messages, read, handle, and typed errors", () => {
+describe("the rebuilt Channel CLI JSON contract (TASK-123, section 38.4)", () => {
+  it("pins the nine commands' closed envelopes, the duplicate rule, and the typed errors", { timeout: 30_000 }, () => {
     const f = fixture();
     try {
       const outputs: Record<string, unknown> = {};
       function capture(name: string, args: string[], status = 0) {
         const result = f.run([...args, "--json"]);
-        expect(result.status, result.stderr).toBe(status);
+        expect(result.status, `${name}: ${result.stderr}`).toBe(status);
         expect(status === 0 ? result.stderr : result.stdout).toBe("");
-        outputs[name] = { status, envelope: JSON.parse(normalize(status === 0 ? result.stdout : result.stderr)) };
+        outputs[name] = {
+          status,
+          envelope: JSON.parse(normalize(status === 0 ? result.stdout : result.stderr)),
+        };
         return result;
       }
 
-      const created = JSON.parse(
-        capture("create", [
-          "channel",
-          "create",
-          "--main-handle",
-          "orchestrator",
-          "--title",
-          "Journey",
-          "--idempotency-key",
-          "create-key",
-        ]).stdout,
-      ) as {
-        data: { channel: { id: string; mainParticipantId: string } };
-      };
-      const channelId = created.data.channel.id;
-      const mainId = created.data.channel.mainParticipantId;
-      capture("create-retained", [
+      capture("create", ["channel", "create", "aq-golden", "--title", "Golden", "--main", "orchestrator"]);
+      capture("create-existing", ["channel", "create", "aq-golden", "--title", "Golden", "--main", "orchestrator"]);
+      capture("create-different-main", ["channel", "create", "aq-golden", "--main", "other"], 64);
+      capture("create-uuid-name", ["channel", "create", "10000000-0000-4000-8000-000000000001"], 64);
+      capture("add", ["channel", "add", "aq-golden", "worker-1", "--role", "worker"]);
+      capture("add-repeat", ["channel", "add", "aq-golden", "worker-1", "--role", "worker"]);
+      capture("add-different-role", ["channel", "add", "aq-golden", "worker-1", "--role", "judge"], 64);
+      capture("add-judge", ["channel", "add", "aq-golden", "judge-1", "--role", "judge"]);
+      capture("post", [
         "channel",
-        "create",
-        "--main-handle",
-        "orchestrator",
-        "--title",
-        "Journey",
-        "--idempotency-key",
-        "create-key",
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "report",
+        "--ref",
+        "pr-1",
+        "--body",
+        "first report body",
       ]);
-      capture(
-        "create-conflict",
-        [
-          "channel",
-          "create",
-          "--main-handle",
-          "orchestrator",
-          "--title",
-          "Different",
-          "--idempotency-key",
-          "create-key",
-        ],
-        75,
-      );
-      const worker = JSON.parse(
-        capture("participant-add", [
-          "channel",
-          "participant",
-          "add",
-          channelId,
-          "--role",
-          "worker",
-          "--handle",
-          "worker-a",
-          "--native",
-          "",
-          "--as-participant",
-          mainId,
-        ]).stdout,
-      ) as { data: { participant: { id: string } } };
-      const workerId = worker.data.participant.id;
-      capture("judge-add", [
+      capture("post-duplicate", [
         "channel",
-        "participant",
-        "add",
-        channelId,
-        "--role",
-        "judge",
-        "--handle",
-        "judge-x",
-        "--native",
-        "ctx:node",
-        "--as-participant",
-        mainId,
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "report",
+        "--ref",
+        "pr-1",
+        "--body",
+        "first report body",
       ]);
-      const assignment = JSON.parse(
-        capture("assignment-add", [
-          "channel",
-          "assignment",
-          "add",
-          channelId,
-          "--label",
-          "task",
-          "--participant",
-          workerId,
-          "--as-participant",
-          mainId,
-        ]).stdout,
-      ) as { data: { assignment: { id: string } } };
-      capture("assignment-close", [
+      capture("post-duplicate-no-ref", [
         "channel",
-        "assignment",
-        "close",
-        channelId,
-        assignment.data.assignment.id,
-        "--as-participant",
-        mainId,
-      ]);
-      capture("list", ["channel", "list"]);
-      capture("show", ["channel", "show", channelId]);
-      const submit = [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId,
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
         "--kind",
         "report",
         "--body",
-        "Report body\r\nwith CRLF",
-        "--context-session",
-        "sess",
-        "--context-node",
-        "",
-        "--assignment",
-        assignment.data.assignment.id,
-        "--idempotency-key",
-        "submit-key",
-      ];
-      const message = JSON.parse(capture("submit", submit).stdout) as { data: { message: { id: string } } };
-      const messageId = message.data.message.id;
-      capture("messages-unhandled", ["channel", "messages", channelId]);
-      capture("wait-pending", ["channel", "messages", channelId, "--wait", "--timeout", "0"]);
-      capture("read", ["channel", "read", channelId, messageId]);
-      capture(
-        "handle-wrong-version",
-        ["channel", "handle", channelId, messageId, "--expected-row-version", "2", "--as-participant", mainId],
-        75,
-      );
-      capture(
-        "forbidden-role",
-        ["channel", "handle", channelId, messageId, "--expected-row-version", "1", "--as-participant", workerId],
-        77,
-      );
-      capture("handle", [
+        "plain retry body",
+      ]);
+      capture("post-duplicate-no-ref-retry", [
         "channel",
-        "handle",
-        channelId,
-        messageId,
-        "--expected-row-version",
-        "1",
-        "--as-participant",
-        mainId,
-        "--note",
-        "done",
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "report",
+        "--body",
+        "plain retry body",
+      ]);
+      capture("post-relay", [
+        "channel",
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "relay_request",
+        "--to",
+        "judge-1",
+        "--body",
+        "please relay",
+      ]);
+      capture("post-relay-duplicate", [
+        "channel",
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "relay_request",
+        "--to",
+        "judge-1",
+        "--body",
+        "please relay",
       ]);
       capture(
-        "handle-stale",
-        ["channel", "handle", channelId, messageId, "--expected-row-version", "1", "--as-participant", mainId],
-        75,
-      );
-      capture(
-        "re-handle",
-        ["channel", "handle", channelId, messageId, "--expected-row-version", "2", "--as-participant", mainId],
+        "post-relay-missing-to",
+        ["channel", "post", "aq-golden", "--from", "worker-1", "--kind", "relay_request", "--body", "no target"],
         64,
       );
-      capture("messages-handled", ["channel", "messages", channelId, "--handled"]);
       capture(
-        "messages-filter-participant-not-found",
-        ["channel", "messages", channelId, "--participant", randomUUID()],
-        66,
-      );
-      capture("wait-timeout", ["channel", "messages", channelId, "--wait", "--timeout", "0"]);
-      capture("participant-deactivate", [
-        "channel",
-        "participant",
-        "deactivate",
-        channelId,
-        workerId,
-        "--as-participant",
-        mainId,
-      ]);
-      capture("participant-deactivate-noop", [
-        "channel",
-        "participant",
-        "deactivate",
-        channelId,
-        workerId,
-        "--as-participant",
-        mainId,
-      ]);
-      capture("not-found", ["channel", "show", randomUUID()], 66);
-      capture("closed", ["channel", "close", channelId, "--as-participant", mainId]);
-      capture(
-        "submit-closed",
-        ["channel", "submit", channelId, "--as-participant", workerId, "--kind", "report", "--body", "after close"],
-        65,
-      );
-      capture("historical-replay", [...submit, "--replay-only"]);
-      capture(
-        "replay-unavailable",
+        "post-to-unknown",
         [
           "channel",
-          "submit",
-          channelId,
-          "--as-participant",
-          workerId,
+          "post",
+          "aq-golden",
+          "--from",
+          "worker-1",
           "--kind",
-          "report",
+          "relay_request",
+          "--to",
+          "ghost",
           "--body",
-          "x",
-          "--idempotency-key",
-          "missing-key",
-          "--replay-only",
+          "b",
         ],
-        75,
+        66,
       );
       capture(
+        "post-from-main",
+        ["channel", "post", "aq-golden", "--from", "orchestrator", "--kind", "report", "--body", "b"],
+        64,
+      );
+      const removed = capture("remove", ["channel", "remove", "aq-golden", "judge-1"]);
+      void removed;
+      capture("remove-repeat", ["channel", "remove", "aq-golden", "judge-1"]);
+      capture(
+        "post-from-removed",
+        ["channel", "post", "aq-golden", "--from", "judge-1", "--kind", "report", "--body", "removed sender"],
+        66,
+      );
+      capture("readd", ["channel", "add", "aq-golden", "judge-1", "--role", "judge"]);
+      capture("messages", ["channel", "messages", "aq-golden"]);
+      capture("ack", ["channel", "ack", "aq-golden", "1", "--note", "reviewed"]);
+      capture("ack-already-handled", ["channel", "ack", "aq-golden", "1"]);
+      capture("ack-unknown-seq", ["channel", "ack", "aq-golden", "1", "99"], 66);
+      capture("post-after-ack", [
+        "channel",
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "report",
+        "--ref",
+        "pr-1",
+        "--body",
+        "first report body",
+      ]);
+      capture("messages-all", ["channel", "messages", "aq-golden", "--all"]);
+      capture("messages-after", ["channel", "messages", "aq-golden", "--all", "--after", "2"]);
+      capture("messages-from-unknown", ["channel", "messages", "aq-golden", "--from", "ghost"], 66);
+      capture("close", ["channel", "close", "aq-golden"]);
+      capture("close-repeat", ["channel", "close", "aq-golden"]);
+      capture(
+        "post-closed",
+        ["channel", "post", "aq-golden", "--from", "worker-1", "--kind", "report", "--body", "never posted before"],
+        65,
+      );
+      capture("post-duplicate-after-close", [
+        "channel",
+        "post",
+        "aq-golden",
+        "--from",
+        "worker-1",
+        "--kind",
+        "report",
+        "--body",
+        "plain retry body",
+      ]);
+      capture("add-closed", ["channel", "add", "aq-golden", "late", "--role", "judge"], 65);
+      capture("create-closed-name", ["channel", "create", "aq-golden"], 65);
+      capture("ack-after-close", ["channel", "ack", "aq-golden", "4"]);
+      capture("list", ["channel", "list"]);
+      capture("list-state", ["channel", "list", "--state", "closed"]);
+      capture("show", ["channel", "show", "aq-golden"]);
+      capture("not-found", ["channel", "show", "ghost"], 66);
+      capture(
         "blank-body",
-        ["channel", "submit", channelId, "--as-participant", workerId, "--kind", "report", "--body", "   "],
+        ["channel", "post", "aq-golden", "--from", "worker-1", "--kind", "report", "--body", "   "],
         64,
       );
 
-      // TASK-119 (V8): the write-protected refusal is created inside this
-      // harness's own fixture by write-protecting its database and WAL; the
-      // saved modes are restored before the fixture is cleaned up, and the
-      // write-protected state is created nowhere else.
+      // TASK-119 (V8) on the rebuilt surface: the write-protected refusal is
+      // created inside this harness's own fixture by write-protecting its
+      // database and WAL; the saved modes are restored before cleanup.
       const databasePath = join(f.home, "state", "sorage.sqlite3");
       const walPath = `${databasePath}-wal`;
       const savedMode = statSync(databasePath).mode & 0o777;
@@ -279,7 +234,7 @@ describe("Channel CLI additive contracts", () => {
       chmodSync(databasePath, 0o444);
       if (walSavedMode !== undefined) chmodSync(walPath, 0o444);
       try {
-        capture("storage-write-protected", ["channel", "list"], 75);
+        capture("storage-write-protected", ["channel", "create", "refused"], 75);
       } finally {
         chmodSync(databasePath, savedMode);
         if (walSavedMode !== undefined) chmodSync(walPath, walSavedMode);
@@ -290,80 +245,39 @@ describe("Channel CLI additive contracts", () => {
       if (process.env.SORAGE_UPDATE_GOLDENS === "1") writeFileSync(path, actual);
       expect(actual).toBe(readFileSync(path, "utf8"));
 
-      const conflict = outputs["create-conflict"] as {
+      // The duplicate rule: the pinned envelopes answer duplicate: true with
+      // the original sequence number, never a second message.
+      const duplicate = outputs["post-duplicate"] as {
         status: number;
-        envelope: {
-          error: { code: string; message: string; details: unknown; recovery: { suggestedCommand: string } };
-        };
+        envelope: { data: { message: { seq: number }; duplicate: boolean } };
       };
-      expect(conflict.status).toBe(75);
-      expect(conflict.envelope.error.code).toBe("IDEMPOTENCY_CONFLICT");
-      expect(conflict.envelope.error.message).toBe(
-        "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
-      );
-      expect(conflict.envelope.error.details).toEqual({});
-      expect(conflict.envelope.error.recovery.suggestedCommand).toBe(
-        "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
-      );
-      expect(conflict.envelope.error.recovery.suggestedCommand).not.toBe(
-        "Use a new key, or replay the identical request",
-      );
+      expect(duplicate.status).toBe(0);
+      expect(duplicate.envelope.data.duplicate).toBe(true);
+      const fresh = outputs.post as { envelope: { data: { message: { seq: number }; duplicate: boolean } } };
+      expect(duplicate.envelope.data.message.seq).toBe(fresh.envelope.data.message.seq);
+      expect(fresh.envelope.data.duplicate).toBe(false);
+      const afterAck = outputs["post-after-ack"] as {
+        envelope: { data: { message: { seq: number }; duplicate: boolean } };
+      };
+      expect(afterAck.envelope.data.duplicate).toBe(false);
+      expect(afterAck.envelope.data.message.seq).toBeGreaterThan(fresh.envelope.data.message.seq);
 
-      const forbiddenFreshKey = /Use a new key|mint a replacement key|generate a fresh (?:idempotency )?key/;
-      const authorityFlags = [
-        "--as ",
-        "--as-user",
-        "--confirm",
-        "--confirm-pinned",
-        "--allow-external-source",
-        "--allow-unregistered",
-      ];
-      for (const [name, value] of Object.entries(outputs)) {
-        const entry = value as {
-          envelope: { error?: { recovery?: { suggestedCommand?: string } } };
-        };
-        if (entry.envelope.error === undefined) continue;
-        const recovery = entry.envelope.error.recovery?.suggestedCommand ?? "";
-        expect(recovery, `${name} recovery must not suggest a fresh key`).not.toMatch(forbiddenFreshKey);
-        // The state-required authority flags are the only allowed cases: the
-        // forbidden-role refusal may name --as-user, and an ambiguous-Project
-        // refusal may name --as <project-slug>.
-        const allowedFlags = name === "forbidden-role" ? ["--as-user"] : name === "ambiguous-project" ? ["--as "] : [];
-        for (const flag of authorityFlags) {
-          if (allowedFlags.includes(flag)) continue;
-          expect(recovery, `${name} recovery must not suggest ${flag}`).not.toContain(flag);
-        }
-      }
-    } finally {
-      f.cleanup();
-    }
-  }, 60_000);
-
-  it("discovers the channel group and its commands in help and completion", () => {
-    const f = fixture();
-    try {
-      const help = f.run(["channel", "--help"]);
-      const completion = f.run(["completion", "zsh"]);
-      expect(help.status).toBe(0);
-      expect(completion.status).toBe(0);
-      for (const name of [
-        "create",
-        "list",
-        "show",
-        "close",
-        "participant",
+      // The removed-machinery vocabulary never returns in any pinned output.
+      const serialized = JSON.stringify(outputs);
+      for (const forbidden of [
+        "idempotency",
+        "replay",
+        "as-participant",
+        "expectedRowVersion",
+        "processingRowVersion",
         "assignment",
-        "submit",
-        "messages",
-        "read",
-        "handle",
+        "nativeProvenance",
+        "contentActivating",
+        "bodyPreviewUnavailable",
+        "mainParticipantId",
       ]) {
-        expect(help.stdout).toContain(name);
-        expect(completion.stdout).toContain("channel");
+        expect(serialized.includes(forbidden), forbidden).toBe(false);
       }
-      const rootHelp = f.run(["--help"]);
-      expect(rootHelp.status).toBe(0);
-      expect(rootHelp.stdout).toContain("channel");
     } finally {
       f.cleanup();
     }

@@ -1,7 +1,7 @@
 import { chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   envelopeOf,
   errorEnvelopeOf,
@@ -29,19 +29,19 @@ afterEach(runCleanups);
 const WRITE_PROTECTED_CHANNEL_MESSAGE =
   "Channel storage is write-protected: the Sorage database cannot be written by this invocation, so this Channel command committed none of the changes it was asked to make.";
 const WRITE_PROTECTED_CHANNEL_RECOVERY =
-  "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access.";
+  "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make.";
 const WRITE_PROTECTED_HANDOFF_MESSAGE =
   "Handoff storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.";
 const WRITE_PROTECTED_HANDOFF_RECOVERY =
   "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.";
 
-/** One installation with retained keyed send and Channel receipts, then — by default — write-protected. */
+/** One installation with a retained keyed send and a committed Channel message, then — by default — write-protected. */
 function protectedInstallation(protect = true): {
   home: string;
   work: string;
   sendArgs: string[];
-  channelArgs: string[];
-  channelId: string;
+  channelName: string;
+  channelBody: string;
   databasePath: string;
 } {
   const home = makeTempDir("sorage-write-protected-home-");
@@ -53,29 +53,29 @@ function protectedInstallation(protect = true): {
     const run = sorage([...args, "--json"], { home, cwd: work });
     expect(run.status, run.stderr).toBe(0);
   }
-  const created = sorage(["channel", "create", "--main-handle", "orchestrator", "--as-user", "--json"], {
-    home,
-    cwd: work,
-  });
-  expect(created.status, created.stderr).toBe(0);
-  const channel = envelopeOf(created).data as { channel: { id: string; mainParticipantId: string } };
-  const body = "original body";
-  const sendArgs = ["send", "--to", "alpha", "--title", "Original", "--body", body, "--idempotency-key", "send-key"];
+  const channelName = "aq-wp";
+  for (const args of [
+    ["channel", "create", channelName, "--main", "orchestrator"],
+    ["channel", "add", channelName, "worker-1", "--role", "worker"],
+  ]) {
+    const run = sorage([...args, "--json"], { home, cwd: work });
+    expect(run.status, run.stderr).toBe(0);
+  }
+  const channelBody = "channel committed body";
+  const sendArgs = [
+    "send",
+    "--to",
+    "alpha",
+    "--title",
+    "Original",
+    "--body",
+    "original body",
+    "--idempotency-key",
+    "send-key",
+  ];
   const sent = sorage([...sendArgs, "--json"], { home, cwd: work });
   expect(sent.status, sent.stderr).toBe(0);
-  const channelArgs = [
-    "channel",
-    "submit",
-    channel.channel.id,
-    "--as-participant",
-    channel.channel.mainParticipantId,
-    "--kind",
-    "report",
-    "--body",
-    "channel body",
-    "--idempotency-key",
-    "channel-key",
-  ];
+  const channelArgs = ["channel", "post", channelName, "--from", "worker-1", "--kind", "report", "--body", channelBody];
   const submitted = sorage([...channelArgs, "--json"], { home, cwd: work });
   expect(submitted.status, submitted.stderr).toBe(0);
   const databasePath = join(home, "state", "sorage.sqlite3");
@@ -90,7 +90,7 @@ function protectedInstallation(protect = true): {
       for (const [path, mode] of savedModes) chmodSync(path, mode);
     });
   }
-  return { home, work, sendArgs, channelArgs, channelId: channel.channel.id, databasePath };
+  return { home, work, sendArgs, channelName, channelBody, databasePath };
 }
 
 describe("a write-protected installation (TASK-119)", () => {
@@ -106,14 +106,18 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(sendReplay.status, sendReplay.stderr).toBe(0);
     expect((envelopeOf(sendReplay).data as { replayed: boolean }).replayed).toBe(true);
 
-    const channelReplay = sorage([...f.channelArgs, "--replay-only", "--json"], { home: f.home, cwd: f.work });
-    expect(channelReplay.status, channelReplay.stderr).toBe(0);
-    const replayed = envelopeOf(channelReplay).data as { replayed: boolean; message: { bodyPreview: string } };
-    expect(replayed.replayed).toBe(true);
-    expect(replayed.message.bodyPreview).toContain("channel body");
+    // The covered zero-write Channel reads succeed on the write-protected
+    // installation with their normal output and write nothing (SHR-015's
+    // EPIC-018 amendment; channel list moves to the success group).
+    const channelList = sorage(["channel", "list", "--json"], { home: f.home, cwd: f.work });
+    expect(channelList.status, channelList.stderr).toBe(0);
+    expect((envelopeOf(channelList).data as { items: unknown[] }).items).toHaveLength(1);
+    const channelMessages = sorage(["channel", "messages", f.channelName, "--json"], { home: f.home, cwd: f.work });
+    expect(channelMessages.status, channelMessages.stderr).toBe(0);
+    expect((envelopeOf(channelMessages).data as { items: Array<{ body: string }> }).items[0]?.body).toContain(
+      f.channelBody,
+    );
 
-    // A covered zero-write read succeeds on the write-protected installation
-    // with its normal output and writes nothing (SHR-015's EPIC-018 amendment).
     const projectRead = sorage(["project", "list", "--json"], { home: f.home, cwd: f.work });
     expect(projectRead.status, projectRead.stderr).toBe(0);
     const projects = envelopeOf(projectRead).data as Array<{ slug: string }>;
@@ -125,10 +129,10 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(storageProof(f.home)).toEqual(before);
   });
 
-  it("refuses Channel and Handoff operational commands with the typed write-protected envelope", () => {
+  it("refuses Channel mutations and Handoff sends with the typed write-protected envelope", () => {
     const f = protectedInstallation();
-
-    const channel = sorage(["channel", "list", "--json"], { home: f.home, cwd: f.work });
+    void f;
+    const channel = sorage(["channel", "create", "refused", "--json"], { home: f.home, cwd: f.work });
     expect(channel.status).toBe(75);
     expect(channel.stdout).toBe("");
     const channelEnvelope = JSON.parse(channel.stderr) as {
@@ -144,11 +148,12 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(channelEnvelope.error.details.storageContention).toBe(true);
     expect(channelEnvelope.error.recovery.suggestedCommand).toBe(WRITE_PROTECTED_CHANNEL_RECOVERY);
 
-    const human = sorage(["channel", "list"], { home: f.home, cwd: f.work });
-    expect(human.status).toBe(75);
-    expect(human.stderr).toBe(
-      `STORAGE_INSPECTION_UNAVAILABLE: ${WRITE_PROTECTED_CHANNEL_MESSAGE}\nRecovery: ${WRITE_PROTECTED_CHANNEL_RECOVERY}\n`,
+    const post = sorage(
+      ["channel", "post", f.channelName, "--from", "worker-1", "--kind", "report", "--body", "second", "--json"],
+      { home: f.home, cwd: f.work },
     );
+    expect(post.status).toBe(75);
+    expect((JSON.parse(post.stderr) as { error: { code: string } }).error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
 
     const send = sorage(["send", "--to", "alpha", "--title", "Second", "--body", "b2", "--json"], {
       home: f.home,
@@ -178,9 +183,13 @@ describe("a write-protected installation (TASK-119)", () => {
     const holder = new DatabaseSync(f.databasePath);
     registerCleanup(() => holder.close());
     holder.exec("BEGIN IMMEDIATE");
-    const run = sorage(["channel", "list", "--json"], { home: f.home, cwd: f.work });
-    expect(run.status).toBe(75);
-    const refusal = errorEnvelopeOf(run);
+    // The covered Channel read proceeds while another process holds the write
+    // lock (RDR-002); the mutation refuses with the contention wording.
+    const listed = sorage(["channel", "list", "--json"], { home: f.home, cwd: f.work });
+    expect(listed.status, listed.stderr).toBe(0);
+    const created = sorage(["channel", "create", "contended", "--json"], { home: f.home, cwd: f.work });
+    expect(created.status).toBe(75);
+    const refusal = errorEnvelopeOf(created);
     expect(refusal.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(refusal.error.message).toContain("Channel storage is contended");
     expect(refusal.error.message).not.toContain("write-protected");

@@ -1,56 +1,55 @@
-import { DatabaseSync } from "node:sqlite";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import { homedir } from "node:os";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as sqliteConnections from "../../src/sqlite/connection";
+import { DatabaseSync } from "node:sqlite";
 import {
-  MigrationConnectionError,
-  MigrationFailedError,
-  MigrationIntegrityError,
-  SchemaAdmissionError,
-  openAndMigrate,
-} from "../../src/sqlite/migrator";
-import {
-  appError,
   type AppError,
+  addParticipant,
+  addProject,
+  appError,
   approveDeletion,
   archiveProject,
+  type ChannelCommandPorts,
   createChannel,
   declineHandoff,
-  err,
   fetchHandoff,
   initializeInstallation,
-  addProject,
   listChannelMessages,
+  postMessage,
   renameProject,
   requestDeletion,
   resolveCommandActor,
   resolveMemoProject,
   sendHandoffs,
   setReviewNote,
-  submitMessage,
-  handleChannelMessage,
   USER_ACTOR,
 } from "@sorage/core";
-import { createNodeInitPorts } from "../../src/init-ports";
-import { createNodeProjectPorts } from "../../src/project-command-ports";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureChannelBodyText, channelStorageError, createNodeChannelPorts } from "../../src/channels";
 import {
-  createNodeSendPorts,
-  createNodeReviewPorts,
-  createNodeRetentionPorts,
-  createNodeTerminalPorts,
   createNodeHandoffReadPorts,
+  createNodeRetentionPorts,
+  createNodeReviewPorts,
+  createNodeSendPorts,
+  createNodeTerminalPorts,
 } from "../../src/handoff-command-ports";
-import { createNodeChannelPorts, captureChannelBodyText, channelStorageError } from "../../src/channels";
+import { createNodeInitPorts } from "../../src/init-ports";
 import { createNodeMemoPorts, memoStorageError } from "../../src/memo-command-ports";
-import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
-import { storageContentionOf, AppCommandError, asAppCommandError } from "../../src/storage-contention";
-import { openSorageDatabase, openSorageInspectionCopy } from "../../src/sqlite/connection";
+import { createNodeProjectPorts } from "../../src/project-command-ports";
 import type { SorageSqlite } from "../../src/sqlite/connection";
+import * as sqliteConnections from "../../src/sqlite/connection";
+import { openSorageDatabase, openSorageInspectionCopy } from "../../src/sqlite/connection";
 import { productionMigrationPlan } from "../../src/sqlite/migrations";
+import {
+  MigrationConnectionError,
+  MigrationFailedError,
+  MigrationIntegrityError,
+  openAndMigrate,
+  SchemaAdmissionError,
+} from "../../src/sqlite/migrator";
+import { AppCommandError, asAppCommandError, storageContentionOf } from "../../src/storage-contention";
+import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 
 /**
  * The SHR-015 storage-preparation contention contract at the adapter boundary:
@@ -64,7 +63,13 @@ import { productionMigrationPlan } from "../../src/sqlite/migrations";
  */
 
 /** An inline accepted body with honest size and digest. */
-function textAccepted(text: string): { kind: "text"; text: string; sizeBytes: number; sha256: string } {
+function unwrapOk<T>(result: { ok: boolean; value?: T; error?: { code: string; message: string } }): T {
+  if (!result.ok || result.value === undefined)
+    throw new Error(`${String(result.error?.code)}: ${String(result.error?.message)}`);
+  return result.value;
+}
+
+function _textAccepted(text: string): { kind: "text"; text: string; sizeBytes: number; sha256: string } {
   return {
     kind: "text",
     text,
@@ -231,7 +236,7 @@ describe("the shared classifier", () => {
       expect(byCode?.message).toContain("committed none of the changes it was asked to make");
       expect(byCode?.recovery?.suggestedCommand).toBe(
         surface === "channel"
-          ? "Retry the same channel command with its original mode, input, and idempotency key when storage is quieter; a replay-only retry stays replay-only, and after an unknown submission outcome inspect with --replay-only first."
+          ? "Retry the same channel command when storage is quieter; it committed none of the changes it was asked to make."
           : surface === "handoff"
             ? "Retry the same command with its original mode, input, and idempotency key when storage is quieter; after an unknown send outcome inspect with sorage send --replay-only first."
             : "Retry the same command when storage is quieter; it committed none of the changes it was asked to make.",
@@ -266,7 +271,7 @@ describe("the shared classifier", () => {
       );
       expect(byCode?.recovery?.suggestedCommand).toBe(
         surface === "channel"
-          ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access."
+          ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make."
           : surface === "handoff"
             ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access."
             : "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.",
@@ -484,105 +489,66 @@ describe("the surfaced Project composition", () => {
 });
 
 describe("the surfaced Channel composition", () => {
-  it("refuses a domain mutation with the Channel refusal and committed nothing (real held lock)", () => {
+  it("refuses a domain mutation with the Channel refusal, committing no rows and no events (real held lock)", () => {
     const ports = createNodeChannelPorts({ database: quickDb() });
     const lock = holdWriteLock();
     const before = rowCount(independentConnection, "SELECT COUNT(*) AS n FROM channels");
-    const created = createChannel(ports, { creator: USER_ACTOR, mainHandle: "orchestrator", title: undefined });
+    const eventsBefore = rowCount(independentConnection, "SELECT COUNT(*) AS n FROM events");
+    const created = createChannel(ports, { name: "contended" });
     expect(created.ok).toBe(false);
     expect(errorOf(created).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(errorOf(created).message).toContain("Channel storage is contended");
-    expect(errorOf(created).recovery?.suggestedCommand).toContain("a replay-only retry stays replay-only");
-    expect(rowCount(independentConnection, "SELECT COUNT(*) AS n FROM channels")).toBe(before);
-    lock.release();
-    const retry = createChannel(ports, { creator: USER_ACTOR, mainHandle: "orchestrator", title: undefined });
-    expect(retry.ok).toBe(true);
-  });
-
-  it("stamps the Channel wording on a refusal raised in the shared Project repository during actor resolution (V11, W1)", () => {
-    const ports = createNodeChannelPorts({ database: withBusyStatement(quickDb(), "FROM projects WHERE slug =") });
-    const resolved = resolveCommandActor(ports.projectPorts, {
-      path: work,
-      userHome: homedir(),
-      as: "nope",
-      asUser: false,
-    });
-    expect(resolved.ok).toBe(false);
-    expect(errorOf(resolved).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-    expect(errorOf(resolved).message).toContain("Channel storage is contended");
-    expect(errorOf(resolved).message).toContain(
-      "this Channel command committed none of the changes it was asked to make",
+    expect(errorOf(created).recovery?.suggestedCommand).toBe(
+      "Retry the same channel command when storage is quieter; it committed none of the changes it was asked to make.",
     );
+    expect(rowCount(independentConnection, "SELECT COUNT(*) AS n FROM channels")).toBe(before);
+    // The refusal appended no event either: the ledger is byte-count identical
+    // through the refused mutation (decision item 13).
+    expect(rowCount(independentConnection, "SELECT COUNT(*) AS n FROM events")).toBe(eventsBefore);
+    lock.release();
+    const retry = createChannel(ports, { name: "contended" });
+    expect(retry.ok, JSON.stringify(retry)).toBe(true);
   });
 
-  it("drives the real coherence-exhaustion path and keeps its own text, never the contention stamp (V1)", () => {
-    // The mechanism reuses the established churn pattern: a concurrent commit
-    // lands between the page's external-version capture and its re-check, and
-    // repeating it past the bounded budget exhausts coherence (listExhausted).
-    const ports = createNodeChannelPorts({ database: quickDb() });
-    const other = createNodeChannelPorts({ database: quickDb() });
-    try {
-      const created = createChannel(ports, { creator: USER_ACTOR, mainHandle: "orchestrator", title: undefined });
-      expect(created.ok).toBe(true);
-      if (!created.ok) return;
-      const submitted = submitMessage(ports, {
-        channelId: created.value.channel.id,
-        senderParticipantId: created.value.channel.mainParticipantId,
-        kind: "report",
-        accepted: textAccepted("coherent body"),
-        actor: USER_ACTOR,
-      });
-      expect(submitted.ok).toBe(true);
-      const read = ports.bodies.readRecordPreviewSeed;
-      ports.bodies.readRecordPreviewSeed = (ref, binding) => {
-        const result = read(ref, binding);
-        void createChannel(other, { creator: { kind: "user", id: null }, mainHandle: "churn", title: null });
-        return result;
-      };
-      const refused = listChannelMessages(ports, created.value.channel.id, { handling: "all" });
-      expect(refused.ok).toBe(false);
-      const coherence = errorOf(refused);
-      expect(coherence.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-      expect(coherence.message).toBe(
-        "A coherent Channel list page could not be assembled because the database kept changing; no page was emitted",
-      );
-      expect(coherence.recovery?.suggestedCommand).toBe("Retry the Channel list; no partial page was emitted");
-      expect(coherence.details?.storageContention).toBeUndefined();
-      // The shared classifier never captures the coherence refusal.
-      expect(storageContentionOf(coherence, "channel")).toBeNull();
-    } finally {
-      ports.close();
-      other.close();
+  it("stamps the Channel wording on a refusal raised while the composition opens its own storage (V11, W1)", () => {
+    // The rebuilt Channel composition resolves no working-directory Project
+    // (CHN-013), so the shared-seam wording is pinned at the ports' own
+    // storage work: a busy schema-history statement surfaces through the
+    // composition's construction with the Channel wording.
+    const base = quickDb();
+    const guarded = withBusyStatement(base, "FROM channels WHERE name");
+    const ports = createNodeChannelPorts({ database: guarded });
+    const refused = listChannelMessages(ports, { channelRef: "missing" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(refused.error.message).toContain("Channel storage is contended");
     }
   });
 
-  it("returns the committed Channel outcomes on the real post-commit failure paths", () => {
+  it("returns the committed post outcome with bodyPending and a warning when the activation pauses behind a live move lock (CHN-012)", () => {
     const ports = createNodeChannelPorts({ database: quickDb() });
     try {
-      const created = createChannel(ports, { creator: USER_ACTOR, mainHandle: "orchestrator", title: undefined });
-      expect(created.ok).toBe(true);
+      const created = createChannel(ports, { name: "pause" });
+      expect(created.ok, JSON.stringify(created)).toBe(true);
       if (!created.ok) return;
-      const channelId = created.value.channel.id;
-      const mainId = created.value.channel.mainParticipantId;
+      unwrapOk(addParticipant(ports, { channelRef: "pause", handle: "w1", role: "worker" }));
       const warnings: string[] = [];
-      const disclosures = ports.disclosures;
-      if (disclosures === undefined) throw new Error("expected the Channel disclosures seam");
-      ports.disclosures = { ...disclosures, completionWarning: (text) => warnings.push(text) };
+      (ports as { disclosures?: ChannelCommandPorts["disclosures"] }).disclosures = {
+        backupEnabled: false,
+        thresholdBytes: 1,
+        largeContent: () => {},
+        completionWarning: (text) => warnings.push(text),
+      };
 
-      // A committed submit whose file-backed activation pauses behind a live
-      // move lock returns its committed outcome with `contentActivating` and a
-      // contained warning, never the interim CONTENT_MATERIALIZING failure.
       mkdirSync(join(home, "run"), { recursive: true });
       const lockPath = join(home, "run", "vault-move.lock");
-      const placeLock = () => {
+      const activate = ports.staging.activateContent;
+      ports.staging.activateContent = (input, binding) => {
         writeFileSync(
           lockPath,
           JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), hostname: "test" }),
         );
-      };
-      const activate = ports.staging.activateContent;
-      ports.staging.activateContent = (input, binding) => {
-        placeLock();
         return activate(input, binding);
       };
       const largeText = "vault body\n".repeat(7000);
@@ -593,61 +559,17 @@ describe("the surfaced Channel composition", () => {
       });
       expect(captured.ok).toBe(true);
       if (!captured.ok) return;
-      const paused = submitMessage(ports, {
-        channelId,
-        senderParticipantId: mainId,
-        kind: "report",
-        accepted: captured.value,
-        actor: USER_ACTOR,
-      });
-      expect(paused.ok).toBe(true);
+      const paused = postMessage(ports, { channelRef: "pause", from: "w1", kind: "report", accepted: captured.value });
+      expect(paused.ok, JSON.stringify(paused)).toBe(true);
       if (!paused.ok) return;
-      expect(paused.value.contentActivating).toBe(true);
-      expect(warnings).toEqual([
-        "the Channel message committed but its content activation paused behind a held Vault-move lock; the pending intent remains for the next process start",
-      ]);
-      const pausedSummary = paused.value.message;
-      expect(pausedSummary.bodyBytes).toBeGreaterThan(65_536);
+      expect(paused.value.duplicate).toBe(false);
+      expect(paused.value.message.bodyPending).toBe(true);
+      expect(paused.value.message.body).toBeNull();
+      expect(warnings.length).toBeGreaterThan(0);
       rmSync(lockPath, { force: true });
       ports.staging.activateContent = activate;
-
-      // A committed handle whose post-commit preview read fails returns its
-      // committed decision with the explicit unavailable-preview indicator and
-      // never becomes the contention refusal.
-      const submitted = submitMessage(ports, {
-        channelId,
-        senderParticipantId: mainId,
-        kind: "report",
-        accepted: textAccepted("preview body"),
-        actor: USER_ACTOR,
-      });
-      expect(submitted.ok).toBe(true);
-      if (!submitted.ok) return;
-      ports.bodies.readRecordPreviewSeed = () => err(appError("INTERNAL_ERROR", "injected preview failure"));
-      const handled = handleChannelMessage(ports, {
-        channelId,
-        messageId: submitted.value.message.id,
-        assertion: { actor: USER_ACTOR, asParticipant: mainId },
-        expectedRowVersion: 1,
-      });
-      expect(handled.ok).toBe(true);
-      if (handled.ok) {
-        expect(handled.value.bodyPreviewUnavailable).toBe(true);
-        expect(handled.value.message.bodyPreview).toBe("");
-        expect(handled.value.message.handled).toBe(true);
-      }
-      // The decision itself committed: the message is handled in the database.
-      const count = independentConnection();
-      try {
-        const row = count
-          .prepare("SELECT handled FROM channel_messages WHERE id = ?")
-          .get(submitted.value.message.id) as {
-          handled: number;
-        };
-        expect(row.handled).toBe(1);
-      } finally {
-        count.close();
-      }
+      const page = listChannelMessages(ports, { channelRef: "pause" });
+      expect(page.ok, JSON.stringify(page)).toBe(true);
     } finally {
       ports.close();
     }
@@ -1113,7 +1035,7 @@ describe("the Channel domain transaction under a failing COMMIT (R2)", () => {
     const base = quickDb();
     const ports = createNodeChannelPorts({ database: withCommitFailure(base) });
     const before = snapshot(["channels", "channel_participants", "events", "idempotency_keys"]);
-    const created = createChannel(ports, { creator: USER_ACTOR, mainHandle: "orchestrator", title: undefined });
+    const created = createChannel(ports, { name: "failing-commit" });
     expect(created.ok).toBe(false);
     expect(errorOf(created).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(errorOf(created).message).toContain("Channel storage is contended");
@@ -1256,7 +1178,10 @@ describe("a write-protected installation (TASK-119)", () => {
     const channelRefusal = asAppCommandError(channelFailure)?.error ?? channelStorageError(channelFailure);
     expect(channelRefusal.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(channelRefusal.message).toContain("Channel storage is write-protected");
-    expect(channelRefusal.recovery?.suggestedCommand).toContain("runs without write access");
+    expect(channelRefusal.recovery?.suggestedCommand).toContain(
+      "After write access to the Sorage home and Vault is restored",
+    );
+    expect(channelRefusal.recovery?.suggestedCommand).not.toContain("replay-only");
   });
 
   it("succeeds again once write access is restored, proving the protection caused the refusals (design c)", () => {

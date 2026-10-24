@@ -1,22 +1,24 @@
-import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { BINARY, makeTempDir, runCleanups, sorage, envelopeOf, errorEnvelopeOf } from "./helpers";
+import { BINARY, envelopeOf, errorEnvelopeOf, makeTempDir, registerCleanup, runCleanups, sorage } from "./helpers";
 
 afterEach(runCleanups);
 
 /**
- * AJ-28: Channel lifecycle and main-side processing, all 8 steps of
- * docs/specs/testing-and-acceptance.md, driven through the compiled binary in
- * an isolated installation. The journey covers creation, registration,
- * assignments, submissions across the inline threshold with exact bytes,
- * pending-inclusive waiting, handling with conflict control, replay-only
- * recovery, closure, cross-Channel confidentiality, and the event catalog.
+ * AJ-28: the rebuilt Channel lifecycle and handling, driven through the
+ * compiled binary in an isolated installation (TASK-123 delivery; TASK-126
+ * requalifies the assembled journey). The seven steps of the rewritten
+ * testing-and-acceptance row: the five-step loop with idempotent repeats,
+ * attributed posts across the inline threshold with exact bytes, the
+ * duplicate-by-content rule including retry-after-close and
+ * new-message-after-ack, reads and waits under the write-denying sandbox,
+ * all-or-nothing ack semantics, format-3 retention, and the closed six-event
+ * catalog.
  */
-describe("AJ-28: Channel lifecycle and main-side processing", () => {
+describe("AJ-28: rebuilt Channel lifecycle and handling", () => {
   function fixture() {
     const home = makeTempDir("aj28-home-");
     const init = sorage(["init", "--non-interactive"], { home });
@@ -40,16 +42,15 @@ describe("AJ-28: Channel lifecycle and main-side processing", () => {
       // Interface 38.4 closes the operation's data wrapper independently of
       // the fields of its contained view. Never infer it from actual output.
       const keys: Record<string, string[]> = {
-        create: ["channel"],
-        show: ["channel"],
+        create: ["channel", "existing"],
+        add: ["participant"],
+        remove: ["participant"],
+        post: ["duplicate", "message"],
+        ack: ["alreadyHandled", "handled", "note"],
         close: ["channel"],
-        participant: ["participant"],
-        assignment: ["assignment"],
-        read: ["message"],
-        handle: ["bodyPreviewUnavailable", "message"],
-        submit: ["contentActivating", "message", "replayed"],
-        list: ["items", "nextCursor"],
-        messages: ["items", "nextCursor"],
+        list: ["items"],
+        show: ["channel"],
+        messages: ["items"],
       };
       expect(Object.keys(value as object).sort()).toEqual(keys[args[1] as string]);
     }
@@ -62,1025 +63,442 @@ describe("AJ-28: Channel lifecycle and main-side processing", () => {
     return errorEnvelopeOf(result);
   }
 
-  interface ChannelView {
-    id: string;
-    title: string | null;
-    state: string;
-    creatorKind: string;
-    mainParticipantId: string;
-    participantCount: number;
-    messageCount: number;
-    unhandledCount: number;
-    participants: Array<{ id: string; role: string; handle: string; active: boolean; nativeProvenance: string[] }>;
-    assignments: Array<{ id: string; state: string; label: string }>;
-  }
-
-  interface MessageSummary {
-    id: string;
-    channelId: string;
-    kind: string;
-    senderParticipantId: string;
-    senderHandle: string;
-    assignmentId: string | null;
-    assignmentLate: boolean;
-    relayToParticipantId: string | null;
-    contextSession: string | null;
-    contextNode: string | null;
-    contextAttempt: string | null;
-    handled: boolean;
-    handledAt: string | null;
-    handleNote: string | null;
-    processingRowVersion: number;
-    createdAt: string;
-    bodyBytes: number;
-    bodyPreview: string;
-    bodyPreviewTruncated: boolean;
-  }
-
-  interface MessageDetail extends MessageSummary {
-    body: string;
-  }
-
-  it("covers all 8 AJ-28 steps through the compiled CLI", () => {
+  it("runs the five-step loop with idempotent repeats (step 1)", () => {
     const f = fixture();
-
-    // Step 1: Create a Channel, register main plus Worker and Judge,
-    // register and close assignments. Exactly one main; main cannot be
-    // deactivated; handle and bound violations fail; duplicate handle fails.
-    const created = data<{ channel: ChannelView }>(f, [
+    const created = data<{
+      channel: { name: string; state: string; main: string; id: string; participantCount: number };
+      existing: boolean;
+    }>(f, ["channel", "create", "aq-run-42", "--main", "orchestrator"]);
+    expect(created.channel.name).toBe("aq-run-42");
+    expect(created.channel.state).toBe("open");
+    expect(created.channel.main).toBe("orchestrator");
+    expect(created.channel.participantCount).toBe(1);
+    expect(created.existing).toBe(false);
+    const repeat = data<{ channel: { id: string }; existing: boolean }>(f, [
       "channel",
       "create",
-      "--main-handle",
+      "aq-run-42",
+      "--main",
       "orchestrator",
-      "--title",
-      "AJ-28 run",
     ]);
-    const channelId = created.channel.id;
-    const mainId = created.channel.mainParticipantId;
-    expect(created.channel.state).toBe("open");
-    expect(created.channel.participants).toHaveLength(1);
-    expect(created.channel.participants[0]?.role).toBe("main");
-
-    const worker = data<{ participant: { id: string; handle: string } }>(f, [
+    expect(repeat.existing).toBe(true);
+    expect(repeat.channel.id).toBe(created.channel.id);
+    const differentMain = failure(f, ["channel", "create", "aq-run-42", "--main", "other"]);
+    expect(differentMain.error.code).toBe("CHN_INVALID_INPUT");
+    const worker = data<{ participant: { handle: string; role: string; addedAt: string; removedAt: string | null } }>(
+      f,
+      ["channel", "add", "aq-run-42", "worker-1", "--role", "worker"],
+    );
+    expect(worker.participant.handle).toBe("worker-1");
+    expect(worker.participant.removedAt).toBeNull();
+    const addRepeat = data<{ participant: { addedAt: string } }>(f, [
       "channel",
-      "participant",
       "add",
-      channelId,
+      "aq-run-42",
+      "worker-1",
       "--role",
       "worker",
-      "--handle",
-      "worker-a",
-      "--as-participant",
-      mainId,
-    ]).participant;
-    const workerId = worker.id;
-    const judge = data<{ participant: { id: string; handle: string; nativeProvenance: string[] } }>(f, [
+    ]);
+    expect(addRepeat.participant.addedAt).toBe(worker.participant.addedAt);
+    const differentRole = failure(f, ["channel", "add", "aq-run-42", "worker-1", "--role", "judge"]);
+    expect(differentRole.error.code).toBe("CHN_INVALID_INPUT");
+    const removed = data<{ participant: { handle: string; addedAt: string; removedAt: string | null } }>(f, [
       "channel",
-      "participant",
-      "add",
-      channelId,
-      "--role",
-      "judge",
-      "--handle",
-      "judge-x",
-      "--native",
-      "podway:node-9",
-      "--as-participant",
-      mainId,
-    ]).participant;
-    const judgeId = judge.id;
-    expect(judge.nativeProvenance).toEqual(["podway:node-9"]);
-
-    const dupHandle = failure(f, [
+      "remove",
+      "aq-run-42",
+      "worker-1",
+    ]);
+    expect(removed.participant.removedAt).not.toBeNull();
+    const removeRepeat = data<{ participant: { handle: string; addedAt: string; removedAt: string | null } }>(f, [
       "channel",
-      "participant",
+      "remove",
+      "aq-run-42",
+      "worker-1",
+    ]);
+    expect(removeRepeat.participant.removedAt).toBe(removed.participant.removedAt);
+    const reAdded = data<{ participant: { handle: string; addedAt: string; removedAt: string | null } }>(f, [
+      "channel",
       "add",
-      channelId,
+      "aq-run-42",
+      "worker-1",
       "--role",
       "worker",
-      "--handle",
-      "worker-a",
-      "--as-participant",
-      mainId,
     ]);
-    expect(dupHandle.error.code).toBe("CHN_INVALID_INPUT");
+    expect(reAdded.participant.removedAt).toBeNull();
+    expect(reAdded.participant.addedAt).not.toBe(worker.participant.addedAt);
+  });
 
-    const mainDeactivate = failure(f, [
+  it("posts attributed bodies across the inline threshold with exact bytes and the relay rule (step 2)", () => {
+    const f = fixture();
+    data(f, ["channel", "create", "c"]);
+    data(f, ["channel", "add", "c", "w1", "--role", "worker"]);
+    data(f, ["channel", "add", "c", "j1", "--role", "judge"]);
+    const small = data<{ message: { seq: number; body: string; bodyPath: string | null; bodyPending: boolean } }>(f, [
       "channel",
-      "participant",
-      "deactivate",
-      channelId,
-      mainId,
-      "--as-participant",
-      mainId,
-    ]);
-    expect(mainDeactivate.error.code).toBe("CHN_INVALID_INPUT");
-
-    const assignment = data<{ assignment: { id: string; state: string } }>(f, [
-      "channel",
-      "assignment",
-      "add",
-      channelId,
-      "--label",
-      "lint pass",
-      "--participant",
-      workerId,
-      "--as-participant",
-      mainId,
-    ]).assignment;
-    expect(assignment.state).toBe("open");
-    const closedAssignment = data<{ assignment: { id: string; state: string } }>(f, [
-      "channel",
-      "assignment",
-      "close",
-      channelId,
-      assignment.id,
-      "--as-participant",
-      mainId,
-    ]).assignment;
-    expect(closedAssignment.state).toBe("closed");
-
-    // Step 2: Submit attributed reports, questions, and relay requests with
-    // text bodies across the inline threshold; exact bytes; verbatim context;
-    // closed assignment -> late; inactive participant and closed Channel fail.
-    const smallBody = "small report with \u00e9 and CRLF\r\nlines";
-    const smallReport = data<{ message: MessageSummary; replayed: boolean }>(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      workerId,
+      "post",
+      "c",
+      "--from",
+      "w1",
       "--kind",
       "report",
       "--body",
-      smallBody,
-      "--context-session",
-      "sess-1",
-      "--context-node",
-      "node-1",
-      "--context-attempt",
-      "attempt-1",
-      "--idempotency-key",
-      "aj28-small-key",
+      "small body",
     ]);
-    expect(smallReport.replayed).toBe(false);
-    expect(smallReport.message.bodyBytes).toBe(Buffer.byteLength(smallBody, "utf8"));
-    expect(smallReport.message.contextSession).toBe("sess-1");
-
-    // Late report against a closed assignment.
-    const lateReport = data<{ message: MessageSummary; replayed: boolean }>(f, [
+    expect(small.message.body).toBe("small body");
+    expect(small.message.bodyPath).toBeNull();
+    expect(small.message.bodyPending).toBe(false);
+    // A body above 65,536 UTF-8 bytes routes to the Vault with exact bytes.
+    const large = "x".repeat(70_000);
+    const bodyFile = join(f.home, "large.txt");
+    writeFileSync(bodyFile, large);
+    const fileBacked = data<{ message: { seq: number; body: string; bodyPath: string; bodyPending: boolean } }>(f, [
       "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      workerId,
+      "post",
+      "c",
+      "--from",
+      "w1",
       "--kind",
       "report",
-      "--body",
-      "late report",
-      "--assignment",
-      assignment.id,
-    ]);
-    expect(lateReport.message.assignmentLate).toBe(true);
-
-    // Large body above 65,536 UTF-8 bytes.
-    const largeBody = `${"large report line\n".repeat(6600)}tail-\u00e9`;
-    const largeFile = join(f.home, "large-body.md");
-    writeFileSync(largeFile, largeBody, "utf8");
-    const largeReport = data<{ message: MessageSummary; replayed: boolean }>(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      workerId,
-      "--kind",
-      "report",
+      "--ref",
+      "pr-42",
       "--body-file",
-      largeFile,
+      bodyFile,
     ]);
-    expect(largeReport.message.bodyBytes).toBeGreaterThan(65_536);
-    expect(largeReport.message.bodyPreviewTruncated).toBe(true);
-
-    // Relay request with target.
-    const relay = data<{ message: MessageSummary; replayed: boolean }>(f, [
+    expect(fileBacked.message.body).toBe(large);
+    expect(fileBacked.message.bodyPath).toContain("content/channel/");
+    expect(fileBacked.message.bodyPending).toBe(false);
+    // A --ref reference rides verbatim; --to is required exactly on relay.
+    const relay = data<{ message: { kind: string; to: string | null; ref: string | null } }>(f, [
       "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      workerId,
+      "post",
+      "c",
+      "--from",
+      "w1",
+      "--kind",
+      "relay_request",
+      "--to",
+      "j1",
+      "--body",
+      "please relay",
+    ]);
+    expect(relay.message.to).toBe("j1");
+    const relayWithoutTo = failure(f, [
+      "channel",
+      "post",
+      "c",
+      "--from",
+      "w1",
       "--kind",
       "relay_request",
       "--body",
-      "please relay to judge",
-      "--relay-to",
-      judgeId,
+      "b",
     ]);
-    expect(relay.message.relayToParticipantId).toBe(judgeId);
-
-    // Question from judge.
-    const question = data<{ message: MessageSummary; replayed: boolean }>(f, [
+    expect(relayWithoutTo.error.code).toBe("CHN_INVALID_INPUT");
+    const toUnknown = failure(f, [
       "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
+      "post",
+      "c",
+      "--from",
+      "w1",
+      "--kind",
+      "relay_request",
+      "--to",
+      "ghost",
+      "--body",
+      "b",
+    ]);
+    expect(toUnknown.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
+    const fromUnknown = failure(f, ["channel", "messages", "c", "--from", "ghost"]);
+    expect(fromUnknown.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
+    const mainPost = failure(f, ["channel", "post", "c", "--from", "main", "--kind", "report", "--body", "b"]);
+    expect(mainPost.error.code).toBe("CHN_INVALID_INPUT");
+    expect(mainPost.error.message).toContain("upstream");
+    data(f, ["channel", "close", "c"]);
+    const postClosed = failure(f, ["channel", "post", "c", "--from", "w1", "--kind", "report", "--body", "fresh"]);
+    expect(postClosed.error.code).toBe("CHN_CLOSED");
+    const addClosed = failure(f, ["channel", "add", "c", "late", "--role", "judge"]);
+    expect(addClosed.error.code).toBe("CHN_CLOSED");
+    const ackAfterClose = data<{ handled: number[] }>(f, ["channel", "ack", "c", "1"]);
+    expect(ackAfterClose.handled).toEqual([1]);
+  });
+
+  it("proves the duplicate-by-content rule with no replay material (step 3)", () => {
+    const f = fixture();
+    data(f, ["channel", "create", "c"]);
+    data(f, ["channel", "add", "c", "w1", "--role", "worker"]);
+    data(f, ["channel", "add", "c", "w2", "--role", "worker"]);
+    const first = data<{ message: { seq: number }; duplicate: boolean }>(f, [
+      "channel",
+      "post",
+      "c",
+      "--from",
+      "w1",
+      "--kind",
+      "report",
+      "--body",
+      "same body",
+    ]);
+    expect(first.duplicate).toBe(false);
+    const retry = data<{ message: { seq: number }; duplicate: boolean }>(f, [
+      "channel",
+      "post",
+      "c",
+      "--from",
+      "w1",
+      "--kind",
+      "report",
+      "--body",
+      "same body",
+    ]);
+    expect(retry.duplicate).toBe(true);
+    expect(retry.message.seq).toBe(first.message.seq);
+    const otherSender = data<{ message: { seq: number }; duplicate: boolean }>(f, [
+      "channel",
+      "post",
+      "c",
+      "--from",
+      "w2",
+      "--kind",
+      "report",
+      "--body",
+      "same body",
+    ]);
+    expect(otherSender.duplicate).toBe(false);
+    expect(otherSender.message.seq).toBe(first.message.seq + 1);
+    data(f, ["channel", "ack", "c", String(first.message.seq)]);
+    const afterAck = data<{ message: { seq: number }; duplicate: boolean }>(f, [
+      "channel",
+      "post",
+      "c",
+      "--from",
+      "w1",
+      "--kind",
+      "report",
+      "--body",
+      "same body",
+    ]);
+    expect(afterAck.duplicate).toBe(false);
+    // A retry after close still reports the duplicate.
+    const pending = data<{ message: { seq: number } }>(f, [
+      "channel",
+      "post",
+      "c",
+      "--from",
+      "w2",
       "--kind",
       "question",
       "--body",
-      "should we proceed?",
+      "unhandled window",
     ]);
-
-    // Exact byte read.
-    const smallDetail = data<{ message: MessageDetail }>(f, [
+    data(f, ["channel", "close", "c"]);
+    const closedRetry = data<{ message: { seq: number }; duplicate: boolean }>(f, [
       "channel",
-      "read",
-      channelId,
-      smallReport.message.id,
-    ]).message;
-    expect(smallDetail.body).toBe(smallBody);
-    const largeDetail = data<{ message: MessageDetail }>(f, [
-      "channel",
-      "read",
-      channelId,
-      largeReport.message.id,
-    ]).message;
-    expect(largeDetail.body).toBe(largeBody);
-
-    // Inactive participant fails.
-    const deactivated = data<{ participant: { id: string } }>(f, [
-      "channel",
-      "participant",
-      "deactivate",
-      channelId,
-      workerId,
-      "--as-participant",
-      mainId,
-    ]).participant;
-    void deactivated;
-    const inactiveSubmit = failure(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      workerId,
+      "post",
+      "c",
+      "--from",
+      "w2",
       "--kind",
-      "report",
+      "question",
       "--body",
-      "from inactive worker",
+      "unhandled window",
     ]);
-    expect(inactiveSubmit.error.code).toBe("CHN_PARTICIPANT_INACTIVE");
+    expect(closedRetry.duplicate).toBe(true);
+    expect(closedRetry.message.seq).toBe(pending.message.seq);
+  });
 
-    // Unknown participant fails.
-    const unknownSubmit = failure(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      randomUUID(),
-      "--kind",
-      "report",
-      "--body",
-      "from unknown",
+  it("proves reads, filters, and the wait under the write-denying sandbox (step 4)", () => {
+    const f = fixture();
+    data(f, ["channel", "create", "c"]);
+    data(f, ["channel", "add", "c", "w1", "--role", "worker"]);
+    data(f, ["channel", "post", "c", "--from", "w1", "--kind", "report", "--body", "first body"]);
+    data(f, ["channel", "post", "c", "--from", "w1", "--kind", "question", "--body", "second body"]);
+    data(f, ["channel", "ack", "c", "1"]);
+    const unhandled = data<{ items: Array<{ seq: number; body: string }> }>(f, ["channel", "messages", "c"]);
+    expect(unhandled.items.map((item) => [item.seq, item.body])).toEqual([[2, "second body"]]);
+    const all = data<{ items: Array<{ seq: number; handled: boolean }> }>(f, ["channel", "messages", "c", "--all"]);
+    expect(all.items.map((item) => [item.seq, item.handled])).toEqual([
+      [1, true],
+      [2, false],
     ]);
-    expect(unknownSubmit.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
-
-    // Step 3: Reads never mutate. Listing with filters, previews, cursor.
-    const unhandledPage = data<{ items: MessageSummary[]; nextCursor: string | null }>(f, [
+    const afterOne = data<{ items: Array<{ seq: number }> }>(f, ["channel", "messages", "c", "--all", "--after", "1"]);
+    expect(afterOne.items.map((item) => item.seq)).toEqual([2]);
+    const fromW1 = data<{ items: Array<{ seq: number }> }>(f, ["channel", "messages", "c", "--from", "w1", "--all"]);
+    expect(fromW1.items).toHaveLength(2);
+    const limited = data<{ items: Array<{ seq: number }> }>(f, ["channel", "messages", "c", "--all", "--limit", "1"]);
+    expect(limited.items.map((item) => item.seq)).toEqual([1]);
+    // A wait with a pending message returns immediately.
+    const immediate = data<{ items: Array<{ seq: number }> }>(f, [
       "channel",
       "messages",
-      channelId,
-      "--unhandled",
-      "--limit",
+      "c",
+      "--wait",
+      "--timeout",
       "2",
     ]);
-    expect(unhandledPage.items).toHaveLength(2);
-    expect(unhandledPage.nextCursor).toBeTruthy();
-    const unhandledBefore = unhandledPage.items.map((m) => m.handled);
-    expect(unhandledBefore.every((h) => h === false)).toBe(true);
+    expect(immediate.items.map((item) => item.seq)).toEqual([2]);
+    // Reads never mutate across a process restart.
+    const before = data<{ items: unknown[] }>(f, ["channel", "messages", "c", "--all"]);
+    const reopened = data<{ items: unknown[] }>(f, ["channel", "messages", "c", "--all"]);
+    expect(reopened.items).toEqual(before.items);
+    void BINARY;
+    // The sandboxed read and wait live in the zero-write-reads suite, which
+    // owns the write-denying profile and the inventory discipline.
+  });
 
-    // Step 4: Wait with unhandled messages already present.
-    const waitImmediate = sorage(["channel", "messages", channelId, "--wait", "--timeout", "5", "--json"], {
-      home: f.home,
-    });
-    expect(waitImmediate.status).toBe(0);
-    const waitData = envelopeOf(waitImmediate).data as { items: MessageSummary[] };
-    expect(waitData.items.length).toBeGreaterThan(0);
-
-    // Wait timeout with no unhandled matches after handling.
-    for (const msg of [smallReport, lateReport, largeReport, relay, question]) {
-      sorage(
-        [
-          "channel",
-          "handle",
-          channelId,
-          msg.message.id,
-          "--expected-row-version",
-          "1",
-          "--as-participant",
-          mainId,
-          "--json",
-        ],
-        { home: f.home },
-      );
+  it("proves ack semantics: all-or-nothing, alreadyHandled, and the note (step 5)", () => {
+    const f = fixture();
+    data(f, ["channel", "create", "c"]);
+    data(f, ["channel", "add", "c", "w1", "--role", "worker"]);
+    for (const body of ["one", "two", "three"]) {
+      data(f, ["channel", "post", "c", "--from", "w1", "--kind", "report", "--body", body]);
     }
-    const waitTimeout = sorage(["channel", "messages", channelId, "--wait", "--timeout", "0", "--json"], {
-      home: f.home,
-    });
-    expect(waitTimeout.status).toBe(0);
-    const timeoutEnvelope = envelopeOf(waitTimeout);
-    expect(timeoutEnvelope.meta).toMatchObject({ timedOut: true });
-
-    // Wait usage errors.
-    const waitCursor = sorage(["channel", "messages", channelId, "--wait", "--cursor", "x", "--json"], {
-      home: f.home,
-    });
-    expect(waitCursor.status).toBe(2);
-    const waitSubInterval = sorage(["channel", "messages", channelId, "--wait", "--interval", "0", "--json"], {
-      home: f.home,
-    });
-    expect(waitSubInterval.status).toBe(2);
-
-    // Step 5: Process with conflict control. First handle wins; duplicates fail.
-    const newReport = data<{ message: MessageSummary }>(f, [
+    const missing = failure(f, ["channel", "ack", "c", "1", "99"]);
+    expect(missing.error.code).toBe("CHN_MESSAGE_NOT_FOUND");
+    expect(missing.error.message).toContain("99");
+    const stillUnhandled = data<{ items: unknown[] }>(f, ["channel", "messages", "c"]);
+    expect(stillUnhandled.items).toHaveLength(3);
+    const acked = data<{ handled: number[]; alreadyHandled: number[]; note: string }>(f, [
       "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
-      "--kind",
-      "report",
-      "--body",
-      "handle me",
-    ]);
-    // Reactivate worker for later steps.
-    // (No reactivation in M9; judge submits instead.)
-
-    const firstHandle = data<{ message: MessageSummary }>(f, [
-      "channel",
-      "handle",
-      channelId,
-      newReport.message.id,
-      "--expected-row-version",
+      "ack",
+      "c",
       "1",
-      "--as-participant",
-      mainId,
-      "--note",
-      "first decision",
-    ]).message;
-    expect(firstHandle.handled).toBe(true);
-    expect(firstHandle.handleNote).toBe("first decision");
-    expect(firstHandle.processingRowVersion).toBe(2);
-
-    const staleVersion = failure(f, [
-      "channel",
-      "handle",
-      channelId,
-      newReport.message.id,
-      "--expected-row-version",
-      "1",
-      "--as-participant",
-      mainId,
-    ]);
-    expect(staleVersion.error.code).toBe("ROW_VERSION_CONFLICT");
-
-    const currentVersion = failure(f, [
-      "channel",
-      "handle",
-      channelId,
-      newReport.message.id,
-      "--expected-row-version",
       "2",
-      "--as-participant",
-      mainId,
       "--note",
-      "second",
+      "reviewed both",
     ]);
-    expect(currentVersion.error.code).toBe("CHN_INVALID_INPUT");
-    expect(currentVersion.error.message).toContain("first handling decision is immutable");
-
-    // Non-main actor fails.
-    const nonMain = failure(f, [
+    expect(acked.handled).toEqual([1, 2]);
+    expect(acked.alreadyHandled).toEqual([]);
+    expect(acked.note).toBe("reviewed both");
+    const repeat = data<{ handled: number[]; alreadyHandled: number[] }>(f, ["channel", "ack", "c", "2", "3"]);
+    expect(repeat.handled).toEqual([3]);
+    expect(repeat.alreadyHandled).toEqual([2]);
+    const messages = data<{ items: Array<{ seq: number; handleNote: string | null }> }>(f, [
       "channel",
-      "handle",
-      channelId,
-      newReport.message.id,
-      "--expected-row-version",
-      "1",
-      "--as-participant",
-      judgeId,
+      "messages",
+      "c",
+      "--all",
     ]);
-    expect(nonMain.error.code).toBe("CHN_FORBIDDEN_ROLE");
+    expect(messages.items.find((item) => item.seq === 1)?.handleNote).toBe("reviewed both");
+  });
 
-    // Restart preservation: read the handled message after a "restart" (new CLI
-    // process, same home).
-    const afterRestart = data<{ message: MessageDetail }>(f, [
-      "channel",
-      "read",
-      channelId,
-      newReport.message.id,
-    ]).message;
-    expect(afterRestart.handled).toBe(true);
-    expect(afterRestart.handleNote).toBe("first decision");
+  it("proves retention: the format-3 round trip preserves the rebuilt record (step 7)", () => {
+    const f = fixture();
+    data(f, ["channel", "create", "kept", "--title", "Kept"]);
+    data(f, ["channel", "add", "kept", "w1", "--role", "worker"]);
+    data(f, ["channel", "post", "kept", "--from", "w1", "--kind", "report", "--ref", "pr-7", "--body", "retained"]);
+    data(f, ["channel", "ack", "kept", "1", "--note", "done"]);
+    data(f, ["channel", "remove", "kept", "w1"]);
+    const backup = sorage(["backup", "run", "--json"], { home: f.home });
+    expect(backup.status, backup.stderr).toBe(0);
+    const target = makeTempDir("aj28-restore-");
+    const init = sorage(["init", "--non-interactive"], { home: target });
+    expect(init.status, init.stderr).toBe(0);
+    const restore = sorage(["backup", "restore", "--from", join(f.home, "vault"), "--confirm", "--as-user", "--json"], {
+      home: target,
+    });
+    expect(restore.status, restore.stderr).toBe(0);
+    const shown = data<{
+      channel: {
+        name: string;
+        title: string | null;
+        messageCount: number;
+        unhandledCount: number;
+        participants: Array<{ handle: string; removedAt: string | null }>;
+      };
+    }>({ home: target }, ["channel", "show", "kept"]);
+    expect(shown.channel.name).toBe("kept");
+    expect(shown.channel.title).toBe("Kept");
+    expect(shown.channel.messageCount).toBe(1);
+    expect(shown.channel.unhandledCount).toBe(0);
+    expect(shown.channel.participants.find((participant) => participant.handle === "w1")?.removedAt).not.toBeNull();
+    const messages = data<{
+      items: Array<{ seq: number; handled: boolean; ref: string | null; handleNote: string | null; body: string }>;
+    }>({ home: target }, ["channel", "messages", "kept", "--all"]);
+    expect(messages.items[0]).toMatchObject({
+      seq: 1,
+      handled: true,
+      ref: "pr-7",
+      handleNote: "done",
+      body: "retained",
+    });
+  });
 
-    // Step 6: Recover an outcome-unknown submission with replay-only.
-    const recoveryBody = "recovery test body";
-    const recoveryKey = "aj28-recovery-key";
-    data<{ message: MessageSummary }>(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
-      "--kind",
-      "report",
-      "--body",
-      recoveryBody,
-      "--idempotency-key",
-      recoveryKey,
-    ]);
-    const replay = data<{ message: MessageSummary; replayed: boolean }>(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
-      "--kind",
-      "report",
-      "--body",
-      recoveryBody,
-      "--idempotency-key",
-      recoveryKey,
-      "--replay-only",
-    ]);
-    expect(replay.replayed).toBe(true);
-    const changedReplay = failure(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
-      "--kind",
-      "report",
-      "--body",
-      "different body",
-      "--idempotency-key",
-      recoveryKey,
-      "--replay-only",
-    ]);
-    expect(changedReplay.error.code).toBe("IDEMPOTENCY_CONFLICT");
-    const missingKey = failure(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
-      "--kind",
-      "report",
-      "--body",
-      recoveryBody,
-      "--idempotency-key",
-      "never-used-key",
-      "--replay-only",
-    ]);
-    expect(missingKey.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-
-    // Step 7: Close the Channel. Submissions freeze; reads and processing stay.
-    const closed = data<{ channel: ChannelView }>(f, [
-      "channel",
-      "close",
-      channelId,
-      "--as-participant",
-      mainId,
-    ]).channel;
-    expect(closed.state).toBe("closed");
-
-    const closedSubmit = failure(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      judgeId,
-      "--kind",
-      "report",
-      "--body",
-      "after close",
-    ]);
-    expect(closedSubmit.error.code).toBe("CHN_CLOSED");
-
-    const stillReads = data<{ items: MessageSummary[] }>(f, ["channel", "messages", channelId, "--all"]);
-    expect(stillReads.items.length).toBeGreaterThan(0);
-
-    // Closed Channel retains existing message processing.
-    const stillHandles = data<{ message: MessageSummary }>(f, [
-      "channel",
-      "handle",
-      channelId,
-      replay.message.id,
-      "--expected-row-version",
-      "1",
-      "--as-participant",
-      mainId,
-    ]).message;
-    expect(stillHandles.handled).toBe(true);
-
-    // Cross-Channel isolation: an unrelated Channel's operations never disclose
-    // this Channel's messages.
-    const otherChannel = data<{ channel: ChannelView }>(f, ["channel", "create", "--main-handle", "other-main"]);
-    const crossRead = failure(f, ["channel", "read", otherChannel.channel.id, smallReport.message.id]);
-    expect(crossRead.error.code).toBe("CHN_MESSAGE_NOT_FOUND");
-
-    // Step 8: Event catalog. Verify the exact event types and closed metadata.
+  it("pins the closed six-event catalog with the acting handle and no repeats (step 7)", () => {
+    const f = fixture();
+    data(f, ["channel", "create", "audit", "--main", "boss"]);
+    data(f, ["channel", "add", "audit", "w1", "--role", "worker"]);
+    data(f, ["channel", "post", "audit", "--from", "w1", "--kind", "report", "--body", "b"]);
+    // Duplicates and repeats append nothing.
+    data(f, ["channel", "post", "audit", "--from", "w1", "--kind", "report", "--body", "b"]);
+    data(f, ["channel", "add", "audit", "w1", "--role", "worker"]);
+    data(f, ["channel", "ack", "audit", "1"]);
+    data(f, ["channel", "ack", "audit", "1"]);
+    data(f, ["channel", "remove", "audit", "w1"]);
+    data(f, ["channel", "add", "audit", "w1", "--role", "worker"]);
+    data(f, ["channel", "close", "audit"]);
+    data(f, ["channel", "close", "audit"]);
     const db = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"));
     try {
-      const events = db
+      const rows = db
         .prepare(
-          "SELECT event_type, metadata_json FROM events WHERE event_type LIKE 'CHANNEL_%' ORDER BY created_at, id",
+          "SELECT event_type, actor_kind, actor_id, row_version, metadata_json FROM events WHERE event_type LIKE 'CHANNEL_%' ORDER BY event_type, id",
         )
-        .all() as Array<{ event_type: string; metadata_json: string }>;
-      const types = events.map((e) => e.event_type);
-      expect(types).toContain("CHANNEL_CREATED");
-      expect(types).toContain("CHANNEL_CLOSED");
-      expect(types).toContain("CHANNEL_PARTICIPANT_REGISTERED");
-      expect(types).toContain("CHANNEL_PARTICIPANT_DEACTIVATED");
-      expect(types).toContain("CHANNEL_ASSIGNMENT_CREATED");
-      expect(types).toContain("CHANNEL_ASSIGNMENT_CLOSED");
-      expect(types).toContain("CHANNEL_MESSAGE_SUBMITTED");
-      expect(types).toContain("CHANNEL_MESSAGE_HANDLED");
-
-      const created1 = events.find((e) => e.event_type === "CHANNEL_CREATED");
-      expect(created1).toBeTruthy();
-      const meta1 = JSON.parse(created1?.metadata_json ?? "{}") as Record<string, unknown>;
-      expect(Object.keys(meta1).sort()).toEqual(["channelId", "mainParticipantId"]);
-      expect(meta1.mainParticipantId).toBe(mainId);
-
-      const submitted = events.find((e) => e.event_type === "CHANNEL_MESSAGE_SUBMITTED");
-      expect(submitted).toBeTruthy();
-      const metaSub = JSON.parse(submitted?.metadata_json ?? "{}") as Record<string, unknown>;
-      expect(metaSub.processingRowVersion).toBe(1);
-      expect(metaSub.channelId).toBe(channelId);
-
-      const handled = events.find((e) => e.event_type === "CHANNEL_MESSAGE_HANDLED");
-      expect(handled).toBeTruthy();
-      const metaH = JSON.parse(handled?.metadata_json ?? "{}") as Record<string, unknown>;
-      expect(metaH.processingRowVersion).toBe(2);
-
-      // No body/handle/note/context leaked into event metadata.
-      for (const e of events) {
-        const meta = JSON.parse(e.metadata_json) as Record<string, unknown>;
-        const metaStr = JSON.stringify(meta);
-        expect(metaStr).not.toContain(smallBody);
-        expect(metaStr).not.toContain("first decision");
-        expect(metaStr).not.toContain("sess-1");
+        .all() as Array<{
+        event_type: string;
+        actor_kind: string;
+        actor_id: string | null;
+        row_version: number | null;
+        metadata_json: string;
+      }>;
+      const counts = rows.reduce<Record<string, number>>((acc, row) => {
+        acc[row.event_type] = (acc[row.event_type] ?? 0) + 1;
+        return acc;
+      }, {});
+      expect(counts).toEqual({
+        CHANNEL_CREATED: 1,
+        CHANNEL_PARTICIPANT_ADDED: 2,
+        CHANNEL_PARTICIPANT_REMOVED: 1,
+        CHANNEL_MESSAGE_POSTED: 1,
+        CHANNEL_MESSAGE_ACKED: 1,
+        CHANNEL_CLOSED: 1,
+      });
+      for (const row of rows) {
+        expect(row.actor_kind).toBe("user");
+        expect(row.actor_id).toBeNull();
+        expect(row.row_version).toBeNull();
+        const metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+        expect(typeof metadata.actingHandle).toBe("string");
+        expect(JSON.stringify(metadata)).not.toContain("body");
       }
-
-      // Operational receipts exist for normal operations but are excluded from
-      // restore (tested by the snapshot suites).
-      const receipts = db.prepare("SELECT COUNT(*) as n FROM idempotency_keys").get() as { n: number };
-      expect(receipts.n).toBeGreaterThan(0);
+      const posted = rows.find((row) => row.event_type === "CHANNEL_MESSAGE_POSTED") as {
+        metadata_json: string;
+      };
+      expect((JSON.parse(posted.metadata_json) as { actingHandle: string }).actingHandle).toBe("w1");
     } finally {
       db.close();
     }
   });
 
-  it("waits for an arrival without handling and arbitrates concurrent native handling", async () => {
+  it("renders the Channel database-schema refusal with the migration-name check", () => {
     const f = fixture();
-    const channel = data<{ channel: ChannelView }>(f, ["channel", "create", "--main-handle", "main"]).channel;
-    const worker = data<{ participant: { id: string } }>(f, [
-      "channel",
-      "participant",
-      "add",
-      channel.id,
-      "--role",
-      "worker",
-      "--handle",
-      "worker",
-      "--as-participant",
-      channel.mainParticipantId,
-    ]).participant;
-    const submit = (body: string) =>
-      data<{ message: MessageSummary }>(f, [
-        "channel",
-        "submit",
-        channel.id,
-        "--as-participant",
-        worker.id,
-        "--kind",
-        "report",
-        "--body",
-        body,
-      ]).message;
-    const initial = [submit("first"), submit("second")];
-    function domainState() {
-      const db = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"));
-      try {
-        return {
-          messages: db.prepare("SELECT * FROM channel_messages ORDER BY id").all(),
-          events: db.prepare("SELECT * FROM events WHERE event_type LIKE 'CHANNEL_%' ORDER BY id").all(),
-        };
-      } finally {
-        db.close();
-      }
-    }
-    const before = domainState();
-    const page = data<{ items: MessageSummary[]; nextCursor: string }>(f, [
-      "channel",
-      "messages",
-      channel.id,
-      "--wait",
-      "--timeout",
-      "0",
-      "--limit",
-      "1",
-    ]);
-    expect(page.items).toHaveLength(1);
-    expect(page.nextCursor).toBeTruthy();
-    const next = data<{ items: MessageSummary[]; nextCursor: null }>(f, [
-      "channel",
-      "messages",
-      channel.id,
-      "--limit",
-      "1",
-      "--cursor",
-      page.nextCursor,
-    ]);
-    expect(next.items).toHaveLength(1);
-    expect(new Set([...page.items, ...next.items].map((message) => message.id))).toEqual(
-      new Set(initial.map((message) => message.id)),
-    );
-    expect(next.nextCursor).toBeNull();
-    expect(domainState()).toEqual(before);
-    const handle = (id: string, note: string) => [
-      "channel",
-      "handle",
-      channel.id,
-      id,
-      "--as-participant",
-      channel.mainParticipantId,
-      "--expected-row-version",
-      "1",
-      "--note",
-      note,
-    ];
-    for (const message of initial) data<MessageSummary>(f, handle(message.id, "initial review"));
-    function native(args: string[]) {
-      return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-        const child = spawn(BINARY, [...args, "--json"], {
-          env: { ...process.env, SORAGE_HOME: f.home, SORAGE_TEST_REQUEST_ID: undefined },
-          timeout: 10_000,
-        });
-        let stdout = "",
-          stderr = "";
-        child.stdout.setEncoding("utf8");
-        child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => {
-          stdout += chunk;
-        });
-        child.stderr.on("data", (chunk: string) => {
-          stderr += chunk;
-        });
-        child.once("error", reject);
-        child.once("close", (status) => resolve({ status, stdout, stderr }));
-      });
-    }
-    const waiting = native([
-      "channel",
-      "messages",
-      channel.id,
-      "--wait",
-      "--interval",
-      "1",
-      "--timeout",
-      "5",
-      "--limit",
-      "1",
-    ]);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const arrival = submit("arrived while the consumer was waiting");
-    const afterSubmit = domainState();
-    const waited = await waiting;
-    expect(waited.status, waited.stderr).toBe(0);
-    expect((envelopeOf(waited).data as { items: MessageSummary[] }).items.map((message) => message.id)).toEqual([
-      arrival.id,
-    ]);
-    expect(domainState()).toEqual(afterSubmit);
-    const outcomes = await Promise.all([
-      native(handle(arrival.id, "decision A")),
-      native(handle(arrival.id, "decision B")),
-    ]);
-    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual([0, 75]);
-    const winner = outcomes.find((outcome) => outcome.status === 0);
-    const loser = outcomes.find((outcome) => outcome.status === 75);
-    if (winner === undefined || loser === undefined) throw new Error("expected exactly one native handling winner");
-    expect(errorEnvelopeOf(loser).error.code).toBe("ROW_VERSION_CONFLICT");
-    const recorded = data<{ message: MessageDetail }>(f, ["channel", "read", channel.id, arrival.id]).message;
-    expect(recorded.handleNote).toBe((envelopeOf(winner).data as { message: MessageSummary }).message.handleNote);
-    expect(recorded.processingRowVersion).toBe(2);
-    expect(domainState().events).toHaveLength(afterSubmit.events.length + 1);
-  });
-
-  it("preserves BOM and exact bytes through native backup, restore, and reopen", () => {
-    const f = fixture();
-    // Initialize with Git backup so backup run produces a snapshot tree.
-    const reinit = sorage(["init", "--non-interactive", "--initialize-git", "--reconfigure"], { home: f.home });
-    expect(reinit.status, reinit.stderr).toBe(0);
-
-    const created = data<{ channel: ChannelView }>(f, ["channel", "create", "--main-handle", "\uFEFFmain"]);
-    const channelId = created.channel.id;
-    const mainId = created.channel.mainParticipantId;
-
-    const worker = data<{ participant: { id: string } }>(f, [
-      "channel",
-      "participant",
-      "add",
-      channelId,
-      "--role",
-      "worker",
-      "--handle",
-      "\uFEFFworker",
-      "--native",
-      "\uFEFFnative-provenance",
-      "--as-participant",
-      mainId,
-    ]).participant;
-
-    // Inline body with BOM, CRLF, Unicode, and no final newline.
-    const bomBody = "\uFEFFBOM body with CRLF\r\nand \u00e9\u3042\uD83D\uDE00 no final newline";
-    const message = data<{ message: MessageSummary }>(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      worker.id,
-      "--kind",
-      "report",
-      "--body",
-      bomBody,
-      "--idempotency-key",
-      "bom-key",
-      "--context-session",
-      "\uFEFFsession",
-      "--context-node",
-      "node\u3042",
-      "--context-attempt",
-      "",
-    ]);
-
-    // Large file-backed body above 65,536 UTF-8 bytes with BOM, CRLF, Unicode, no final LF.
-    const largeBody = `\uFEFFLarge body\r\n${"report line with \u00e9\u3042\uD83D\uDE00 and CRLF\r\n".repeat(6600)}tail-\u00e9`;
-    const largeFile = join(f.home, "large-body.md");
-    writeFileSync(largeFile, largeBody, "utf8");
-    const largeMsg = data<{ message: MessageSummary }>(f, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      worker.id,
-      "--kind",
-      "report",
-      "--body-file",
-      largeFile,
-      "--idempotency-key",
-      "bom-large-key",
-    ]);
-    expect(largeMsg.message.bodyBytes).toBeGreaterThan(65_536);
-
-    // Handle the small message to verify immutable decisions survive restore.
-    data<{ message: { message: MessageSummary } }>(f, [
-      "channel",
-      "handle",
-      channelId,
-      message.message.id,
-      "--expected-row-version",
-      "1",
-      "--as-participant",
-      mainId,
-      "--note",
-      "\uFEFFdecision note",
-    ]).message;
-
-    // Verify exact bytes before backup.
-    const detail = data<{ message: MessageDetail }>(f, ["channel", "read", channelId, message.message.id]).message;
-    expect(detail.body).toBe(bomBody);
-    expect(detail.senderHandle).toBe("\uFEFFworker");
-    expect(detail.contextSession).toBe("\uFEFFsession");
-    const largeDetail = data<{ message: MessageDetail }>(f, [
-      "channel",
-      "read",
-      channelId,
-      largeMsg.message.id,
-    ]).message;
-    expect(largeDetail.body).toBe(largeBody);
-
-    // Backup run → verify → restore into a fresh home.
-    const backupHome = makeTempDir("aj28-backup-");
-    const sourceHome = f.home;
-
-    const backup = sorage(["backup", "run", "--json"], { home: sourceHome });
-    expect(backup.status, backup.stderr).toBe(0);
-
-    const verify = sorage(["backup", "verify", "--json"], { home: sourceHome });
-    expect(verify.status, verify.stderr).toBe(0);
-
-    // Restore into an empty home using the actual --from convention.
-    const restoreInit = sorage(["init", "--non-interactive"], { home: backupHome });
-    expect(restoreInit.status, restoreInit.stderr).toBe(0);
-    const sourceVault = join(sourceHome, "vault");
-    const restore = sorage(["backup", "restore", "--from", sourceVault, "--as-user", "--confirm", "--json"], {
-      home: backupHome,
-    });
-    expect(restore.status, restore.stderr).toBe(0);
-
-    // Read the restored messages: BOM handles, context, notes, and bodies must be exact.
-    const restoredDetail = (() => {
-      const result = sorage(["channel", "read", channelId, message.message.id, "--json"], { home: backupHome });
-      expect(result.status, result.stderr).toBe(0);
-      return (envelopeOf(result).data as { message: MessageDetail }).message;
-    })();
-    expect(restoredDetail.body).toBe(bomBody);
-    expect(restoredDetail.senderHandle).toBe("\uFEFFworker");
-    expect(restoredDetail.contextSession).toBe("\uFEFFsession");
-    expect(restoredDetail.handleNote).toBe("\uFEFFdecision note");
-    expect(restoredDetail.handled).toBe(true);
-    expect(restoredDetail.processingRowVersion).toBe(2);
-
-    const restoredLarge = (() => {
-      const result = sorage(["channel", "read", channelId, largeMsg.message.id, "--json"], { home: backupHome });
-      expect(result.status, result.stderr).toBe(0);
-      return (envelopeOf(result).data as { message: MessageDetail }).message;
-    })();
-    expect(restoredLarge.body).toBe(largeBody);
-    expect(restoredLarge.handled).toBe(false);
-    expect(restoredLarge.processingRowVersion).toBe(1);
-
-    // Show the restored Channel: complete roster with native provenance.
-    const restoredShow = (() => {
-      const result = sorage(["channel", "show", channelId, "--json"], { home: backupHome });
-      expect(result.status, result.stderr).toBe(0);
-      return (envelopeOf(result).data as { channel: ChannelView }).channel;
-    })();
-    const restoredWorker = restoredShow.participants.find((p) => p.id === worker.id);
-    expect(restoredWorker?.nativeProvenance).toEqual(["\uFEFFnative-provenance"]);
-
-    // Fresh private content-record IDs: the restored messages must reference
-    // different content records than the source.
-    const sourceDb = new DatabaseSync(join(sourceHome, "state", "sorage.sqlite3"));
-    const backupDb = new DatabaseSync(join(backupHome, "state", "sorage.sqlite3"));
+    data(f, ["channel", "create", "c"]);
+    const database = join(f.home, "state", "sorage.sqlite3");
+    const db = new DatabaseSync(database);
     try {
-      const srcRecords = sourceDb
-        .prepare("SELECT content_record_id FROM channel_messages WHERE channel_id = ? ORDER BY id")
-        .all(channelId) as Array<{ content_record_id: string }>;
-      const dstRecords = backupDb
-        .prepare("SELECT content_record_id FROM channel_messages WHERE channel_id = ? ORDER BY id")
-        .all(channelId) as Array<{ content_record_id: string }>;
-      expect(dstRecords.length).toBe(srcRecords.length);
-      for (let i = 0; i < srcRecords.length; i++) {
-        expect(dstRecords[i]?.content_record_id).not.toBe(srcRecords[i]?.content_record_id);
-      }
-
-      // Complete metadata ledger preserved.
-      const srcEvents = sourceDb
-        .prepare(
-          "SELECT event_type, metadata_json FROM events WHERE event_type LIKE 'CHANNEL_%' ORDER BY created_at, id",
-        )
-        .all() as Array<{ event_type: string; metadata_json: string }>;
-      const dstEvents = backupDb
-        .prepare(
-          "SELECT event_type, metadata_json FROM events WHERE event_type LIKE 'CHANNEL_%' ORDER BY created_at, id",
-        )
-        .all() as Array<{ event_type: string; metadata_json: string }>;
-      expect(dstEvents.map(({ metadata_json, ...row }) => ({ ...row, metadata: JSON.parse(metadata_json) }))).toEqual(
-        srcEvents.map(({ metadata_json, ...row }) => ({ ...row, metadata: JSON.parse(metadata_json) })),
-      );
-
-      // No operational receipts restored.
-      const receipts = backupDb.prepare("SELECT COUNT(*) as n FROM idempotency_keys").get() as { n: number };
-      expect(receipts.n).toBe(0);
+      db.exec("BEGIN IMMEDIATE");
+      db.prepare("UPDATE schema_migrations SET name = 'channels-v1' WHERE version = 11").run();
+      db.exec("COMMIT");
     } finally {
-      sourceDb.close();
-      backupDb.close();
+      db.close();
     }
-
-    // Restore-lost receipt → replay-only unavailable.
-    const lostRecovery = failure({ home: backupHome }, [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      worker.id,
-      "--kind",
-      "report",
-      "--body",
-      bomBody,
-      "--idempotency-key",
-      "bom-key",
-      "--replay-only",
-    ]);
-    expect(lostRecovery.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-  });
-
-  it("returns the create-specific conflict without creating a second Channel", () => {
-    const f = fixture();
-    const createArgs = [
-      "channel",
-      "create",
-      "--main-handle",
-      "orchestrator",
-      "--title",
-      "Original",
-      "--idempotency-key",
-      "create-key",
-    ];
-    const first = data<{ channel: ChannelView }>(f, createArgs).channel;
-    const replay = data<{ channel: ChannelView }>(f, createArgs).channel;
-    expect(replay.id).toBe(first.id);
-
-    const conflictArgs = [
-      "channel",
-      "create",
-      "--main-handle",
-      "orchestrator",
-      "--title",
-      "Changed",
-      "--idempotency-key",
-      "create-key",
-    ];
-    const conflictRun = run(f, conflictArgs);
-    expect(conflictRun.status).toBe(75);
-    const conflict = errorEnvelopeOf(conflictRun) as {
-      error: {
-        code: string;
-        message: string;
-        details: Record<string, unknown>;
-        recovery: { suggestedCommand: string };
-      };
-    };
-    expect(conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
-    expect(conflict.error.message).toBe(
-      "The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
-    );
-    expect(conflict.error.details).toEqual({});
-    expect(conflict.error.recovery.suggestedCommand).toBe(
-      "Replay the identical original sorage channel create with the original key and inputs; while its receipt is retained, that replay returns the original Channel. A new key creates a new Channel and is legitimate only for a genuinely new intent, never as recovery for an unknown create outcome",
-    );
-    expect(conflict.error.recovery.suggestedCommand).not.toContain("Use a new key");
-
-    const human = runHuman(f, conflictArgs);
-    expect(human.status).toBe(75);
-    expect(human.stdout).toBe("");
-    expect(human.stderr).toContain(
-      "IDEMPOTENCY_CONFLICT: The retained Channel creation key belongs to a different create request; this invocation created no Channel.",
-    );
-    expect(human.stderr).toContain(
-      "Recovery: Replay the identical original sorage channel create with the original key and inputs;",
-    );
-
-    const list = data<{ items: Array<{ id: string }> }>(f, ["channel", "list"]);
-    expect(list.items).toHaveLength(1);
-    expect(list.items[0]?.id).toBe(first.id);
-  });
-
-  it("renders the Channel database-schema refusal without Handoff send material", () => {
-    const f = fixture();
-    const seeded = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"));
-    try {
-      seeded
-        .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
-        .run(999, "future", "2026-01-01T00:00:00.000Z");
-    } finally {
-      seeded.close();
-    }
-
-    const schemaRun = run(f, ["channel", "list"]);
-    expect(schemaRun.status).toBe(78);
-    const schema = errorEnvelopeOf(schemaRun) as {
-      error: {
-        code: string;
-        message: string;
-        details: Record<string, unknown>;
-        recovery: { suggestedCommand: string };
-      };
-    };
-    expect(schema.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
-    expect(schema.error.details).toEqual({});
-    expect(schema.error.recovery.suggestedCommand).toBe(
-      "Retain the original Channel command and its input, and for a keyed create or submit its idempotency key; use a Sorage version that supports this storage layout; never downgrade the database",
-    );
-    expect(schema.error.recovery.suggestedCommand).not.toMatch(/Use a new key|fresh key|--as |--as-user|--confirm/);
-
-    const human = runHuman(f, ["channel", "list"]);
-    expect(human.status).toBe(78);
-    expect(human.stdout).toBe("");
-    expect(human.stderr).toContain("STORAGE_SCHEMA_UNSUPPORTED: The database schema is at migration 999");
-    expect(human.stderr).toContain(`Recovery: ${schema.error.recovery.suggestedCommand}`);
-
-    const verified = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"));
-    try {
-      const max = verified.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as {
-        version: number;
-      };
-      expect(max.version).toBe(999);
-    } finally {
-      verified.close();
-    }
+    const read = sorage(["channel", "list", "--json"], { home: f.home });
+    expect(read.status).toBe(73);
+    expect(errorEnvelopeOf(read).error.code).toBe("STORAGE_INTEGRITY_ERROR");
+    const human = sorage(["channel", "list"], { home: f.home });
+    expect(human.status).toBe(73);
+    void createHash;
+    void readFileSync;
+    void registerCleanup;
+    void runHuman;
   });
 });

@@ -1,29 +1,20 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  mkdirSync,
-  lstatSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  readlinkSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildProgram } from "../../src/main";
 
 /**
- * Channel CLI structural checks: actual --help output for the channel group
- * and its subcommands, --as-participant registration on every main-role
- * command, its absence from reads, the repeatable --native collector with
- * empty entries, and opaque non-UUID idempotency keys. These are surface
- * checks only; behavioral coverage lives in the adapter and E2E suites.
+ * The rebuilt Channel CLI surface of TASK-123 (interface sections 38.4 to
+ * 38.6): the nine-command catalog's structure and defaults read from the real
+ * program, the closed JSON data keyset of every operation, the usage errors of
+ * the rebuilt option coherence, both rendering forms of the reads, and the
+ * 60-second wait default pinned cheaply beside the behavioral timeout case.
+ * Behavioral depth lives in the adapter and E2E suites; these are the CLI's
+ * own structural and rendering contracts.
  */
 const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
 
@@ -45,19 +36,38 @@ function cli(args: string[], h: string, taskEnv: NodeJS.ProcessEnv = {}) {
     encoding: "utf8",
     cwd: work,
     env: { ...process.env, ...taskEnv, SORAGE_HOME: h },
-    timeout: 10_000,
+    timeout: 20_000,
   });
   if (result.error) throw result.error;
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+function initialized(_prefix = "sorage-channel-cli-"): string {
+  const h = home();
+  const init = cli(["init", "--non-interactive"], h);
+  expect(init.status, init.stderr).toBe(0);
+  return h;
+}
+
+function dataOf(run: { status: number | null; stdout: string; stderr: string }): Record<string, unknown> {
+  expect(run.status, run.stderr).toBe(0);
+  const parsed = JSON.parse(run.stdout) as { ok: boolean; data: Record<string, unknown> };
+  expect(parsed.ok).toBe(true);
+  return parsed.data;
+}
+
+function errorOf(run: { status: number | null; stdout: string; stderr: string }): { code: string; message: string } {
+  const parsed = JSON.parse(run.stderr) as { error: { code: string; message: string } };
+  return parsed.error;
+}
+
 function fingerprint(root: string): Record<string, string> {
   const result: Record<string, string> = {};
   function visit(directory: string) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) visit(path);
-      else if (entry.isFile() && !entry.name.endsWith("-shm"))
+    for (const item of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, item.name);
+      if (item.isDirectory()) visit(path);
+      else if (item.isFile() && !item.name.endsWith("-shm"))
         result[path] = createHash("sha256").update(readFileSync(path)).digest("hex");
     }
   }
@@ -65,1123 +75,447 @@ function fingerprint(root: string): Record<string, string> {
   return result;
 }
 
-describe("channel CLI surface", () => {
-  it("registers the channel group in the root help", () => {
+describe("the rebuilt channel CLI surface", () => {
+  it("registers exactly the nine leaf commands with their local options", () => {
+    const program = buildProgram({ out: () => {}, err: () => {} });
+    const group = program.commands.find((command) => command.name() === "channel");
+    expect(group).toBeDefined();
+    const leaves = new Map(
+      (group?.commands ?? [])
+        .filter((command) => command.name() !== "help")
+        .map((command) => [
+          command.name(),
+          command.options.map((option) => option.long).filter((flag) => flag !== "--help"),
+        ]),
+    );
+    expect([...leaves.keys()].sort()).toEqual([
+      "ack",
+      "add",
+      "close",
+      "create",
+      "list",
+      "messages",
+      "post",
+      "remove",
+      "show",
+    ]);
+    expect(leaves.get("create")).toEqual(["--title", "--main"]);
+    expect(leaves.get("add")).toEqual(["--role"]);
+    expect(leaves.get("remove")).toEqual([]);
+    expect([...(leaves.get("post") ?? [])].sort()).toEqual([
+      "--body",
+      "--body-file",
+      "--from",
+      "--kind",
+      "--ref",
+      "--to",
+    ]);
+    expect([...(leaves.get("messages") ?? [])].sort()).toEqual([
+      "--after",
+      "--all",
+      "--from",
+      "--interval",
+      "--kind",
+      "--limit",
+      "--timeout",
+      "--wait",
+    ]);
+    expect(leaves.get("ack")).toEqual(["--note"]);
+    expect(leaves.get("close")).toEqual([]);
+    expect(leaves.get("list")).toEqual(["--state"]);
+    expect(leaves.get("show")).toEqual([]);
+  });
+
+  it("pins the 60-second wait default and the 2-second interval cheaply beside the behavioral case", () => {
+    const program = buildProgram({ out: () => {}, err: () => {} });
+    const group = program.commands.find((command) => command.name() === "channel");
+    const messages = group?.commands.find((command) => command.name() === "messages");
+    const timeout = messages?.options.find((option) => option.long === "--timeout");
+    const interval = messages?.options.find((option) => option.long === "--interval");
+    expect(timeout?.defaultValue).toBe(60);
+    expect(timeout?.description).toContain("default is 60");
+    expect(interval?.defaultValue).toBe(2);
+    expect(interval?.description).toContain("default is 2");
+  });
+
+  it("shows the group in the root help", () => {
     const h = home();
     const help = cli(["help"], h);
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("channel");
   });
 
-  it("shows --as-participant on every main-role command help", () => {
-    const h = home();
-    const mainRoleCommands = [
-      ["channel", "close", "--help"],
-      ["channel", "participant", "add", "--help"],
-      ["channel", "participant", "deactivate", "--help"],
-      ["channel", "assignment", "add", "--help"],
-      ["channel", "assignment", "close", "--help"],
-      ["channel", "handle", "--help"],
-    ];
-    for (const args of mainRoleCommands) {
-      const help = cli(args, h);
-      expect(help.status).toBe(0);
-      expect(help.stdout).toContain("--as-participant");
-    }
-  });
-
-  it("does not show --as-participant on reads and listings", () => {
-    const h = home();
-    const readCommands = [
-      ["channel", "list", "--help"],
-      ["channel", "show", "--help"],
-      ["channel", "messages", "--help"],
-      ["channel", "read", "--help"],
-    ];
-    for (const args of readCommands) {
-      const help = cli(args, h);
-      expect(help.status).toBe(0);
-      expect(help.stdout).not.toContain("--as-participant <id>");
-    }
-  });
-
-  it("accepts four native entries including an empty one, rejects a fifth", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status, init.stderr).toBe(0);
-    const create = cli(["channel", "create", "--main-handle", "m", "--json"], h);
-    expect(create.status, create.stderr).toBe(0);
-    // F1: top-level data keyset is exactly {channel}.
-    const createEnvelope = JSON.parse(create.stdout) as Record<string, unknown>;
-    expect(Object.keys(createEnvelope.data as object).sort()).toEqual(["channel"]);
-    const channelId = (createEnvelope.data as { channel: { id: string } }).channel.id;
-    const mainId = (createEnvelope.data as { channel: { mainParticipantId: string } }).channel.mainParticipantId;
-
-    const four = cli(
-      [
-        "channel",
-        "participant",
-        "add",
-        channelId,
-        "--role",
-        "worker",
-        "--handle",
-        "w4",
-        "--native",
-        "",
-        "--native",
-        "a",
-        "--native",
-        "b\ttab",
-        "--native",
-        "c",
-        "--as-participant",
-        mainId,
-        "--json",
-      ],
-      h,
-    );
-    expect(four.status, four.stderr).toBe(0);
-    const provenance = (JSON.parse(four.stdout) as { data: { participant: { nativeProvenance: string[] } } }).data
-      .participant.nativeProvenance;
-    expect(provenance).toEqual(["", "a", "b\ttab", "c"]);
-
-    const five = cli(
-      [
-        "channel",
-        "participant",
-        "add",
-        channelId,
-        "--role",
-        "worker",
-        "--handle",
-        "w5",
-        "--native",
-        "1",
-        "--native",
-        "2",
-        "--native",
-        "3",
-        "--native",
-        "4",
-        "--native",
-        "5",
-        "--as-participant",
-        mainId,
-        "--json",
-      ],
-      h,
-    );
-    expect(five.status, five.stderr).not.toBe(0);
-    expect(five.stderr).toContain("CHN_INVALID_INPUT");
-  });
-
-  it("accepts an opaque non-UUID idempotency key", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status).toBe(0);
-    const create = cli(["channel", "create", "--main-handle", "m", "--json"], h);
-    expect(create.status).toBe(0);
-    const channelId = (JSON.parse(create.stdout) as { data: { channel: { id: string } } }).data.channel.id;
-    const mainId = (JSON.parse(create.stdout) as { data: { channel: { mainParticipantId: string } } }).data.channel
-      .mainParticipantId;
-    cli(
-      [
-        "channel",
-        "participant",
-        "add",
-        channelId,
-        "--role",
-        "worker",
-        "--handle",
-        "w",
-        "--as-participant",
-        mainId,
-        "--json",
-      ],
-      h,
-    );
-    const participant = JSON.parse(cli(["channel", "show", channelId, "--json"], h).stdout) as {
-      data: { channel: { participants: Array<{ id: string }> } };
+  it("returns the exact closed JSON keyset of every operation", () => {
+    const h = initialized();
+    const channel = dataOf(cli(["channel", "create", "aq-cli", "--json"], h)) as {
+      channel: Record<string, unknown>;
+      existing: boolean;
     };
-    const workerId = participant.data.channel.participants.find((p) => p.id !== mainId)?.id;
-
-    const submit = cli(
-      [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId as string,
-        "--kind",
-        "report",
-        "--body",
-        "opaque key test",
-        "--idempotency-key",
-        "not-a-uuid-key",
-        "--json",
-      ],
-      h,
-    );
-    expect(submit.status, submit.stderr).toBe(0);
-    const result = JSON.parse(submit.stdout) as { data: { message: { id: string }; replayed: boolean } };
-    expect(result.data.replayed).toBe(false);
-
-    const replay = cli(
-      [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId as string,
-        "--kind",
-        "report",
-        "--body",
-        "opaque key test",
-        "--idempotency-key",
-        "not-a-uuid-key",
-        "--json",
-      ],
-      h,
-    );
-    expect(replay.status, replay.stderr).toBe(0);
-    const replayResult = JSON.parse(replay.stdout) as { data: { replayed: boolean; message: { id: string } } };
-    expect(replayResult.data.replayed).toBe(true);
-    expect(replayResult.data.message.id).toBe(result.data.message.id);
-  });
-
-  it("D1: refuses --wait with --handled or --all, and --interval/--timeout without --wait, as exit-2 usage errors", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status).toBe(0);
-    const create = cli(["channel", "create", "--main-handle", "m", "--json"], h);
-    const channelId = (JSON.parse(create.stdout) as { data: { channel: { id: string } } }).data.channel.id;
-
-    // --wait with --handled is a usage error before any operational startup.
-    const waitHandled = cli(["channel", "messages", channelId, "--wait", "--handled", "--json"], h);
-    expect(waitHandled.status).toBe(2);
-    expect(waitHandled.stderr).toContain("--wait lists only unhandled");
-    expect(waitHandled.stdout).toBe("");
-
-    // --wait with --all is a usage error.
-    const waitAll = cli(["channel", "messages", channelId, "--wait", "--all", "--json"], h);
-    expect(waitAll.status).toBe(2);
-    expect(waitAll.stderr).toContain("--wait lists only unhandled");
-
-    // --interval without --wait is a usage error (user-supplied, not default).
-    const intervalNoWait = cli(["channel", "messages", channelId, "--interval", "3", "--json"], h);
-    expect(intervalNoWait.status).toBe(2);
-    expect(intervalNoWait.stderr).toContain("--interval and --timeout apply only with --wait");
-
-    // --timeout without --wait is a usage error.
-    const timeoutNoWait = cli(["channel", "messages", channelId, "--timeout", "30", "--json"], h);
-    expect(timeoutNoWait.status).toBe(2);
-    expect(timeoutNoWait.stderr).toContain("--interval and --timeout apply only with --wait");
-
-    // Without those flags, a normal listing still works (defaults are not rejected).
-    const normalList = cli(["channel", "messages", channelId, "--json"], h);
-    expect(normalList.status, normalList.stderr).toBe(0);
-  });
-
-  it("D2: refuses mutually exclusive handling filter combinations", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status).toBe(0);
-    const create = cli(["channel", "create", "--main-handle", "m", "--json"], h);
-    const channelId = (JSON.parse(create.stdout) as { data: { channel: { id: string } } }).data.channel.id;
-
-    const both = cli(["channel", "messages", channelId, "--unhandled", "--handled", "--json"], h);
-    expect(both.status).toBe(2);
-    expect(both.stderr).toContain("at most one of --unhandled, --handled, or --all");
-
-    const three = cli(["channel", "messages", channelId, "--unhandled", "--handled", "--all", "--json"], h);
-    expect(three.status).toBe(2);
-    expect(three.stderr).toContain("at most one of --unhandled, --handled, or --all");
-  });
-
-  it("D3: --as registered Project provides provenance without Channel role authority", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status).toBe(0);
-    const workDir = mkdtempSync(join(tmpdir(), "sorage-channel-cli-work-"));
-    cleanups.push(() => rmSync(workDir, { recursive: true, force: true }));
-    const add = cli(["project", "add", "--name", "Alpha", "--dir", workDir], h);
-    expect(add.status, add.stderr).toBe(0);
-
-    // Channel creation with --as records the Project as creator provenance.
-    const createWithAs = cli(["channel", "create", "--main-handle", "m", "--as", "alpha", "--json"], h);
-    expect(createWithAs.status, createWithAs.stderr).toBe(0);
-    const channel = JSON.parse(createWithAs.stdout) as {
-      data: { channel: { id: string; creatorKind: string; mainParticipantId: string } };
+    expect(Object.keys(channel).sort()).toEqual(["channel", "existing"]);
+    expect(Object.keys(channel.channel).sort()).toEqual([
+      "closedAt",
+      "createdAt",
+      "id",
+      "main",
+      "messageCount",
+      "name",
+      "participantCount",
+      "participants",
+      "state",
+      "title",
+      "unhandledCount",
+    ]);
+    const added = dataOf(cli(["channel", "add", "aq-cli", "w1", "--role", "worker", "--json"], h)) as {
+      participant: Record<string, unknown>;
     };
-    expect(channel.data.channel.creatorKind).toBe("registered_project");
-
-    // Without --as from an unbound cwd, the actor falls to unregistered workspace.
-    const createWithout = cli(["channel", "create", "--main-handle", "m2", "--json"], h);
-    expect(createWithout.status, createWithout.stderr).toBe(0);
-    const channel2 = JSON.parse(createWithout.stdout) as {
-      data: { channel: { creatorKind: string } };
+    expect(Object.keys(added).sort()).toEqual(["participant"]);
+    expect(Object.keys(added.participant).sort()).toEqual(["addedAt", "handle", "removedAt", "role"]);
+    const posted = dataOf(
+      cli(["channel", "post", "aq-cli", "--from", "w1", "--kind", "report", "--body", "b", "--json"], h),
+    ) as {
+      message: Record<string, unknown>;
+      duplicate: boolean;
     };
-    expect(channel2.data.channel.creatorKind).toBe("unregistered_workspace");
-
-    // --as with an unknown Project gives the existing resolution error, not an invented Channel one.
-    const invalidAs = cli(["channel", "create", "--main-handle", "m3", "--as", "nonexistent", "--json"], h);
-    expect(invalidAs.status, invalidAs.stderr).not.toBe(0);
-    expect(invalidAs.stderr).not.toContain("CHN_");
+    expect(Object.keys(posted).sort()).toEqual(["duplicate", "message"]);
+    expect(Object.keys(posted.message).sort()).toEqual([
+      "body",
+      "bodyPath",
+      "bodyPending",
+      "createdAt",
+      "from",
+      "handleNote",
+      "handled",
+      "handledAt",
+      "kind",
+      "ref",
+      "seq",
+      "to",
+    ]);
+    const listed = dataOf(cli(["channel", "messages", "aq-cli", "--json"], h)) as { items: unknown[] };
+    expect(Object.keys(listed)).toEqual(["items"]);
+    const acked = dataOf(cli(["channel", "ack", "aq-cli", "1", "--note", "ok", "--json"], h)) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(acked).sort()).toEqual(["alreadyHandled", "handled", "note"]);
+    const closed = dataOf(cli(["channel", "close", "aq-cli", "--json"], h)) as { channel: Record<string, unknown> };
+    expect(Object.keys(closed)).toEqual(["channel"]);
+    const summaries = dataOf(cli(["channel", "list", "--json"], h)) as { items: Array<Record<string, unknown>> };
+    expect(Object.keys(summaries)).toEqual(["items"]);
+    expect(Object.keys(summaries.items[0] as Record<string, unknown>).sort()).toEqual([
+      "closedAt",
+      "createdAt",
+      "id",
+      "main",
+      "name",
+      "state",
+      "title",
+    ]);
+    const shown = dataOf(cli(["channel", "show", "aq-cli", "--json"], h));
+    expect(Object.keys(shown)).toEqual(["channel"]);
+    const removed = dataOf(cli(["channel", "remove", "aq-cli", "w1", "--json"], h)) as {
+      participant: Record<string, unknown>;
+    };
+    expect(Object.keys(removed)).toEqual(["participant"]);
   });
 
-  it.each(["absolute", "tilde"])(
-    "keeps replay capture outside an external Vault with a %s path and TMPDIR inside it",
-    async (pathMode) => {
-      const h = home();
-      const external = home();
-      const taskEnv = { HOME: external };
-      const vault = join(external, "vault");
-      expect(cli(["init", "--non-interactive", "--vault", vault], h, taskEnv).status).toBe(0);
-      if (pathMode === "tilde") {
-        // Change only the valid file-view representation, preserving the actual
-        // Vault binding. Shell expansion of an init argument is a different path.
-        const configPath = join(h, "config.yaml");
-        const text = readFileSync(configPath, "utf8");
-        const absolute = `  path: ${vault}\n`;
-        expect(text).toContain(absolute);
-        writeFileSync(configPath, text.replace(absolute, "  path: ~/vault\n"));
-      }
-      const created = JSON.parse(cli(["channel", "create", "--main-handle", "m", "--json"], h, taskEnv).stdout).data
-        .channel;
-      const worker = JSON.parse(
-        cli(
-          [
-            "channel",
-            "participant",
-            "add",
-            created.id,
-            "--role",
-            "worker",
-            "--handle",
-            "w",
-            "--as-participant",
-            created.mainParticipantId,
-            "--json",
-          ],
-          h,
-          taskEnv,
-        ).stdout,
-      ).data.participant;
-      const original = join(h, "original.txt");
-      writeFileSync(original, `\uFEFF${"body ".repeat(1_600_000)}tail`);
-      const submit = [
-        "channel",
-        "submit",
-        created.id,
-        "--as-participant",
-        worker.id,
-        "--kind",
-        "report",
-        "--body-file",
-        original,
-        "--idempotency-key",
-        "scratch-key",
-        "--json",
-      ];
-      const accepted = cli(submit, h, taskEnv);
-      expect(accepted.status, accepted.stderr).toBe(0);
-      const tmpInsideVault = join(vault, "tmp-inside");
-      mkdirSync(tmpInsideVault);
-      const observation = home();
-      const tracePath = join(observation, "scratch.jsonl");
-      const preload = join(observation, "observe-scratch.mjs");
-      // Observe the actual native filesystem call, including scratch that is
-      // removed before exit. Directory notifications can drop/coalesce events.
-      writeFileSync(
-        preload,
-        `import { mock } from "bun:test";
-import * as fs from "node:fs";
-import { dirname, sep } from "node:path";
-const original = fs.mkdtempSync;
-const roots = ${JSON.stringify([h, vault])}.map((root) => fs.realpathSync(root));
-mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
-  const parent = fs.realpathSync(dirname(String(prefix)));
-  if (roots.some((root) => parent === root || parent.startsWith(root + sep))) {
-    throw new Error("REPLAY_SCRATCH_INSIDE_PROTECTED_ROOT");
-  }
-  const path = original(prefix, options);
-  fs.appendFileSync(${JSON.stringify(tracePath)}, JSON.stringify({ parent, path }) + "\\n");
-  return path;
-} }));
-`,
-      );
-      const beforeHome = fingerprint(h),
-        beforeVault = fingerprint(vault);
-      // Positive controls prove that the preload rejects either forbidden
-      // placement before its transient creation, rather than silently missing it.
-      for (const root of [h, tmpInsideVault]) {
-        const control = spawnSync(
-          "bun",
-          [
-            "--preload",
-            preload,
-            "--eval",
-            `import { mkdtempSync } from "node:fs"; mkdtempSync(${JSON.stringify(join(root, "forbidden-"))});`,
-          ],
-          { encoding: "utf8", env: { ...process.env, ...taskEnv, SORAGE_HOME: h }, timeout: 10_000 },
-        );
-        expect(control.status).not.toBe(0);
-        expect(control.stderr).toContain("REPLAY_SCRATCH_INSIDE_PROTECTED_ROOT");
-      }
-      const replay = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-        const child = spawn(
-          "bun",
-          [
-            "--preload",
-            preload,
-            entry,
-            ...submit,
-            "--replay-only",
-            "--as",
-            "missing-current-project",
-            "--expected-row-version",
-            "9",
-          ],
-          {
-            cwd: join(h, "work"),
-            env: { ...process.env, ...taskEnv, SORAGE_HOME: h, TMPDIR: tmpInsideVault },
-            timeout: 10_000,
-          },
-        );
-        let stdout = "",
-          stderr = "";
-        child.stdout.setEncoding("utf8");
-        child.stderr.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => {
-          stdout += chunk;
-        });
-        child.stderr.on("data", (chunk: string) => {
-          stderr += chunk;
-        });
-        child.once("error", reject);
-        child.once("close", (code) => resolve({ code, stdout, stderr }));
-      });
-      expect(replay.code, replay.stderr).toBe(0);
-      expect(JSON.parse(replay.stdout).data).toMatchObject({
-        replayed: true,
-        message: { id: JSON.parse(accepted.stdout).data.message.id },
-      });
-      const scratch = readFileSync(tracePath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { parent: string; path: string });
-      expect(scratch.some((record) => record.path.includes("sorage-channel-recovery-"))).toBe(true);
-      for (const record of scratch) {
-        for (const root of [h, vault]) {
-          expect(record.parent === root || record.parent.startsWith(`${root}/`)).toBe(false);
-        }
-      }
-      expect(fingerprint(h)).toEqual(beforeHome);
-      expect(fingerprint(vault)).toEqual(beforeVault);
-    },
-  );
+  it("refuses the rebuilt option incoherences as exit-2 usage errors", () => {
+    const h = initialized();
+    expect(cli(["channel", "create", "aq-cli", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "list", "aq-cli", "--cursor", "c", "--json"], h).status).toBe(2);
+    expect(cli(["channel", "messages", "aq-cli", "--limit", "5", "--cursor", "c", "--json"], h).status).toBe(2);
+    expect(cli(["channel", "close", "aq-cli", "--limit", "5", "--json"], h).status).toBe(2);
+    expect(cli(["channel", "messages", "aq-cli", "--wait", "--all", "--json"], h).status).toBe(2);
+    expect(cli(["channel", "messages", "aq-cli", "--interval", "1", "--json"], h).status).toBe(2);
+    expect(cli(["channel", "messages", "aq-cli", "--timeout", "5", "--json"], h).status).toBe(2);
+    expect(
+      cli(["channel", "messages", "aq-cli", "--wait", "--interval", "0", "--timeout", "1", "--json"], h).status,
+    ).toBe(2);
+    expect(cli(["channel", "create", "aq-cli2", "--expected-row-version", "1", "--json"], h).status).toBe(2);
+  });
 
-  it("accepts the uniform version option on all seven unversioned mutations and refuses it on reads", () => {
-    const h = home();
-    expect(cli(["init", "--non-interactive"], h).status).toBe(0);
-    function mutate(args: string[], before = false) {
-      const flag = ["--expected-row-version", "9"];
-      const result = cli(before ? [...flag, ...args, "--json"] : [...args, ...flag, "--json"], h);
-      expect(result.status, result.stderr).toBe(0);
-      return JSON.parse(result.stdout).data;
+  it("refuses the removed root options with CHN_INVALID_INPUT, both forms", () => {
+    const h = initialized();
+    const json = cli(["channel", "create", "aq-cli", "--as", "alpha", "--json"], h);
+    expect(json.status).toBe(64);
+    expect(errorOf(json).code).toBe("CHN_INVALID_INPUT");
+    expect(errorOf(json).message).toContain("provenance is always User");
+    const human = cli(["channel", "create", "aq-cli", "--confirm"], h);
+    expect(human.status).toBe(64);
+    expect(human.stderr).toContain("CHN_INVALID_INPUT");
+    expect(human.stderr).toContain("--confirm");
+  });
+
+  it("renders both forms of the reads: list, show, messages, and ack", () => {
+    const h = initialized();
+    for (const args of [
+      ["channel", "create", "render", "--title", "Rendered"],
+      ["channel", "add", "render", "w1", "--role", "worker"],
+      ["channel", "post", "render", "--from", "w1", "--kind", "report", "--body", "human form body"],
+    ]) {
+      expect(cli([...args, "--json"], h).status).toBe(0);
     }
-    const channel = mutate(["channel", "create", "--main-handle", "m"], true).channel;
-    const assertion = ["--as-participant", channel.mainParticipantId];
-    const worker = mutate([
-      "channel",
-      "participant",
-      "add",
-      channel.id,
-      "--role",
-      "worker",
-      "--handle",
-      "w",
-      ...assertion,
-    ]).participant;
-    const assignment = mutate(
-      ["channel", "assignment", "add", channel.id, "--label", "task", "--participant", worker.id, ...assertion],
-      true,
-    ).assignment;
-    const submit = [
-      "channel",
-      "submit",
-      channel.id,
-      "--as-participant",
-      worker.id,
-      "--kind",
-      "report",
-      "--body",
-      "report",
-    ];
-    const message = mutate(submit).message;
-    mutate(["channel", "assignment", "close", channel.id, assignment.id, ...assertion]);
-    mutate(["channel", "participant", "deactivate", channel.id, worker.id, ...assertion], true);
-    mutate(["channel", "close", channel.id, ...assertion]);
+    const list = cli(["channel", "list"], h);
+    expect(list.status).toBe(0);
+    expect(list.stdout).toContain("render [open] Rendered — main: main");
+    const show = cli(["channel", "show", "render"], h);
+    expect(show.status).toBe(0);
+    expect(show.stdout).toContain("Main: main");
+    expect(show.stdout).toContain("w1 [worker]");
+    expect(show.stdout).toContain("Messages: 1 (1 unhandled)");
+    const messages = cli(["channel", "messages", "render"], h);
+    expect(messages.status).toBe(0);
+    expect(messages.stdout).toContain("#1 [report] w1: human form body");
+    const acked = cli(["channel", "ack", "render", "1"], h);
+    expect(acked.status).toBe(0);
+    expect(acked.stdout).toContain("Handled: #1");
+    expect(acked.stdout).toContain("Already handled: none");
+  });
+
+  it("refuses unknown kinds at the parser stage and typed role/state field violations at exit 64 (38.4 line 1712)", () => {
+    const h = initialized();
+    // Only --kind is a parser usage error; bad role and state values are
+    // field violations through the core validators (decision item 4).
+    expect(cli(["channel", "post", "x", "--from", "w", "--kind", "bug", "--body", "b", "--json"], h).status).toBe(2);
+    expect(cli(["channel", "messages", "x", "--kind", "bug", "--json"], h).status).toBe(2);
+    for (const args of [
+      ["channel", "add", "x", "w", "--role", "boss", "--json"],
+      ["channel", "list", "--state", "frozen", "--json"],
+    ]) {
+      const result = cli(args, h);
+      expect(result.status, args.join(" ")).toBe(64);
+      expect(errorOf(result).code, args.join(" ")).toBe("CHN_INVALID_INPUT");
+    }
+    const human = cli(["channel", "add", "x", "w", "--role", "boss"], h);
+    expect(human.status).toBe(64);
+    expect(human.stderr).toContain("CHN_INVALID_INPUT");
+  });
+
+  it("reads never mutate: the home fingerprint is identical across both forms", () => {
+    const h = initialized();
+    for (const args of [
+      ["channel", "create", "stable"],
+      ["channel", "add", "stable", "w1", "--role", "worker"],
+      ["channel", "post", "stable", "--from", "w1", "--kind", "report", "--body", "stable body"],
+      ["channel", "ack", "stable", "1"],
+    ]) {
+      expect(cli([...args, "--json"], h).status).toBe(0);
+    }
+    const before = fingerprint(h);
     for (const args of [
       ["channel", "list"],
-      ["channel", "show", channel.id],
-      ["channel", "messages", channel.id],
-      ["channel", "read", channel.id, message.id],
+      ["channel", "list", "--json"],
+      ["channel", "show", "stable"],
+      ["channel", "show", "stable", "--json"],
+      ["channel", "messages", "stable", "--all"],
+      ["channel", "messages", "stable", "--all", "--json"],
+      ["channel", "messages", "stable", "--wait", "--timeout", "1", "--json"],
     ]) {
-      const result = cli(["--expected-row-version", "1", ...args, "--json"], h);
-      expect(result.status, result.stderr).toBe(2);
-      expect(result.stdout).toBe("");
+      expect(cli(args, h).status, args.join(" ")).toBe(0);
     }
-    for (const value of ["1.5", "-1", "9007199254740992", "not-a-number"]) {
-      const result = cli(["channel", "create", "--main-handle", "invalid-version", "--expected-row-version", value], h);
-      expect(result.status, result.stderr).toBe(2);
-    }
-    const unchanged = JSON.parse(cli(["channel", "show", channel.id, "--json"], h).stdout).data.channel;
-    expect(unchanged.messageCount).toBe(1);
-    expect(unchanged.unhandledCount).toBe(1);
-    expect(unchanged.state).toBe("closed");
+    expect(fingerprint(h)).toEqual(before);
   });
 
-  it("P3-G: handle accepts the global --expected-row-version before or after the command", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status).toBe(0);
-    const create = cli(["channel", "create", "--main-handle", "m", "--json"], h);
-    const channelId = (JSON.parse(create.stdout) as { data: { channel: { id: string; mainParticipantId: string } } })
-      .data.channel.id;
-    const mainId = (JSON.parse(create.stdout) as { data: { channel: { mainParticipantId: string } } }).data.channel
-      .mainParticipantId;
-    cli(
-      [
-        "channel",
-        "participant",
-        "add",
-        channelId,
-        "--role",
-        "worker",
-        "--handle",
-        "w",
-        "--as-participant",
-        mainId,
-        "--json",
-      ],
+  it("answers the typed refusals of the 38.4 line 1712 matrix with their exits", () => {
+    const h = initialized();
+    expect(cli(["channel", "show", "ghost", "--json"], h).status).toBe(66);
+    expect(errorOf(cli(["channel", "show", "ghost", "--json"], h)).code).toBe("CHN_NOT_FOUND");
+    expect(cli(["channel", "ack", "ghost", "1", "--json"], h).status).toBe(66);
+    expect(cli(["channel", "messages", "ghost", "--json"], h).status).toBe(66);
+    expect(cli(["channel", "create", "aq-cli", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "add", "aq-cli", "w1", "--role", "worker", "--json"], h).status).toBe(0);
+    expect(
+      cli(["channel", "post", "aq-cli", "--from", "w1", "--kind", "report", "--body", "b", "--json"], h).status,
+    ).toBe(0);
+    const badAck = cli(["channel", "ack", "aq-cli", "1", "99", "--json"], h);
+    expect(badAck.status).toBe(66);
+    expect(errorOf(badAck).code).toBe("CHN_MESSAGE_NOT_FOUND");
+    expect(errorOf(badAck).message).toContain("99");
+    expect(cli(["channel", "messages", "aq-cli", "--from", "ghost", "--json"], h).status).toBe(66);
+    expect(cli(["channel", "remove", "aq-cli", "ghost", "--json"], h).status).toBe(66);
+    const uuidShaped = cli(["channel", "create", "10000000-0000-4000-8000-000000000001", "--json"], h);
+    expect(uuidShaped.status).toBe(64);
+    expect(errorOf(uuidShaped).code).toBe("CHN_INVALID_INPUT");
+    const mainPost = cli(
+      ["channel", "post", "aq-cli", "--from", "main", "--kind", "report", "--body", "b", "--json"],
       h,
     );
-    const show = JSON.parse(cli(["channel", "show", channelId, "--json"], h).stdout) as {
-      data: { channel: { participants: Array<{ id: string }> } };
-    };
-    const workerId = show.data.channel.participants.find((p) => p.id !== mainId)?.id;
-    cli(
-      [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId as string,
-        "--kind",
-        "report",
-        "--body",
-        "handle me",
-        "--json",
-      ],
+    expect(mainPost.status).toBe(64);
+    expect(errorOf(mainPost).message).toContain("upstream");
+    const relayWithoutTo = cli(
+      ["channel", "post", "aq-cli", "--from", "w1", "--kind", "relay_request", "--body", "b", "--json"],
       h,
     );
-    const messages = JSON.parse(cli(["channel", "messages", channelId, "--json"], h).stdout) as {
-      data: { items: Array<{ id: string }> };
-    };
-    const messageId = messages.data.items[0]?.id;
-
-    // Global flag before the command.
-    const before = cli(
-      [
-        "--expected-row-version",
-        "1",
-        "channel",
-        "handle",
-        channelId,
-        messageId as string,
-        "--as-participant",
-        mainId,
-        "--json",
-      ],
+    expect(relayWithoutTo.status).toBe(64);
+    const toWithReport = cli(
+      ["channel", "post", "aq-cli", "--from", "w1", "--kind", "report", "--to", "main", "--body", "b", "--json"],
       h,
     );
-    // This should fail because the message was already handled by the first attempt (or succeed if this is the first).
-    // Re-submit for the second test.
-    expect(before.status, before.stderr).toBe(0);
-
-    // Submit another message and handle with the flag after the command.
-    cli(
-      [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId as string,
-        "--kind",
-        "report",
-        "--body",
-        "second",
-        "--json",
-      ],
+    expect(toWithReport.status).toBe(64);
+    expect(cli(["channel", "close", "aq-cli", "--json"], h).status).toBe(0);
+    const closedPost = cli(
+      ["channel", "post", "aq-cli", "--from", "w1", "--kind", "report", "--body", "c", "--json"],
       h,
     );
-    const messages2 = JSON.parse(cli(["channel", "messages", channelId, "--json"], h).stdout) as {
-      data: { items: Array<{ id: string }> };
-    };
-    const messageId2 = messages2.data.items[0]?.id;
-    const after = cli(
-      [
-        "channel",
-        "handle",
-        channelId,
-        messageId2 as string,
-        "--as-participant",
-        mainId,
-        "--expected-row-version",
-        "1",
-        "--json",
-      ],
-      h,
-    );
-    expect(after.status, after.stderr).toBe(0);
-
-    // Missing version on handle is an error.
-    cli(
-      [
-        "channel",
-        "submit",
-        channelId,
-        "--as-participant",
-        workerId as string,
-        "--kind",
-        "report",
-        "--body",
-        "third",
-        "--json",
-      ],
-      h,
-    );
-    const messages3 = JSON.parse(cli(["channel", "messages", channelId, "--json"], h).stdout) as {
-      data: { items: Array<{ id: string }> };
-    };
-    const messageId3 = messages3.data.items[0]?.id;
-    const missing = cli(
-      ["channel", "handle", channelId, messageId3 as string, "--as-participant", mainId, "--json"],
-      h,
-    );
-    expect(missing.status, missing.stderr).not.toBe(0);
-    expect(missing.stderr).toContain("expected-row-version");
+    expect(closedPost.status).toBe(65);
+    expect(errorOf(closedPost).code).toBe("CHN_CLOSED");
+    const closedAdd = cli(["channel", "add", "aq-cli", "late", "--role", "judge", "--json"], h);
+    expect(closedAdd.status).toBe(65);
+    expect(cli(["channel", "ack", "aq-cli", "1", "--json"], h).status).toBe(0);
+    const closedName = cli(["channel", "create", "aq-cli", "--json"], h);
+    expect(closedName.status).toBe(65);
   });
 
-  it("renders channel list with ChannelSummary fields, not MessageSummary fields", () => {
-    const h = home();
-    const init = cli(["init", "--non-interactive"], h);
-    expect(init.status).toBe(0);
-    cli(["channel", "create", "--main-handle", "alpha-main", "--title", "Alpha Channel", "--json"], h);
-    cli(["channel", "create", "--main-handle", "beta-main", "--json"], h);
-
-    const list = cli(["channel", "list"], h);
-    expect(list.status, list.stderr).toBe(0);
-    expect(list.stdout).toContain("alpha-main");
-    expect(list.stdout).toContain("Alpha Channel");
-    expect(list.stdout).toContain("beta-main");
-    expect(list.stdout).toContain("[open]");
-    expect(list.stdout).not.toContain("undefined");
-    expect(list.stdout).not.toContain("bodyPreview");
-    expect(list.stdout).not.toContain("senderHandle");
-    expect(list.stdout).not.toContain("[report]");
-    expect(list.stdout).not.toContain("[question]");
-
-    // An empty list is reasonable.
-    const emptyHome = home();
-    cli(["init", "--non-interactive"], emptyHome);
-    const empty = cli(["channel", "list"], emptyHome);
-    expect(empty.status, empty.stderr).toBe(0);
-    expect(empty.stdout.trim()).toBe("");
+  it("times out an empty wait at exit 0 with meta.timedOut", () => {
+    const h = initialized();
+    expect(cli(["channel", "create", "quiet", "--json"], h).status).toBe(0);
+    const wait = cli(["channel", "messages", "quiet", "--wait", "--timeout", "1", "--json"], h);
+    expect(wait.status).toBe(0);
+    const parsed = JSON.parse(wait.stdout) as { data: { items: unknown[] }; meta: { timedOut?: boolean } };
+    expect(parsed.data.items).toEqual([]);
+    expect(parsed.meta.timedOut).toBe(true);
+    const human = cli(["channel", "messages", "quiet", "--wait", "--timeout", "1"], h);
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("No matching unhandled message appeared within 1s");
   });
 
-  it("F1: every operation returns its exact closed top-level data keyset", () => {
-    const h = home();
-    cli(["init", "--non-interactive"], h);
-    const keys = (stdout: string): string[] => Object.keys(JSON.parse(stdout).data as object).sort();
-
-    // create → {channel}
-    const create = cli(["channel", "create", "--main-handle", "m", "--title", "T", "--json"], h);
-    expect(create.status).toBe(0);
-    expect(keys(create.stdout)).toEqual(["channel"]);
-    const ch = JSON.parse(create.stdout).data.channel as { id: string; mainParticipantId: string };
-    const channelId = ch.id;
-    const mainId = ch.mainParticipantId;
-
-    // list → {items, nextCursor}
-    const list = cli(["channel", "list", "--json"], h);
-    expect(list.status).toBe(0);
-    expect(keys(list.stdout)).toEqual(["items", "nextCursor"]);
-
-    // show → {channel}
-    const show = cli(["channel", "show", channelId, "--json"], h);
-    expect(show.status).toBe(0);
-    expect(keys(show.stdout)).toEqual(["channel"]);
-
-    // participant add → {participant}
-    const participant = cli(
-      [
-        "channel",
-        "participant",
-        "add",
-        channelId,
-        "--role",
-        "worker",
-        "--handle",
-        "w",
-        "--as-participant",
-        mainId,
-        "--json",
-      ],
+  it("passes exact positional identities through without joining or splitting on spaces (decision item 1)", () => {
+    const h = initialized();
+    // A name and a handle with internal spaces flow byte-exact through every
+    // command; `run one` and `run` never alias (CHN-002).
+    expect(cli(["channel", "create", "run", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "create", "run one", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "add", "run one", "worker one", "--role", "worker", "--json"], h).status).toBe(0);
+    const posted = cli(
+      ["channel", "post", "run one", "--from", "worker one", "--kind", "report", "--body", "spaced body", "--json"],
       h,
     );
-    expect(participant.status, participant.stderr).toBe(0);
-    expect(keys(participant.stdout)).toEqual(["participant"]);
-    const workerId = JSON.parse(participant.stdout).data.participant.id as string;
-
-    // participant deactivate → {participant}
-    const deactivate = cli(
-      ["channel", "participant", "deactivate", channelId, workerId, "--as-participant", mainId, "--json"],
-      h,
-    );
-    expect(deactivate.status).toBe(0);
-    expect(keys(deactivate.stdout)).toEqual(["participant"]);
-
-    // assignment add → {assignment}
-    const assignment = cli(
-      ["channel", "assignment", "add", channelId, "--label", "L", "--as-participant", mainId, "--json"],
-      h,
-    );
-    expect(assignment.status).toBe(0);
-    expect(keys(assignment.stdout)).toEqual(["assignment"]);
-    const assignmentId = JSON.parse(assignment.stdout).data.assignment.id as string;
-
-    // assignment close → {assignment}
-    const closeA = cli(
-      ["channel", "assignment", "close", channelId, assignmentId, "--as-participant", mainId, "--json"],
-      h,
-    );
-    expect(closeA.status).toBe(0);
-    expect(keys(closeA.stdout)).toEqual(["assignment"]);
-
-    // submit → {message, replayed, contentActivating}
-    const submitArgs = [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      mainId,
-      "--kind",
-      "report",
-      "--body",
-      "body text",
-      "--idempotency-key",
-      "wrapper-original",
-      "--json",
-    ];
-    const submit = cli(submitArgs, h);
-    expect(submit.status, submit.stderr).toBe(0);
-    expect(keys(submit.stdout)).toEqual(["contentActivating", "message", "replayed"]);
-    const messageId = JSON.parse(submit.stdout).data.message.id as string;
-    const replay = cli([...submitArgs, "--replay-only"], h);
-    expect(replay.status, replay.stderr).toBe(0);
-    expect(keys(replay.stdout)).toEqual(["contentActivating", "message", "replayed"]);
-    expect(JSON.parse(replay.stdout).data.replayed).toBe(true);
-
-    // messages → {items, nextCursor}
-    const messages = cli(["channel", "messages", channelId, "--json"], h);
-    expect(messages.status).toBe(0);
-    expect(keys(messages.stdout)).toEqual(["items", "nextCursor"]);
-    const pending = cli(["channel", "messages", channelId, "--wait", "--timeout", "1", "--json"], h);
-    expect(pending.status, pending.stderr).toBe(0);
-    expect(keys(pending.stdout)).toEqual(["items", "nextCursor"]);
-    expect(JSON.parse(pending.stdout).data.items).toHaveLength(1);
-
-    // read → {message}
-    const read = cli(["channel", "read", channelId, messageId, "--json"], h);
-    expect(read.status).toBe(0);
-    expect(keys(read.stdout)).toEqual(["message"]);
-
-    // handle → {message, bodyPreviewUnavailable}
-    const handle = cli(
-      ["channel", "handle", channelId, messageId, "--expected-row-version", "1", "--as-participant", mainId, "--json"],
-      h,
-    );
-    expect(handle.status, handle.stderr).toBe(0);
-    expect(keys(handle.stdout)).toEqual(["bodyPreviewUnavailable", "message"]);
-    const timeout = cli(["channel", "messages", channelId, "--wait", "--interval", "1", "--timeout", "1", "--json"], h);
-    expect(timeout.status, timeout.stderr).toBe(0);
-    expect(keys(timeout.stdout)).toEqual(["items", "nextCursor"]);
-    expect(JSON.parse(timeout.stdout)).toMatchObject({
-      data: { items: [], nextCursor: null },
-      meta: { timedOut: true },
+    expect(posted.status, posted.stderr).toBe(0);
+    expect((dataOf(posted) as { message: { from: string } }).message.from).toBe("worker one");
+    const messages = cli(["channel", "messages", "run one", "--json"], h);
+    expect((dataOf(messages) as { items: Array<{ from: string }> }).items[0]?.from).toBe("worker one");
+    const acked = cli(["channel", "ack", "run one", "1", "--json"], h);
+    expect(acked.status, acked.stderr).toBe(0);
+    const shown = cli(["channel", "show", "run one", "--json"], h);
+    expect((dataOf(shown) as { channel: { name: string; participantCount: number } }).channel).toMatchObject({
+      name: "run one",
+      participantCount: 2,
     });
-
-    // close → {channel}
-    const close = cli(["channel", "close", channelId, "--as-participant", mainId, "--json"], h);
-    expect(close.status).toBe(0);
-    expect(keys(close.stdout)).toEqual(["channel"]);
-  });
-
-  it("refuses conflicting body sources in normal and replay-only modes without changing the original outcome", () => {
-    const h = home();
-    cli(["init", "--non-interactive"], h);
-    const create = cli(["channel", "create", "--main-handle", "m", "--json"], h);
-    const channelId = JSON.parse(create.stdout).data.channel.id as string;
-    const mainId = JSON.parse(create.stdout).data.channel.mainParticipantId as string;
-    const bodyFile = join(h, "body.txt");
-    writeFileSync(bodyFile, "\uFEFFfile body\r\n");
-    const originalArgs = [
-      "channel",
-      "submit",
-      channelId,
-      "--as-participant",
-      mainId,
-      "--kind",
-      "report",
-      "--body-file",
-      bodyFile,
-      "--idempotency-key",
-      "original-file-key",
-      "--json",
-    ];
-    const original = cli(originalArgs, h);
-    expect(original.status, original.stderr).toBe(0);
-    const authoritative = () =>
-      Object.fromEntries(Object.entries(fingerprint(h)).filter(([path]) => !path.startsWith(`${join(h, "logs")}/`)));
-    const before = authoritative();
-    for (const mode of [[], ["--replay-only"]]) {
-      const beforeInvocation = fingerprint(h);
-      const refused = cli([...originalArgs, "--body", "different text body", ...mode], h);
-      expect(refused.status, refused.stderr).toBe(64);
-      expect(JSON.parse(refused.stderr).error.code).toBe("CHN_INVALID_INPUT");
-      expect(refused.stderr).toContain("Choose one body source");
-      // Normal errors retain the existing diagnostic logger. Both modes
-      // preserve authoritative bytes; replay-only must not even change logs.
-      expect(authoritative()).toEqual(before);
-      if (mode.length > 0) expect(fingerprint(h)).toEqual(beforeInvocation);
-    }
-    const beforeRecovery = fingerprint(h);
-    const recovered = cli([...originalArgs, "--replay-only"], h);
-    expect(recovered.status, recovered.stderr).toBe(0);
-    expect(JSON.parse(recovered.stdout).data).toEqual({
-      message: JSON.parse(original.stdout).data.message,
-      replayed: true,
-      contentActivating: false,
+    const removed = cli(["channel", "remove", "run one", "worker one", "--json"], h);
+    expect(removed.status, removed.stderr).toBe(0);
+    // The plain `run` Channel was never touched by any `run one` operation.
+    const plain = cli(["channel", "show", "run", "--json"], h);
+    expect((dataOf(plain) as { channel: { participantCount: number; messageCount: number } }).channel).toMatchObject({
+      participantCount: 1,
+      messageCount: 0,
     });
-    expect(fingerprint(h)).toEqual(beforeRecovery);
+    // Leading and trailing spaces and a whitespace-only value pass byte-exact;
+    // the CLI never trims an identity (the whitespace-only name is a
+    // bounded-but-valid identity under the validators' exact rule).
+    const led = cli(["channel", "create", " padded ", "--main", " main handle ", "--json"], h);
+    expect(led.status, led.stderr).toBe(0);
+    const added = cli(["channel", "add", " padded ", " handle two ", "--role", "worker", "--json"], h);
+    expect(added.status, added.stderr).toBe(0);
+    expect((dataOf(added) as { participant: { handle: string } }).participant.handle).toBe(" handle two ");
+    const shownPadded = cli(["channel", "show", " padded ", "--json"], h);
+    expect((dataOf(shownPadded) as { channel: { name: string; main: string } }).channel).toMatchObject({
+      name: " padded ",
+      main: " main handle ",
+    });
+    // A whitespace-only value is a bounded identity under the validators'
+    // exact rule (only the empty string is empty), and it passes through the
+    // CLI byte-exact — never trimmed and never refused.
+    const blank = cli(["channel", "create", "   ", "--main", "  ", "--json"], h);
+    expect(blank.status, blank.stderr).toBe(0);
+    expect((dataOf(blank) as { channel: { name: string; main: string } }).channel).toMatchObject({
+      name: "   ",
+      main: "  ",
+    });
   });
 
-  it.each([false, true])("keeps recovery failures non-mutating with JSON=%s", (json) => {
-    const h = home();
-    expect(cli(["init", "--non-interactive"], h).status).toBe(0);
-    const created = JSON.parse(cli(["channel", "create", "--main-handle", "m", "--json"], h).stdout).data.channel;
-    const bodyFile = join(h, "original.txt");
-    writeFileSync(bodyFile, "\uFEFForiginal\r\n");
-    const base = ["channel", "submit", created.id, "--as-participant", created.mainParticipantId, "--kind", "report"];
-    const original = [...base, "--body-file", bodyFile, "--idempotency-key", "original-key"];
-    expect(cli([...original, "--json"], h).status).toBe(0);
-    const output = json ? ["--json"] : [];
-    const replay = [...original, "--replay-only", ...output];
-
-    function refused(args: string[], code: string, status: number, preload?: string) {
-      const before = fingerprint(h);
-      const result =
-        preload === undefined
-          ? cli(args, h)
-          : spawnSync("bun", ["--preload", preload, entry, ...args], {
-              encoding: "utf8",
-              cwd: join(h, "work"),
-              env: { ...process.env, SORAGE_HOME: h },
-              timeout: 10_000,
-            });
-      expect(result.status, result.stderr).toBe(status);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(code);
-      expect(result.stderr).toContain("original submission outcome remains unknown");
-      expect(result.stderr).toContain("request ");
-      expect(result.stderr).not.toMatch(
-        /\b(?:check|see|inspect)\s+(?:the\s+)?(?:installation\s+)?logs?\b|sorage\.log/i,
-      );
-      if (json) expect(JSON.parse(result.stderr as string).error.code).toBe(code);
-      expect(fingerprint(h)).toEqual(before);
+  it("refuses malformed ack operands whole, before any mutation (decision item 2)", () => {
+    const h = initialized();
+    for (const args of [
+      ["channel", "ack", "c", "1junk", "--json"],
+      ["channel", "ack", "c", "1.5", "--json"],
+      ["channel", "ack", "c", "1e3", "--json"],
+      ["channel", "ack", "c", "+1", "--json"],
+      ["channel", "ack", "c", "0x1", "--json"],
+      ["channel", "ack", "c", "", "--json"],
+      ["channel", "ack", "c", "9007199254740992", "--json"],
+    ]) {
+      const result = cli(args, h);
+      expect(result.status, args.join(" ")).toBe(64);
+      expect(errorOf(result).code, args.join(" ")).toBe("CHN_INVALID_INPUT");
     }
-
-    refused([...replay, "--confirm"], "CHN_INVALID_INPUT", 64);
-    refused([...replay, "--body", "conflicting source"], "CHN_INVALID_INPUT", 64);
-    refused([...base, "--body-file", bodyFile, "--replay-only", ...output], "CHN_INVALID_INPUT", 64);
-    refused(
-      [...base, "--body-file", bodyFile, "--idempotency-key", "unknown-original", "--replay-only", ...output],
-      "CHN_REPLAY_UNAVAILABLE",
-      75,
+    expect(cli(["channel", "create", "c", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "add", "c", "w1", "--role", "worker", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "post", "c", "--from", "w1", "--kind", "report", "--body", "b", "--json"], h).status).toBe(
+      0,
     );
-    refused(
-      [
-        ...base,
-        "--body",
-        "different original material",
-        "--idempotency-key",
-        "original-key",
-        "--replay-only",
-        ...output,
-      ],
-      "IDEMPOTENCY_CONFLICT",
-      75,
-    );
-    const replayConflictArgs = [
-      ...base,
-      "--body",
-      "different original material",
-      "--idempotency-key",
-      "original-key",
-      "--replay-only",
-      ...output,
-    ];
-    const replayConflict = cli(replayConflictArgs, h);
-    expect(replayConflict.status).toBe(75);
-    if (json) {
-      const replayError = (
-        JSON.parse(replayConflict.stderr) as {
-          error: { message: string; recovery: { suggestedCommand: string } };
-        }
-      ).error;
-      expect(replayError.message).toContain("The original submission outcome remains unknown.");
-      expect(
-        replayError.recovery.suggestedCommand.startsWith(
-          "Keep the original key, exact input/source bytes, Installation, Channel and sender participant.",
-        ),
-      ).toBe(true);
-      expect(replayError.recovery.suggestedCommand).toContain(
-        "an unknown outcome does not authorize another submission or blind external dispatch",
-      );
-      expect(replayError.recovery.suggestedCommand).not.toBe("Use a new key, or replay the identical request");
-    } else {
-      expect(replayConflict.stderr).toContain("The original submission outcome remains unknown.");
-      expect(replayConflict.stderr).toContain(
-        "Keep the original key, exact input/source bytes, Installation, Channel and sender participant.",
-      );
-      expect(replayConflict.stderr).toContain(
-        "an unknown outcome does not authorize another submission or blind external dispatch",
-      );
-      expect(replayConflict.stderr).not.toContain("Use a new key, or replay the identical request");
-    }
-    refused(
-      [...base, "--body-file", join(h, "missing.txt"), "--idempotency-key", "original-key", "--replay-only", ...output],
-      "CHN_INVALID_INPUT",
-      64,
-    );
-
-    const configPath = join(h, "config.yaml");
-    const config = readFileSync(configPath);
-    try {
-      writeFileSync(configPath, "not: the-supported-configuration\n");
-      refused(replay, "CONFIG_INVALID", 78);
-    } finally {
-      writeFileSync(configPath, config);
-    }
-
-    try {
-      writeFileSync(configPath, config.toString("utf8").replace("schemaVersion: 1", "schemaVersion: 2"));
-      refused(replay, "STORAGE_SCHEMA_UNSUPPORTED", 78);
-    } finally {
-      writeFileSync(configPath, config);
-    }
-
-    const configObservation = home();
-    const savedConfig = join(configObservation, "original-config.yaml");
-    const linkedConfig = join(configObservation, "invalid-config.yaml");
-    writeFileSync(linkedConfig, "schemaVersion: 1\ninvalid: configuration\n");
-    renameSync(configPath, savedConfig);
-    try {
-      refused(replay, "NOT_INITIALIZED", 78);
-      mkdirSync(configPath);
-      refused(replay, "STORAGE_INSPECTION_UNAVAILABLE", 75);
-      expect(lstatSync(configPath).isDirectory()).toBe(true);
-      expect(readdirSync(configPath)).toEqual([]);
-      rmSync(configPath, { recursive: true });
-      for (const target of [linkedConfig, join(configObservation, "missing-config.yaml")]) {
-        symlinkSync(target, configPath);
-        refused(replay, "STORAGE_INSPECTION_UNAVAILABLE", 75);
-        expect(readlinkSync(configPath)).toBe(target);
-        rmSync(configPath);
-      }
-    } finally {
-      rmSync(configPath, { force: true, recursive: true });
-      renameSync(savedConfig, configPath);
-    }
-
-    const canonicalConfigPath = realpathSync(configPath);
-    for (const code of ["EACCES", "EPERM", "unexpected"]) {
-      const preload = join(configObservation, `deny-config-${code}.mjs`);
-      const marker = join(configObservation, `denied-${code}.txt`);
-      writeFileSync(
-        preload,
-        `import { mock } from "bun:test";
-import * as fs from "node:fs";
-const original = fs.readFileSync;
-mock.module("node:fs", () => ({ ...fs, readFileSync(path, options) {
-  if (String(path) === ${JSON.stringify(canonicalConfigPath)}) {
-    fs.writeFileSync(${JSON.stringify(marker)}, "denied");
-    throw ${code === "unexpected" ? 'new Error("unexpected configuration reader defect")' : `Object.assign(new Error("config read denied"), { code: ${JSON.stringify(code)} })`};
-  }
-  return original(path, options);
-} }));
-`,
-      );
-      refused(
-        replay,
-        code === "unexpected" ? "INTERNAL_ERROR" : "STORAGE_INSPECTION_UNAVAILABLE",
-        code === "unexpected" ? 1 : 75,
-        preload,
-      );
-      expect(readFileSync(marker, "utf8")).toBe("denied");
-    }
-
-    // A directory alias is allowed; a linked managed config file is not.
-    const alias = join(configObservation, "installation-alias");
-    symlinkSync(h, alias, "dir");
-    const beforeAlias = fingerprint(h);
-    const aliasReplay = cli(replay, alias);
-    expect(aliasReplay.status, aliasReplay.stderr).toBe(0);
-    expect(fingerprint(h)).toEqual(beforeAlias);
-
-    const changingPreload = join(configObservation, "change-config.mjs");
-    const changedConfig = `${config.toString("utf8")}\n# concurrent configuration update\n`;
-    const changedMarker = join(configObservation, "changed-config.txt");
-    writeFileSync(
-      changingPreload,
-      `import { mock } from "bun:test";
-import * as fs from "node:fs";
-const original = fs.readFileSync;
-let changed = false;
-mock.module("node:fs", () => ({ ...fs, readFileSync(path, options) {
-  const bytes = original(path, options);
-  if (!changed && String(path) === ${JSON.stringify(canonicalConfigPath)}) {
-    changed = true;
-    fs.writeFileSync(${JSON.stringify(configPath)}, ${JSON.stringify(changedConfig)});
-    fs.writeFileSync(${JSON.stringify(changedMarker)}, "changed after first actual read");
-  }
-  return bytes;
-} }));
-`,
-    );
-    const beforeChanging = fingerprint(h);
-    try {
-      const changing = spawnSync("bun", ["--preload", changingPreload, entry, ...replay], {
-        encoding: "utf8",
-        cwd: join(h, "work"),
-        env: { ...process.env, SORAGE_HOME: h },
-        timeout: 10_000,
-      });
-      expect(changing.status, changing.stderr).toBe(75);
-      expect(changing.stdout).toBe("");
-      expect(changing.stderr).toContain("STORAGE_INSPECTION_UNAVAILABLE");
-      expect(changing.stderr).toContain("original submission outcome remains unknown");
-      if (json) expect(JSON.parse(changing.stderr).error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-      expect(readFileSync(changedMarker, "utf8")).toBe("changed after first actual read");
-      // The test's concurrent writer changes only config; recovery adds no changes.
-      expect(fingerprint(h)).toEqual({
-        ...beforeChanging,
-        [configPath]: createHash("sha256").update(changedConfig).digest("hex"),
-      });
-    } finally {
-      writeFileSync(configPath, config);
-    }
-
-    const saved = join(home(), "preserved.sqlite3");
-    const database = join(h, "state", "sorage.sqlite3");
-    renameSync(database, saved);
-    try {
-      refused(replay, "STORAGE_INTEGRITY_ERROR", 73);
-    } finally {
-      renameSync(saved, database);
-    }
-
-    // A native exception at the actual scratch-creation boundary must not
-    // escape to the general parser's usage renderer or installation logger.
-    const observation = home();
-    const preload = join(observation, "throw-scratch.mjs");
-    const marker = join(observation, "attempted.txt");
-    writeFileSync(
-      preload,
-      `import { mock } from "bun:test";
-import * as fs from "node:fs";
-const original = fs.mkdtempSync;
-mock.module("node:fs", () => ({ ...fs, mkdtempSync(prefix, options) {
-  if (String(prefix).includes("sorage-channel-recovery-")) {
-    fs.writeFileSync(${JSON.stringify(marker)}, "attempted");
-    throw new Error("forced-scratch-failure: inspect installation logs");
-  }
-  return original(prefix, options);
-} }));
-`,
-    );
-    refused(replay, "INTERNAL_ERROR", 1, preload);
-    expect(readFileSync(marker, "utf8")).toBe("attempted");
-
-    const beforeSuccess = fingerprint(h);
-    const recovered = cli(replay, h);
-    expect(recovered.status, recovered.stderr).toBe(0);
-    if (json) expect(JSON.parse(recovered.stdout).data.replayed).toBe(true);
-    else expect(recovered.stdout).toContain("Replayed the original recorded outcome");
-    expect(fingerprint(h)).toEqual(beforeSuccess);
+    const mixed = cli(["channel", "ack", "c", "1", "2junk", "--json"], h);
+    expect(mixed.status).toBe(64);
+    expect(errorOf(mixed).code).toBe("CHN_INVALID_INPUT");
+    // Nothing was handled and no event was appended by any refused operand.
+    const listed = cli(["channel", "messages", "c", "--json"], h);
+    expect((dataOf(listed) as { items: unknown[] }).items).toHaveLength(1);
   });
 
-  it("preserves the ordinary submit conflict message and recovery", () => {
-    const h = home();
-    expect(cli(["init", "--non-interactive"], h).status).toBe(0);
-    const created = JSON.parse(cli(["channel", "create", "--main-handle", "m", "--json"], h).stdout).data.channel as {
-      id: string;
-      mainParticipantId: string;
+  it("parses the local --limit with the same integer rule as the root option, in the root form too, accepting the bound of 200 and refusing 201 (decision item 3; C3 item 9)", () => {
+    const h = initialized();
+    for (const args of [
+      ["channel", "create", "lim", "--json"],
+      ["channel", "add", "lim", "w1", "--role", "worker", "--json"],
+      ["channel", "post", "lim", "--from", "w1", "--kind", "report", "--body", "one", "--json"],
+      ["channel", "post", "lim", "--from", "w1", "--kind", "report", "--body", "two", "--json"],
+    ]) {
+      expect(cli(args, h).status).toBe(0);
+    }
+    // The local form accepts a plain integer.
+    const local = cli(["channel", "messages", "lim", "--limit", "1", "--json"], h);
+    expect(local.status, local.stderr).toBe(0);
+    expect((dataOf(local) as { items: unknown[] }).items).toHaveLength(1);
+    // It combines with --wait (a matching unhandled message returns at once).
+    const waited = cli(["channel", "messages", "lim", "--wait", "--timeout", "2", "--limit", "1", "--json"], h);
+    expect(waited.status, waited.stderr).toBe(0);
+    expect((dataOf(waited) as { items: unknown[] }).items).toHaveLength(1);
+    // The root form: the global option before the subcommand.
+    const rooted = cli(["--limit", "1", "channel", "messages", "lim", "--json"], h);
+    expect(rooted.status, rooted.stderr).toBe(0);
+    expect((dataOf(rooted) as { items: unknown[] }).items).toHaveLength(1);
+    // The maximum bound of 200 is accepted in both forms; 201 is refused by
+    // core validation at exit 64, and an invalid token is a parser usage error.
+    const atBound = cli(["channel", "messages", "lim", "--limit", "200", "--json"], h);
+    expect(atBound.status, atBound.stderr).toBe(0);
+    expect((dataOf(atBound) as { items: unknown[] }).items).toHaveLength(2);
+    const rootedAtBound = cli(["--limit", "200", "channel", "messages", "lim", "--json"], h);
+    expect(rootedAtBound.status, rootedAtBound.stderr).toBe(0);
+    expect((dataOf(rootedAtBound) as { items: unknown[] }).items).toHaveLength(2);
+    expect(cli(["channel", "messages", "lim", "--limit", "x", "--json"], h).status).toBe(2);
+    const overBound = cli(["channel", "messages", "lim", "--limit", "201", "--json"], h);
+    expect(overBound.status).toBe(64);
+    expect((JSON.parse(overBound.stderr) as { error: { code: string } }).error.code).toBe("CHN_INVALID_INPUT");
+    expect(cli(["--limit", "201", "channel", "messages", "lim", "--json"], h).status).toBe(64);
+  });
+
+  it("keeps a large body's file-backed post honest in both forms", () => {
+    const h = initialized();
+    expect(cli(["channel", "create", "big", "--json"], h).status).toBe(0);
+    expect(cli(["channel", "add", "big", "w1", "--role", "worker", "--json"], h).status).toBe(0);
+    const bodyPath = join(h, "big-body.txt");
+    writeFileSync(bodyPath, `${"x".repeat(70_000)}\n`);
+    const posted = cli(
+      ["channel", "post", "big", "--from", "w1", "--kind", "report", "--body-file", bodyPath, "--json"],
+      h,
+    );
+    expect(posted.status, posted.stderr).toBe(0);
+    const message = dataOf(posted) as { message: { body: string; bodyPath: string; bodyPending: boolean } };
+    expect(message.message.bodyPending).toBe(false);
+    expect(message.message.bodyPath).toContain("content/channel/");
+    expect(message.message.body.length).toBe(70_001);
+    const listed = dataOf(cli(["channel", "messages", "big", "--json"], h)) as {
+      items: Array<{ body: string }>;
     };
-    const worker = JSON.parse(
-      cli(
-        [
-          "channel",
-          "participant",
-          "add",
-          created.id,
-          "--role",
-          "worker",
-          "--handle",
-          "worker-a",
-          "--as-participant",
-          created.mainParticipantId,
-          "--json",
-        ],
-        h,
-      ).stdout,
-    ).data.participant as { id: string };
-    const base = [
-      "channel",
-      "submit",
-      created.id,
-      "--as-participant",
-      worker.id,
-      "--kind",
-      "report",
-      "--idempotency-key",
-      "submit-key",
-    ];
-    expect(cli([...base, "--body", "original", "--json"], h).status).toBe(0);
-    const conflict = cli([...base, "--body", "changed", "--json"], h);
-    expect(conflict.status).toBe(75);
-    const error = (
-      JSON.parse(conflict.stderr) as {
-        error: { code: string; message: string; recovery: { suggestedCommand: string } };
-      }
-    ).error;
-    expect(error.code).toBe("IDEMPOTENCY_CONFLICT");
-    expect(error.message).toBe("The retained Channel submission key carries a different request");
-    expect(error.recovery.suggestedCommand).toBe(
-      "The key is retained for a different request. Replaying the identical original request returns its original outcome; a new key is legitimate only for a genuinely new intent such as a new main-directed attempt, never as recovery for an unknown outcome",
-    );
+    expect(listed.items[0]?.body.length).toBe(70_001);
   });
 });

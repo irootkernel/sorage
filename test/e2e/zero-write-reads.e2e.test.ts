@@ -1,23 +1,23 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, lstatSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
+import { MIGRATIONS } from "../../packages/adapters/src/sqlite/migrations";
+import { migrate } from "../../packages/adapters/src/sqlite/migrator";
 import { knownSchemaMaximum } from "../../packages/core/src/known-schemas";
 import {
   BINARY,
   envelopeOf,
   errorEnvelopeOf,
   makeTempDir,
+  type Run,
   registerCleanup,
   runCleanups,
   sorage,
   storageProof,
-  type Run,
 } from "./helpers";
-import { migrate } from "../../packages/adapters/src/sqlite/migrator";
-import { MIGRATIONS } from "../../packages/adapters/src/sqlite/migrations";
 
 /**
  * The TASK-122 acceptance gate (AJ-30 steps 1 and 2 for the CLI read path):
@@ -48,6 +48,33 @@ function inSandbox(home: string, cwd: string, args: string[]): Run {
   return sorage(["-p", DENY_WRITE_PROFILE, BINARY, ...args], { binary: SANDBOX, home, cwd });
 }
 
+/** A long-running waiter process with its completion promise, for waits that a peer wakes. */
+function spawnWaiter(command: string, args: string[], home: string, cwd: string) {
+  const child = spawn(command, args, {
+    cwd,
+    env: { ...process.env, SORAGE_HOME: home, SORAGE_TEST_REQUEST_ID: undefined },
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
+  });
+  // Captured before any yield: a zero-write waiter exposes no readiness signal,
+  // so a later `once("close")` could miss an already-emitted event.
+  const done = new Promise<Run>((resolve) => {
+    child.on("close", (status) => {
+      resolve({ status: status ?? null, stdout, stderr });
+    });
+  });
+  registerCleanup(() => {
+    if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
+  });
+  return { child, done };
+}
+
 /** An initialized home with two Projects, one sent Handoff and two Memos, all through real CLI writes. */
 function fixture(prefix: string) {
   const home = makeTempDir(prefix);
@@ -74,6 +101,14 @@ function fixture(prefix: string) {
   expect(first.status, first.stderr).toBe(0);
   const memoId = (envelopeOf(first) as { data: { memo: { id: string } } }).data.memo.id;
   const second = sorage(["memo", "add", "--title", "Second", "--json"], { home, cwd: work });
+  for (const args of [
+    ["channel", "create", "aq-cov", "--json"],
+    ["channel", "add", "aq-cov", "w1", "--role", "worker", "--json"],
+    ["channel", "post", "aq-cov", "--from", "w1", "--kind", "report", "--body", "covered channel body", "--json"],
+  ]) {
+    const run = sorage(args, { home, cwd: work });
+    expect(run.status, run.stderr).toBe(0);
+  }
   expect(second.status, second.stderr).toBe(0);
   return { home, work, other, vault, handoffId, memoId, database: join(home, "state", "sorage.sqlite3") };
 }
@@ -112,6 +147,20 @@ function deltaPaths(before: string[], after: string[]): string[] {
     .sort();
 }
 
+/** The one set of home entries a peer's authorized post changes: the database file and its sidecars. */
+const DATABASE_ROWS = new Set(["state/sorage.sqlite3", "state/sorage.sqlite3-wal", "state/sorage.sqlite3-shm"]);
+
+/** Splits a home inventory into the database rows and every other entry. */
+function partitionDatabaseRows(rows: string[]): { database: string[]; others: string[] } {
+  const database: string[] = [];
+  const others: string[] = [];
+  for (const row of rows) {
+    const rel = row.split(" ")[1];
+    (rel !== undefined && DATABASE_ROWS.has(rel) ? database : others).push(row);
+  }
+  return { database, others };
+}
+
 const coveredCommands = (f: ReturnType<typeof fixture>): Array<[string, string[]]> => [
   ["inbox", ["inbox", "--json"]],
   ["outbox", ["outbox", "--json"]],
@@ -122,6 +171,14 @@ const coveredCommands = (f: ReturnType<typeof fixture>): Array<[string, string[]
   ["memo show", ["memo", "show", f.memoId, "--json"]],
   ["project list", ["project", "list", "--json"]],
   ["project show", ["project", "show", "alpha", "--json"]],
+  ["channel messages", ["channel", "messages", "aq-cov", "--json"]],
+  ["channel list", ["channel", "list", "--json"]],
+  ["channel show", ["channel", "show", "aq-cov", "--json"]],
+  ["channel messages human", ["channel", "messages", "aq-cov"]],
+  ["channel list human", ["channel", "list"]],
+  ["channel show human", ["channel", "show", "aq-cov"]],
+  ["channel wait", ["channel", "messages", "aq-cov", "--wait", "--timeout", "1", "--json"]],
+  ["channel wait human", ["channel", "messages", "aq-cov", "--wait", "--timeout", "1"]],
   ["inbox wait", ["inbox", "--wait", "--timeout", "1", "--json"]],
   ["inbox human", ["inbox"]],
   ["outbox human", ["outbox"]],
@@ -319,6 +376,159 @@ describe("the covered reads under a write-denying sandbox (TASK-122)", () => {
     },
   );
 
+  it.skipIf(!sandboxAvailable)(
+    "times out and wakes sandboxed Channel waits in both forms with unsandboxed-identical output, and lists a materialized and a pending file-backed body, writing nothing",
+    async () => {
+      const f = fixture("sorage-zero-write-channelwait-");
+      assertEmptyWalState(f);
+      // The empty timeout: JSON and human, identical to unrestricted runs,
+      // inventories unchanged.
+      for (const args of [
+        ["channel", "messages", "aq-cov", "--after", "99", "--wait", "--timeout", "1", "--json"],
+        ["channel", "messages", "aq-cov", "--after", "99", "--wait", "--timeout", "1"],
+      ]) {
+        const plain = main(f.home, f.work, args);
+        expect(plain.status, `${args.join(" ")}: ${plain.stderr}`).toBe(0);
+        const beforeHome = storageProof(f.home);
+        const beforeVault = storageProof(f.vault);
+        const boxed = inSandbox(f.home, f.work, args);
+        expectIdenticalOutput(boxed, plain, `${args.join(" ")} sandboxed`);
+        expect(storageProof(f.home), `${args.join(" ")} home`).toEqual(beforeHome);
+        expect(storageProof(f.vault), `${args.join(" ")} vault`).toEqual(beforeVault);
+      }
+
+      // The wakes, JSON then human. A sandboxed waiter and an unsandboxed
+      // waiter run side by side on the same Channel and filter; after a lead-in
+      // of two poll intervals, and only once both are observed still running,
+      // an unrestricted peer process posts once. Both wake on that same
+      // message, so their outputs are compared for equality; the inventories
+      // are compared in full except the database file and its sidecars, which
+      // the peer's authorized post changes, and the Vault is compared in full.
+      let lastSeq = 1;
+      for (const [form, formArgs] of [
+        ["json", ["--json"]],
+        ["human", []],
+      ] as Array<[string, string[]]>) {
+        const waitArgs = [
+          "channel",
+          "messages",
+          "aq-cov",
+          "--after",
+          String(lastSeq),
+          "--wait",
+          "--timeout",
+          "20",
+          "--interval",
+          "1",
+          ...formArgs,
+        ];
+        const beforeHome = storageProof(f.home);
+        const beforeVault = storageProof(f.vault);
+        const boxed = spawnWaiter(SANDBOX, ["-p", DENY_WRITE_PROFILE, BINARY, ...waitArgs], f.home, f.work);
+        const plain = spawnWaiter(BINARY, waitArgs, f.home, f.work);
+        // Item 7: a lead-in of two poll intervals, then the proof that neither
+        // waiter returned early. The residual limitation is recorded in the
+        // report: a zero-write waiter prints nothing until it returns, so no
+        // observable empty-poll signal exists without a product change.
+        await delay(2_000);
+        expect(boxed.child.exitCode, `${form}: the sandboxed waiter is still waiting`).toBeNull();
+        expect(plain.child.exitCode, `${form}: the unsandboxed waiter is still waiting`).toBeNull();
+        const body = `sandbox wake ${form}`;
+        const peer = sorage(
+          ["channel", "post", "aq-cov", "--from", "w1", "--kind", "question", "--body", body, "--json"],
+          { home: f.home, cwd: f.work },
+        );
+        expect(peer.status, peer.stderr).toBe(0);
+        lastSeq = (envelopeOf(peer) as { data: { message: { seq: number } } }).data.message.seq;
+        const [boxedResult, plainResult] = await Promise.all([boxed.done, plain.done]);
+        expect(plainResult.status, plainResult.stderr).toBe(0);
+        expectIdenticalOutput(boxedResult, plainResult, `${form} wake`);
+        if (form === "json") {
+          const parsed = JSON.parse(boxedResult.stdout) as {
+            data: { items: Array<{ seq: number; body: string }> };
+            meta: { timedOut?: boolean };
+          };
+          expect(parsed.meta.timedOut).toBeUndefined();
+          expect(parsed.data.items.map((item) => [item.seq, item.body])).toEqual([[lastSeq, body]]);
+        } else {
+          expect(boxedResult.stdout).toContain(body);
+          expect(boxedResult.stdout).not.toContain("No matching unhandled message");
+        }
+        const before = partitionDatabaseRows(beforeHome);
+        const after = partitionDatabaseRows(storageProof(f.home));
+        expect(after.others, `${form} wake: every entry but the database rows`).toEqual(before.others);
+        expect(after.database, `${form} wake: the peer's authorized write landed`).not.toEqual(before.database);
+        expect(storageProof(f.vault), `${form} wake: the Vault in full`).toEqual(beforeVault);
+        expect(existsSync(join(f.home, "logs", "sorage.log"))).toBe(false);
+        await yieldLoop();
+      }
+
+      // A materialized file-backed body, its source outside the home, listed
+      // inside the sandbox with bodyPath and the full body, wrapped in full
+      // inventories.
+      const large = join(makeTempDir("sorage-zero-write-channel-source-"), "channel-large.txt");
+      writeFileSync(large, `${"z".repeat(70_000)}\n`);
+      const backed = main(f.home, f.work, [
+        "channel",
+        "post",
+        "aq-cov",
+        "--from",
+        "w1",
+        "--kind",
+        "report",
+        "--body-file",
+        large,
+        "--json",
+      ]);
+      expect(backed.status, backed.stderr).toBe(0);
+      const backedSeq = (envelopeOf(backed) as { data: { message: { seq: number } } }).data.message.seq;
+      const materializedBeforeHome = storageProof(f.home);
+      const materializedBeforeVault = storageProof(f.vault);
+      const materializedListing = inSandbox(f.home, f.work, ["channel", "messages", "aq-cov", "--json"]);
+      expect(materializedListing.status, materializedListing.stderr).toBe(0);
+      type Listed = { seq: number; body: string | null; bodyPath: string | null; bodyPending: boolean };
+      const materialized = (JSON.parse(materializedListing.stdout) as { data: { items: Listed[] } }).data.items.find(
+        (item) => item.seq === backedSeq,
+      );
+      expect(materialized?.bodyPending).toBe(false);
+      expect(materialized?.bodyPath).not.toBeNull();
+      expect(materialized?.body?.length).toBe(70_001);
+      expect(storageProof(f.home), "materialized read: home").toEqual(materializedBeforeHome);
+      expect(storageProof(f.vault), "materialized read: vault").toEqual(materializedBeforeVault);
+
+      // A pending body: the same file-backed message left unmaterialized with
+      // no pending intent, the state an interrupted activation leaves behind.
+      // The sandboxed listing reports it in place — exit 0, body null,
+      // bodyPath null, bodyPending true — and writes nothing.
+      const plant = new DatabaseSync(f.database);
+      try {
+        plant.exec("BEGIN IMMEDIATE");
+        const planted = plant.prepare("UPDATE content_records SET materialized = 0 WHERE inline_text IS NULL").run();
+        plant.prepare("DELETE FROM pending_fs_ops").run();
+        plant.exec("COMMIT");
+        expect(Number(planted.changes), "the pending plant executed on the file-backed record").toBeGreaterThanOrEqual(
+          1,
+        );
+      } finally {
+        plant.close();
+      }
+      const pendingBeforeHome = storageProof(f.home);
+      const pendingBeforeVault = storageProof(f.vault);
+      const pendingListing = inSandbox(f.home, f.work, ["channel", "messages", "aq-cov", "--json"]);
+      expect(pendingListing.status, pendingListing.stderr).toBe(0);
+      const pending = (JSON.parse(pendingListing.stdout) as { data: { items: Listed[] } }).data.items.find(
+        (item) => item.seq === backedSeq,
+      );
+      expect(pending).toEqual(
+        expect.objectContaining({ seq: backedSeq, body: null, bodyPath: null, bodyPending: true }),
+      );
+      expect(storageProof(f.home), "pending read: home").toEqual(pendingBeforeHome);
+      expect(storageProof(f.vault), "pending read: vault").toEqual(pendingBeforeVault);
+      expect(existsSync(join(f.home, "logs", "sorage.log"))).toBe(false);
+      await yieldLoop();
+    },
+  );
+
   it.skipIf(!sandboxAvailable)("reads while another process holds BEGIN IMMEDIATE", () => {
     const f = fixture("sorage-zero-write-lock-");
     assertEmptyWalState(f);
@@ -333,6 +543,10 @@ describe("the covered reads under a write-denying sandbox (TASK-122)", () => {
     expectIdenticalOutput(boxed, plain, "inbox under BEGIN IMMEDIATE");
     const memo = inSandbox(f.home, f.work, ["memo", "list", "--json"]);
     expect(memo.status, memo.stderr).toBe(0);
+    const channelListed = inSandbox(f.home, f.work, ["channel", "list", "--json"]);
+    expect(channelListed.status, channelListed.stderr).toBe(0);
+    const channelMessages = inSandbox(f.home, f.work, ["channel", "messages", "aq-cov", "--json"]);
+    expect(channelMessages.status, channelMessages.stderr).toBe(0);
     expect(storageProof(f.home)).toEqual(beforeHome);
   });
 
@@ -347,6 +561,7 @@ describe("the covered reads under a write-denying sandbox (TASK-122)", () => {
       for (const args of [
         ["memo", "list", "--json"],
         ["inbox", "--json"],
+        ["channel", "messages", "aq-cov", "--json"],
       ]) {
         const beforeHome = storageProof(f.home);
         const beforeVault = storageProof(f.vault);
@@ -373,6 +588,7 @@ describe("the covered reads under a write-denying sandbox (TASK-122)", () => {
       for (const args of [
         ["memo", "list", "--json"],
         ["inbox", "--json"],
+        ["channel", "messages", "aq-cov", "--json"],
       ]) {
         const beforeHome = storageProof(f.home);
         const beforeVault = storageProof(f.vault);
@@ -388,6 +604,8 @@ describe("the covered reads under a write-denying sandbox (TASK-122)", () => {
       await writer.kill();
       const after = inSandbox(f.home, f.work, ["memo", "list", "--json"]);
       expect(after.status, after.stderr).toBe(0);
+      const afterChannel = inSandbox(f.home, f.work, ["channel", "messages", "aq-cov", "--json"]);
+      expect(afterChannel.status, afterChannel.stderr).toBe(0);
     },
   );
 

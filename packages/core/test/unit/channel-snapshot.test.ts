@@ -1,8 +1,6 @@
-import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type SnapshotChannelShard, type SnapshotDataV3, snapshotFilesV3 } from "../../src/content-snapshot";
-import { validateSnapshot } from "../../src/backup-commands";
+import { canonicalJson, type SnapshotEvent } from "../../src/backup-snapshot";
 import {
   channelContentFilePath,
   channelIdFromSnapshotPath,
@@ -13,911 +11,510 @@ import {
   validateSnapshotChannelHistory,
   validateSnapshotChannelShard,
 } from "../../src/channel-snapshot";
-import { canonicalJson, type SnapshotEvent } from "../../src/backup-snapshot";
+import type { ChannelContentFileExport, SnapshotChannelShard, SnapshotDataV3 } from "../../src/content-snapshot";
 import type { ContentSnapshotManifest } from "../../src/memo-snapshot";
 
+/**
+ * The rebuilt format-3 Channel snapshot validators (section 38.8, section 38.9
+ * line 1818, security section 10.1): the closed shard contract keyed by name,
+ * handle and sequence number; the closed participant and message records with
+ * their null rules and deterministic orders; the content-file inventory; and
+ * the order-independent ledger reconciliation — exactly one posting event per
+ * message, exactly one handling event per handled message, at least one
+ * addition event per retained non-main participant with the count relation,
+ * and no assumption that timestamp or UUID order records mutation order. An
+ * old-key shard or an old Channel event name fails closed with
+ * `VAULT_INTEGRITY_ERROR`, never a conversion.
+ */
+
 const CHANNEL = "10000000-0000-4000-8000-000000000001";
-const OTHER_CHANNEL = "10000000-0000-4000-8000-000000000002";
-const MAIN = "20000000-0000-4000-8000-000000000001";
-const WORKER = "20000000-0000-4000-8000-000000000002";
-const JUDGE = "20000000-0000-4000-8000-000000000003";
-const OTHER_MAIN = "20000000-0000-4000-8000-0000000000a1";
-const ASSIGNMENT_OPEN = "30000000-0000-4000-8000-000000000001";
-const ASSIGNMENT_CLOSED = "30000000-0000-4000-8000-000000000002";
-const MESSAGE_RELAY = "40000000-0000-4000-8000-000000000001";
-const MESSAGE_HANDLED = "40000000-0000-4000-8000-000000000002";
-const MESSAGE_FILE = "40000000-0000-4000-8000-000000000003";
 const CONTENT_ID = "50000000-0000-4000-8000-000000000003";
-const CREATOR_PROJECT = "70000000-0000-4000-8000-000000000001";
-
-const T = (seconds: number): string => `2026-10-01T00:00:${String(seconds).padStart(2, "0")}.000Z`;
-
-const FILE_BODY = Buffer.from("\uFEFFfile body content\r\nno final newline");
-const FILE_SHA = createHash("sha256").update(FILE_BODY).digest("hex");
 const CONTENT_PATH = `content/channel/${CHANNEL}/${CONTENT_ID}`;
+const STAMP = "2026-10-24T00:00:00.000Z";
+const STAMP_2 = "2026-10-24T00:00:00.001Z";
+const STAMP_3 = "2026-10-24T00:00:00.002Z";
+const INLINE = "inline channel body";
 
-/** A complete, healthy closed Channel with every runtime state represented once. */
-function validShard(): SnapshotChannelShard {
-  return structuredClone({
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+type Shard = Mutable<SnapshotChannelShard>;
+
+function baseShard(): Shard {
+  return {
     id: CHANNEL,
-    title: "Snapshot Plan",
-    state: "closed",
-    creatorKind: "registered_project",
-    creatorId: CREATOR_PROJECT,
-    createdAt: T(0),
-    closedAt: T(12),
-    closedByParticipantId: MAIN,
-    closedByKind: "participant",
+    name: "aq-run-42",
+    title: null,
+    state: "open",
+    main: "main",
+    createdAt: STAMP,
+    closedAt: null,
     participants: [
-      {
-        id: MAIN,
-        role: "main",
-        handle: "main",
-        nativeProvenance: [],
-        active: true,
-        registeredAt: T(0),
-        deactivatedAt: null,
-      },
-      {
-        id: WORKER,
-        role: "worker",
-        handle: "\uFEFF worker ",
-        nativeProvenance: ["", "\t", "nul\u0000"],
-        active: true,
-        registeredAt: T(1),
-        deactivatedAt: null,
-      },
-      {
-        id: JUDGE,
-        role: "judge",
-        handle: "judge",
-        nativeProvenance: [],
-        active: false,
-        registeredAt: T(2),
-        deactivatedAt: T(3),
-      },
-    ],
-    assignments: [
-      {
-        id: ASSIGNMENT_OPEN,
-        participantId: WORKER,
-        label: "Do B2",
-        state: "open",
-        createdAt: T(4),
-        closedAt: null,
-      },
-      {
-        id: ASSIGNMENT_CLOSED,
-        participantId: null,
-        label: "Review",
-        state: "closed",
-        createdAt: T(5),
-        closedAt: T(6),
-      },
+      { handle: "main", role: "main", addedAt: STAMP, removedAt: null },
+      { handle: "w1", role: "worker", addedAt: STAMP_2, removedAt: null },
     ],
     messages: [
       {
-        id: MESSAGE_RELAY,
-        senderParticipantId: WORKER,
-        kind: "relay_request",
-        bodyContent: { inline: "relay: please proceed" },
-        assignmentId: ASSIGNMENT_OPEN,
-        assignmentLate: false,
-        relayToParticipantId: WORKER,
-        contextSession: "",
-        contextNode: "node\twith\ttabs",
-        contextAttempt: "attempt\u0000nul",
+        seq: 1,
+        senderHandle: "w1",
+        kind: "report",
+        toHandle: null,
+        ref: null,
+        bodyContent: { inline: INLINE },
         handled: false,
         handledAt: null,
-        handledByParticipantId: null,
-        handledByKind: null,
         handleNote: null,
-        createdAt: T(7),
-      },
-      {
-        id: MESSAGE_HANDLED,
-        senderParticipantId: MAIN,
-        kind: "report",
-        bodyContent: { inline: "done\uFEFF report body" },
-        assignmentId: ASSIGNMENT_CLOSED,
-        assignmentLate: true,
-        relayToParticipantId: null,
-        contextSession: null,
-        contextNode: null,
-        contextAttempt: null,
-        handled: true,
-        handledAt: T(9),
-        handledByParticipantId: MAIN,
-        handledByKind: "participant",
-        handleNote: "handled\uFEFF",
-        createdAt: T(8),
-      },
-      {
-        id: MESSAGE_FILE,
-        senderParticipantId: MAIN,
-        kind: "question",
-        bodyContent: { contentPath: CONTENT_PATH, sizeBytes: FILE_BODY.length, sha256: FILE_SHA },
-        assignmentId: null,
-        assignmentLate: false,
-        relayToParticipantId: null,
-        contextSession: null,
-        contextNode: null,
-        contextAttempt: null,
-        handled: true,
-        handledAt: T(11),
-        handledByParticipantId: null,
-        handledByKind: "user",
-        handleNote: null,
-        createdAt: T(10),
+        createdAt: STAMP_3,
       },
     ],
-  } satisfies SnapshotChannelShard);
-}
-
-function event(seq: number, overrides: Partial<SnapshotEvent> & Record<string, unknown>): SnapshotEvent {
-  return {
-    id: `60000000-0000-4000-8000-${String(seq).padStart(12, "0")}`,
-    handoffId: null,
-    memoId: null,
-    eventType: "",
-    actorKind: "user",
-    actorId: null,
-    rowVersion: null,
-    metadata: {},
-    createdAt: T(0),
-    ...overrides,
-  } as SnapshotEvent;
-}
-
-/** The complete ledger the runtime appends for the fixture above, in order. */
-function validEvents(): SnapshotEvent[] {
-  return [
-    event(1, {
-      eventType: "CHANNEL_CREATED",
-      actorKind: "registered_project",
-      actorId: CREATOR_PROJECT,
-      createdAt: T(0),
-      metadata: { channelId: CHANNEL, mainParticipantId: MAIN },
-    }),
-    event(2, {
-      eventType: "CHANNEL_PARTICIPANT_REGISTERED",
-      createdAt: T(1),
-      metadata: { channelId: CHANNEL, actingParticipantId: MAIN, participantId: WORKER, role: "worker" },
-    }),
-    event(3, {
-      eventType: "CHANNEL_PARTICIPANT_REGISTERED",
-      createdAt: T(2),
-      metadata: { channelId: CHANNEL, actingParticipantId: MAIN, participantId: JUDGE, role: "judge" },
-    }),
-    event(4, {
-      eventType: "CHANNEL_PARTICIPANT_DEACTIVATED",
-      createdAt: T(3),
-      metadata: {
-        channelId: CHANNEL,
-        actingParticipantId: MAIN,
-        participantId: JUDGE,
-        fromActive: true,
-        toActive: false,
-      },
-    }),
-    event(5, {
-      eventType: "CHANNEL_ASSIGNMENT_CREATED",
-      createdAt: T(4),
-      metadata: { channelId: CHANNEL, actingParticipantId: MAIN, assignmentId: ASSIGNMENT_OPEN, participantId: WORKER },
-    }),
-    event(6, {
-      eventType: "CHANNEL_ASSIGNMENT_CREATED",
-      createdAt: T(5),
-      metadata: { channelId: CHANNEL, actingParticipantId: MAIN, assignmentId: ASSIGNMENT_CLOSED, participantId: null },
-    }),
-    event(7, {
-      eventType: "CHANNEL_ASSIGNMENT_CLOSED",
-      createdAt: T(6),
-      metadata: {
-        channelId: CHANNEL,
-        actingParticipantId: MAIN,
-        assignmentId: ASSIGNMENT_CLOSED,
-        fromState: "open",
-        toState: "closed",
-      },
-    }),
-    event(8, {
-      eventType: "CHANNEL_MESSAGE_SUBMITTED",
-      rowVersion: 1,
-      createdAt: T(7),
-      metadata: {
-        channelId: CHANNEL,
-        participantId: WORKER,
-        messageId: MESSAGE_RELAY,
-        kind: "relay_request",
-        assignmentId: ASSIGNMENT_OPEN,
-        assignmentLate: false,
-        relayToParticipantId: WORKER,
-        processingRowVersion: 1,
-      },
-    }),
-    event(9, {
-      eventType: "CHANNEL_MESSAGE_SUBMITTED",
-      rowVersion: 1,
-      createdAt: T(8),
-      metadata: {
-        channelId: CHANNEL,
-        participantId: MAIN,
-        messageId: MESSAGE_HANDLED,
-        kind: "report",
-        assignmentId: ASSIGNMENT_CLOSED,
-        assignmentLate: true,
-        relayToParticipantId: null,
-        processingRowVersion: 1,
-      },
-    }),
-    event(10, {
-      eventType: "CHANNEL_MESSAGE_SUBMITTED",
-      rowVersion: 1,
-      createdAt: T(10),
-      metadata: {
-        channelId: CHANNEL,
-        participantId: MAIN,
-        messageId: MESSAGE_FILE,
-        kind: "question",
-        assignmentId: null,
-        assignmentLate: false,
-        relayToParticipantId: null,
-        processingRowVersion: 1,
-      },
-    }),
-    event(11, {
-      eventType: "CHANNEL_MESSAGE_HANDLED",
-      rowVersion: 2,
-      createdAt: T(9),
-      metadata: { channelId: CHANNEL, actingParticipantId: MAIN, messageId: MESSAGE_HANDLED, processingRowVersion: 2 },
-    }),
-    event(12, {
-      eventType: "CHANNEL_MESSAGE_HANDLED",
-      rowVersion: 2,
-      createdAt: T(11),
-      metadata: { channelId: CHANNEL, actingParticipantId: null, messageId: MESSAGE_FILE, processingRowVersion: 2 },
-    }),
-    event(13, {
-      eventType: "CHANNEL_CLOSED",
-      createdAt: T(12),
-      metadata: { channelId: CHANNEL, actingParticipantId: MAIN, fromState: "open", toState: "closed" },
-    }),
-  ];
-}
-
-function validChannelData(): SnapshotDataV3 {
-  return {
-    projects: [],
-    handoffs: [],
-    events: validEvents(),
-    memos: [],
-    memoContentFiles: [],
-    channels: [validShard()],
-    channelContentFiles: [{ channelId: CHANNEL, contentId: CONTENT_ID, bytes: FILE_BODY }],
   };
 }
 
-function manifestFor(
-  data: SnapshotDataV3,
-  contentDigests: Record<string, string> = { [CONTENT_PATH]: FILE_SHA },
-): ContentSnapshotManifest {
+function event(
+  eventType: string,
+  metadata: Record<string, unknown>,
+  createdAt: string,
+  id = `70000000-0000-4000-8000-${String(eventCounter++).padStart(12, "0")}`,
+): SnapshotEvent {
+  return { id, handoffId: null, eventType, actorKind: "user", actorId: null, rowVersion: null, metadata, createdAt };
+}
+
+let eventCounter = 1;
+
+function coherentEvents(shard: Shard): SnapshotEvent[] {
+  const events: SnapshotEvent[] = [
+    event(
+      "CHANNEL_CREATED",
+      { channelId: shard.id, actingHandle: shard.main, mainHandle: shard.main },
+      shard.createdAt,
+    ),
+  ];
+  if (shard.state === "closed") {
+    events.push(event("CHANNEL_CLOSED", { channelId: shard.id, actingHandle: shard.main }, shard.closedAt ?? STAMP_3));
+  }
+  for (const participant of shard.participants) {
+    if (participant.role === "main") continue;
+    events.push(
+      event(
+        "CHANNEL_PARTICIPANT_ADDED",
+        { channelId: shard.id, actingHandle: shard.main, handle: participant.handle, role: participant.role },
+        participant.addedAt,
+      ),
+    );
+    if (participant.removedAt !== null) {
+      events.push(
+        event(
+          "CHANNEL_PARTICIPANT_REMOVED",
+          { channelId: shard.id, actingHandle: shard.main, handle: participant.handle },
+          participant.removedAt,
+        ),
+      );
+    }
+  }
+  for (const message of shard.messages) {
+    events.push(
+      event(
+        "CHANNEL_MESSAGE_POSTED",
+        {
+          channelId: shard.id,
+          actingHandle: message.senderHandle,
+          seq: message.seq,
+          kind: message.kind,
+          toHandle: message.toHandle,
+        },
+        message.createdAt,
+      ),
+    );
+    if (message.handled) {
+      events.push(
+        event(
+          "CHANNEL_MESSAGE_ACKED",
+          { channelId: shard.id, actingHandle: shard.main, seq: message.seq },
+          message.handledAt ?? STAMP_3,
+        ),
+      );
+    }
+  }
+  return events;
+}
+
+function manifestFor(shards: Shard[], carried: ChannelContentFileExport[]): ContentSnapshotManifest {
+  const contentDigests: Record<string, string> = {};
+  for (const file of carried) {
+    const path = channelContentFilePath(file.channelId, file.contentId);
+    if (!path.ok) throw new Error("carried file identity is not canonical");
+    contentDigests[path.value] = createHash("sha256").update(file.bytes).digest("hex");
+  }
   return {
     formatVersion: 3,
-    counts: {
-      projects: data.projects.length,
-      handoffs: data.handoffs.length,
-      events: data.events.length,
-      artifacts: 0,
-      memos: 0,
-      channels: data.channels?.length ?? 0,
-    },
+    counts: { projects: 0, handoffs: 0, events: 0, artifacts: 0, memos: 0, channels: shards.length },
     memoDigests: {},
     contentDigests,
-  };
+  } as unknown as ContentSnapshotManifest;
 }
 
-describe("Channel snapshot path helpers", () => {
-  it("derives canonical shard and content paths from canonical UUIDs only", () => {
+function snapshotData(shards: Shard[], carried: ChannelContentFileExport[]): SnapshotDataV3 {
+  return { channels: shards, channelContentFiles: carried } as unknown as SnapshotDataV3;
+}
+
+describe("the canonical Channel snapshot paths", () => {
+  it("derives and recovers shard and content paths", () => {
     expect(channelSnapshotPath(CHANNEL)).toEqual({ ok: true, value: `channels/10/${CHANNEL}.json` });
     expect(channelContentFilePath(CHANNEL, CONTENT_ID)).toEqual({ ok: true, value: CONTENT_PATH });
     expect(channelSnapshotPath("not-a-uuid").ok).toBe(false);
     expect(channelContentFilePath(CHANNEL, "x").ok).toBe(false);
-  });
-
-  it("recovers the id from a canonical path and refuses every other shape", () => {
     expect(channelIdFromSnapshotPath(`channels/10/${CHANNEL}.json`)).toEqual({ ok: true, value: CHANNEL });
-    for (const path of [
-      `channels/ab/${CHANNEL}.json`,
-      `channels/10/${CHANNEL}`,
-      `memos/10/${CHANNEL}.json`,
-      `channels/10/../../${CHANNEL}.json`,
-    ]) {
-      expect(channelIdFromSnapshotPath(path).ok).toBe(false);
-    }
+    expect(channelIdFromSnapshotPath(`channels/ff/${CHANNEL}.json`).ok).toBe(false);
   });
 });
 
-describe("parseChannelSnapshotShard", () => {
-  it("parses its own canonical bytes with every verbatim field preserved", () => {
-    const shard = validShard();
-    const parsed = parseChannelSnapshotShard(`channels/10/${CHANNEL}.json`, Buffer.from(canonicalJson(shard)));
-    expect(parsed).toEqual({ ok: true, value: shard });
+describe("the rebuilt closed shard contract", () => {
+  it("accepts a coherent rebuilt shard and refuses an old-key shard", () => {
+    expect(validateSnapshotChannelShard(baseShard()).ok).toBe(true);
+    const oldKeys = baseShard() as unknown as Record<string, unknown>;
+    oldKeys.creatorKind = "user";
+    oldKeys.creatorId = null;
+    oldKeys.assignments = [];
+    delete oldKeys.name;
+    delete oldKeys.main;
+    expect(validateSnapshotChannelShard(oldKeys).ok).toBe(false);
   });
 
-  it("refuses null, arrays, unknown shapes, unknown keys, duplicate keys, and noncanonical bytes before any cast", () => {
-    const path = `channels/10/${CHANNEL}.json`;
-    for (const bytes of [
-      Buffer.from("null"),
-      Buffer.from("[]"),
-      Buffer.from('"text"'),
-      Buffer.from(canonicalJson({ ...validShard(), extra: 1 })),
-      Buffer.from(`{"id":"${CHANNEL}","id":"${CHANNEL}"}`),
-      Buffer.from(JSON.stringify(validShard(), null, 2)),
-    ]) {
-      const parsed = parseChannelSnapshotShard(path, bytes);
-      expect(parsed.ok).toBe(false);
-      if (!parsed.ok) expect(parsed.error.code).toBe("VAULT_INTEGRITY_ERROR");
-    }
-  });
+  it("pins the lifecycle, roster, and message null rules", () => {
+    const openWithClosure = baseShard();
+    openWithClosure.closedAt = STAMP_3;
+    expect(validateSnapshotChannelShard(openWithClosure).ok).toBe(false);
+    const closedWithoutClosure = baseShard();
+    closedWithoutClosure.state = "closed";
+    expect(validateSnapshotChannelShard(closedWithoutClosure).ok).toBe(false);
+    const closed = baseShard();
+    closed.state = "closed";
+    closed.closedAt = STAMP_3;
+    expect(validateSnapshotChannelShard(closed).ok).toBe(true);
 
-  it("refuses a record whose id disagrees with its path", () => {
-    const shard = validShard();
-    const parsed = parseChannelSnapshotShard(`channels/10/${OTHER_CHANNEL}.json`, Buffer.from(canonicalJson(shard)));
-    expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.error.code).toBe("VAULT_INTEGRITY_ERROR");
-  });
-});
-
-describe("validateSnapshotChannelShard wire semantics", () => {
-  it("accepts the healthy fixture with closed, inactive, late, unhandled-relay, and handled-note states", () => {
-    expect(validateSnapshotChannelShard(validShard()).ok).toBe(true);
-  });
-
-  it("refuses an open channel carrying closing provenance and a closed channel missing it", () => {
-    const openWithClose = validShard();
-    openWithClose.state = "open";
-    expect(validateSnapshotChannelShard(openWithClose).ok).toBe(false);
-    const closedWithoutProvenance = validShard();
-    closedWithoutProvenance.closedByKind = null;
-    expect(validateSnapshotChannelShard(closedWithoutProvenance).ok).toBe(false);
-  });
-
-  it("keeps handles verbatim: empty is invalid, space and BOM only are valid, TAB and NUL are invalid", () => {
-    for (const handle of ["", "\t", "\u0000"]) {
-      const shard = validShard();
-      (shard.participants[1] as { handle: string }).handle = handle;
-      expect(validateSnapshotChannelShard(shard).ok).toBe(false);
-    }
-    for (const handle of [" ", "\uFEFF", " \uFEFFworker "]) {
-      const shard = validShard();
-      (shard.participants[1] as { handle: string }).handle = handle;
-      expect(validateSnapshotChannelShard(shard).ok).toBe(true);
-    }
-  });
-
-  it("keeps native provenance and context verbatim, refusing only line separators and shape violations", () => {
-    const withNative = validShard();
-    (withNative.participants[1] as { nativeProvenance: string[] }).nativeProvenance = ["", "\t", "\u0000", "ok"];
-    expect(validateSnapshotChannelShard(withNative).ok).toBe(true);
-    const tooMany = validShard();
-    (tooMany.participants[1] as { nativeProvenance: string[] }).nativeProvenance = ["a", "b", "c", "d", "e"];
-    expect(validateSnapshotChannelShard(tooMany).ok).toBe(false);
-    const newlineNative = validShard();
-    (newlineNative.participants[1] as { nativeProvenance: string[] }).nativeProvenance = ["bad\nline"];
-    expect(validateSnapshotChannelShard(newlineNative).ok).toBe(false);
-    const shard = validShard();
-    const relay = shard.messages[0] as { contextSession: string };
-    relay.contextSession = " \uFEFF";
-    (shard.messages[0] as { contextNode: string | null }).contextNode = null;
-    expect(validateSnapshotChannelShard(shard).ok).toBe(true);
-  });
-
-  it("refuses rosters without exactly one main, duplicate identities or handles, and inactive mains", () => {
-    const twoMains = validShard();
-    (twoMains.participants[1] as { role: string }).role = "main";
-    assert(twoMains.participants[1]);
-    twoMains.participants[1].nativeProvenance = [];
-    twoMains.participants[1].registeredAt = twoMains.createdAt;
-    expect(validateSnapshotChannelShard(twoMains).ok).toBe(false);
-    const noMain = validShard();
-    (noMain.participants[0] as { role: string }).role = "worker";
+    const noMain = baseShard();
+    noMain.participants = [noMain.participants[1] as Shard["participants"][number]];
     expect(validateSnapshotChannelShard(noMain).ok).toBe(false);
-    const duplicateHandle = validShard();
-    (duplicateHandle.participants[2] as { handle: string }).handle = "main";
-    expect(validateSnapshotChannelShard(duplicateHandle).ok).toBe(false);
-    const inactiveMain = validShard();
-    (inactiveMain.participants[0] as { active: boolean }).active = false;
-    (inactiveMain.participants[0] as { deactivatedAt: string | null }).deactivatedAt = T(5);
-    expect(validateSnapshotChannelShard(inactiveMain).ok).toBe(false);
-    const mainWithNative = validShard();
-    (mainWithNative.participants[0] as { nativeProvenance: string[] }).nativeProvenance = [""];
-    expect(validateSnapshotChannelShard(mainWithNative).ok).toBe(false);
-    const mainRegisteredLate = validShard();
-    (mainRegisteredLate.participants[0] as { registeredAt: string }).registeredAt = T(4);
-    expect(validateSnapshotChannelShard(mainRegisteredLate).ok).toBe(false);
-  });
+    const mainDisagreement = baseShard();
+    mainDisagreement.main = "other";
+    expect(validateSnapshotChannelShard(mainDisagreement).ok).toBe(false);
+    const mainNotAtCreation = baseShard();
+    (mainNotAtCreation.participants[0] as { addedAt: string }).addedAt = STAMP_3;
+    expect(validateSnapshotChannelShard(mainNotAtCreation).ok).toBe(false);
 
-  it("refuses cross-roster senders, relay targets, and assignments, and late flags without assignments", () => {
-    const foreignSender = validShard();
-    (foreignSender.messages[0] as { senderParticipantId: string }).senderParticipantId = OTHER_MAIN;
-    expect(validateSnapshotChannelShard(foreignSender).ok).toBe(false);
-    const foreignRelay = validShard();
-    (foreignRelay.messages[0] as { relayToParticipantId: string }).relayToParticipantId = OTHER_MAIN;
-    expect(validateSnapshotChannelShard(foreignRelay).ok).toBe(false);
-    const foreignAssignment = validShard();
-    (foreignAssignment.messages[0] as { assignmentId: string | null }).assignmentId =
-      "30000000-0000-4000-8000-0000000000ff";
-    expect(validateSnapshotChannelShard(foreignAssignment).ok).toBe(false);
-    const lateWithoutAssignment = validShard();
-    (lateWithoutAssignment.messages[0] as { assignmentLate: boolean }).assignmentLate = true;
-    (lateWithoutAssignment.messages[0] as { assignmentId: string | null }).assignmentId = null;
-    expect(validateSnapshotChannelShard(lateWithoutAssignment).ok).toBe(false);
-    const relayWithoutTarget = validShard();
-    (relayWithoutTarget.messages[0] as { relayToParticipantId: string | null }).relayToParticipantId = null;
+    const removed = baseShard();
+    (removed.participants[1] as { removedAt: string | null }).removedAt = STAMP_3;
+    expect(validateSnapshotChannelShard(removed).ok).toBe(true);
+    const mainRemoved = baseShard();
+    (mainRemoved.participants[0] as { removedAt: string | null }).removedAt = STAMP_3;
+    expect(validateSnapshotChannelShard(mainRemoved).ok).toBe(false);
+
+    const unsortedRoster = baseShard();
+    unsortedRoster.participants = [
+      unsortedRoster.participants[1] as Shard["participants"][number],
+      unsortedRoster.participants[0] as Shard["participants"][number],
+    ];
+    expect(validateSnapshotChannelShard(unsortedRoster).ok).toBe(false);
+
+    const relayWithoutTarget = baseShard();
+    (relayWithoutTarget.messages[0] as { kind: string }).kind = "relay_request";
     expect(validateSnapshotChannelShard(relayWithoutTarget).ok).toBe(false);
-    const targetOnReport = validShard();
-    (targetOnReport.messages[1] as { relayToParticipantId: string | null }).relayToParticipantId = WORKER;
-    expect(validateSnapshotChannelShard(targetOnReport).ok).toBe(false);
-  });
-
-  it("refuses handled and unhandled field-shape violations", () => {
-    const unhandledWithNote = validShard();
-    (unhandledWithNote.messages[0] as { handleNote: string | null }).handleNote = "note";
-    expect(validateSnapshotChannelShard(unhandledWithNote).ok).toBe(false);
-    const handledWithoutTime = validShard();
-    (handledWithoutTime.messages[1] as { handledAt: string | null }).handledAt = null;
+    const targetOutsideRoster = baseShard();
+    (targetOutsideRoster.messages[0] as { kind: string; toHandle: string | null }).kind = "relay_request";
+    (targetOutsideRoster.messages[0] as { toHandle: string | null }).toHandle = "ghost";
+    expect(validateSnapshotChannelShard(targetOutsideRoster).ok).toBe(false);
+    const handledWithoutTime = baseShard();
+    (handledWithoutTime.messages[0] as { handled: boolean }).handled = true;
     expect(validateSnapshotChannelShard(handledWithoutTime).ok).toBe(false);
-    const userWithParticipant = validShard();
-    (userWithParticipant.messages[2] as { handledByParticipantId: string | null }).handledByParticipantId = MAIN;
-    expect(validateSnapshotChannelShard(userWithParticipant).ok).toBe(false);
+    const handled = baseShard();
+    (handled.messages[0] as { handled: boolean; handledAt: string | null }).handled = true;
+    (handled.messages[0] as { handledAt: string | null }).handledAt = STAMP_3;
+    expect(validateSnapshotChannelShard(handled).ok).toBe(true);
+    const unsortedMessages = baseShard();
+    unsortedMessages.messages.push({ ...(unsortedMessages.messages[0] as Shard["messages"][number]), seq: 1 });
+    expect(validateSnapshotChannelShard(unsortedMessages).ok).toBe(false);
+    const mainSender = baseShard();
+    (mainSender.messages[0] as { senderHandle: string }).senderHandle = "main";
+    expect(validateSnapshotChannelShard(mainSender).ok).toBe(false);
   });
 
-  it("enforces the closed inline body rules and the fixed inline threshold", () => {
-    for (const body of ["", " ", "\uFEFF", "\u0000", "\uD800ok", `${"x".repeat(65537)}`]) {
-      const shard = validShard();
-      (shard.messages[0] as { bodyContent: { inline: string } }).bodyContent = { inline: body };
-      expect(validateSnapshotChannelShard(shard).ok).toBe(false);
-    }
-    const threshold = validShard();
-    (threshold.messages[0] as { bodyContent: { inline: string } }).bodyContent = { inline: "x".repeat(65536) };
-    expect(validateSnapshotChannelShard(threshold).ok).toBe(true);
-  });
-
-  it("refuses file-backed bodies outside their own Channel identity path", () => {
-    const foreign = validShard();
-    assert(foreign.messages[2]);
-    foreign.messages[2].bodyContent = {
-      contentPath: `content/channel/${OTHER_CHANNEL}/${CONTENT_ID}`,
-      sizeBytes: FILE_BODY.length,
-      sha256: FILE_SHA,
+  it("keeps the inline threshold and the Channel-owned content path", () => {
+    const overThreshold = baseShard();
+    (overThreshold.messages[0] as { bodyContent: { inline: string } }).bodyContent = { inline: "x".repeat(65_537) };
+    expect(validateSnapshotChannelShard(overThreshold).ok).toBe(false);
+    const foreignPath = baseShard();
+    (
+      foreignPath.messages[0] as { bodyContent: { contentPath: string; sizeBytes: number; sha256: string } }
+    ).bodyContent = {
+      contentPath: `content/channel/10000000-0000-4000-8000-000000000009/${CONTENT_ID}`,
+      sizeBytes: 3,
+      sha256: "a".repeat(64),
     };
-    expect(validateSnapshotChannelShard(foreign).ok).toBe(false);
+    expect(validateSnapshotChannelShard(foreignPath).ok).toBe(false);
   });
 
-  it("refuses unnormalized titles and labels instead of re-normalizing retained values", () => {
-    const untrimmedTitle = validShard();
-    untrimmedTitle.title = " Snapshot Plan ";
-    expect(validateSnapshotChannelShard(untrimmedTitle).ok).toBe(false);
-    const untrimmedLabel = validShard();
-    (untrimmedLabel.assignments[0] as { label: string }).label = " Do B2 ";
-    expect(validateSnapshotChannelShard(untrimmedLabel).ok).toBe(false);
-  });
-
-  it("refuses rosters outside their deterministic order", () => {
-    const swapped = validShard();
-    const [main, worker, judge] = swapped.participants;
-    assert(main && worker && judge);
-    swapped.participants = [worker, main, judge];
-    expect(validateSnapshotChannelShard(swapped).ok).toBe(false);
-    const messagesSwapped = validShard();
-    const [relay, handled, file] = messagesSwapped.messages;
-    assert(relay && handled && file);
-    messagesSwapped.messages = [handled, relay, file];
-    expect(validateSnapshotChannelShard(messagesSwapped).ok).toBe(false);
-  });
-
-  it("validates creator ActorRef coherence without any Project lookup", () => {
-    const workspaceCreator = validShard();
-    workspaceCreator.creatorKind = "unregistered_workspace";
-    workspaceCreator.creatorId = "workspace-key";
-    expect(validateSnapshotChannelShard(workspaceCreator).ok).toBe(true);
-    const userCreator = validShard();
-    userCreator.creatorKind = "user";
-    userCreator.creatorId = null;
-    expect(validateSnapshotChannelShard(userCreator).ok).toBe(true);
-    const userWithId = validShard();
-    userWithId.creatorKind = "user";
-    userWithId.creatorId = CREATOR_PROJECT;
-    expect(validateSnapshotChannelShard(userWithId).ok).toBe(false);
+  it("parses canonical bytes and refuses noncanonical ones", () => {
+    const shard = baseShard();
+    const path = channelSnapshotPath(CHANNEL);
+    expect(path.ok).toBe(true);
+    if (!path.ok) return;
+    const bytes = new TextEncoder().encode(canonicalJson(shard));
+    const parsed = parseChannelSnapshotShard(path.value, bytes);
+    expect(parsed.ok).toBe(true);
+    const reordered = new TextEncoder().encode(JSON.stringify(shard, null, 2));
+    expect(parseChannelSnapshotShard(path.value, reordered).ok).toBe(false);
+    const otherChannel = channelSnapshotPath("10000000-0000-4000-8000-000000000002");
+    expect(otherChannel.ok).toBe(true);
+    if (otherChannel.ok) expect(parseChannelSnapshotShard(otherChannel.value, bytes).ok).toBe(false);
   });
 });
 
-describe("proveChannelContentBytes", () => {
-  it("accepts exact bodies and finds non-whitespace beyond any bounded head", () => {
-    expect(proveChannelContentBytes(FILE_BODY).ok).toBe(true);
-    const beyondHead = Buffer.from(`${" ".repeat(70000)}found it`);
-    expect(proveChannelContentBytes(beyondHead).ok).toBe(true);
-    const bomOnly = Buffer.from([0xef, 0xbb, 0xbf, 0x62, 0x6f, 0x64, 0x79]);
-    expect(proveChannelContentBytes(bomOnly).ok).toBe(true);
-  });
-
-  it("refuses invalid UTF-8, NUL, and all-whitespace bodies with typed errors", () => {
-    for (const bytes of [
-      Buffer.from([0xff]),
-      Buffer.from([0x41, 0x00, 0x42]),
-      Buffer.from("   \t\r\n"),
-      Buffer.from([0xef, 0xbb, 0xbf]),
-    ]) {
-      const proof = proveChannelContentBytes(bytes);
-      expect(proof.ok).toBe(false);
-      if (!proof.ok) expect(proof.error.code).toBe("VAULT_INTEGRITY_ERROR");
-    }
+describe("the whole-bytes content proof", () => {
+  it("accepts exact nonblank bytes and refuses NUL, blank, and invalid UTF-8", () => {
+    expect(proveChannelContentBytes(new TextEncoder().encode("report body")).ok).toBe(true);
+    expect(proveChannelContentBytes(new TextEncoder().encode("  \r\n\t ")).ok).toBe(false);
+    expect(proveChannelContentBytes(new Uint8Array([0x62, 0x6f, 0x64, 0x79, 0x00])).ok).toBe(false);
+    expect(proveChannelContentBytes(new Uint8Array([0xff, 0xfe])).ok).toBe(false);
   });
 });
 
-describe("validateSnapshotChannelContent", () => {
-  it("accepts the healthy fixture through the composed format-3 validator", () => {
-    const data = validChannelData();
-    expect(validateSnapshotChannelContent(data, manifestFor(data)).ok).toBe(true);
-    expect(validateSnapshot(data, manifestFor(data)).ok).toBe(true);
+describe("the rebuilt ledger reconciliation", () => {
+  it("accepts a coherent rebuilt ledger", () => {
+    const shard = baseShard();
+    expect(validateSnapshotChannelHistory(coherentEvents(shard), [shard]).ok).toBe(true);
+    const closed = baseShard();
+    closed.state = "closed";
+    closed.closedAt = STAMP_3;
+    const events = coherentEvents(closed);
+    expect(validateSnapshotChannelHistory(events, [closed]).ok).toBe(true);
+    const handled = baseShard();
+    (handled.messages[0] as { handled: boolean; handledAt: string | null }).handled = true;
+    (handled.messages[0] as { handledAt: string | null }).handledAt = STAMP_3;
+    expect(validateSnapshotChannelHistory(coherentEvents(handled), [handled]).ok).toBe(true);
   });
 
-  it("refuses manifest Channel counts that disagree with the shard family in both directions", () => {
-    const data = validChannelData();
-    const positiveCountNoShards = manifestFor({ ...data, channels: [] });
-    expect(validateSnapshotChannelContent({ ...data, channels: [] }, positiveCountNoShards).ok).toBe(false);
-    const zeroCountWithShards = { ...manifestFor(data), counts: { ...manifestFor(data).counts, channels: 0 } };
-    expect(validateSnapshotChannelContent(data, zeroCountWithShards).ok).toBe(false);
-    expect(validateSnapshot({ ...data, channels: [] }, positiveCountNoShards)).toMatchObject({
-      ok: false,
-      error: { code: "VAULT_INTEGRITY_ERROR" },
-    });
-  });
-
-  it("refuses per-table identities duplicated across Channel shards", () => {
-    const base = validChannelData();
-    for (const duplicate of [
-      { id: WORKER, role: "worker" as const },
-      { id: JUDGE, role: "judge" as const },
-    ]) {
-      const data = { ...base, channels: [...(base.channels ?? [])] };
-      const foreign = structuredClone(base.channels?.[0] as SnapshotChannelShard);
-      foreign.id = OTHER_CHANNEL;
-      foreign.state = "open";
-      foreign.closedAt = null;
-      foreign.closedByParticipantId = null;
-      foreign.closedByKind = null;
-      foreign.title = null;
-      foreign.createdAt = T(20);
-      foreign.participants = [
-        {
-          id: OTHER_MAIN,
-          role: "main",
-          handle: "other-main",
-          nativeProvenance: [],
-          active: true,
-          registeredAt: T(20),
-          deactivatedAt: null,
-        },
-        {
-          ...duplicate,
-          handle: `h-${duplicate.id}`,
-          nativeProvenance: [],
-          active: true,
-          registeredAt: T(21),
-          deactivatedAt: null,
-        },
-      ];
-      foreign.assignments = [];
-      foreign.messages = [];
-      (data.channels as SnapshotChannelShard[]).push(foreign);
-      const manifest = manifestFor(data);
-      manifest.counts.channels = 2;
-      const refused = validateSnapshotChannelContent(data, manifest);
-      expect(refused.ok).toBe(false);
-      if (!refused.ok) expect(refused.error.code).toBe("VAULT_INTEGRITY_ERROR");
-    }
-    const duplicateAssignment = { ...base, channels: [...(base.channels ?? [])] };
-    const foreignAssignment = structuredClone(base.channels?.[0] as SnapshotChannelShard);
-    foreignAssignment.id = OTHER_CHANNEL;
-    foreignAssignment.state = "open";
-    foreignAssignment.closedAt = null;
-    foreignAssignment.closedByParticipantId = null;
-    foreignAssignment.closedByKind = null;
-    foreignAssignment.createdAt = T(20);
-    foreignAssignment.participants = [
-      {
-        id: OTHER_MAIN,
-        role: "main",
-        handle: "other-main",
-        nativeProvenance: [],
-        active: true,
-        registeredAt: T(20),
-        deactivatedAt: null,
-      },
-    ];
-    foreignAssignment.assignments = [
-      {
-        id: ASSIGNMENT_OPEN,
-        participantId: null,
-        label: "Foreign",
-        state: "open",
-        createdAt: T(21),
-        closedAt: null,
-      },
-    ];
-    foreignAssignment.messages = [];
-    (duplicateAssignment.channels as SnapshotChannelShard[]).push(foreignAssignment);
-    const assignmentManifest = manifestFor(duplicateAssignment);
-    assignmentManifest.counts.channels = 2;
-    expect(validateSnapshotChannelContent(duplicateAssignment, assignmentManifest).ok).toBe(false);
-
-    const duplicateMessage = { ...base, channels: [...(base.channels ?? [])] };
-    const foreignMessage = structuredClone(foreignAssignment);
-    foreignMessage.assignments = [];
-    foreignMessage.messages = [
-      {
-        id: MESSAGE_RELAY,
-        senderParticipantId: OTHER_MAIN,
-        kind: "report",
-        bodyContent: { inline: "foreign message" },
-        assignmentId: null,
-        assignmentLate: false,
-        relayToParticipantId: null,
-        contextSession: null,
-        contextNode: null,
-        contextAttempt: null,
-        handled: false,
-        handledAt: null,
-        handledByParticipantId: null,
-        handledByKind: null,
-        handleNote: null,
-        createdAt: T(22),
-      },
-    ];
-    (duplicateMessage.channels as SnapshotChannelShard[]).push(foreignMessage);
-    const messageManifest = manifestFor(duplicateMessage);
-    messageManifest.counts.channels = 2;
-    expect(validateSnapshotChannelContent(duplicateMessage, messageManifest).ok).toBe(false);
-  });
-
-  it("refuses orphan, missing, digest-mismatched, and semantically invalid carried content with valid digests", () => {
-    const data = validChannelData();
-    const orphan = {
-      ...data,
-      channelContentFiles: [
-        ...(data.channelContentFiles ?? []),
-        { channelId: CHANNEL, contentId: "50000000-0000-4000-8000-0000000000ff", bytes: FILE_BODY },
-      ],
-    };
-    expect(validateSnapshotChannelContent(orphan, manifestFor(orphan, { [CONTENT_PATH]: FILE_SHA })).ok).toBe(false);
-    const missing = { ...data, channelContentFiles: [] };
-    expect(validateSnapshotChannelContent(missing, manifestFor(missing, {})).ok).toBe(false);
-    const tamperedMap = manifestFor(data, { [CONTENT_PATH]: "0".repeat(64) });
-    expect(validateSnapshotChannelContent(data, tamperedMap).ok).toBe(false);
-    for (const bytes of [Buffer.from([0xff]), Buffer.from("ok\0ok"), Buffer.from(" \t\r\n ")]) {
-      const sha = createHash("sha256").update(bytes).digest("hex");
-      const invalid = {
-        ...data,
-        channels: [{ ...(data.channels?.[0] as SnapshotChannelShard) }],
-        channelContentFiles: [{ channelId: CHANNEL, contentId: CONTENT_ID, bytes }],
-      };
-      const message = invalid.channels[0]?.messages[2];
-      assert(message);
-      message.bodyContent = {
-        contentPath: CONTENT_PATH,
-        sizeBytes: bytes.length,
-        sha256: sha,
-      };
-      const refused = validateSnapshotChannelContent(invalid, manifestFor(invalid, { [CONTENT_PATH]: sha }));
-      expect(refused.ok).toBe(false);
-      if (!refused.ok) expect(refused.error.code).toBe("VAULT_INTEGRITY_ERROR");
-    }
-  });
-
-  it("refuses two messages naming one content record and map keys no record names", () => {
-    const data = validChannelData();
-    const twin = structuredClone(data.channels?.[0] as SnapshotChannelShard);
-    (twin.messages[0] as { bodyContent: unknown }).bodyContent = {
-      contentPath: CONTENT_PATH,
-      sizeBytes: FILE_BODY.length,
-      sha256: FILE_SHA,
-    };
-    const shared = { ...data, channels: [twin] };
-    expect(validateSnapshotChannelContent(shared, manifestFor(shared)).ok).toBe(false);
-    const extraMapKey = manifestFor(data, {
-      [CONTENT_PATH]: FILE_SHA,
-      "content/channel/10000000-0000-4000-8000-000000000001/50000000-0000-4000-8000-0000000000ff": FILE_SHA,
-    });
-    expect(validateSnapshotChannelContent(data, extraMapKey).ok).toBe(false);
-  });
-});
-
-describe("validateSnapshotChannelHistory", () => {
-  it("accepts the complete healthy ledger of the fixture", () => {
-    expect(validateSnapshotChannelHistory(validEvents(), [validShard()]).ok).toBe(true);
-  });
-
-  it("refuses a ledger-only Channel event whose shard is not retained", () => {
-    const events = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CREATED"
-        ? { ...row, metadata: { channelId: OTHER_CHANNEL, mainParticipantId: MAIN } }
-        : row,
+  it("keeps the reconciliation order-independent: a shared-timestamp add/remove/re-add round trips", () => {
+    const shard = baseShard();
+    const worker = shard.participants[1] as { handle: string; role: string; addedAt: string; removedAt: string | null };
+    // Three transactions at one millisecond, with event UUID order chosen so
+    // the (createdAt, id) sort disagrees with the execution order.
+    const addedFirst = event(
+      "CHANNEL_PARTICIPANT_ADDED",
+      { channelId: shard.id, actingHandle: "main", handle: worker.handle, role: "worker" },
+      STAMP_2,
+      "90000000-0000-4000-8000-000000000003",
     );
-    const refused = validateSnapshotChannelHistory(events, [validShard()]);
+    const removedThen = event(
+      "CHANNEL_PARTICIPANT_REMOVED",
+      { channelId: shard.id, actingHandle: "main", handle: worker.handle },
+      STAMP_2,
+      "90000000-0000-4000-8000-000000000001",
+    );
+    const reAddedLast = event(
+      "CHANNEL_PARTICIPANT_ADDED",
+      { channelId: shard.id, actingHandle: "main", handle: worker.handle, role: "worker" },
+      STAMP_2,
+      "90000000-0000-4000-8000-000000000002",
+    );
+    const events = coherentEvents(shard).filter(
+      (entry) =>
+        entry.eventType !== "CHANNEL_PARTICIPANT_ADDED" ||
+        (entry.metadata as { handle: string }).handle !== worker.handle,
+    );
+    // The retained state: registered again (removedAt null, addedAt refreshed).
+    worker.removedAt = null;
+    worker.addedAt = STAMP_2;
+    events.push(addedFirst, removedThen, reAddedLast);
+    const sorted = [...events].sort((left, right) =>
+      left.createdAt === right.createdAt ? (left.id < right.id ? -1 : 1) : left.createdAt < right.createdAt ? -1 : 1,
+    );
+    expect(validateSnapshotChannelHistory(sorted, [shard]).ok).toBe(true);
+    // The retained state may instead end removed: the count relation holds.
+    worker.removedAt = STAMP_2;
+    const removedEvents = events.filter((entry) => entry !== reAddedLast);
+    expect(validateSnapshotChannelHistory(removedEvents, [shard]).ok).toBe(true);
+  });
+
+  it("rejects every missing-or-duplicated event the audit trail requires", () => {
+    const shard = baseShard();
+    const missingPosted = coherentEvents(shard).filter((entry) => entry.eventType !== "CHANNEL_MESSAGE_POSTED");
+    expect(validateSnapshotChannelHistory(missingPosted, [shard]).ok).toBe(false);
+    const duplicatePosted = [
+      ...coherentEvents(shard),
+      coherentEvents(shard).find((entry) => entry.eventType === "CHANNEL_MESSAGE_POSTED") as SnapshotEvent,
+    ];
+    expect(validateSnapshotChannelHistory(duplicatePosted, [shard]).ok).toBe(false);
+
+    const handled = baseShard();
+    (handled.messages[0] as { handled: boolean; handledAt: string | null }).handled = true;
+    (handled.messages[0] as { handledAt: string | null }).handledAt = STAMP_3;
+    const missingAcked = coherentEvents(handled).filter((entry) => entry.eventType !== "CHANNEL_MESSAGE_ACKED");
+    expect(validateSnapshotChannelHistory(missingAcked, [handled]).ok).toBe(false);
+    const duplicateAcked = [
+      ...coherentEvents(handled),
+      coherentEvents(handled).find((entry) => entry.eventType === "CHANNEL_MESSAGE_ACKED") as SnapshotEvent,
+    ];
+    expect(validateSnapshotChannelHistory(duplicateAcked, [handled]).ok).toBe(false);
+
+    const missingAdded = coherentEvents(shard).filter(
+      (entry) =>
+        entry.eventType !== "CHANNEL_PARTICIPANT_ADDED" || (entry.metadata as { handle?: string }).handle === undefined,
+    );
+    // The creation event has no handle key, so this only drops the worker's additions.
+    const strictlyMissingAdded = missingAdded.filter((entry) => !(entry.eventType === "CHANNEL_CREATED"));
+    expect(validateSnapshotChannelHistory(strictlyMissingAdded, [shard]).ok).toBe(false);
+
+    const missingCreated = coherentEvents(shard).filter((entry) => entry.eventType !== "CHANNEL_CREATED");
+    expect(validateSnapshotChannelHistory(missingCreated, [shard]).ok).toBe(false);
+    const duplicateCreated = [
+      ...coherentEvents(shard),
+      event("CHANNEL_CREATED", { channelId: shard.id, actingHandle: "main", mainHandle: "main" }, STAMP_3),
+    ];
+    expect(validateSnapshotChannelHistory(duplicateCreated, [shard]).ok).toBe(false);
+    const closedWithoutEvent = baseShard();
+    closedWithoutEvent.state = "closed";
+    closedWithoutEvent.closedAt = STAMP_3;
+    expect(
+      validateSnapshotChannelHistory(
+        coherentEvents(closedWithoutEvent).filter((e) => e.eventType !== "CHANNEL_CLOSED"),
+        [closedWithoutEvent],
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("enforces the User actor, the associations, and the acting-handle rules", () => {
+    const shard = baseShard();
+    const projectActor = coherentEvents(shard).map((entry) =>
+      entry.eventType === "CHANNEL_CREATED" ? { ...entry, actorKind: "registered_project", actorId: CHANNEL } : entry,
+    );
+    expect(validateSnapshotChannelHistory(projectActor, [shard]).ok).toBe(false);
+    const withHandoff = coherentEvents(shard).map((entry) =>
+      entry.eventType === "CHANNEL_CREATED" ? { ...entry, handoffId: CHANNEL } : entry,
+    );
+    expect(validateSnapshotChannelHistory(withHandoff, [shard]).ok).toBe(false);
+    const withRowVersion = coherentEvents(shard).map((entry) =>
+      entry.eventType === "CHANNEL_MESSAGE_POSTED" ? { ...entry, rowVersion: 1 } : entry,
+    );
+    expect(validateSnapshotChannelHistory(withRowVersion, [shard]).ok).toBe(false);
+    const postedByMain = coherentEvents(shard).map((entry) =>
+      entry.eventType === "CHANNEL_MESSAGE_POSTED"
+        ? { ...entry, metadata: { ...(entry.metadata as Record<string, unknown>), actingHandle: "main" } }
+        : entry,
+    );
+    expect(validateSnapshotChannelHistory(postedByMain, [shard]).ok).toBe(false);
+    const ackedShard = { ...shard } as Shard;
+    ackedShard.messages[0] = {
+      ...(ackedShard.messages[0] as Shard["messages"][number]),
+      handled: true,
+      handledAt: STAMP_3,
+    };
+    const ackedByWorker = coherentEvents(ackedShard).map((entry) =>
+      entry.eventType === "CHANNEL_MESSAGE_ACKED"
+        ? { ...entry, metadata: { ...(entry.metadata as Record<string, unknown>), actingHandle: "w1" } }
+        : entry,
+    );
+    expect(validateSnapshotChannelHistory(ackedByWorker, [ackedShard]).ok).toBe(false);
+    // A registered worker as the acting handle of a User-performed
+    // registration operation is corrupt even though the worker exists
+    // (security section 10.1; decision item 7).
+    for (const type of ["CHANNEL_PARTICIPANT_ADDED", "CHANNEL_PARTICIPANT_REMOVED"] as const) {
+      // The removed variant needs a retained removal for its REMOVED event to
+      // exist at all; the worker stays registered in the base roster.
+      const workerRemoved = { ...shard } as Shard;
+      const worker = workerRemoved.participants.find((participant) => participant.handle === "w1");
+      if (worker !== undefined) worker.removedAt = STAMP_3;
+      const subject = type === "CHANNEL_PARTICIPANT_ADDED" ? shard : workerRemoved;
+      const byWorker = coherentEvents(subject).map((entry) =>
+        entry.eventType === type
+          ? { ...entry, metadata: { ...(entry.metadata as Record<string, unknown>), actingHandle: "w1" } }
+          : entry,
+      );
+      expect(validateSnapshotChannelHistory(byWorker, [subject]).ok, type).toBe(false);
+    }
+    const foreignChannel = coherentEvents(shard).map((entry) =>
+      entry.eventType === "CHANNEL_CREATED"
+        ? {
+            ...entry,
+            metadata: {
+              ...(entry.metadata as Record<string, unknown>),
+              channelId: "10000000-0000-4000-8000-000000000009",
+            },
+          }
+        : entry,
+    );
+    expect(validateSnapshotChannelHistory(foreignChannel, [shard]).ok).toBe(false);
+  });
+
+  it("ignores non-Channel events entirely", () => {
+    const shard = baseShard();
+    const events = [
+      ...coherentEvents(shard),
+      event("MEMO_CREATED", { projectId: CHANNEL, memoId: CHANNEL, rowVersion: 1, toState: "open" }, STAMP_3),
+    ];
+    expect(validateSnapshotChannelHistory(events, [shard]).ok).toBe(true);
+  });
+});
+
+describe("the Channel content inventory", () => {
+  const bytes = new TextEncoder().encode("file channel body");
+  const carried: ChannelContentFileExport[] = [{ channelId: CHANNEL, contentId: CONTENT_ID, bytes }];
+
+  function fileShard(): Shard {
+    const shard = baseShard();
+    (shard.messages[0] as { bodyContent: unknown }).bodyContent = {
+      contentPath: CONTENT_PATH,
+      sizeBytes: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    return shard;
+  }
+
+  it("refuses a snapshot that repeats a Channel name across shards before import (CHN-002, decision item 17)", () => {
+    const first = baseShard();
+    const second = baseShard();
+    second.id = "10000000-0000-4000-8000-000000000009";
+    second.name = first.name;
+    const carried: ChannelContentFileExport[] = [];
+    const manifest = manifestFor([first, second], carried);
+    // The ids stay distinct, so only the name rule refuses the family.
+    const refused = validateSnapshotChannelContent(snapshotData([first, second], carried), manifest);
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe("VAULT_INTEGRITY_ERROR");
+    if (!refused.ok) expect(refused.error.message).toContain("repeats a Channel name");
+    // The distinct-name variant with the same shape passes.
+    second.name = "aq-run-43";
+    const accepted = validateSnapshotChannelContent(snapshotData([first, second], carried), manifest);
+    expect(accepted.ok).toBe(true);
   });
 
-  it("refuses duplicate creation, creation actor mismatch, and creation main mismatch", () => {
-    const events = validEvents();
-    const creation = events[0];
-    assert(creation);
-    const duplicate = [...events, creation];
-    expect(validateSnapshotChannelHistory(duplicate, [validShard()]).ok).toBe(false);
-    const actorMismatch = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CREATED" ? { ...row, actorKind: "user", actorId: null } : row,
+  it("accepts an agreeing inventory and refuses every disagreement", () => {
+    const shard = fileShard();
+    expect(validateSnapshotChannelContent(snapshotData([shard], carried), manifestFor([shard], carried)).ok).toBe(true);
+    const wrongCount = manifestFor([shard], carried);
+    wrongCount.counts.channels = 2;
+    expect(validateSnapshotChannelContent(snapshotData([shard], carried), wrongCount).ok).toBe(false);
+    const missingFile = snapshotData([shard], []);
+    expect(validateSnapshotChannelContent(missingFile, manifestFor([shard], [])).ok).toBe(false);
+    const alteredBytes = new TextEncoder().encode("altered channel body");
+    const altered: ChannelContentFileExport[] = [{ channelId: CHANNEL, contentId: CONTENT_ID, bytes: alteredBytes }];
+    expect(validateSnapshotChannelContent(snapshotData([shard], altered), manifestFor([shard], altered)).ok).toBe(
+      false,
     );
-    expect(validateSnapshotChannelHistory(actorMismatch, [validShard()]).ok).toBe(false);
-    const mainMismatch = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CREATED"
-        ? { ...row, metadata: { channelId: CHANNEL, mainParticipantId: WORKER } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(mainMismatch, [validShard()]).ok).toBe(false);
-  });
-
-  it("refuses a separate registration event for the initial main and role mismatches", () => {
-    const initialMainRegistered = [
-      ...validEvents(),
-      event(14, {
-        eventType: "CHANNEL_PARTICIPANT_REGISTERED",
-        createdAt: T(0),
-        metadata: { channelId: CHANNEL, actingParticipantId: MAIN, participantId: MAIN, role: "worker" },
-      }),
+    const unreferenced: ChannelContentFileExport[] = [
+      ...carried,
+      { channelId: CHANNEL, contentId: "50000000-0000-4000-8000-000000000004", bytes },
     ];
-    expect(validateSnapshotChannelHistory(initialMainRegistered, [validShard()]).ok).toBe(false);
-    const roleMismatch = validEvents().map((row) =>
-      row.metadata instanceof Object && (row.metadata as { role?: string }).role === "worker"
-        ? { ...row, metadata: { ...(row.metadata as object), role: "judge" } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(roleMismatch, [validShard()]).ok).toBe(false);
-  });
-
-  it("refuses missing and extra closure events and closing provenance disagreement", () => {
-    const noClosure = validEvents().filter((row) => row.eventType !== "CHANNEL_CLOSED");
-    expect(validateSnapshotChannelHistory(noClosure, [validShard()]).ok).toBe(false);
-    const wrongTime = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CLOSED" ? { ...row, createdAt: T(11) } : row,
-    );
-    expect(validateSnapshotChannelHistory(wrongTime, [validShard()]).ok).toBe(false);
-    const wrongAuthority = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CLOSED"
-        ? { ...row, metadata: { ...(row.metadata as object), actingParticipantId: null } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(wrongAuthority, [validShard()]).ok).toBe(false);
-    const openShard = validShard();
-    openShard.state = "open";
-    openShard.closedAt = null;
-    openShard.closedByParticipantId = null;
-    openShard.closedByKind = null;
-    const openEvents = validEvents().filter((row) => row.eventType !== "CHANNEL_CLOSED");
-    expect(validateSnapshotChannelHistory(openEvents, [openShard]).ok).toBe(true);
-  });
-
-  it("refuses wrong row versions, duplicate submissions, and handling/record disagreement", () => {
-    const wrongSubmissionVersion = validEvents().map((row) =>
-      row.eventType === "CHANNEL_MESSAGE_SUBMITTED" ? { ...row, rowVersion: 2 } : row,
-    );
-    expect(validateSnapshotChannelHistory(wrongSubmissionVersion, [validShard()]).ok).toBe(false);
-    const events = validEvents();
-    const submission = events[7];
-    assert(submission);
-    const duplicateSubmission = [...events, submission];
-    expect(validateSnapshotChannelHistory(duplicateSubmission, [validShard()]).ok).toBe(false);
-    const handledOnUnhandled = validEvents().map((row) =>
-      row.eventType === "CHANNEL_MESSAGE_HANDLED"
-        ? { ...row, metadata: { ...(row.metadata as object), messageId: MESSAGE_RELAY } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(handledOnUnhandled, [validShard()]).ok).toBe(false);
-    const submissionDisagreement = validEvents().map((row) =>
-      row.eventType === "CHANNEL_MESSAGE_SUBMITTED" &&
-      (row.metadata as { messageId: string }).messageId === MESSAGE_RELAY
-        ? { ...row, metadata: { ...(row.metadata as object), assignmentLate: true } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(submissionDisagreement, [validShard()]).ok).toBe(false);
-    const missingSubmission = validEvents().filter(
-      (row) =>
-        !(
-          row.eventType === "CHANNEL_MESSAGE_SUBMITTED" &&
-          (row.metadata as { messageId: string }).messageId === MESSAGE_RELAY
-        ),
-    );
-    expect(validateSnapshotChannelHistory(missingSubmission, [validShard()]).ok).toBe(false);
-  });
-
-  it("refuses legacy associations, system actors, and non-main acting participants on Channel events", () => {
-    const handoffAssociated = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CREATED" ? { ...row, handoffId: "0123abcd-0000-4000-8000-0000000000ee" } : row,
-    );
-    expect(validateSnapshotChannelHistory(handoffAssociated, [validShard()]).ok).toBe(false);
-    const memoAssociated = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CREATED" ? { ...row, memoId: "0123abcd-0000-4000-8000-0000000000ee" } : row,
-    );
-    expect(validateSnapshotChannelHistory(memoAssociated, [validShard()]).ok).toBe(false);
-    const systemActor = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CREATED" ? { ...row, actorKind: "system" } : row,
-    );
-    expect(validateSnapshotChannelHistory(systemActor, [validShard()]).ok).toBe(false);
-    const nonMainActing = validEvents().map((row) =>
-      row.eventType === "CHANNEL_CLOSED"
-        ? { ...row, metadata: { ...(row.metadata as object), actingParticipantId: WORKER } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(nonMainActing, [validShard()]).ok).toBe(false);
-  });
-
-  it("refuses assignment metadata that disagrees with the retained binding", () => {
-    const bindingMismatch = validEvents().map((row) =>
-      row.eventType === "CHANNEL_ASSIGNMENT_CREATED" &&
-      (row.metadata as { assignmentId: string }).assignmentId === ASSIGNMENT_OPEN
-        ? { ...row, metadata: { ...(row.metadata as object), participantId: null } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(bindingMismatch, [validShard()]).ok).toBe(false);
-    const deactivationOfActive = validEvents().map((row) =>
-      row.eventType === "CHANNEL_PARTICIPANT_DEACTIVATED"
-        ? { ...row, metadata: { ...(row.metadata as object), participantId: WORKER } }
-        : row,
-    );
-    expect(validateSnapshotChannelHistory(deactivationOfActive, [validShard()]).ok).toBe(false);
-  });
-});
-
-describe("snapshotFilesV3 Channel export", () => {
-  it("writes canonical shard and content paths with counts and digests, then imports cleanly", () => {
-    const data = validChannelData();
-    const built = snapshotFilesV3(data);
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    expect(built.value.files.some((file) => file.path === `channels/10/${CHANNEL}.json`)).toBe(true);
-    expect(built.value.files.some((file) => file.path === CONTENT_PATH)).toBe(true);
-    expect(built.value.files.some((file) => file.path.startsWith("snapshots/"))).toBe(false);
-    expect(built.value.manifest.counts.channels).toBe(1);
-    expect(built.value.manifest.contentDigests).toEqual({ [CONTENT_PATH]: FILE_SHA });
-    expect(validateSnapshot(data, built.value.manifest).ok).toBe(true);
-  });
-
-  it("refuses invalid shards, orphan content, and duplicate content references before writing", () => {
-    const invalidTitle = validChannelData();
-    (invalidTitle.channels?.[0] as { title: string }).title = " untrimmed ";
-    expect(snapshotFilesV3(invalidTitle).ok).toBe(false);
-    const orphan = validChannelData();
-    orphan.channelContentFiles = [
-      ...(orphan.channelContentFiles ?? []),
-      { channelId: CHANNEL, contentId: "50000000-0000-4000-8000-0000000000ff", bytes: Buffer.from("orphan") },
-    ];
-    expect(snapshotFilesV3(orphan).ok).toBe(false);
-    const missing = validChannelData();
-    missing.channelContentFiles = [];
-    expect(snapshotFilesV3(missing).ok).toBe(false);
-    const blank = validChannelData();
-    const blankBytes = Buffer.from(" ");
-    const blankSha = createHash("sha256").update(blankBytes).digest("hex");
-    blank.channelContentFiles = [{ channelId: CHANNEL, contentId: CONTENT_ID, bytes: blankBytes }];
-    ((blank.channels?.[0] as SnapshotChannelShard).messages[2] as { bodyContent: unknown }).bodyContent = {
+    expect(
+      validateSnapshotChannelContent(snapshotData([shard], unreferenced), manifestFor([shard], unreferenced)).ok,
+    ).toBe(false);
+    const unmaterializable = baseShard();
+    (unmaterializable.messages[0] as { bodyContent: unknown }).bodyContent = {
       contentPath: CONTENT_PATH,
-      sizeBytes: blankBytes.length,
-      sha256: blankSha,
+      sizeBytes: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
     };
-    const blankBuilt = snapshotFilesV3(blank);
-    expect(blankBuilt.ok).toBe(false);
-    if (!blankBuilt.ok) expect(blankBuilt.error.code).toBe("VAULT_INTEGRITY_ERROR");
-    expect(blankSha).not.toBe(FILE_SHA);
+    expect(
+      validateSnapshotChannelContent(
+        snapshotData([unmaterializable], carried),
+        manifestFor([unmaterializable], carried),
+      ).ok,
+    ).toBe(true);
   });
 });

@@ -1,26 +1,25 @@
 import { createHash } from "node:crypto";
-import { canonicalJson, compareSnapshotStrings, type SnapshotEvent } from "./backup-snapshot";
+import { canonicalJson, type SnapshotEvent } from "./backup-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { isChannelDomainEventType } from "./events";
 import { memoObject } from "./memo-protocol";
-import { isMemoTimestamp, isMemoUuid } from "./memos";
+import { isMemoTimestamp } from "./memos";
 import { parseUniqueSnapshotJson, type ContentSnapshotManifest } from "./memo-snapshot";
 import { CONTENT_INLINE_MAX_UTF8_BYTES, isUtf8ExactText, utf8ByteLength } from "./content";
 import {
+  compareHandles,
   isChannelUuid,
-  normalizeAssignmentLabel,
   normalizeChannelTitle,
   validateChannelEventMetadata,
   validateChannelHandle,
-  validateContextField,
+  validateChannelName,
   validateHandleNote,
-  validateNativeProvenance,
+  validateMessageRef,
 } from "./channels";
 import {
   memoContentFilePath,
   parseSnapshotBodyContent,
   type ChannelContentFileExport,
-  type SnapshotChannelAssignment,
   type SnapshotChannelMessage,
   type SnapshotChannelParticipant,
   type SnapshotChannelShard,
@@ -28,16 +27,21 @@ import {
 } from "./content-snapshot";
 
 /**
- * The format-3 Channel snapshot family of TASK-109 (CHN-009, SHR-010, interface
- * sections 38.8 and 38.9, security section 10.1): one closed Channel shard per
- * Channel under `snapshots/channels/<xx>/<id>.json`, file-backed message bodies
- * carried as exact raw bytes under `snapshots/content/channel/<channel-id>/…`
- * and digested in the manifest's `contentDigests`, and the complete retained
- * Channel-domain ledger reconciled against the retained records before import.
- * The manifest stays closed — `memoDigests` and `contentDigests` only — so a
- * Channel shard has no authoritative external digest: its integrity scope is
- * the closed record shape, duplicate-key refusal, fatal UTF-8, canonical
- * bytes, ledger correspondence, and the content files' digested exact bytes.
+ * The format-3 Channel snapshot family rebuilt under ADR-0034 (CHN-009,
+ * SHR-010, interface sections 38.8 and 38.9, security section 10.1): one
+ * closed Channel shard per Channel under `snapshots/channels/<xx>/<id>.json`
+ * carrying the rebuilt record shape — the name, the main handle, participants
+ * keyed by handle with reversible removal, and messages keyed by per-Channel
+ * sequence number — with file-backed message bodies carried as exact raw
+ * bytes under `snapshots/content/channel/<channel-id>/…` and digested in the
+ * manifest's `contentDigests`. The retained ledger reconciles against the
+ * shards referentially and order-independently: the six User-actor event
+ * types, the acting handle of every event, exactly one posting event per
+ * message and one handling event per handled message, and the add/remove
+ * count relation of every non-main handle, with no assumption that timestamp
+ * or UUID order records mutation order. A development snapshot carrying an
+ * old Channel shard key set or an old Channel event name fails closed
+ * validation with `VAULT_INTEGRITY_ERROR` rather than being converted.
  */
 
 function corrupt(message: string): Result<never, AppError> {
@@ -69,83 +73,44 @@ export function channelContentFilePath(channelId: string, contentId: string): Re
 
 const SHARD_KEYS = [
   "id",
+  "name",
   "title",
   "state",
-  "creatorKind",
-  "creatorId",
+  "main",
   "createdAt",
   "closedAt",
-  "closedByParticipantId",
-  "closedByKind",
   "participants",
-  "assignments",
   "messages",
 ] as const;
 
-const PARTICIPANT_KEYS = [
-  "id",
-  "role",
-  "handle",
-  "nativeProvenance",
-  "active",
-  "registeredAt",
-  "deactivatedAt",
-] as const;
-
-const ASSIGNMENT_KEYS = ["id", "participantId", "label", "state", "createdAt", "closedAt"] as const;
+const PARTICIPANT_KEYS = ["handle", "role", "addedAt", "removedAt"] as const;
 
 const MESSAGE_KEYS = [
-  "id",
-  "senderParticipantId",
+  "seq",
+  "senderHandle",
   "kind",
+  "toHandle",
+  "ref",
   "bodyContent",
-  "assignmentId",
-  "assignmentLate",
-  "relayToParticipantId",
-  "contextSession",
-  "contextNode",
-  "contextAttempt",
   "handled",
   "handledAt",
-  "handledByParticipantId",
-  "handledByKind",
   "handleNote",
   "createdAt",
 ] as const;
-
-function isCreatorKind(value: unknown): value is SnapshotChannelShard["creatorKind"] {
-  return value === "registered_project" || value === "unregistered_workspace" || value === "user";
-}
-
-function isAuthorityKind(value: unknown): value is "participant" | "user" {
-  return value === "participant" || value === "user";
-}
 
 function isMessageKind(value: unknown): value is SnapshotChannelMessage["kind"] {
   return value === "report" || value === "question" || value === "relay_request";
 }
 
-function strictlySorted(rows: ReadonlyArray<{ key: [string, string] }>): boolean {
-  for (let index = 1; index < rows.length; index++) {
-    const previous = rows[index - 1]?.key as [string, string];
-    const current = rows[index]?.key as [string, string];
-    const byTime = compareSnapshotStrings(previous[0], current[0]);
-    if (byTime > 0) return false;
-    if (byTime === 0 && compareSnapshotStrings(previous[1], current[1]) >= 0) return false;
-  }
-  return true;
-}
-
 /**
- * Validates one Channel shard's complete closed wire contract (section 38.8):
- * exact key sets, canonical UUIDs, canonical timestamps, the frozen enums, the
- * creator ActorRef coherence, the closed/open and active/inactive field pairs,
- * the retained verbatim text rules without re-normalization, the closed
- * `BodyContent` union with the fixed inline threshold, same-Channel roster
- * references, and the deterministic array orders. The record's retained values
- * — handles, native provenance, contexts, notes, the insertion-frozen late
- * flag, bodies — are validated as retained history, never re-derived from
- * today's runtime eligibility rules.
+ * Validates one rebuilt Channel shard's complete closed wire contract (section
+ * 38.8 line 1806): exact key sets, canonical UUID identity, the name and title
+ * rules, the closed/open field pairs, the one-main roster with reversible
+ * removal, the relay-target and handled-state null rules, the retained
+ * verbatim text rules without re-normalization, the closed `BodyContent`
+ * union with the fixed inline threshold, same-Channel roster references, and
+ * the deterministic array orders — participants by handle under exact
+ * code-point comparison, messages by `seq` ascending.
  */
 export function validateSnapshotChannelShard(value: unknown): Result<SnapshotChannelShard, AppError> {
   if (!memoObject(value, SHARD_KEYS)) return corrupt("Format-3 Channel shard fields are invalid");
@@ -153,164 +118,103 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
   if (
     !isChannelUuid(shard.id) ||
     (shard.state !== "open" && shard.state !== "closed") ||
-    !isCreatorKind(shard.creatorKind) ||
     !isMemoTimestamp(shard.createdAt)
   )
     return corrupt("Format-3 Channel shard identity or lifecycle fields are invalid");
+  const name = validateChannelName(shard.name);
+  if (!name.ok || name.value !== shard.name) return corrupt("A Channel shard name is outside the recorded name rules");
   if (shard.title !== null) {
     const title = normalizeChannelTitle(shard.title);
     if (!title.ok || title.value !== shard.title)
       return corrupt("A Channel shard title is outside the recorded title rules");
   }
-  if (shard.creatorKind === "registered_project") {
-    if (!isMemoUuid(shard.creatorId)) return corrupt("A registered Project Channel creator carries a non-UUID id");
-  } else if (shard.creatorKind === "unregistered_workspace") {
-    if (typeof shard.creatorId !== "string" || shard.creatorId.length === 0)
-      return corrupt("An unregistered workspace Channel creator carries no workspace key");
-  } else if (shard.creatorId !== null) {
-    return corrupt("A user Channel creator carries a creator id");
-  }
+  if (typeof shard.main !== "string") return corrupt("A Channel shard carries no main handle");
   if (shard.state === "open") {
-    if (shard.closedAt !== null || shard.closedByParticipantId !== null || shard.closedByKind !== null)
-      return corrupt("An open Channel shard carries closing provenance");
-  } else if (
-    !isMemoTimestamp(shard.closedAt) ||
-    !isAuthorityKind(shard.closedByKind) ||
-    (shard.closedByKind === "participant"
-      ? !isChannelUuid(shard.closedByParticipantId)
-      : shard.closedByParticipantId !== null)
-  )
-    return corrupt("A closed Channel shard does not carry its closing provenance");
-  if (!Array.isArray(shard.participants) || !Array.isArray(shard.assignments) || !Array.isArray(shard.messages))
+    if (shard.closedAt !== null) return corrupt("An open Channel shard carries a closure time");
+  } else if (!isMemoTimestamp(shard.closedAt)) {
+    return corrupt("A closed Channel shard does not carry its closure time");
+  }
+  if (!Array.isArray(shard.participants) || !Array.isArray(shard.messages))
     return corrupt("Format-3 Channel shard rosters are not arrays");
 
-  const participantIds = new Set<string>();
   const handles = new Set<string>();
   let main: SnapshotChannelParticipant | null = null;
   for (const raw of shard.participants) {
     if (!memoObject(raw, PARTICIPANT_KEYS)) return corrupt("Format-3 Channel participant fields are invalid");
     const participant = raw as Record<string, unknown>;
-    if (
-      !isChannelUuid(participant.id) ||
-      (participant.role !== "main" && participant.role !== "worker" && participant.role !== "judge") ||
-      !isMemoTimestamp(participant.registeredAt)
-    )
-      return corrupt("Format-3 Channel participant identity fields are invalid");
     const handle = validateChannelHandle(participant.handle);
     if (!handle.ok) return corrupt("A Channel participant handle is outside the recorded handle rules");
-    const native = validateNativeProvenance(participant.nativeProvenance);
-    if (!native.ok) return corrupt("A Channel participant native provenance is outside the recorded rules");
-    if (typeof participant.active !== "boolean") return corrupt("A Channel participant active flag is not boolean");
-    if (participant.active) {
-      if (participant.deactivatedAt !== null)
-        return corrupt("An active Channel participant carries a deactivation time");
-    } else if (!isMemoTimestamp(participant.deactivatedAt)) {
-      return corrupt("A deactivated Channel participant carries no deactivation time");
+    if (
+      (participant.role !== "main" && participant.role !== "worker" && participant.role !== "judge") ||
+      !isMemoTimestamp(participant.addedAt)
+    )
+      return corrupt("Format-3 Channel participant identity fields are invalid");
+    if (participant.removedAt === null) {
+      // registered: nothing more to carry
+    } else if (!isMemoTimestamp(participant.removedAt)) {
+      return corrupt("A removed Channel participant carries a malformed removal time");
     }
-    if (participantIds.has(participant.id)) return corrupt("A Channel shard repeats a participant identity");
     if (handles.has(handle.value)) return corrupt("A Channel shard repeats a participant handle");
-    participantIds.add(participant.id);
     handles.add(handle.value);
     if (participant.role === "main") {
       if (main !== null) return corrupt("A Channel shard carries more than one main participant");
+      if (participant.removedAt !== null) return corrupt("A Channel shard's main participant is removed");
       main = participant as unknown as SnapshotChannelParticipant;
     }
   }
   if (main === null) return corrupt("A Channel shard carries no main participant");
-  // The creation main is registered inside the creation transaction: it is
-  // active, carries exactly an empty native provenance list, and its
-  // registration time is the Channel's creation time (section 38.8, section
-  // 10.1 — creation includes the initial main registration in its one event).
-  if (!main.active || main.deactivatedAt !== null)
-    return corrupt("The initial main participant of a Channel shard is deactivated");
-  if (main.nativeProvenance.length !== 0)
-    return corrupt("The initial main participant of a Channel shard carries native provenance");
-  if (main.registeredAt !== shard.createdAt)
+  if (main.handle !== shard.main) return corrupt("A Channel shard's main field disagrees with its main participant");
+  // The creation registers the main participant inside the creation
+  // transaction: its `addedAt` is the Channel's creation time (section 38.8;
+  // one clock read per transaction).
+  if (main.addedAt !== shard.createdAt)
     return corrupt("The initial main participant of a Channel shard is not registered at creation");
-  if (
-    !strictlySorted(
-      shard.participants.map((participant) => ({
-        key: [(participant as SnapshotChannelParticipant).registeredAt, (participant as SnapshotChannelParticipant).id],
-      })),
-    )
-  )
-    return corrupt("A Channel shard's participants are not in their deterministic order");
-
-  const assignmentIds = new Set<string>();
-  for (const raw of shard.assignments) {
-    if (!memoObject(raw, ASSIGNMENT_KEYS)) return corrupt("Format-3 Channel assignment fields are invalid");
-    const assignment = raw as Record<string, unknown>;
-    if (
-      !isChannelUuid(assignment.id) ||
-      !isMemoTimestamp(assignment.createdAt) ||
-      (assignment.participantId !== null && !isChannelUuid(assignment.participantId)) ||
-      (assignment.participantId !== null && !participantIds.has(assignment.participantId))
-    )
-      return corrupt("Format-3 Channel assignment identity or binding fields are invalid");
-    const label = normalizeAssignmentLabel(assignment.label);
-    if (!label.ok || label.value !== assignment.label)
-      return corrupt("A Channel assignment label is outside the recorded label rules");
-    if (assignment.state === "open") {
-      if (assignment.closedAt !== null) return corrupt("An open Channel assignment carries a closure time");
-    } else if (assignment.state !== "closed" || !isMemoTimestamp(assignment.closedAt)) {
-      return corrupt("A Channel assignment does not carry a coherent state");
-    }
-    if (assignmentIds.has(assignment.id)) return corrupt("A Channel shard repeats an assignment identity");
-    assignmentIds.add(assignment.id);
+  const roster = shard.participants as SnapshotChannelParticipant[];
+  const ordered = roster.map((participant) => participant.handle);
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1] ?? "";
+    const current = ordered[index] ?? "";
+    if (compareHandles(previous, current) >= 0)
+      return corrupt("A Channel shard's participants are not in their deterministic order");
   }
-  if (
-    !strictlySorted(
-      shard.assignments.map((assignment) => ({
-        key: [(assignment as SnapshotChannelAssignment).createdAt, (assignment as SnapshotChannelAssignment).id],
-      })),
-    )
-  )
-    return corrupt("A Channel shard's assignments are not in their deterministic order");
 
-  const messageIds = new Set<string>();
+  const seqs = new Set<number>();
+  let previousSeq = 0;
   for (const raw of shard.messages) {
     if (!memoObject(raw, MESSAGE_KEYS)) return corrupt("Format-3 Channel message fields are invalid");
     const message = raw as Record<string, unknown>;
-    if (!isChannelUuid(message.id) || !isMessageKind(message.kind) || !isMemoTimestamp(message.createdAt))
-      return corrupt("Format-3 Channel message identity fields are invalid");
-    if (!isChannelUuid(message.senderParticipantId) || !participantIds.has(message.senderParticipantId))
-      return corrupt("A Channel message names a sender outside its Channel's roster");
-    if (message.assignmentId !== null) {
-      if (!isChannelUuid(message.assignmentId) || !assignmentIds.has(message.assignmentId))
-        return corrupt("A Channel message names an assignment outside its Channel's records");
-    }
-    if (typeof message.assignmentLate !== "boolean")
-      return corrupt("A Channel message carries a non-boolean assignmentLate flag");
-    if (message.assignmentLate && message.assignmentId === null)
-      return corrupt("A Channel message is marked late against no assignment");
-    const relay = message.relayToParticipantId;
-    if (message.kind === "relay_request") {
-      if (!isChannelUuid(relay) || !participantIds.has(relay))
-        return corrupt("A relay request names no target inside its Channel's roster");
-    } else if (relay !== null) {
-      return corrupt("A Channel message that is not a relay request names a relay target");
-    }
-    for (const field of [message.contextSession, message.contextNode, message.contextAttempt]) {
-      if (field !== null && !validateContextField(field).ok)
-        return corrupt("A Channel message context field is outside the recorded context rules");
-    }
-    if (typeof message.handled !== "boolean") return corrupt("A Channel message handled flag is not boolean");
-    if (!message.handled) {
-      if (
-        message.handledAt !== null ||
-        message.handledByParticipantId !== null ||
-        message.handledByKind !== null ||
-        message.handleNote !== null
-      )
-        return corrupt("An unhandled Channel message carries handling provenance");
-    } else if (
-      !isMemoTimestamp(message.handledAt) ||
-      !isAuthorityKind(message.handledByKind) ||
-      (message.handledByKind === "participant"
-        ? !isChannelUuid(message.handledByParticipantId)
-        : message.handledByParticipantId !== null)
+    if (
+      typeof message.seq !== "number" ||
+      !Number.isSafeInteger(message.seq) ||
+      message.seq < 1 ||
+      !isMessageKind(message.kind) ||
+      !isMemoTimestamp(message.createdAt)
     )
-      return corrupt("A handled Channel message does not carry its handling provenance");
+      return corrupt("Format-3 Channel message identity fields are invalid");
+    if (message.seq <= previousSeq) return corrupt("A Channel shard's messages are not in their deterministic order");
+    previousSeq = message.seq;
+    if (typeof message.senderHandle !== "string" || !handles.has(message.senderHandle))
+      return corrupt("A Channel message names a sender outside its Channel's roster");
+    if (message.senderHandle === shard.main)
+      return corrupt("A Channel message's sender is the main handle, which never posts");
+    if (message.kind === "relay_request") {
+      if (typeof message.toHandle !== "string" || !handles.has(message.toHandle))
+        return corrupt("A relay request names no target inside its Channel's roster");
+    } else if (message.toHandle !== null) {
+      return corrupt("A Channel message that is not a relay request names a target handle");
+    }
+    if (message.ref !== null) {
+      const reference = validateMessageRef(message.ref);
+      if (!reference.ok || reference.value !== message.ref)
+        return corrupt("A Channel message reference is outside the recorded reference rules");
+    }
+    if (typeof message.handled !== "boolean") return corrupt("Format-3 Channel message handled flag is not boolean");
+    if (!message.handled) {
+      if (message.handledAt !== null || message.handleNote !== null)
+        return corrupt("An unhandled Channel message carries handling state");
+    } else if (!isMemoTimestamp(message.handledAt)) {
+      return corrupt("A handled Channel message carries no handling time");
+    }
     if (message.handleNote !== null && !validateHandleNote(message.handleNote).ok)
       return corrupt("A Channel handling note is outside the recorded note rules");
     const body = parseSnapshotBodyContent(message.bodyContent);
@@ -324,21 +228,13 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
         return corrupt("An inline Channel message body exceeds the inline routing threshold");
     } else {
       const contentId = body.value.contentPath.split("/")[3] as string;
-      const owned = channelContentFilePath(shard.id, contentId);
+      const owned = channelContentFilePath(shard.id as string, contentId);
       if (!owned.ok || owned.value !== body.value.contentPath)
         return corrupt("A Channel message names a content file outside its own Channel's identity path");
     }
-    if (messageIds.has(message.id)) return corrupt("A Channel shard repeats a message identity");
-    messageIds.add(message.id);
+    if (seqs.has(message.seq)) return corrupt("A Channel shard repeats a message sequence number");
+    seqs.add(message.seq);
   }
-  if (
-    !strictlySorted(
-      shard.messages.map((message) => ({
-        key: [(message as SnapshotChannelMessage).createdAt, (message as SnapshotChannelMessage).id],
-      })),
-    )
-  )
-    return corrupt("A Channel shard's messages are not in their deterministic order");
   return ok(value as unknown as SnapshotChannelShard);
 }
 
@@ -420,28 +316,19 @@ export function validateSnapshotChannelContent(
   if (channels.length !== manifest.counts.channels)
     return corrupt("The manifest's Channel count disagrees with the shard family");
   const channelIds = new Set<string>();
-  const participantIds = new Set<string>();
-  const assignmentIds = new Set<string>();
-  const messageIds = new Set<string>();
+  // Names are globally unique in the live model (`name TEXT NOT NULL UNIQUE`
+  // in channels-v2, CHN-002); a snapshot repeating one across shards must
+  // fail closed before import, never as a restore-time UNIQUE violation.
+  const channelNames = new Set<string>();
   const messageContentPaths = new Set<string>();
   for (const channel of channels) {
     const shard = validateSnapshotChannelShard(channel);
     if (!shard.ok) return shard;
     if (channelIds.has(channel.id)) return corrupt("The snapshot repeats a Channel identity");
     channelIds.add(channel.id);
-    for (const participant of channel.participants) {
-      if (participantIds.has(participant.id))
-        return corrupt("A participant identity is duplicated across Channel shards");
-      participantIds.add(participant.id);
-    }
-    for (const assignment of channel.assignments) {
-      if (assignmentIds.has(assignment.id))
-        return corrupt("An assignment identity is duplicated across Channel shards");
-      assignmentIds.add(assignment.id);
-    }
+    if (channelNames.has(channel.name)) return corrupt("The snapshot repeats a Channel name");
+    channelNames.add(channel.name);
     for (const message of channel.messages) {
-      if (messageIds.has(message.id)) return corrupt("A message identity is duplicated across Channel shards");
-      messageIds.add(message.id);
       if ("contentPath" in message.bodyContent) {
         if (messageContentPaths.has(message.bodyContent.contentPath))
           return corrupt("Two Channel messages name one content record");
@@ -495,44 +382,35 @@ export function validateSnapshotChannelContent(
 
 interface ChannelHistoryIndex {
   shard: SnapshotChannelShard;
-  mainId: string;
+  mainHandle: string;
   participants: Map<string, SnapshotChannelParticipant>;
-  assignments: Map<string, SnapshotChannelAssignment>;
-  messages: Map<string, SnapshotChannelMessage>;
+  messages: Map<number, SnapshotChannelMessage>;
   created: number;
   closed: number;
-  registered: Set<string>;
-  deactivated: Set<string>;
-  assignmentCreated: Set<string>;
-  assignmentClosed: Set<string>;
-  submitted: Set<string>;
-  handled: Set<string>;
-}
-
-function channelEventActorOk(kind: unknown, id: unknown): boolean {
-  if (kind === "registered_project") return isMemoUuid(id);
-  if (kind === "unregistered_workspace") return typeof id === "string" && id.length > 0;
-  if (kind === "user") return id === null;
-  return false;
+  added: Map<string, number>;
+  removed: Map<string, number>;
+  posted: Set<number>;
+  acked: Set<number>;
 }
 
 /**
- * Reconciles the complete retained Channel-domain ledger against the retained
- * Channel shards before import (security section 10.1, interface section 38.9):
- * every Channel event carries null Handoff and Memo associations, one of the
- * three creator actor kinds with a coherent ActorRef id, the catalog row
- * version, and its closed metadata; every event resolves to a retained shard —
- * a ledger-only Channel event without its record is a corrupt supported-family
- * record, never an unknown or unsupported one — and creation, closure,
- * participant registration and deactivation, assignment creation and closure,
- * and message submission and first handling correspond exactly, one event per
- * retained record, with the original ids, actors, and links preserved. The
- * correspondence checks decision and version equality and the
- * same-transaction timestamp equality the runtime guarantees; it never treats
- * wall-clock ordering as authentication, never recomputes the insertion-frozen
- * late flag, and never substitutes today's runtime eligibility for historical
- * validity. Common physical-content events stay outside this reconciliation:
- * their owner ids are historical attribution and never require a live owner.
+ * Reconciles the retained Channel-domain ledger against the retained Channel
+ * shards before import (security section 10.1, interface section 38.9 line
+ * 1818): every `CHANNEL_*` event carries null Handoff and Memo associations,
+ * the User actor with a null id and a null row version, and its closed
+ * metadata with the acting handle — the sender for a posting, the Channel's
+ * main handle otherwise; every event resolves to a retained shard; and the
+ * retained state is covered exactly — creation once, closure exactly when
+ * closed, at least one `ADDED` per retained non-main participant with the
+ * count relation `#ADDED = #REMOVED + (removedAt === null ? 1 : 0)`, exactly
+ * one posting event per message with matching sender, kind and target, and
+ * exactly one handling event per handled message and none for an unhandled
+ * one. The checks are referential and count-based: neither timestamp order
+ * nor UUID order records mutation order, and the four same-transaction
+ * timestamp equalities hold because one clock read stamps a transaction's
+ * rows and its event alike. Common physical-content events stay outside this
+ * reconciliation: their owner ids are historical attribution and never
+ * require a live owner.
  */
 export function validateSnapshotChannelHistory(
   events: readonly SnapshotEvent[],
@@ -544,18 +422,15 @@ export function validateSnapshotChannelHistory(
     if (main === undefined) return corrupt("A Channel shard carries no main participant for its ledger");
     index.set(shard.id, {
       shard,
-      mainId: main.id,
-      participants: new Map(shard.participants.map((participant) => [participant.id, participant])),
-      assignments: new Map(shard.assignments.map((assignment) => [assignment.id, assignment])),
-      messages: new Map(shard.messages.map((message) => [message.id, message])),
+      mainHandle: main.handle,
+      participants: new Map(shard.participants.map((participant) => [participant.handle, participant])),
+      messages: new Map(shard.messages.map((message) => [message.seq, message])),
       created: 0,
       closed: 0,
-      registered: new Set<string>(),
-      deactivated: new Set<string>(),
-      assignmentCreated: new Set<string>(),
-      assignmentClosed: new Set<string>(),
-      submitted: new Set<string>(),
-      handled: new Set<string>(),
+      added: new Map(),
+      removed: new Map(),
+      posted: new Set(),
+      acked: new Set(),
     });
   }
   for (const event of events) {
@@ -563,126 +438,92 @@ export function validateSnapshotChannelHistory(
     if (event.handoffId !== null) return corrupt("A Channel domain event carries a Handoff association");
     if (event.memoId !== null && event.memoId !== undefined)
       return corrupt("A Channel domain event carries a Memo association");
-    if (!channelEventActorOk(event.actorKind, event.actorId))
-      return corrupt("A Channel domain event carries an invalid creator actor");
-    const expectedRowVersion =
-      event.eventType === "CHANNEL_MESSAGE_SUBMITTED" ? 1 : event.eventType === "CHANNEL_MESSAGE_HANDLED" ? 2 : null;
-    if (event.rowVersion !== expectedRowVersion) return corrupt("A Channel domain event carries the wrong row version");
+    if (event.actorKind !== "user" || event.actorId !== null)
+      return corrupt("A Channel domain event's actor is not the User");
+    if (event.rowVersion !== null && event.rowVersion !== undefined)
+      return corrupt("A Channel domain event carries a row version");
     const metadata = validateChannelEventMetadata(event.eventType, event.metadata);
-    if (!metadata.ok) return metadata;
+    if (!metadata.ok) return corrupt("A Channel domain event carries invalid closed metadata");
     const row = event.metadata as Record<string, unknown>;
     const channelId = row.channelId as string;
     const entry = index.get(channelId);
     if (entry === undefined) return corrupt("A Channel domain event names a Channel the snapshot does not retain");
-    const acting = (row.actingParticipantId as string | null | undefined) ?? null;
-    if (acting !== null && acting !== entry.mainId)
-      return corrupt("A Channel domain event's acting participant is not the Channel's main");
+    const acting = row.actingHandle as string;
+    if (!entry.participants.has(acting)) return corrupt("A Channel domain event's acting handle is outside its roster");
+    const count = (map: Map<string, number>, handle: string): number => {
+      const next = (map.get(handle) ?? 0) + 1;
+      map.set(handle, next);
+      return next;
+    };
     switch (event.eventType) {
       case "CHANNEL_CREATED": {
         entry.created += 1;
         if (entry.created > 1) return corrupt("A Channel's creation is recorded more than once");
-        if (row.mainParticipantId !== entry.mainId)
+        if (row.mainHandle !== entry.mainHandle)
           return corrupt("A Channel's creation event names a main outside its roster");
-        if (event.actorKind !== entry.shard.creatorKind || event.actorId !== entry.shard.creatorId)
-          return corrupt("A Channel's creation event actor disagrees with its creator provenance");
+        if (acting !== entry.mainHandle)
+          return corrupt("A Channel's creation event acting handle is not its main handle");
         if (event.createdAt !== entry.shard.createdAt)
           return corrupt("A Channel's creation event disagrees with its creation time");
         break;
       }
       case "CHANNEL_CLOSED": {
         entry.closed += 1;
-        if (entry.shard.state !== "closed") return corrupt("A Channel's closure is recorded while the Channel is open");
-        if (acting !== entry.shard.closedByParticipantId)
-          return corrupt("A Channel's closure event disagrees with its closing provenance");
-        if ((acting !== null) !== (entry.shard.closedByKind === "participant"))
-          return corrupt("A Channel's closure event authority is incoherent");
+        if (entry.shard.state !== "closed") return corrupt("A Channel's closure event is recorded while it is open");
+        if (acting !== entry.mainHandle)
+          return corrupt("A Channel's closure event acting handle is not its main handle");
         if (event.createdAt !== entry.shard.closedAt)
           return corrupt("A Channel's closure event disagrees with its closure time");
         break;
       }
-      case "CHANNEL_PARTICIPANT_REGISTERED": {
-        const participantId = row.participantId as string;
-        const participant = entry.participants.get(participantId);
-        if (participant === undefined) return corrupt("A registration event names a participant outside its Channel");
-        if (participant.role === "main")
-          return corrupt("The initial main participant carries a separate registration event");
-        if (row.role !== participant.role) return corrupt("A registration event disagrees with the participant's role");
-        if (event.createdAt !== participant.registeredAt)
-          return corrupt("A registration event disagrees with the participant's registration time");
-        if (entry.registered.has(participantId))
-          return corrupt("A participant's registration is recorded more than once");
-        entry.registered.add(participantId);
+      case "CHANNEL_PARTICIPANT_ADDED": {
+        const handle = row.handle as string;
+        // The User acts as the Channel's main participant on every
+        // User-performed operation: a worker acting handle is corrupt even
+        // when the worker is registered (security section 10.1).
+        if (acting !== entry.mainHandle)
+          return corrupt("An addition event's acting handle is not the Channel's main handle");
+        const participant = entry.participants.get(handle);
+        if (participant === undefined) return corrupt("An addition event names a handle outside its Channel");
+        if (participant.role === "main") return corrupt("An addition event names the main handle");
+        if (row.role !== participant.role) return corrupt("An addition event disagrees with the participant's role");
+        count(entry.added, handle);
         break;
       }
-      case "CHANNEL_PARTICIPANT_DEACTIVATED": {
-        const participantId = row.participantId as string;
-        const participant = entry.participants.get(participantId);
-        if (participant === undefined) return corrupt("A deactivation event names a participant outside its Channel");
-        if (participant.role === "main") return corrupt("A main participant is deactivated by a Channel event");
-        if (participant.active) return corrupt("A deactivation event names an active participant");
-        if (event.createdAt !== participant.deactivatedAt)
-          return corrupt("A deactivation event disagrees with the participant's deactivation time");
-        if (entry.deactivated.has(participantId))
-          return corrupt("A participant's deactivation is recorded more than once");
-        entry.deactivated.add(participantId);
+      case "CHANNEL_PARTICIPANT_REMOVED": {
+        const handle = row.handle as string;
+        if (acting !== entry.mainHandle)
+          return corrupt("A removal event's acting handle is not the Channel's main handle");
+        const participant = entry.participants.get(handle);
+        if (participant === undefined) return corrupt("A removal event names a handle outside its Channel");
+        if (participant.role === "main") return corrupt("A removal event names the main handle");
+        count(entry.removed, handle);
         break;
       }
-      case "CHANNEL_ASSIGNMENT_CREATED": {
-        const assignmentId = row.assignmentId as string;
-        const assignment = entry.assignments.get(assignmentId);
-        if (assignment === undefined) return corrupt("An assignment event names an assignment outside its Channel");
-        if (row.participantId !== assignment.participantId)
-          return corrupt("An assignment creation event disagrees with the assignment's bound participant");
-        if (event.createdAt !== assignment.createdAt)
-          return corrupt("An assignment creation event disagrees with the assignment's creation time");
-        if (entry.assignmentCreated.has(assignmentId))
-          return corrupt("An assignment's creation is recorded more than once");
-        entry.assignmentCreated.add(assignmentId);
-        break;
-      }
-      case "CHANNEL_ASSIGNMENT_CLOSED": {
-        const assignmentId = row.assignmentId as string;
-        const assignment = entry.assignments.get(assignmentId);
-        if (assignment === undefined) return corrupt("An assignment event names an assignment outside its Channel");
-        if (assignment.state !== "closed") return corrupt("An assignment closure is recorded while it is open");
-        if (event.createdAt !== assignment.closedAt)
-          return corrupt("An assignment closure event disagrees with the assignment's closure time");
-        if (entry.assignmentClosed.has(assignmentId))
-          return corrupt("An assignment's closure is recorded more than once");
-        entry.assignmentClosed.add(assignmentId);
-        break;
-      }
-      case "CHANNEL_MESSAGE_SUBMITTED": {
-        const messageId = row.messageId as string;
-        const message = entry.messages.get(messageId);
-        if (message === undefined) return corrupt("A submission event names a message outside its Channel");
-        if (
-          row.participantId !== message.senderParticipantId ||
-          row.kind !== message.kind ||
-          row.assignmentId !== message.assignmentId ||
-          row.assignmentLate !== message.assignmentLate ||
-          row.relayToParticipantId !== message.relayToParticipantId
-        )
-          return corrupt("A submission event disagrees with its retained message");
+      case "CHANNEL_MESSAGE_POSTED": {
+        const seq = row.seq as number;
+        const message = entry.messages.get(seq);
+        if (message === undefined) return corrupt("A posting event names a sequence number outside its Channel");
+        if (entry.posted.has(seq)) return corrupt("A message's posting is recorded more than once");
+        if (acting !== message.senderHandle) return corrupt("A posting event's acting handle is not its sender");
+        if (row.kind !== message.kind || row.toHandle !== message.toHandle)
+          return corrupt("A posting event disagrees with its retained message");
         if (event.createdAt !== message.createdAt)
-          return corrupt("A submission event disagrees with the message's creation time");
-        if (entry.submitted.has(messageId)) return corrupt("A message's submission is recorded more than once");
-        entry.submitted.add(messageId);
+          return corrupt("A posting event disagrees with the message's creation time");
+        entry.posted.add(seq);
         break;
       }
-      case "CHANNEL_MESSAGE_HANDLED": {
-        const messageId = row.messageId as string;
-        const message = entry.messages.get(messageId);
-        if (message === undefined) return corrupt("A handling event names a message outside its Channel");
+      case "CHANNEL_MESSAGE_ACKED": {
+        const seq = row.seq as number;
+        const message = entry.messages.get(seq);
+        if (message === undefined) return corrupt("A handling event names a sequence number outside its Channel");
         if (!message.handled) return corrupt("A handling event is recorded for an unhandled message");
-        if (acting !== message.handledByParticipantId)
-          return corrupt("A handling event disagrees with the message's handling provenance");
-        if ((acting !== null) !== (message.handledByKind === "participant"))
-          return corrupt("A handling event's authority is incoherent");
+        if (entry.acked.has(seq)) return corrupt("A message's handling is recorded more than once");
+        if (acting !== entry.mainHandle)
+          return corrupt("A handling event's acting handle is not the Channel's main handle");
         if (event.createdAt !== message.handledAt)
           return corrupt("A handling event disagrees with the message's handling time");
-        if (entry.handled.has(messageId)) return corrupt("A message's handling is recorded more than once");
-        entry.handled.add(messageId);
+        entry.acked.add(seq);
         break;
       }
     }
@@ -692,22 +533,19 @@ export function validateSnapshotChannelHistory(
     if (entry.created !== 1) return corrupt("A Channel's creation event is missing");
     if (entry.closed !== (shard.state === "closed" ? 1 : 0))
       return corrupt("A Channel's closure event does not match its state");
-    const nonMain = shard.participants.filter((participant) => participant.role !== "main");
-    if (entry.registered.size !== nonMain.length)
-      return corrupt("A Channel's registration events do not cover its non-main roster");
-    const inactive = nonMain.filter((participant) => !participant.active);
-    if (entry.deactivated.size !== inactive.length)
-      return corrupt("A Channel's deactivation events do not cover its inactive roster");
-    if (entry.assignmentCreated.size !== shard.assignments.length)
-      return corrupt("A Channel's assignment creation events do not cover its assignments");
-    const closedAssignments = shard.assignments.filter((assignment) => assignment.state === "closed");
-    if (entry.assignmentClosed.size !== closedAssignments.length)
-      return corrupt("A Channel's assignment closure events do not cover its closed assignments");
-    if (entry.submitted.size !== shard.messages.length)
-      return corrupt("A Channel's submission events do not cover its messages");
-    const handled = shard.messages.filter((message) => message.handled);
-    if (entry.handled.size !== handled.length)
-      return corrupt("A Channel's handling events do not cover its handled messages");
+    for (const participant of shard.participants) {
+      if (participant.role === "main") continue;
+      const added = entry.added.get(participant.handle) ?? 0;
+      const removed = entry.removed.get(participant.handle) ?? 0;
+      if (added < 1) return corrupt("A retained participant has no addition event");
+      if (added !== removed + (participant.removedAt === null ? 1 : 0))
+        return corrupt("A retained participant's addition and removal events disagree with its registration state");
+    }
+    if (entry.posted.size !== shard.messages.length)
+      return corrupt("A Channel's posting events do not cover its messages");
+    for (const message of shard.messages) {
+      if (message.handled && !entry.acked.has(message.seq)) return corrupt("A handled message has no handling event");
+    }
   }
   return ok(undefined);
 }

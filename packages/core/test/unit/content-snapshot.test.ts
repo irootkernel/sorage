@@ -1,22 +1,21 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { validateSnapshot } from "../../src/backup-commands";
+import { canonicalJson, type SnapshotData } from "../../src/backup-snapshot";
 import {
-  type SnapshotDataV3,
   classifySnapshotArtifactBody,
   classifySnapshotEvent,
   parseMemoSnapshotV3,
   parseSnapshotBodyContent,
+  type SnapshotDataV3,
   serializeMemoSnapshotV3,
   snapshotFilesV3,
   validateSnapshotHandoffV3,
 } from "../../src/content-snapshot";
-import { canonicalJson, type SnapshotData } from "../../src/backup-snapshot";
-import { parseVersionedSnapshotManifest } from "../../src/memo-snapshot";
-import { validateSnapshot } from "../../src/backup-commands";
-import { snapshotFilesV2 } from "../../src/memo-snapshot";
-import type { Memo } from "../../src/memos";
 import { ok } from "../../src/errors";
+import { parseVersionedSnapshotManifest, snapshotFilesV2 } from "../../src/memo-snapshot";
+import type { Memo } from "../../src/memos";
 
 const USER = { kind: "user" as const, id: null };
 
@@ -379,9 +378,27 @@ describe("classifySnapshotArtifactBody", () => {
 });
 
 describe("classifySnapshotEvent", () => {
-  it("admits the Channel domain family in format 3 and keeps earlier formats frozen", () => {
-    expect(classifySnapshotEvent("CHANNEL_CREATED", 3)).toBe("family");
-    expect(classifySnapshotEvent("CHANNEL_MESSAGE_HANDLED", 3)).toBe("family");
+  it("admits the rebuilt Channel domain family in format 3 and keeps earlier formats and old names frozen out", () => {
+    for (const name of [
+      "CHANNEL_CREATED",
+      "CHANNEL_CLOSED",
+      "CHANNEL_PARTICIPANT_ADDED",
+      "CHANNEL_PARTICIPANT_REMOVED",
+      "CHANNEL_MESSAGE_POSTED",
+      "CHANNEL_MESSAGE_ACKED",
+    ]) {
+      expect(classifySnapshotEvent(name, 3)).toBe("family");
+    }
+    // The old TASK-109 family never returns: an old name is unknown in every
+    // format, so a development snapshot carrying it fails closed (38.9).
+    for (const name of [
+      "CHANNEL_MESSAGE_SUBMITTED",
+      "CHANNEL_MESSAGE_HANDLED",
+      "CHANNEL_PARTICIPANT_REGISTERED",
+      "CHANNEL_ASSIGNMENT_CREATED",
+    ]) {
+      expect(classifySnapshotEvent(name, 3)).toBe("unknown");
+    }
     expect(classifySnapshotEvent("CHANNEL_CREATED", 2)).toBe("unknown");
     expect(classifySnapshotEvent("CHANNEL_CREATED", 1)).toBe("unknown");
   });

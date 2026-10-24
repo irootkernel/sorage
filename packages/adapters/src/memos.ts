@@ -26,10 +26,11 @@ import {
   type StoredMemoReceiptLookup,
   type SnapshotMemoV3,
 } from "@sorage/core";
-import { fsyncDirectory, isSafeVaultRelativePath, liveFencePaused } from "./intent-log";
+import { fsyncDirectory, isSafeVaultRelativePath } from "./intent-log";
 import { digestManagedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import type { SqliteContentStore } from "./content-store";
 import type { SorageSqlite } from "./sqlite/connection";
+import { runInTransaction } from "./sqlite/transaction";
 
 /**
  * The schema-10 SQLite Memo repository (SHR-004, MEM-009, ADR-0032): reads
@@ -146,11 +147,6 @@ function requireJoinedRecord(row: ContentJoinRow): Result<ContentJoinRow> {
     );
   }
   return ok(row);
-}
-
-function externalVersion(db: SorageSqlite): number {
-  const row = db.prepare("PRAGMA data_version").get() as { data_version: number } | null | undefined;
-  return Number(row?.data_version ?? 0);
 }
 
 function coherenceMarker(): Result<never> {
@@ -335,26 +331,14 @@ export function createSqliteMemoRepository(db: SorageSqlite, options: MemoReposi
   };
 
   function inTransaction<T>(begin: string, work: () => Result<T>, options?: MemoRunOptions): Result<T> {
-    return databaseResult(() => {
-      db.exec(begin);
-      try {
-        if (liveFencePaused(db)) {
-          db.exec("ROLLBACK");
-          return err(appError("SERVICE_PAUSED", "A Vault move or restore is in progress"));
-        }
-        if (options?.expectedExternalVersion !== undefined && begin === "BEGIN IMMEDIATE") {
-          if (externalVersion(db) !== options.expectedExternalVersion) {
-            db.exec("ROLLBACK");
-            return coherenceMarker();
-          }
-        }
-        const result = work();
-        db.exec(result.ok ? "COMMIT" : "ROLLBACK");
-        return result;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
+    // The shared adapter transaction runner (CHN-014) with the Memo domain's
+    // failure classifier and MEM-011 coherence option: the envelopes are
+    // byte-identical to the private helper this delegation replaced.
+    return runInTransaction(db, begin as "BEGIN" | "BEGIN IMMEDIATE", work, {
+      failure: () => appError("INTERNAL_ERROR", "Accessing Memo storage failed"),
+      ...(options?.expectedExternalVersion !== undefined
+        ? { expectedExternalVersion: options.expectedExternalVersion, coherenceMarker }
+        : {}),
     });
   }
 

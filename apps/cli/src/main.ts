@@ -125,7 +125,7 @@ import { buildCompletionScript } from "./completion";
 import { runPreflightCommand } from "./preflight-command";
 import { runSendRecoveryCommand } from "./send-recovery-command";
 import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
-import { registerChannelCommands, renderChannelRecoveryError } from "./channel-commands";
+import { registerChannelCommands } from "./channel-commands";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
 import * as webBindings from "./web";
@@ -536,11 +536,8 @@ export function buildProgram(
     err: (text) => ports.err(text),
     requestId,
     warn: (text) => ports.err(text),
-    fail: (error, json) => {
-      reportExitCode(renderAppError(channelError(error), ports, json));
-    },
-    failReadOnly: (error, json) => {
-      reportExitCode(renderChannelRecoveryError(error, { err: ports.err, json, requestId: requestId() }));
+    fail: (error, json, options) => {
+      reportExitCode(renderAppError(channelError(error), ports, json, undefined, options));
     },
     usageExit: () => {
       reportExitCode(2);
@@ -2663,6 +2660,9 @@ const COVERED_READ_OPERANDS: ReadonlyArray<readonly string[]> = [
   ["memo", "show"],
   ["project", "list"],
   ["project", "show"],
+  ["channel", "messages"],
+  ["channel", "list"],
+  ["channel", "show"],
 ];
 
 /**

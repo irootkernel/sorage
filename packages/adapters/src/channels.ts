@@ -1,277 +1,181 @@
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { openSync, readSync, closeSync, fstatSync, constants } from "node:fs";
 import {
-  SystemClock,
-  UuidGenerator,
-  appError,
-  err,
-  ok,
-  channelDomainEvent,
-  parseStoredChannelCreateReceipt,
-  parseStoredChannelSubmitReceipt,
-  validateChannelEventMetadata,
   type AcceptedChannelBody,
   type AppError,
-  type Clock,
-  type ChannelAggregate,
-  type ChannelAssignmentRecord,
-  type ChannelAuthorityKind,
+  appError,
   type ChannelCommandPorts,
-  type ChannelListCapture,
-  type ChannelMessageRecord,
-  type ChannelParticipantRecord,
-  type ChannelRecord,
+  type ChannelCounters,
+  type ChannelDomainEventType,
   type ChannelReader,
-  type ChannelReceiptReader,
-  type ChannelRecoveryPorts,
+  type ChannelRecord,
   type ChannelRepository,
-  type ChannelRunOptions,
   type ChannelTransaction,
-  type MessageListCapture,
-  type ProjectCommandPorts,
+  type Clock,
+  channelDomainEvent,
+  err,
+  type MessageBodyRef,
+  type MessagePageQuery,
+  type MessageRecord,
+  ok,
+  type ParticipantRecord,
+  type ResolvedMessageBody,
   type Result,
-  type StoredChannelCreateReceipt,
-  type StoredChannelSubmitReceipt,
+  SystemClock,
+  UuidGenerator,
+  validateChannelEventMetadata,
 } from "@sorage/core";
 import { createConfigStore } from "./config-store";
-import { managedRoot } from "./managed-paths";
 import {
   activateCommonFile,
   completeCommonIntentTx,
   createSqliteContentStore,
   type SqliteContentStore,
 } from "./content-store";
+import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
+import { isSafeVaultRelativePath } from "./intent-log";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
+import { managedRoot } from "./managed-paths";
 import {
+  type AcceptedBodyCaptureCodes,
   captureMemoBodyFile,
   captureMemoBodyText,
   streamMemoSpool,
-  type AcceptedBodyCaptureCodes,
 } from "./memo-body-file";
 import { releaseMemoInputSpool, sweepMemoInputSpool } from "./memo-input-spool";
-import { createNodeProjectPorts } from "./project-command-ports";
-import { blockingSleepMs } from "./sleep";
-import { AppCommandError, asAppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
-import { appendStructuredLog } from "./structured-log";
 import type { SorageSqlite } from "./sqlite/connection";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { productionMigrationPlan } from "./sqlite/migrations";
-import { createSqliteEventLedger } from "./events";
-import { isSafeVaultRelativePath, liveFencePaused } from "./intent-log";
-import { readRecoveryConfiguration, withInstallationInspection } from "./preflight";
+import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { runInTransaction } from "./sqlite/transaction";
+import { AppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
 
 /**
- * The TASK-109 Channel storage adapter (CHN-001 to CHN-009, interface sections
- * 38.3 to 38.6, the reviewed P3 operative addendum): the SQLite repository
- * behind the core ports, the production node composition with the required
- * runDir fence, fresh binding, and external-version coherence on every
- * mutation and bounded list page, and the non-migrating replay-only
- * inspection ports. Every mutation's one SQL transaction commits the domain
- * rows, the content record and its activation intent through the shared
- * in-transaction primitives — never the standalone `write` family — the exact
- * Channel domain event, and the bounded metadata-only receipt together;
- * filesystem activation happens only after the commit behind the move-lock
- * gate (SHR-004, SHR-005, P3 steps 3 to 5).
+ * The TASK-123 rebuilt Channel storage adapter (CHN-001 to CHN-014, interface
+ * sections 38.3 to 38.6, ADR-0034): the SQLite repository behind the rebuilt
+ * core ports over the `channels-v2` tables, and the production node
+ * composition. Mutations run one `BEGIN IMMEDIATE` transaction through the
+ * shared transaction helper with its vault-move fence check; the one-shot
+ * reads run a plain `BEGIN`/`COMMIT` with no SQL fence, because the covered
+ * read's admission checked the fence once; and there is no coherence loop, no
+ * rollback-and-retry, no backoff and no receipt machinery. The content record
+ * and its activation intent commit through the shared in-transaction
+ * primitives — never the standalone `write` family — the exact Channel domain
+ * event, and nothing else; filesystem activation happens only after the
+ * commit behind the move-lock gate (SHR-004, SHR-005).
  */
 
 /** Keeps database admission details inside the composition boundary (SHR-015 unwrap seam). */
 export function channelStorageError(error: unknown): AppError {
-  const carried = asAppCommandError(error);
-  if (carried !== null) return carried.error;
   const admission = asSchemaAdmission(error);
   if (admission !== null) return admission;
   const contention = storageContentionOf(error, "channel");
   if (contention !== null) return contention;
-  return appError("INTERNAL_ERROR", "Channel storage could not be opened");
+  if (error instanceof AppCommandError) return error.error;
+  return appError("INTERNAL_ERROR", `Channel storage could not be opened: ${String(error)}`);
 }
 
-/**
- * The pinned-Bun verbatim-text binding of the shared content store's
- * established strategy: a leading byte-order mark in a directly bound string
- * parameter is stripped by the engine's text binding, so every verbatim
- * Channel field — handles, the three context columns, the handling note, and
- * the opaque idempotency key — binds its exact UTF-8 bytes with
- * `CAST(? AS TEXT)`, preserving SQL NULL for absent values and byte-exact
- * comparisons on both sides of every lookup (SHR-003, section 38.3).
- */
+/** Binds one verbatim text value's exact UTF-8 bytes (a leading BOM stays byte-exact). */
 const text = (value: string | null): Buffer | null => (value === null ? null : Buffer.from(value, "utf8"));
 
 interface ChannelRow {
   id: string;
+  name: string;
   title: string | null;
   state: string;
-  creator_kind: string;
-  creator_id: string | null;
   created_at: string;
-  updated_at: string;
   closed_at: string | null;
-  closed_by_participant_id: string | null;
-  closed_by_kind: string | null;
 }
 
 interface ParticipantRow {
-  id: string;
   channel_id: string;
-  role: string;
   handle: string;
-  native_provenance_json: string;
-  active: number;
-  registered_at: string;
-  deactivated_at: string | null;
+  role: string;
+  added_at: string;
+  removed_at: string | null;
 }
 
-interface AssignmentRow {
-  id: string;
+/** One message row joined with its immutable content record (a dangling record is a whole-page integrity refusal, SHR-004). */
+interface MessageJoinRow {
   channel_id: string;
-  participant_id: string | null;
-  label: string;
-  state: string;
-  created_at: string;
-  closed_at: string | null;
-}
-
-interface MessageRow {
-  id: string;
-  channel_id: string;
-  sender_participant_id: string;
+  seq: number;
   sender_handle: string;
   kind: string;
-  content_record_id: string;
-  assignment_id: string | null;
-  assignment_late: number;
-  relay_to_participant_id: string | null;
-  context_session: string | null;
-  context_node: string | null;
-  context_attempt: string | null;
+  to_handle: string | null;
+  ref: string | null;
   handled: number;
   handled_at: string | null;
-  handled_by_participant_id: string | null;
-  handled_by_kind: string | null;
   handle_note: string | null;
-  processing_row_version: number;
   created_at: string;
+  record_id: string | null;
+  inline_text: string | null;
+  storage_key: string | null;
+  materialized: number | null;
+  size_bytes: number | null;
+  sha256: string | null;
 }
 
-function channelFromRow(row: ChannelRow): ChannelRecord {
+function channelFromRow(row: ChannelRow | null | undefined): ChannelRecord | null {
+  if (row === null || row === undefined) return null;
   return {
     id: row.id,
+    name: row.name,
     title: row.title,
     state: row.state === "closed" ? "closed" : "open",
-    creatorKind: row.creator_kind as ChannelRecord["creatorKind"],
-    creatorId: row.creator_id,
     createdAt: row.created_at,
-    updatedAt: row.updated_at,
     closedAt: row.closed_at,
-    closedByParticipantId: row.closed_by_participant_id,
-    closedByKind: row.closed_by_kind === null ? null : (row.closed_by_kind as ChannelAuthorityKind),
   };
 }
 
-function participantFromRow(row: ParticipantRow): ChannelParticipantRecord {
-  let native: string[] = [];
-  try {
-    const parsed: unknown = JSON.parse(row.native_provenance_json);
-    if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) native = parsed as string[];
-  } catch {
-    // A malformed stored array surfaces as empty attribution, never a crash;
-    // the closed catalog forbids writing such a row and the guard reads stay
-    // metadata-only.
-  }
+function participantFromRow(row: ParticipantRow): ParticipantRecord {
   return {
-    id: row.id,
     channelId: row.channel_id,
-    role: row.role as ChannelParticipantRecord["role"],
     handle: row.handle,
-    nativeProvenance: native,
-    active: row.active === 1,
-    registeredAt: row.registered_at,
-    deactivatedAt: row.deactivated_at,
+    role: row.role === "main" ? "main" : row.role === "judge" ? "judge" : "worker",
+    addedAt: row.added_at,
+    removedAt: row.removed_at,
   };
 }
 
-function assignmentFromRow(row: AssignmentRow): ChannelAssignmentRecord {
-  return {
-    id: row.id,
-    channelId: row.channel_id,
-    participantId: row.participant_id,
-    label: row.label,
-    state: row.state === "closed" ? "closed" : "open",
-    createdAt: row.created_at,
-    closedAt: row.closed_at,
-  };
-}
-
-function messageFromRow(db: SorageSqlite, row: MessageRow): Result<ChannelMessageRecord> {
-  const record = db
-    .prepare("SELECT inline_text, storage_key, size_bytes, sha256, materialized FROM content_records WHERE id = ?")
-    .get(row.content_record_id) as
-    | {
-        inline_text: string | null;
-        storage_key: string | null;
-        size_bytes: number;
-        sha256: string;
-        materialized: number;
-      }
-    | null
-    | undefined;
-  if (record === null || record === undefined) {
+function messageFromRow(row: MessageJoinRow): Result<MessageRecord> {
+  if (
+    row.record_id === null ||
+    row.record_id === undefined ||
+    row.size_bytes === null ||
+    row.size_bytes === undefined ||
+    row.sha256 === null ||
+    row.sha256 === undefined
+  ) {
     return err(
       appError(
         "STORAGE_INTEGRITY_ERROR",
-        `The Channel message ${row.id} references content record ${row.content_record_id}, which is missing.`,
-        {
-          messageId: row.id,
-          contentRecordId: row.content_record_id,
-        },
+        `The Channel ${row.channel_id} message ${String(row.seq)} references a missing content record; the page could not be assembled`,
+        { channelId: row.channel_id, seq: row.seq },
       ),
     );
   }
   return ok({
-    id: row.id,
     channelId: row.channel_id,
-    senderParticipantId: row.sender_participant_id,
+    seq: Number(row.seq),
     senderHandle: row.sender_handle,
-    kind: row.kind as ChannelMessageRecord["kind"],
-    body: {
-      recordId: row.content_record_id,
-      representation: record.inline_text !== null ? "inline" : "file",
-      sizeBytes: record.size_bytes,
-      sha256: record.sha256,
-      inlineText: record.inline_text,
+    kind: row.kind as MessageRecord["kind"],
+    toHandle: row.to_handle,
+    ref: row.ref,
+    content: {
+      recordId: row.record_id,
+      representation: row.inline_text !== null ? "inline" : "file",
+      materialized: row.materialized === 1,
+      inlineText: row.inline_text,
+      storageKey: row.storage_key,
+      sizeBytes: Number(row.size_bytes),
+      sha256: row.sha256,
     },
-    assignmentId: row.assignment_id,
-    assignmentLate: row.assignment_late === 1,
-    relayToParticipantId: row.relay_to_participant_id,
-    contextSession: row.context_session,
-    contextNode: row.context_node,
-    contextAttempt: row.context_attempt,
     handled: row.handled === 1,
     handledAt: row.handled_at,
-    handledByParticipantId: row.handled_by_participant_id,
-    handledByKind: row.handled_by_kind === null ? null : (row.handled_by_kind as ChannelAuthorityKind),
     handleNote: row.handle_note,
-    processingRowVersion: row.processing_row_version,
     createdAt: row.created_at,
   });
-}
-
-function externalVersion(db: SorageSqlite): number {
-  const row = db.prepare("PRAGMA data_version").get() as { data_version: number } | null | undefined;
-  return Number(row?.data_version ?? 0);
-}
-
-function coherenceMarker(): Result<never> {
-  return err(
-    appError(
-      "SERVICE_PAUSED",
-      "External database state changed during this Channel operation; the attempt rolled back",
-      {
-        coherenceMismatch: true,
-      },
-    ),
-  );
 }
 
 function databaseResult<T>(work: () => Result<T>): Result<T> {
@@ -294,6 +198,21 @@ function databaseResult<T>(work: () => Result<T>): Result<T> {
   }
 }
 
+const MESSAGE_JOIN_SELECT = `SELECT m.channel_id AS channel_id, m.seq AS seq, m.sender_handle AS sender_handle, m.kind AS kind,
+    m.to_handle AS to_handle, m.ref AS ref, m.handled AS handled, m.handled_at AS handled_at, m.handle_note AS handle_note, m.created_at AS created_at,
+    c.id AS record_id, c.inline_text AS inline_text, c.storage_key AS storage_key, c.materialized AS materialized, c.size_bytes AS size_bytes, c.sha256 AS sha256
+  FROM channel_messages m LEFT JOIN content_records c ON c.id = m.content_record_id`;
+
+function pageOfRows(rows: MessageJoinRow[]): Result<MessageRecord[]> {
+  const records: MessageRecord[] = [];
+  for (const row of rows) {
+    const mapped = messageFromRow(row);
+    if (!mapped.ok) return mapped;
+    records.push(mapped.value);
+  }
+  return ok(records);
+}
+
 export interface SqliteChannelRepositoryOptions {
   contentStore: SqliteContentStore;
 }
@@ -305,84 +224,101 @@ export function createSqliteChannelRepository(
   const store = options.contentStore;
   const ledger = createSqliteEventLedger(db);
 
-  const channelById = (id: string): ChannelRecord | null => {
-    const row = db.prepare("SELECT * FROM channels WHERE id = ?").get(id) as ChannelRow | null | undefined;
-    return row === null || row === undefined ? null : channelFromRow(row);
-  };
-
-  const participantsOf = (channelId: string): ChannelParticipantRecord[] =>
-    (
-      db
-        .prepare("SELECT * FROM channel_participants WHERE channel_id = ? ORDER BY registered_at, id")
-        .all(channelId) as unknown as ParticipantRow[]
-    ).map(participantFromRow);
-
-  const participantOf = (channelId: string, participantId: string): ChannelParticipantRecord | null => {
-    const row = db
-      .prepare("SELECT * FROM channel_participants WHERE channel_id = ? AND id = ?")
-      .get(channelId, participantId) as ParticipantRow | null | undefined;
-    return row === null || row === undefined ? null : participantFromRow(row);
-  };
-
-  const participantHandleOf = (channelId: string, handle: string): ChannelParticipantRecord | null => {
-    const row = db
+  const channelRowById = (id: string): ChannelRow | null =>
+    (db.prepare("SELECT * FROM channels WHERE id = ?").get(id) as ChannelRow | null | undefined) ?? null;
+  const channelRowByName = (name: string): ChannelRow | null =>
+    (db.prepare("SELECT * FROM channels WHERE name = CAST(? AS TEXT)").get(text(name)) as
+      | ChannelRow
+      | null
+      | undefined) ?? null;
+  const participantsOf = (channelId: string): ParticipantRow[] =>
+    db
+      .prepare("SELECT * FROM channel_participants WHERE channel_id = ? ORDER BY handle COLLATE BINARY")
+      .all(channelId) as unknown as ParticipantRow[];
+  const participantOf = (channelId: string, handle: string): ParticipantRow | null =>
+    (db
       .prepare("SELECT * FROM channel_participants WHERE channel_id = ? AND handle = CAST(? AS TEXT)")
-      .get(channelId, text(handle)) as ParticipantRow | null | undefined;
-    return row === null || row === undefined ? null : participantFromRow(row);
-  };
+      .get(channelId, text(handle)) as ParticipantRow | null | undefined) ?? null;
 
-  const assignmentOf = (channelId: string, assignmentId: string): ChannelAssignmentRecord | null => {
-    const row = db
-      .prepare("SELECT * FROM channel_assignments WHERE channel_id = ? AND id = ?")
-      .get(channelId, assignmentId) as AssignmentRow | null | undefined;
-    return row === null || row === undefined ? null : assignmentFromRow(row);
-  };
-
-  const messageOf = (channelId: string, messageId: string): Result<ChannelMessageRecord | null> => {
-    const row = db
-      .prepare("SELECT * FROM channel_messages WHERE channel_id = ? AND id = ?")
-      .get(channelId, messageId) as MessageRow | null | undefined;
-    if (row === null || row === undefined) return ok(null);
-    return messageFromRow(db, row);
-  };
-
-  const aggregateOf = (channelId: string): ChannelAggregate | null => {
-    const channel = channelById(channelId);
-    if (channel === null) return null;
-    const participants = participantsOf(channelId);
-    const main = participants.find((candidate) => candidate.role === "main");
-    if (main === undefined) {
-      throw new Error(`The Channel ${channelId} has no main participant.`);
+  const queryMessages = (channelId: string, query: MessagePageQuery, limit: number): Result<MessageRecord[]> => {
+    const where: string[] = ["m.channel_id = ?"];
+    const params: unknown[] = [channelId];
+    if (query.handling === "unhandled") where.push("m.handled = 0");
+    if (query.afterSeq !== null) {
+      where.push("m.seq > ?");
+      params.push(query.afterSeq);
     }
-    const assignments = (
-      db
-        .prepare("SELECT * FROM channel_assignments WHERE channel_id = ? ORDER BY created_at, id")
-        .all(channelId) as unknown as AssignmentRow[]
-    ).map(assignmentFromRow);
-    const counts = db
+    if (query.fromHandle !== null) {
+      where.push("m.sender_handle = CAST(? AS TEXT)");
+      params.push(text(query.fromHandle));
+    }
+    if (query.kind !== null) {
+      where.push("m.kind = ?");
+      params.push(query.kind);
+    }
+    const rows = db
+      .prepare(`${MESSAGE_JOIN_SELECT} WHERE ${where.join(" AND ")} ORDER BY m.seq ASC LIMIT ?`)
+      .all(...params, limit) as unknown as MessageJoinRow[];
+    return databaseResult(() => pageOfRows(rows));
+  };
+
+  const countersOf = (channelId: string): ChannelCounters => {
+    const row = db
       .prepare(
         "SELECT COUNT(*) AS total, SUM(CASE WHEN handled = 0 THEN 1 ELSE 0 END) AS unhandled FROM channel_messages WHERE channel_id = ?",
       )
-      .get(channelId) as { total: number; unhandled: number | null } | undefined;
-    return {
-      channel,
-      participants,
-      assignments,
-      mainParticipantId: main.id,
-      messageCount: Number(counts?.total ?? 0),
-      unhandledCount: Number(counts?.unhandled ?? 0),
-    };
+      .get(channelId) as { total: number; unhandled: number | null };
+    return { total: Number(row.total), unhandled: Number(row.unhandled ?? 0) };
   };
 
   const transaction: ChannelTransaction = {
-    channel: (id) => databaseResult(() => ok(channelById(id))),
-    participants: (channelId) => databaseResult(() => ok(participantsOf(channelId))),
-    participant: (channelId, participantId) => databaseResult(() => ok(participantOf(channelId, participantId))),
-    participantByHandle: (channelId, handle) => databaseResult(() => ok(participantHandleOf(channelId, handle))),
-    assignment: (channelId, assignmentId) => databaseResult(() => ok(assignmentOf(channelId, assignmentId))),
-    message: (channelId, messageId) => databaseResult(() => messageOf(channelId, messageId)),
-    submitReceipt: (key, scope, now) => databaseResult(() => lookupSubmitReceipt(db, key, scope, now)),
-    createReceipt: (key, scope, now) => databaseResult(() => lookupCreateReceipt(db, key, scope, now)),
+    channelByName: (name) => databaseResult(() => ok(channelFromRow(channelRowByName(name)))),
+    channelById: (id) => databaseResult(() => ok(channelFromRow(channelRowById(id)))),
+    participants: (channelId) => databaseResult(() => ok(participantsOf(channelId).map(participantFromRow))),
+    participant: (channelId, handle) =>
+      databaseResult(() => {
+        const row = participantOf(channelId, handle);
+        return ok(row === null ? null : participantFromRow(row));
+      }),
+    messageBySeq: (channelId, seq) =>
+      databaseResult(() => {
+        const row = db
+          .prepare(`${MESSAGE_JOIN_SELECT} WHERE m.channel_id = ? AND m.seq = ?`)
+          .get(channelId, seq) as unknown as MessageJoinRow;
+        if (row === null || row === undefined) return ok(null);
+        const mapped = messageFromRow(row);
+        if (!mapped.ok) return mapped;
+        return ok(mapped.value);
+      }),
+    pageMessages: (channelId, query, limit) => queryMessages(channelId, query, limit),
+    counters: (channelId) => databaseResult(() => ok(countersOf(channelId))),
+    findUnhandledDuplicate: (channelId, senderHandle, kind, toHandle, ref, bodySha256) =>
+      databaseResult(() => {
+        // The NULL-safe identity of CHN-005: `IS` compares the optional `--to`
+        // and `--ref` exactly, including both-absent NULLs, and the body is its
+        // content record's digest through the join.
+        const row = db
+          .prepare(
+            `${MESSAGE_JOIN_SELECT} WHERE m.channel_id = ? AND m.sender_handle = CAST(? AS TEXT) AND m.kind = ?
+               AND m.to_handle IS CAST(? AS TEXT) AND m.ref IS CAST(? AS TEXT) AND c.sha256 = ? AND m.handled = 0
+             ORDER BY m.seq DESC LIMIT 1`,
+          )
+          .get(channelId, text(senderHandle), kind, text(toHandle), text(ref), bodySha256) as
+          | MessageJoinRow
+          | null
+          | undefined;
+        if (row === null || row === undefined) return ok(null);
+        const mapped = messageFromRow(row);
+        if (!mapped.ok) return mapped;
+        return ok(mapped.value);
+      }),
+    nextSeq: (channelId) =>
+      databaseResult(() => {
+        const row = db
+          .prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM channel_messages WHERE channel_id = ?")
+          .get(channelId) as { next: number };
+        return ok(Number(row.next));
+      }),
     commitContent: (plan, ownerChannelId, createdAt) =>
       databaseResult(() => {
         if (plan.kind === "inline") {
@@ -420,305 +356,147 @@ export function createSqliteChannelRepository(
         });
         return ok(undefined);
       }),
-    insertChannel: (row) =>
-      databaseResult(() => {
-        db.prepare(
-          "INSERT INTO channels (id, title, state, creator_kind, creator_id, created_at, updated_at, closed_at, closed_by_participant_id, closed_by_kind) VALUES (?, ?, 'open', ?, ?, ?, ?, NULL, NULL, NULL)",
-        ).run(row.id, row.title, row.creatorKind, row.creatorId, row.createdAt, row.updatedAt);
-        return ok(undefined);
-      }),
-    insertParticipant: (row) =>
-      databaseResult(() => {
-        db.prepare(
-          "INSERT INTO channel_participants (id, channel_id, role, handle, native_provenance_json, active, registered_at, deactivated_at) VALUES (?, ?, ?, CAST(? AS TEXT), ?, 1, ?, NULL)",
-        ).run(
-          row.id,
-          row.channelId,
-          row.role,
-          text(row.handle),
-          JSON.stringify(row.nativeProvenance),
-          row.registeredAt,
-        );
-        return ok(undefined);
-      }),
-    insertAssignment: (row) =>
-      databaseResult(() => {
-        db.prepare(
-          "INSERT INTO channel_assignments (id, channel_id, participant_id, label, state, created_at, closed_at) VALUES (?, ?, ?, ?, 'open', ?, NULL)",
-        ).run(row.id, row.channelId, row.participantId, row.label, row.createdAt);
-        return ok(undefined);
-      }),
     insertMessage: (row) =>
       databaseResult(() => {
         db.prepare(
-          `INSERT INTO channel_messages (id, channel_id, sender_participant_id, sender_handle, kind, content_record_id,
-             assignment_id, assignment_late, relay_to_participant_id, context_session, context_node, context_attempt,
-             handled, handled_at, handled_by_participant_id, handled_by_kind, handle_note, processing_row_version, created_at)
-           VALUES (?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?, ?, CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT),
-             0, NULL, NULL, NULL, NULL, 1, ?)`,
+          `INSERT INTO channel_messages (channel_id, seq, sender_handle, kind, to_handle, ref, content_record_id,
+             handled, handled_at, handle_note, created_at)
+           VALUES (?, ?, CAST(? AS TEXT), ?, CAST(? AS TEXT), CAST(? AS TEXT), ?, 0, NULL, NULL, ?)`,
         ).run(
-          row.id,
           row.channelId,
-          row.senderParticipantId,
+          row.seq,
           text(row.senderHandle),
           row.kind,
-          row.body.recordId,
-          row.assignmentId,
-          row.assignmentLate ? 1 : 0,
-          row.relayToParticipantId,
-          text(row.contextSession),
-          text(row.contextNode),
-          text(row.contextAttempt),
+          text(row.toHandle),
+          text(row.ref),
+          row.content.recordId,
           row.createdAt,
         );
         return ok(undefined);
       }),
-    closeChannel: (id, closedAt, closedByParticipantId, closedByKind) =>
+    insertChannel: (row) =>
       databaseResult(() => {
-        const changed = db
-          .prepare(
-            "UPDATE channels SET state = 'closed', closed_at = ?, closed_by_participant_id = ?, closed_by_kind = ?, updated_at = ? WHERE id = ? AND state = 'open'",
-          )
-          .run(closedAt, closedByParticipantId, closedByKind, closedAt, id) as { changes: number };
-        return ok(changed.changes === 1 ? ("changed" as const) : ("unchanged" as const));
+        db.prepare(
+          "INSERT INTO channels (id, name, title, state, created_at, closed_at) VALUES (?, CAST(? AS TEXT), ?, 'open', ?, NULL)",
+        ).run(row.id, text(row.name), row.title, row.createdAt);
+        return ok(undefined);
       }),
-    deactivateParticipant: (id, deactivatedAt) =>
+    insertParticipant: (channelId, handle, role, addedAt) =>
       databaseResult(() => {
-        const changed = db
-          .prepare("UPDATE channel_participants SET active = 0, deactivated_at = ? WHERE id = ? AND active = 1")
-          .run(deactivatedAt, id) as { changes: number };
-        return ok(changed.changes === 1 ? ("changed" as const) : ("unchanged" as const));
+        db.prepare(
+          "INSERT INTO channel_participants (channel_id, handle, role, added_at, removed_at) VALUES (?, CAST(? AS TEXT), ?, ?, NULL)",
+        ).run(channelId, text(handle), role, addedAt);
+        return ok(undefined);
       }),
-    closeAssignment: (id, closedAt) =>
+    reRegisterParticipant: (channelId, handle, addedAt) =>
+      databaseResult(() => {
+        db.prepare(
+          "UPDATE channel_participants SET removed_at = NULL, added_at = ? WHERE channel_id = ? AND handle = CAST(? AS TEXT)",
+        ).run(addedAt, channelId, text(handle));
+        return ok(undefined);
+      }),
+    removeParticipant: (channelId, handle, removedAt) =>
+      databaseResult(() => {
+        db.prepare(
+          "UPDATE channel_participants SET removed_at = ? WHERE channel_id = ? AND handle = CAST(? AS TEXT)",
+        ).run(removedAt, channelId, text(handle));
+        return ok(undefined);
+      }),
+    closeChannelRow: (id, closedAt) =>
       databaseResult(() => {
         const changed = db
-          .prepare("UPDATE channel_assignments SET state = 'closed', closed_at = ? WHERE id = ? AND state = 'open'")
+          .prepare("UPDATE channels SET state = 'closed', closed_at = ? WHERE id = ? AND state = 'open'")
           .run(closedAt, id) as { changes: number };
         return ok(changed.changes === 1 ? ("changed" as const) : ("unchanged" as const));
       }),
-    handleMessage: (channelId, messageId, decision) =>
+    markHandled: (channelId, seq, handledAt, note) =>
       databaseResult(() => {
         const changed = db
           .prepare(
-            `UPDATE channel_messages SET handled = 1, handled_at = ?, handled_by_participant_id = ?, handled_by_kind = ?,
-               handle_note = CAST(? AS TEXT), processing_row_version = 2
-             WHERE channel_id = ? AND id = ? AND handled = 0 AND processing_row_version = 1`,
+            "UPDATE channel_messages SET handled = 1, handled_at = ?, handle_note = CAST(? AS TEXT) WHERE channel_id = ? AND seq = ? AND handled = 0",
           )
-          .run(
-            decision.handledAt,
-            decision.handledByParticipantId,
-            decision.handledByKind,
-            text(decision.handleNote),
-            channelId,
-            messageId,
-          ) as { changes: number };
+          .run(handledAt, text(note), channelId, seq) as { changes: number };
         if (changed.changes !== 1) {
-          return err({
-            ...appError(
-              "ROW_VERSION_CONFLICT",
-              "A handling decision has already committed for this message; the first handling decision is immutable",
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The unhandled message ${String(seq)} could not be marked handled inside its transaction`,
+              { channelId, seq },
             ),
-            recovery: {
-              suggestedCommand:
-                "The first decision is immutable and there is nothing to retry; read the recorded decision with sorage channel read <channelId> <messageId>",
-            },
-          });
+          );
         }
-        return ok("changed" as const);
+        return ok(undefined);
       }),
-    appendEvent: (id, event) =>
+    appendEvent: (id, event, createdAt) =>
       databaseResult(() => {
         // The closed metadata and association rules are application-level and
         // validated before the insert; the migration's trigger is the
         // association backstop (security section 10.1, section 38.9).
-        const checked = validateChannelEventMetadata(event.eventType, event.metadata);
+        const row = channelDomainEvent(id, event, createdAt);
+        const checked = validateChannelEventMetadata(row.eventType as ChannelDomainEventType, row.metadata);
         if (!checked.ok) return checked;
-        const channel = channelById(event.metadata.channelId as string);
-        if (channel === null) {
-          return err(appError("STORAGE_INTEGRITY_ERROR", `The ${event.eventType} event names an unknown Channel.`));
+        const channelRow = channelRowById(row.metadata.channelId as string);
+        if (channelRow === null) {
+          return err(appError("STORAGE_INTEGRITY_ERROR", `The ${row.eventType} event names an unknown Channel.`));
         }
-        ledger.append(channelDomainEvent(id, event));
-        return ok(undefined);
-      }),
-    storeSubmitReceipt: (key, scope, requestHash, summary, createdAt, expiresAt) =>
-      databaseResult(() => {
-        // Reuse only this expired key; no global cleanup of other families.
-        // The opaque key binds its exact bytes on every statement, so a
-        // leading-BOM original key keeps its identity through the expiry
-        // cleanup and the retained insert alike.
-        db.prepare("DELETE FROM idempotency_keys WHERE key = CAST(? AS TEXT) AND scope = ? AND expires_at <= ?").run(
-          text(key),
-          scope,
-          createdAt,
-        );
-        db.prepare(
-          "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (CAST(? AS TEXT), ?, ?, ?, ?, ?)",
-        ).run(text(key), scope, requestHash, JSON.stringify({ message: summary }), createdAt, expiresAt);
-        return ok(undefined);
-      }),
-    storeCreateReceipt: (key, scope, requestHash, view, createdAt, expiresAt) =>
-      databaseResult(() => {
-        db.prepare("DELETE FROM idempotency_keys WHERE key = CAST(? AS TEXT) AND scope = ? AND expires_at <= ?").run(
-          text(key),
-          scope,
-          createdAt,
-        );
-        db.prepare(
-          "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (CAST(? AS TEXT), ?, ?, ?, ?, ?)",
-        ).run(text(key), scope, requestHash, JSON.stringify({ channel: view }), createdAt, expiresAt);
+        ledger.append(row);
         return ok(undefined);
       }),
   };
 
-  function inTransaction<T>(begin: string, work: () => Result<T>, options?: ChannelRunOptions): Result<T> {
-    return databaseResult(() => {
-      db.exec(begin);
-      try {
-        if (liveFencePaused(db) !== null) {
-          db.exec("ROLLBACK");
-          return err(appError("SERVICE_PAUSED", "A Vault move or restore is in progress"));
-        }
-        if (options?.expectedExternalVersion !== undefined && begin === "BEGIN IMMEDIATE") {
-          if (externalVersion(db) !== options.expectedExternalVersion) {
-            db.exec("ROLLBACK");
-            return coherenceMarker();
-          }
-        }
-        const result = work();
-        db.exec(result.ok ? "COMMIT" : "ROLLBACK");
-        return result;
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-    });
-  }
+  const reader: ChannelReader = {
+    channelByName: transaction.channelByName,
+    channelById: transaction.channelById,
+    participants: transaction.participants,
+    participant: transaction.participant,
+    pageMessages: transaction.pageMessages,
+    counters: transaction.counters,
+    listChannels: (filter) =>
+      databaseResult(() => {
+        const rows = (filter.state === "all"
+          ? db
+              .prepare(
+                `SELECT c.*, (SELECT p.handle FROM channel_participants p WHERE p.channel_id = c.id AND p.role = 'main') AS main_handle
+                     FROM channels c ORDER BY c.created_at DESC, c.id DESC`,
+              )
+              .all()
+          : db
+              .prepare(
+                `SELECT c.*, (SELECT p.handle FROM channel_participants p WHERE p.channel_id = c.id AND p.role = 'main') AS main_handle
+                     FROM channels c WHERE c.state = ? ORDER BY c.created_at DESC, c.id DESC`,
+              )
+              .all(filter.state)) as unknown as Array<ChannelRow & { main_handle: string | null }>;
+        return ok(
+          rows.map((row) => ({
+            id: row.id,
+            name: row.name,
+            title: row.title,
+            state: row.state === "closed" ? ("closed" as const) : ("open" as const),
+            main: row.main_handle ?? "",
+            createdAt: row.created_at,
+            closedAt: row.closed_at,
+          })),
+        );
+      }),
+  };
 
   return {
-    aggregate: (channelId) => databaseResult(() => ok(aggregateOf(channelId))),
-    message: (channelId, messageId) => databaseResult(() => messageOf(channelId, messageId)),
-    captureChannelList: (filter, after, batchSize) =>
-      databaseResult(() => {
-        db.exec("BEGIN");
-        try {
-          const where: string[] = [];
-          const params: unknown[] = [];
-          if (filter.state !== "all") {
-            where.push("c.state = ?");
-            params.push(filter.state);
-          }
-          if (after !== undefined) {
-            where.push("(c.created_at < ? OR (c.created_at = ? AND c.id < ?))");
-            params.push(after.createdAt, after.createdAt, after.id);
-          }
-          const rows = db
-            .prepare(
-              `SELECT c.id AS id, c.title AS title, c.state AS state, c.created_at AS created_at, c.closed_at AS closed_at,
-                 (SELECT p.handle FROM channel_participants p WHERE p.channel_id = c.id AND p.role = 'main') AS main_handle
-               FROM channels c${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""}
-               ORDER BY c.created_at DESC, c.id DESC LIMIT ?`,
-            )
-            .all(...(params.length > 0 ? params : []), batchSize + 1) as unknown as Array<{
-            id: string;
-            title: string | null;
-            state: string;
-            created_at: string;
-            closed_at: string | null;
-            main_handle: string | null;
-          }>;
-          db.exec("COMMIT");
-          const exhausted = rows.length <= batchSize;
-          const page = rows.slice(0, batchSize);
-          const last =
-            page.length > 0
-              ? { createdAt: page[page.length - 1]?.created_at ?? "", id: page[page.length - 1]?.id ?? "" }
-              : null;
-          const capture: ChannelListCapture = {
-            summaries: page.map((row) => ({
-              id: row.id,
-              title: row.title,
-              state: row.state === "closed" ? ("closed" as const) : ("open" as const),
-              mainHandle: row.main_handle ?? "",
-              createdAt: row.created_at,
-              closedAt: row.closed_at,
-            })),
-            lastSortKey: last,
-            exhausted,
-          };
-          return ok(capture);
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
+    run: (work) =>
+      runInTransaction(db, "BEGIN IMMEDIATE", () => work(transaction), {
+        failure: (error) =>
+          storageContentionOf(error, "channel") ??
+          appError(
+            "INTERNAL_ERROR",
+            `The Channel storage operation failed: ${error instanceof Error ? error.message : String(error)}.`,
+            {
+              cause: String(error),
+            },
+          ),
       }),
-    captureMessageList: (channelId, filter, after, batchSize) =>
+    read: (work) =>
       databaseResult(() => {
-        db.exec("BEGIN");
-        try {
-          if (channelById(channelId) === null) {
-            db.exec("COMMIT");
-            return err(appError("CHN_NOT_FOUND", "Unknown Channel UUID"));
-          }
-          const where: string[] = ["m.channel_id = ?"];
-          const params: unknown[] = [channelId];
-          if (filter.handling === "unhandled") where.push("m.handled = 0");
-          if (filter.handling === "handled") where.push("m.handled = 1");
-          if (filter.participantId !== null) {
-            where.push("m.sender_participant_id = ?");
-            params.push(filter.participantId);
-          }
-          if (filter.assignmentId !== null) {
-            where.push("m.assignment_id = ?");
-            params.push(filter.assignmentId);
-          }
-          if (filter.kind !== null) {
-            where.push("m.kind = ?");
-            params.push(filter.kind);
-          }
-          if (after !== undefined) {
-            where.push("(m.created_at < ? OR (m.created_at = ? AND m.id < ?))");
-            params.push(after.createdAt, after.createdAt, after.id);
-          }
-          const rows = db
-            .prepare(
-              `SELECT * FROM channel_messages m WHERE ${where.join(" AND ")} ORDER BY m.created_at DESC, m.id DESC LIMIT ?`,
-            )
-            .all(...params, batchSize + 1) as unknown as MessageRow[];
-          db.exec("COMMIT");
-          const exhausted = rows.length <= batchSize;
-          const page = rows.slice(0, batchSize);
-          const records: ChannelMessageRecord[] = [];
-          for (const row of page) {
-            const mapped = messageFromRow(db, row);
-            if (!mapped.ok) return mapped;
-            // List descriptors stay metadata-only: the capture carries the
-            // record identity, never the inline text, and every preview seed
-            // resolves outside the capture transaction (the Memo listing's
-            // retained discipline).
-            records.push({ ...mapped.value, body: { ...mapped.value.body, inlineText: null } });
-          }
-          const last =
-            page.length > 0
-              ? { createdAt: page[page.length - 1]?.created_at ?? "", id: page[page.length - 1]?.id ?? "" }
-              : null;
-          const capture: MessageListCapture = {
-            records,
-            lastSortKey: last,
-            exhausted,
-          };
-          return ok(capture);
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
-      }),
-    run: (work, options) => inTransaction("BEGIN IMMEDIATE", () => work(transaction), options),
-    inspect: (work) => {
-      const reader: ChannelReader = {
-        aggregate: (channelId) => databaseResult(() => ok(aggregateOf(channelId))),
-        message: (channelId, messageId) => databaseResult(() => messageOf(channelId, messageId)),
-      };
-      return databaseResult(() => {
+        // A plain deferred read: no SQL fence check, because the covered read's
+        // admission already checked the vault-move fence once (plan §3).
         db.exec("BEGIN");
         try {
           const result = work(reader);
@@ -728,65 +506,8 @@ export function createSqliteChannelRepository(
           db.exec("ROLLBACK");
           throw error;
         }
-      });
-    },
+      }),
   };
-}
-
-function lookupSubmitReceipt(
-  db: SorageSqlite,
-  key: string,
-  scope: string,
-  now: string,
-): Result<StoredChannelSubmitReceipt | null> {
-  const row = db
-    .prepare(
-      "SELECT request_hash, response_json FROM idempotency_keys WHERE key = CAST(? AS TEXT) AND scope = ? AND expires_at > ?",
-    )
-    .get(text(key), scope, now) as { request_hash: string; response_json: string } | null | undefined;
-  if (row === null || row === undefined) return ok(null);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.response_json);
-  } catch {
-    // A malformed stored receipt is a body-free integrity refusal, never
-    // absence and never a fresh execute (SHR-008).
-    return err(
-      appError("STORAGE_INTEGRITY_ERROR", `A stored Channel receipt under scope ${scope} is not valid JSON.`, {
-        scope,
-      }),
-    );
-  }
-  const message = parseStoredChannelSubmitReceipt(parsed);
-  if (!message.ok) return message;
-  return ok({ requestHash: row.request_hash, message: message.value });
-}
-
-function lookupCreateReceipt(
-  db: SorageSqlite,
-  key: string,
-  scope: string,
-  now: string,
-): Result<StoredChannelCreateReceipt | null> {
-  const row = db
-    .prepare(
-      "SELECT request_hash, response_json FROM idempotency_keys WHERE key = CAST(? AS TEXT) AND scope = ? AND expires_at > ?",
-    )
-    .get(text(key), scope, now) as { request_hash: string; response_json: string } | null | undefined;
-  if (row === null || row === undefined) return ok(null);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.response_json);
-  } catch {
-    return err(
-      appError("STORAGE_INTEGRITY_ERROR", `A stored Channel receipt under scope ${scope} is not valid JSON.`, {
-        scope,
-      }),
-    );
-  }
-  const channel = parseStoredChannelCreateReceipt(parsed);
-  if (!channel.ok) return channel;
-  return ok({ requestHash: row.request_hash, channel: channel.value });
 }
 
 // ---------------------------------------------------------------------------
@@ -843,14 +564,6 @@ export interface NodeChannelPorts extends ChannelCommandPorts {
   close(): void;
   releaseAcceptedBody(accepted: AcceptedChannelBody): void;
   stateDir: string;
-  /** The configured `gc.graceHours` window the shared accepted-input spool sweep honors. */
-  graceHours: number;
-  /**
-   * The actor-resolution ports on this composition's own open-and-migrated
-   * connection: one open-and-migrate serves the operational and the
-   * actor-resolution work, and `close()` closes it (SHR-015).
-   */
-  projectPorts: ProjectCommandPorts;
 }
 
 export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): NodeChannelPorts {
@@ -893,10 +606,6 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
       ledger,
     });
     const repository = createSqliteChannelRepository(db, { contentStore });
-    const externalVersion = (): number => {
-      const row = db.prepare("PRAGMA data_version").get() as { data_version: number } | null | undefined;
-      return Number(row?.data_version ?? 0);
-    };
     /** One content store aimed at the binding the current operation captured, not the composition-time path. */
     const boundStore = (binding: { vaultPath: string }): SqliteContentStore =>
       binding.vaultPath === config.vault.path
@@ -908,6 +617,27 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
             runDir: home.runDir,
             ledger,
           });
+    const relativeStaged = (
+      stagingPath: string,
+      vaultPath: string,
+      sizeBytes: number,
+      sha256: string,
+    ): Result<{ stagedPath: string; sizeBytes: number; sha256: string }> => {
+      let stagedPath: string;
+      try {
+        stagedPath = relative(managedRoot(vaultPath), stagingPath);
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", "The bound Channel Vault root could not be resolved", {
+            cause: String(error),
+          }),
+        );
+      }
+      if (stagedPath.startsWith("..") || stagedPath.length === 0) {
+        return err(appError("INTERNAL_ERROR", "The staged Channel body escaped the bound Vault"));
+      }
+      return ok({ stagedPath, sizeBytes, sha256 });
+    };
     return {
       installationId: config.installationId,
       maxBytes: config.artifact.maxBytes,
@@ -915,88 +645,73 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
       clock,
       ids: new UuidGenerator(),
       channels: repository,
-      projectPorts: createNodeProjectPorts({
-        env: options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME },
-        userHome,
-        database: db,
-        contentionSurface: "channel",
-      }),
       disclosures: {
         backupEnabled: config.gitBackup.enabled,
         thresholdBytes: config.gitBackup.largeArtifactWarningBytes,
-        largeContent: (sizeBytes: number, thresholdBytes: number) => {
-          appendStructuredLog(
-            { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "channel", sizeBytes, thresholdBytes },
-            home,
-            config.logging,
-          );
-        },
+        largeContent: () => {},
       },
       bodies: {
-        readAcceptedPreviewSeed: (accepted) => readSpoolPreviewSeed(accepted),
-        proveAcceptedNonBlank: (accepted) => proveSpoolNonBlank(accepted),
-        readRecordPreviewSeed: (ref, binding) => readRecordPreviewSeed(boundStore(binding), ref),
-        resolveBody: (ref, binding) => resolveRecordBody(boundStore(binding), ref),
-        messageContentState: (channelId, messageId) => channelMessageContentState(db, channelId, messageId),
-      },
-      coherence: {
-        captureExternalVersion: () => ok(externalVersion()),
-        classifyExternalChange: (expectedVaultPath) => {
-          if (vaultMoveLockHeld(home.runDir)) {
-            return ok("vault-move-held" as const);
-          }
-          // An operational re-read: a present-but-unreadable configuration is
-          // the typed CONFIG_INVALID refusal, never a swallowed absence
-          // (SHR-015's W4 clarification).
-          const current = configStore.readForOperation();
-          if (!current.ok) return current;
-          if (!current.value) return err(appError("INTERNAL_ERROR", "Channel configuration could not be re-read"));
-          return {
-            ok: true as const,
-            value:
-              current.value.config.vault.path === expectedVaultPath
-                ? ("external-commit" as const)
-                : ("vault-path-changed" as const),
-          };
-        },
-        moveLockHeld: () => vaultMoveLockHeld(home.runDir),
-      },
-      backoff: {
-        sleepMs: (ms) => blockingSleepMs(ms),
-        random: () => Math.random(),
+        proveAcceptedNonBlank: (accepted) => proveAcceptedNonBlank(accepted),
+        resolveBody: (ref) => resolveRecordBody(contentStore, config.vault.path, ref),
       },
       staging: {
         freshBinding: () => {
-          // An operational re-read for the same reason (SHR-015, W4).
+          // An operational re-read: a present-but-unreadable configuration is
+          // the typed CONFIG_INVALID refusal, never a swallowed absence
+          // (SHR-015's W4 clarification). The staged-file post re-reads this
+          // binding inside its transaction (CHN-014).
           const current = configStore.readForOperation();
           if (!current.ok) return current;
           if (!current.value) return err(appError("INTERNAL_ERROR", "Channel configuration could not be re-read"));
           return ok({ vaultPath: current.value.config.vault.path });
         },
         stageAccepted: (accepted, binding) => {
-          if (accepted.kind === "text") {
-            return err(appError("INTERNAL_ERROR", "An inline Channel body never stages into the Vault"));
-          }
-          const staged = boundStore(binding).stage({
-            sourcePath: accepted.spoolPath,
-            maxBytes: config.artifact.maxBytes,
-            tooLargeCode: "CHN_TOO_LARGE",
-          });
-          if (!staged.ok) return staged;
-          let stagedPath: string;
-          try {
-            stagedPath = relative(managedRoot(binding.vaultPath), staged.value.stagingPath);
-          } catch (error) {
-            return err(
-              appError("INTERNAL_ERROR", "The bound Channel Vault root could not be resolved", {
-                cause: String(error),
-              }),
+          if (accepted.kind === "spool") {
+            const staged = boundStore(binding).stage({
+              sourcePath: accepted.spoolPath,
+              maxBytes: config.artifact.maxBytes,
+              tooLargeCode: "CHN_TOO_LARGE",
+            });
+            if (!staged.ok) return staged;
+            return relativeStaged(
+              staged.value.stagingPath,
+              binding.vaultPath,
+              staged.value.sizeBytes,
+              staged.value.sha256,
             );
           }
-          if (stagedPath.startsWith("..") || stagedPath.length === 0) {
-            return err(appError("INTERNAL_ERROR", "The staged Channel body escaped the bound Vault"));
+          // A large in-memory text (the JSON transport's bounded string) reaches
+          // the Vault through the same two guarded primitives a file body uses:
+          // the owned private spool capture and the content store's
+          // managed-path-guarded streaming stage. No raw Vault write bypasses
+          // those guards, and the temporary owned spool is released on every
+          // exit; the accepted input itself stays immutable.
+          const spoolId = randomUUID();
+          const captured = captureMemoBodyText(accepted.text, {
+            maxBytes: config.artifact.maxBytes,
+            stateDir: home.stateDir,
+            spoolId,
+          });
+          if (!captured.ok) return captured;
+          if (captured.value.kind !== "spool") {
+            return err(appError("INTERNAL_ERROR", "A below-threshold Channel body never stages into the Vault"));
           }
-          return ok({ stagedPath, sizeBytes: staged.value.sizeBytes, sha256: staged.value.sha256 });
+          try {
+            const staged = boundStore(binding).stage({
+              sourcePath: captured.value.spoolPath,
+              maxBytes: config.artifact.maxBytes,
+              tooLargeCode: "CHN_TOO_LARGE",
+            });
+            if (!staged.ok) return staged;
+            return relativeStaged(
+              staged.value.stagingPath,
+              binding.vaultPath,
+              staged.value.sizeBytes,
+              staged.value.sha256,
+            );
+          } finally {
+            releaseMemoInputSpool(captured.value.spoolPath);
+          }
         },
         activateContent: (input, binding) => {
           // The post-commit gate: a held lock leaves the committed intent durably
@@ -1012,9 +727,9 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
           if (!completion.ok) return completion;
           // A committed failed assessment retains the intent and its
           // CONTENT_INTEGRITY_FAILED event with materialized left 0; the
-          // submission's post-commit half reports it honestly as committed but
+          // post's post-commit half reports it honestly as committed but
           // unmaterialized — never a fabricated success, never a rollback
-          // claim, and never a raw error or body detail (SHR-005, P3 step 5).
+          // claim, and never a raw error or body detail (SHR-005, CHN-012).
           if (completion.value.status === "failed") {
             return err(
               appError(
@@ -1031,7 +746,6 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
       },
       releaseAcceptedBody: (accepted) => releaseAcceptedChannelBody(accepted),
       stateDir: home.stateDir,
-      graceHours: config.gc.graceHours,
     };
   } catch (error) {
     if (!options.database) db.close();
@@ -1039,50 +753,14 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
   }
 }
 
-function readSpoolPreviewSeed(accepted: AcceptedChannelBody): Result<string, AppError> {
-  if (accepted.kind === "text") return ok(accepted.text);
-  const head = readSpoolHead(accepted.spoolPath, 2048);
-  if (!head.ok) return head;
-  return ok(head.value);
-}
-
 /**
- * One bounded head read of an accepted spool: at most `bytes` bytes feed the
- * 512-byte preview rule, never the whole body. The accepted bytes were already
- * fatally validated by the capture pass, so a scalar split at the read boundary
- * is a truncation artifact handled by decoding non-fatally for the seed only,
- * never an invalid-UTF-8 conclusion about the accepted input.
+ * The full accepted-spool nonblank proof (CHN-004): streams the accepted
+ * bytes in bounded chunks through the shared spool reader and proves at least
+ * one non-whitespace scalar exists — bounded memory, the exact accepted bytes,
+ * and no second UTF-8 or bound validator, because the capture pass already
+ * owns those.
  */
-function readSpoolHead(spoolPath: string, bytes: number): Result<string, AppError> {
-  let handle: number | undefined;
-  try {
-    handle = openSync(spoolPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = fstatSync(handle);
-    if (!stat.isFile()) return err(appError("INTERNAL_ERROR", "The accepted Channel body spool is not a regular file"));
-    const buffer = Buffer.allocUnsafe(Math.min(bytes, 64 * 1024));
-    const read = readSync(handle, buffer, 0, buffer.byteLength, 0);
-    const head = buffer.subarray(0, read);
-    // Non-fatal decode: the capture pass proved the full stream's UTF-8, and a
-    // trailing partial scalar here is only the head-cut boundary.
-    return ok(new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(head));
-  } catch {
-    return err(appError("INTERNAL_ERROR", "The accepted Channel body spool could not be read"));
-  } finally {
-    if (handle !== undefined) closeSync(handle);
-  }
-}
-
-/**
- * The full accepted-spool nonblank proof (the F5 correction): streams the
- * spool's exact bytes in bounded chunks through the shared spool reader and
- * proves at least one non-whitespace scalar exists — bounded memory, the exact
- * accepted bytes, and no second UTF-8 or bound validator, because the capture
- * pass already owns those. The streaming decoder keeps multibyte scalars
- * whole across chunk boundaries, and whitespace membership is per scalar and
- * matches `String.prototype.trim`'s WhiteSpace+LineTerminator definition, so
- * chunk boundaries cannot split a verdict.
- */
-function proveSpoolNonBlank(accepted: AcceptedChannelBody): Result<void, AppError> {
+function proveAcceptedNonBlank(accepted: AcceptedChannelBody): Result<void, AppError> {
   if (accepted.kind === "text") return ok(undefined);
   const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
   let sawNonWhitespace = false;
@@ -1098,169 +776,31 @@ function proveSpoolNonBlank(accepted: AcceptedChannelBody): Result<void, AppErro
   return ok(undefined);
 }
 
-/** The bounded record-head seed for list summaries: inline text directly, a file body through one positional read. */
-function readRecordPreviewSeed(
-  store: SqliteContentStore,
-  ref: { recordId: string; representation: "inline" | "file"; sizeBytes: number; sha256: string },
-): Result<string, AppError> {
-  const opened = store.openBody(ref.recordId, { verifyFileDigest: "never" });
-  if (!opened.ok) return opened;
-  try {
-    const head = opened.value.read(0, 2048);
-    if (!head.ok) return head;
-    return ok(new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(head.value));
-  } finally {
-    opened.value.close();
-  }
-}
-
-/** The complete-content resolution of one record's exact text, outside every transaction. */
+/**
+ * The complete-content resolution of one record's body against the current
+ * Vault binding, outside every transaction: an inline record is its exact
+ * text, an unmaterialized file-backed record is pending in place, and a
+ * materialized file is read and digest-verified with its immutable Vault
+ * path (section 38.4 line 1716).
+ */
 function resolveRecordBody(
   store: SqliteContentStore,
-  ref: { recordId: string; representation: "inline" | "file"; sizeBytes: number; sha256: string },
-): Result<string, AppError> {
+  vaultPath: string,
+  ref: MessageBodyRef,
+): Result<ResolvedMessageBody, AppError> {
+  // Every representation resolves through the shared store's verified read:
+  // an inline record's bytes are checked against their recorded size and
+  // SHA-256 exactly as a file-backed body's are (SHR-005).
   const read = store.read(ref.recordId);
-  if (!read.ok) return read;
-  const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(read.value.bytes);
-  return ok(decoded);
-}
-
-/** The minimal read capability both the operational connection and the installation inspection expose. */
-interface ChannelContentStateReader {
-  prepare(sql: string): { get(...params: unknown[]): unknown };
-}
-
-/**
- * The database-only content-state probe behind `contentActivating` (CHN-012,
- * ADR-0033's unconfirmed-content note): the message's recorded representation
- * and whether its content record is materialized, from one SQL read and never
- * the filesystem. A missing message or content row is this probe's own typed
- * integrity refusal; the submit paths decide how to disclose an unobservable
- * file-backed state.
- */
-function channelMessageContentState(
-  database: ChannelContentStateReader,
-  channelId: string,
-  messageId: string,
-): Result<{ representation: "inline" | "file"; materialized: boolean }, AppError> {
-  // The probe runs after the domain commit, so its own failure must never be
-  // the pre-commit contention refusal: every thrown observation error becomes
-  // this probe's typed integrity failure naming the failed read and its cause,
-  // which the submit paths absorb into the unconfirmed-content disclosure.
-  try {
-    const row = database
-      .prepare(
-        `SELECT cr.inline_text IS NOT NULL AS inline, cr.materialized AS materialized
-           FROM channel_messages m JOIN content_records cr ON cr.id = m.content_record_id
-          WHERE m.channel_id = ? AND m.id = ?`,
-      )
-      .get(channelId, messageId) as { inline: number; materialized: number } | null | undefined;
-    if (row === null || row === undefined) {
-      return err(
-        appError("STORAGE_INTEGRITY_ERROR", "The committed Channel message or its content record is missing."),
-      );
-    }
-    return ok({
-      representation: row.inline === 1 ? ("inline" as const) : ("file" as const),
-      materialized: row.materialized === 1,
-    });
-  } catch (error) {
-    return err(
-      appError(
-        "STORAGE_INTEGRITY_ERROR",
-        `the committed Channel message's content state could not be read: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: String(error) },
-      ),
-    );
+  if (!read.ok) {
+    if (read.error.code === "CONTENT_MATERIALIZING") return ok({ state: "pending" });
+    return read;
   }
-}
-
-// ---------------------------------------------------------------------------
-// The replay-only inspection ports (CHN-006, P3 section C)
-
-export interface NodeChannelRecoveryOptions {
-  env?: HomeEnvironment;
-  userHome?: string;
-  inspection?: Parameters<typeof withInstallationInspection>[1];
-}
-
-/** Read only the safely observed configuration needed before original-body capture. */
-export function readChannelRecoveryConfiguration(
-  options: Pick<NodeChannelRecoveryOptions, "env" | "userHome"> = {},
-): Result<{ installationId: string; maxBytes: number; vaultPath: string }, AppError> {
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths(options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME }, userHome);
-  const loaded = readRecoveryConfiguration(home.home, userHome);
-  if (!loaded.ok) return loaded;
-  return ok({
-    installationId: loaded.value.installationId,
-    maxBytes: loaded.value.artifact.maxBytes,
-    vaultPath: loaded.value.vault.path,
-  });
-}
-
-export function createNodeChannelRecoveryPorts(options: NodeChannelRecoveryOptions = {}): ChannelRecoveryPorts {
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths(options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME }, userHome);
-  return {
-    clock: new SystemClock(),
-    bodies: {
-      // The read-only seam reuses the same full proofs over the accepted
-      // input — the nonblank scan and the bounded preview-head seed — each a
-      // private input read, never a Vault or database effect, so replay-only
-      // stays non-mutating (the F5 and C1 corrections).
-      proveAcceptedNonBlank: (accepted) => proveSpoolNonBlank(accepted),
-      readAcceptedPreviewSeed: (accepted) => readSpoolPreviewSeed(accepted),
-    },
-    inspect(consume) {
-      return withInstallationInspection(home.home, { ...options.inspection, userHome }, (observation) => {
-        if (observation.kind === "refused") return err(observation.error);
-        const receipts: ChannelReceiptReader = {
-          submitReceipt: (key, scope, now) => {
-            try {
-              const row = observation.reader
-                .prepare(
-                  "SELECT request_hash, response_json FROM idempotency_keys WHERE key = CAST(? AS TEXT) AND scope = ? AND expires_at > ?",
-                )
-                .get(text(key), scope, now) as { request_hash: string; response_json: string } | null | undefined;
-              if (row === null || row === undefined) return ok(null);
-              let parsed: unknown;
-              try {
-                parsed = JSON.parse(row.response_json);
-              } catch {
-                return err(
-                  appError(
-                    "STORAGE_INTEGRITY_ERROR",
-                    `A stored Channel receipt under scope ${scope} is not valid JSON.`,
-                    {
-                      scope,
-                    },
-                  ),
-                );
-              }
-              // The one shared strict parser: the read-only inspection never
-              // trusts a stored receipt shape the mutation path would not
-              // accept either (SHR-008 fail-closed).
-              const message = parseStoredChannelSubmitReceipt(parsed);
-              if (!message.ok) return message;
-              return ok({ requestHash: row.request_hash, message: message.value });
-            } catch (error) {
-              return err(
-                appError(
-                  "STORAGE_INTEGRITY_ERROR",
-                  `The inspected Channel receipt rows are malformed: ${error instanceof Error ? error.message : String(error)}`,
-                ),
-              );
-            }
-          },
-        };
-        return consume({
-          installationId: observation.config.installationId,
-          migrationVersion: observation.migrationVersion,
-          receipts,
-          contentState: (channelId, messageId) => channelMessageContentState(observation.reader, channelId, messageId),
-        });
-      });
-    },
-  };
+  const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(read.value.bytes);
+  if (read.value.kind === "inline") {
+    return ok({ state: "inline", text: decoded });
+  }
+  const root = managedRoot(vaultPath);
+  const path = ref.storageKey === null ? root : join(root, ref.storageKey);
+  return ok({ state: "materialized", text: decoded, path });
 }

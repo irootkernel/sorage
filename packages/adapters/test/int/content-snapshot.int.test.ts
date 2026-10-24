@@ -3,7 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
 import {
   backupRestore,
   backupVerify,
@@ -12,6 +11,7 @@ import {
   exportSnapshot,
   SYSTEM_ACTOR,
 } from "@sorage/core";
+import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { createSqliteEventLedger } from "../../src/events";
 import { openSorageDatabase } from "../../src/sqlite/connection";
@@ -92,7 +92,7 @@ function exportedHistory() {
         )
         .all(),
     ).toEqual([]);
-    for (const table of ["channels", "channel_participants", "channel_assignments", "channel_messages"]) {
+    for (const table of ["channels", "channel_participants", "channel_messages"]) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
   } finally {
@@ -762,7 +762,7 @@ describe("format-3 historical physical-content snapshots", () => {
           .all(),
       ).toEqual([]);
       expect(db.prepare("SELECT key FROM idempotency_keys").all()).toEqual([]);
-      for (const table of ["channels", "channel_participants", "channel_assignments", "channel_messages"]) {
+      for (const table of ["channels", "channel_participants", "channel_messages"]) {
         expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
       }
     } finally {

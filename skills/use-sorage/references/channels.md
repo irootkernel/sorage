@@ -8,19 +8,16 @@ A Channel is one durable attributed upstream communication line per orchestratio
 
 Channel commands:
 
-- `sorage channel create --main-handle <handle> [--title <title>] [--idempotency-key <key>] --json`
-- `sorage channel list [--state open|closed|all] [--limit <n>] [--cursor <c>] --json`
+- `sorage channel create <name> [--title <title>] [--main <handle=main>] --json`
+- `sorage channel add <channel> <handle> --role worker|judge --json`
+- `sorage channel remove <channel> <handle> --json`
+- `sorage channel post <channel> --from <handle> --kind report|question|relay_request [--to <handle>] [--ref <text>] (--body <text> | --body-file <path>) --json`
+- `sorage channel messages <channel> [--all] [--after <seq>] [--from <handle>] [--kind <kind>] [--limit <n>] --json`
+- `sorage channel messages <channel> [--after <seq>] [--from <handle>] [--kind <kind>] --wait [--interval <s>] [--timeout <s>] --json`
+- `sorage channel ack <channel> <seq>... [--note <text>] --json`
+- `sorage channel close <channel> --json`
+- `sorage channel list [--state open|closed|all] --json`
 - `sorage channel show <channel> --json`
-- `sorage channel close <channel> (--as-participant <main-id> | --as-user) --json`
-- `sorage channel participant add <channel> --role worker|judge --handle <handle> [--native <text>]... (--as-participant <main-id> | --as-user) --json`
-- `sorage channel participant deactivate <channel> <participant> (--as-participant <main-id> | --as-user) --json`
-- `sorage channel assignment add <channel> [--participant <id>] --label <label> (--as-participant <main-id> | --as-user) --json`
-- `sorage channel assignment close <channel> <assignment> (--as-participant <main-id> | --as-user) --json`
-- `sorage channel submit <channel> --as-participant <id> --kind report|question|relay_request (--body <text> | --body-file <path>) [--assignment <id>] [--relay-to <participant>] [--context-session <s>] [--context-node <s>] [--context-attempt <s>] [--idempotency-key <key>] [--replay-only] --json`
-- `sorage channel messages <channel> [--unhandled|--handled|--all] [--participant <id>] [--assignment <id>] [--kind <kind>] [--limit <n>] [--cursor <c>] --json`
-- `sorage channel messages <channel> [--unhandled] [--participant <id>] [--assignment <id>] [--kind <kind>] [--wait [--interval <s>] [--timeout <s>]] [--limit <n>] --json`
-- `sorage channel read <channel> <message> --json`
-- `sorage channel handle <channel> <message> --expected-row-version <n> [--note <text>] (--as-participant <main-id> | --as-user) --json`
 
 Reads, listings, and `show` do not take `--as-participant`; only the commands that actually assert a main-role or sender identity do. Main-role commands accept either `--as-participant <main-id>` or `--as-user`; `submit` always requires `--as-participant <id>`, and `--as-user` does not replace it. The global `--as <project-slug>` still selects ActorRef provenance only, never the Channel or participant.
 

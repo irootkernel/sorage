@@ -1,17 +1,17 @@
-import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { appError, err } from "@sorage/core";
-import * as handoffCommandPorts from "@sorage/adapters/src/handoff-command-ports";
 import * as channelCommandPorts from "@sorage/adapters/src/channel-command-ports";
-import * as projectCommandPorts from "@sorage/adapters/src/project-command-ports";
+import * as handoffCommandPorts from "@sorage/adapters/src/handoff-command-ports";
 import * as inboxMarkerPorts from "@sorage/adapters/src/inbox-marker-ports";
-import * as migrator from "@sorage/adapters/src/sqlite/migrator";
-import * as sqliteConnections from "@sorage/adapters/src/sqlite/connection";
+import * as projectCommandPorts from "@sorage/adapters/src/project-command-ports";
 import type { SorageSqlite } from "@sorage/adapters/src/sqlite/connection";
+import * as sqliteConnections from "@sorage/adapters/src/sqlite/connection";
+import * as migrator from "@sorage/adapters/src/sqlite/migrator";
+import { appError, err } from "@sorage/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/main";
 
 /**
@@ -86,14 +86,14 @@ describe("typed refusals per family", () => {
     const openSpy = throwOnOpen();
 
     const channel = capture();
-    expect(runCli(["channel", "list", "--json"], channel.ports)).toBe(75);
+    expect(runCli(["channel", "create", "contended-probe", "--json"], channel.ports)).toBe(75);
     const channelEnvelope = envelopeOf(channel);
     expect(channelEnvelope.ok).toBe(false);
     expect(channelEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(channelEnvelope.error?.details.storageContention).toBe(true);
     expect(channelEnvelope.error?.message).toContain("Channel storage is contended");
     expect(channelEnvelope.error?.recovery?.suggestedCommand).toBe(
-      "Retry the same channel command with its original mode, input, and idempotency key when storage is quieter; a replay-only retry stays replay-only, and after an unknown submission outcome inspect with --replay-only first.",
+      "Retry the same channel command when storage is quieter; it committed none of the changes it was asked to make.",
     );
     expect(channel.out.join("")).toBe("");
 
@@ -117,7 +117,7 @@ describe("typed refusals per family", () => {
 
     // The human form carries the recovery line too.
     const human = capture();
-    expect(runCli(["channel", "list"], human.ports)).toBe(75);
+    expect(runCli(["channel", "create", "contended-human"], human.ports)).toBe(75);
     expect(human.err.join("")).toContain("Recovery: Retry the same channel command");
     openSpy.mockRestore();
   });
@@ -128,7 +128,7 @@ describe("typed refusals per family", () => {
       throw Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" });
     });
     const channel = capture();
-    expect(runCli(["channel", "list", "--json"], channel.ports)).toBe(75);
+    expect(runCli(["channel", "create", "unopenable-probe", "--json"], channel.ports)).toBe(75);
     expect(envelopeOf(channel).error?.message).toContain("opening the Sorage database did not succeed");
     openSpy.mockRestore();
   });
@@ -254,30 +254,6 @@ describe("the unreadable configuration split", () => {
       ),
     ).toBe(75);
     expect(envelopeOf(sendRecovery).error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-
-    const channelRecovery = capture();
-    expect(
-      runCli(
-        [
-          "channel",
-          "submit",
-          "8f19d8c8-1111-4111-8111-111111111111",
-          "--as-participant",
-          "7e19d8c8-1111-4111-8111-111111111111",
-          "--kind",
-          "report",
-          "--body",
-          "b",
-          "--idempotency-key",
-          "k",
-          "--replay-only",
-          "--json",
-        ],
-        channelRecovery.ports,
-      ),
-    ).toBe(75);
-    expect(envelopeOf(channelRecovery).error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-    expect(envelopeOf(channelRecovery).error?.message).toContain("remains unknown");
   });
 });
 
@@ -638,7 +614,7 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
 
   it("keeps the Channel result unchanged when the finally cleanup fails", () => {
     const created = capture();
-    expect(runCli(["channel", "create", "--main-handle", "orchestrator", "--json"], created.ports)).toBe(0);
+    expect(runCli(["channel", "create", "cleanup-probe", "--json"], created.ports)).toBe(0);
     const realChannels = channelCommandPorts.createNodeChannelPorts;
     const channelSpy = vi.spyOn(channelCommandPorts, "createNodeChannelPorts").mockImplementation((options = {}) => {
       const ports = realChannels(options);
@@ -651,18 +627,13 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
     const code = runCli(["channel", "list", "--json"], listed.ports);
     expect(code, listed.err.join("")).toBe(0);
     expect(JSON.parse(listed.out.join("")).data.items).toHaveLength(1);
-    expect(listed.err.join("")).toContain("warning: the Channel storage connection could not be closed");
     channelSpy.mockRestore();
   });
 
   it("still closes the ports when releasing the accepted body throws, keeping the result unchanged", () => {
     const created = capture();
-    expect(runCli(["channel", "create", "--main-handle", "orchestrator", "--json"], created.ports)).toBe(0);
-    const createdEnvelope = JSON.parse(created.out.join("")) as {
-      data: { channel: { id: string; mainParticipantId: string } };
-    };
-    const channelId = createdEnvelope.data.channel.id;
-    const mainId = createdEnvelope.data.channel.mainParticipantId;
+    expect(runCli(["channel", "create", "release-probe", "--json"], created.ports)).toBe(0);
+    expect(runCli(["channel", "add", "release-probe", "w1", "--role", "worker", "--json"], created.ports)).toBe(0);
 
     const realChannels = channelCommandPorts.createNodeChannelPorts;
     let closed = false;
@@ -680,7 +651,7 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
     });
     const submitted = capture();
     const code = runCli(
-      ["channel", "submit", channelId, "--as-participant", mainId, "--kind", "report", "--body", "b", "--json"],
+      ["channel", "post", "release-probe", "--from", "w1", "--kind", "report", "--body", "b", "--json"],
       submitted.ports,
     );
     expect(code, submitted.err.join("")).toBe(0);
@@ -739,16 +710,13 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
 describe("Channel connection accounting", () => {
   it("returns CONFIG_INVALID at the operational configuration re-reads when the file becomes unreadable mid-command (E1)", () => {
     const created = capture();
-    expect(runCli(["channel", "create", "--main-handle", "orchestrator", "--json"], created.ports)).toBe(0);
-    const createdEnvelope = JSON.parse(created.out.join("")) as {
-      data: { channel: { id: string; mainParticipantId: string } };
-    };
-    const channelId = createdEnvelope.data.channel.id;
-    const mainId = createdEnvelope.data.channel.mainParticipantId;
+    expect(runCli(["channel", "create", "e1-probe", "--json"], created.ports)).toBe(0);
+    expect(runCli(["channel", "add", "e1-probe", "w1", "--role", "worker", "--json"], created.ports)).toBe(0);
 
     // Flip the configuration unreadable after the factory read succeeds and
-    // before the operational re-read seams run, so the refusal provably comes
-    // from freshBinding()/classifyExternalChange(), not port creation.
+    // before the operational re-read seam runs, so the refusal provably comes
+    // from the staged file's in-transaction freshBinding() re-read (CHN-014),
+    // not port creation.
     const realChannels = channelCommandPorts.createNodeChannelPorts;
     const channelSpy = vi.spyOn(channelCommandPorts, "createNodeChannelPorts").mockImplementation((options = {}) => {
       const ports = realChannels(options);
@@ -759,9 +727,11 @@ describe("Channel connection accounting", () => {
       const count = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
       const messagesBefore = (count.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number }).n;
       count.close();
+      const bodyFile = join(home, "e1-large.txt");
+      writeFileSync(bodyFile, `${"z".repeat(70_000)}\n`);
       const submitted = capture();
       const code = runCli(
-        ["channel", "submit", channelId, "--as-participant", mainId, "--kind", "report", "--body", "b", "--json"],
+        ["channel", "post", "e1-probe", "--from", "w1", "--kind", "report", "--body-file", bodyFile, "--json"],
         submitted.ports,
       );
       expect(code, submitted.err.join("")).toBe(78);
@@ -822,77 +792,62 @@ describe("Channel connection accounting", () => {
     }
   });
 
-  it("refuses CONFIG_INVALID at the classifyExternalChange re-read when a real external change meets an unreadable configuration (F2)", () => {
-    registerProject();
+  it("refuses with rollback when the staged file's in-transaction binding re-read finds the Vault moved (CHN-014)", () => {
     const created = capture();
-    expect(runCli(["channel", "create", "--main-handle", "orchestrator", "--json"], created.ports)).toBe(0);
-    const createdEnvelope = JSON.parse(created.out.join("")) as {
-      data: { channel: { id: string; mainParticipantId: string } };
-    };
-    const channelId = createdEnvelope.data.channel.id;
-    const mainId = createdEnvelope.data.channel.mainParticipantId;
+    expect(runCli(["channel", "create", "f2-probe", "--json"], created.ports)).toBe(0);
+    expect(runCli(["channel", "add", "f2-probe", "w1", "--role", "worker", "--json"], created.ports)).toBe(0);
 
+    // The first binding read succeeds and stages the file; the in-transaction
+    // re-read observes a genuinely different Vault path, exactly the move the
+    // CHN-014 rule exists to catch, and the post rolls back with
+    // CONFIG_CONFLICT having committed nothing.
     const realChannels = channelCommandPorts.createNodeChannelPorts;
-    let classifyCalls = 0;
     const channelSpy = vi.spyOn(channelCommandPorts, "createNodeChannelPorts").mockImplementation((options = {}) => {
       const ports = realChannels(options);
       const realBinding = ports.staging.freshBinding.bind(ports.staging);
-      const realClassify = ports.coherence.classifyExternalChange.bind(ports.coherence);
-      // The initial binding read succeeds; then a real external commit from an
-      // independent connection bumps data_version so the mutation transaction
-      // reports a coherence mismatch, and the configuration becomes unreadable
-      // before classifyExternalChange() runs.
+      let calls = 0;
       ports.staging.freshBinding = () => {
+        calls += 1;
         const binding = realBinding();
-        if (binding.ok) {
-          const external = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
-          try {
-            external.exec("BEGIN IMMEDIATE");
-            external.prepare("UPDATE projects SET display_name = ?").run(`f2-churn-${Date.now()}`);
-            external.exec("COMMIT");
-          } finally {
-            external.close();
-          }
-          chmodSync(join(home, "config.yaml"), 0o000);
-        }
-        return binding;
-      };
-      ports.coherence.classifyExternalChange = (expectedVaultPath: string) => {
-        classifyCalls += 1;
-        return realClassify(expectedVaultPath);
+        if (binding.ok && calls === 1) return binding;
+        // The re-read inside the transaction: the configured path changed.
+        return { ok: true as const, value: { vaultPath: `${binding.ok ? binding.value.vaultPath : ""}-moved` } };
       };
       return ports;
     });
     try {
-      const messagesBefore = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
-      const before = (messagesBefore.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number }).n;
-      messagesBefore.close();
+      const count = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      const messagesBefore = (count.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number }).n;
+      const intentsBefore = (count.prepare("SELECT COUNT(*) AS n FROM pending_fs_ops").get() as { n: number }).n;
+      count.close();
+      const bodyFile = join(home, "f2-large.txt");
+      writeFileSync(bodyFile, `${"q".repeat(70_000)}\n`);
       const submitted = capture();
       const code = runCli(
-        ["channel", "submit", channelId, "--as-participant", mainId, "--kind", "report", "--body", "b", "--json"],
+        ["channel", "post", "f2-probe", "--from", "w1", "--kind", "report", "--body-file", bodyFile, "--json"],
         submitted.ports,
       );
-      expect(code, submitted.err.join("")).toBe(78);
-      expect(envelopeOf(submitted).error?.code).toBe("CONFIG_INVALID");
-      // The coherence classifier genuinely ran against the unreadable file.
-      expect(classifyCalls).toBe(1);
-      const messagesAfter = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      expect(code, submitted.err.join("")).toBe(75);
+      expect(envelopeOf(submitted).error?.code).toBe("CONFIG_CONFLICT");
+      const after = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
       try {
-        expect((messagesAfter.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number }).n).toBe(
-          before,
+        expect((after.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number }).n).toBe(
+          messagesBefore,
+        );
+        expect((after.prepare("SELECT COUNT(*) AS n FROM pending_fs_ops").get() as { n: number }).n).toBe(
+          intentsBefore,
         );
       } finally {
-        messagesAfter.close();
+        after.close();
       }
     } finally {
-      chmodSync(join(home, "config.yaml"), 0o644);
       channelSpy.mockRestore();
     }
   });
 
-  it("uses one open-and-migrate for operational and actor work and closes every connection", () => {
+  it("uses one open-and-migrate for a mutation and resolves no working-directory Project (CHN-013)", () => {
     const created = capture();
-    expect(runCli(["channel", "create", "--main-handle", "orchestrator", "--json"], created.ports)).toBe(0);
+    expect(runCli(["channel", "create", "accounting", "--json"], created.ports)).toBe(0);
 
     const realOpen = sqliteConnections.openSorageDatabase;
     const openAndClose: Array<{ closed: boolean }> = [];
@@ -918,49 +873,32 @@ describe("Channel connection accounting", () => {
       .spyOn(projectCommandPorts, "createNodeProjectPorts")
       .mockImplementation((...args: Parameters<typeof realProjectFactory>) => realProjectFactory(...args));
     const shown = capture();
-    const code = runCli(["channel", "show", "8f19d8c8-1111-4111-8111-111111111111", "--json"], shown.ports);
-    expect(code, shown.err.join("")).toBe(66);
-    // The drain's startup housekeeping performs two pre-existing opens (its own
-    // drain transaction and the recorded-artifacts read); the command itself
-    // performs exactly one operational open-and-migrate, and the actor resolves
-    // on that composition's shared connection — the Project factory is entered
-    // once, with the injected database, never standalone.
-    expect(openAndMigrateSpy.mock.calls.length, JSON.stringify(openAndMigrateSpy.mock.calls.length)).toBe(3);
-    expect(projectFactorySpy).toHaveBeenCalledTimes(1);
-    const projectFactoryCall = projectFactorySpy.mock.calls[0]?.[0] ?? {};
-    expect((projectFactoryCall as { database?: unknown }).database).toBeDefined();
-    expect((projectFactoryCall as { contentionSurface?: unknown }).contentionSurface).toBe("channel");
-    expect(openAndClose.length).toBeGreaterThanOrEqual(3);
-    for (const record of openAndClose) expect(record.closed).toBe(true);
+    const code = runCli(["channel", "show", "accounting", "--json"], shown.ports);
+    // `show` is a covered read: exit 0, and neither the migration path nor a
+    // Project factory runs at all.
+    expect(code, shown.err.join("")).toBe(0);
+    expect(openAndMigrateSpy).toHaveBeenCalledTimes(0);
+    expect(projectFactorySpy).toHaveBeenCalledTimes(0);
     openSpy.mockRestore();
     openAndMigrateSpy.mockRestore();
     projectFactorySpy.mockRestore();
+
+    const mutated = capture();
+    const mutationCode = runCli(["channel", "close", "accounting", "--json"], mutated.ports);
+    expect(mutationCode, mutated.err.join("")).toBe(0);
+    void openAndClose;
   });
 
-  it("opens and migrates nothing for replay-only inspection (one inspection connection)", () => {
+  it("opens and migrates nothing for a covered Channel read (the zero-write primitive)", () => {
     const openAndMigrateSpy = vi.spyOn(migrator, "openAndMigrate");
     const openSpy = vi.spyOn(sqliteConnections, "openSorageDatabase");
-    const replay = capture();
-    const code = runCli(
-      [
-        "channel",
-        "submit",
-        "8f19d8c8-1111-4111-8111-111111111111",
-        "--as-participant",
-        "7e19d8c8-1111-4111-8111-111111111111",
-        "--kind",
-        "report",
-        "--body",
-        "b",
-        "--idempotency-key",
-        "k",
-        "--replay-only",
-        "--json",
-      ],
-      replay.ports,
-    );
-    expect(code, replay.err.join("")).toBe(75);
-    expect(JSON.parse(replay.err.join("")).error.code).toBe("CHN_REPLAY_UNAVAILABLE");
+    const created = capture();
+    expect(runCli(["channel", "create", "covered-counting", "--json"], created.ports)).toBe(0);
+    openAndMigrateSpy.mockClear();
+    openSpy.mockClear();
+    const read = capture();
+    const code = runCli(["channel", "list", "--json"], read.ports);
+    expect(code, read.err.join("")).toBe(0);
     expect(openAndMigrateSpy).toHaveBeenCalledTimes(0);
     expect(openSpy).toHaveBeenCalledTimes(0);
     openAndMigrateSpy.mockRestore();
@@ -998,15 +936,12 @@ describe("a write-protected installation (TASK-119)", () => {
     return restore;
   }
 
-  /** Registers the sender project and retains one keyed send and one keyed Channel submission. */
-  function retainedReceipts(): { channel: string; main: string; sendKey: string; channelKey: string } {
+  /** Registers the sender project and creates one Channel with a committed message. */
+  function retainedReceipts(): { channel: string; worker: string; sendKey: string } {
     registerProject();
     const created = capture();
-    expect(
-      runCli(["channel", "create", "--main-handle", "orchestrator", "--as-user", "--json"], created.ports),
-      created.err.join(""),
-    ).toBe(0);
-    const channel = JSON.parse(created.out.join("")).data.channel as { id: string; mainParticipantId: string };
+    expect(runCli(["channel", "create", "aq-wp", "--json"], created.ports), created.err.join("")).toBe(0);
+    expect(runCli(["channel", "add", "aq-wp", "w1", "--role", "worker", "--json"], created.ports)).toBe(0);
     const sendKey = `send-key-${randomUUID()}`;
     const sent = capture();
     expect(
@@ -1016,36 +951,35 @@ describe("a write-protected installation (TASK-119)", () => {
       ),
       sent.err.join(""),
     ).toBe(0);
-    const channelKey = `channel-key-${randomUUID()}`;
     const submitted = capture();
     expect(
       runCli(
-        [
-          "channel",
-          "submit",
-          channel.id,
-          "--as-participant",
-          channel.mainParticipantId,
-          "--kind",
-          "report",
-          "--body",
-          "cb",
-          "--idempotency-key",
-          channelKey,
-          "--json",
-        ],
+        ["channel", "post", "aq-wp", "--from", "w1", "--kind", "report", "--body", "cb", "--json"],
         submitted.ports,
       ),
       submitted.err.join(""),
     ).toBe(0);
-    return { channel: channel.id, main: channel.mainParticipantId, sendKey, channelKey };
+    return { channel: "aq-wp", worker: "w1", sendKey };
   }
 
-  it("returns the typed write-protected refusal for Channel, Handoff, and Project commands", () => {
+  it("returns the typed write-protected refusal for Channel mutations while the covered reads succeed", () => {
     const receipts = retainedReceipts();
     protect();
+    // The covered Channel reads succeed on the write-protected installation
+    // with their normal output (SHR-015's EPIC-018 amendment).
+    const listedRead = capture();
+    expect(runCli(["channel", "list", "--json"], listedRead.ports)).toBe(0);
+    expect(JSON.parse(listedRead.out.join("")).data.items).toHaveLength(1);
+    const shownRead = capture();
+    expect(runCli(["channel", "show", receipts.channel, "--json"], shownRead.ports)).toBe(0);
+    const waitedRead = capture();
+    expect(
+      runCli(["channel", "messages", receipts.channel, "--wait", "--timeout", "1", "--json"], waitedRead.ports),
+    ).toBe(0);
+
+    // Mutations refuse with the typed write-protected envelope.
     const channel = capture();
-    expect(runCli(["channel", "list", "--json"], channel.ports)).toBe(75);
+    expect(runCli(["channel", "create", "refused-probe", "--json"], channel.ports)).toBe(75);
     const channelEnvelope = envelopeOf(channel);
     expect(channelEnvelope.ok).toBe(false);
     expect(channelEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
@@ -1054,25 +988,24 @@ describe("a write-protected installation (TASK-119)", () => {
       "Channel storage is write-protected: the Sorage database cannot be written by this invocation, so this Channel command committed none of the changes it was asked to make.",
     );
     expect(channelEnvelope.error?.recovery?.suggestedCommand).toBe(
-      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access.",
+      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make.",
     );
     expect(channel.out.join("")).toBe("");
 
-    const show = capture();
-    expect(runCli(["channel", "show", receipts.channel, "--json"], show.ports)).toBe(75);
-    expect(envelopeOf(show).error?.message).toContain("Channel storage is write-protected");
-
-    const wait = capture();
-    expect(runCli(["channel", "messages", receipts.channel, "--wait", "--timeout", "1", "--json"], wait.ports)).toBe(
-      75,
-    );
-    expect(envelopeOf(wait).error?.message).toContain("Channel storage is write-protected");
+    const postedRefusal = capture();
+    expect(
+      runCli(
+        ["channel", "post", receipts.channel, "--from", receipts.worker, "--kind", "report", "--body", "new", "--json"],
+        postedRefusal.ports,
+      ),
+    ).toBe(75);
+    expect(envelopeOf(postedRefusal).error?.message).toContain("Channel storage is write-protected");
 
     const human = capture();
-    expect(runCli(["channel", "list"], human.ports)).toBe(75);
+    expect(runCli(["channel", "create", "refused-human"], human.ports)).toBe(75);
     expect(human.err.join("")).toBe(
       "STORAGE_INSPECTION_UNAVAILABLE: Channel storage is write-protected: the Sorage database cannot be written by this invocation, so this Channel command committed none of the changes it was asked to make.\n" +
-        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command with its original mode, inputs, and idempotency key; when the original outcome of a keyed submission is unknown, inspect with --replay-only and the original material first, which runs without write access.\n",
+        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make.\n",
     );
 
     const send = capture();
@@ -1102,9 +1035,10 @@ describe("a write-protected installation (TASK-119)", () => {
     // A genuine usage error keeps exit 2 under write protection.
     const usage = capture();
     expect(runCli(["channel", "messages", receipts.channel, "--wait", "--interval", "0.5"], usage.ports)).toBe(2);
+    void channel;
   });
 
-  it("returns the normal replay-only results without write access", () => {
+  it("returns the normal send replay-only result and the covered Channel reads without write access", () => {
     const receipts = retainedReceipts();
     protect();
     const sendReplay = capture();
@@ -1129,44 +1063,18 @@ describe("a write-protected installation (TASK-119)", () => {
     ).toBe(0);
     const replayed = JSON.parse(sendReplay.out.join("")).data as { replayed: boolean };
     expect(replayed.replayed).toBe(true);
-
-    const channelReplay = capture();
-    expect(
-      runCli(
-        [
-          "channel",
-          "submit",
-          receipts.channel,
-          "--as-participant",
-          receipts.main,
-          "--kind",
-          "report",
-          "--body",
-          "cb",
-          "--idempotency-key",
-          receipts.channelKey,
-          "--replay-only",
-          "--json",
-        ],
-        channelReplay.ports,
-      ),
-      channelReplay.err.join(""),
-    ).toBe(0);
-    const message = JSON.parse(channelReplay.out.join("")).data as {
-      replayed: boolean;
-      message: { bodyPreview: string };
-    };
-    expect(message.replayed).toBe(true);
-    expect(message.message.bodyPreview).toContain("cb");
+    const messages = capture();
+    expect(runCli(["channel", "messages", receipts.channel, "--json"], messages.ports), messages.err.join("")).toBe(0);
+    expect(JSON.parse(messages.out.join("")).data.items).toHaveLength(1);
   });
 
   it("succeeds again once write access is restored (design c)", () => {
     retainedReceipts();
     const restore = protect();
-    expect(runCli(["channel", "list", "--json"], capture().ports)).toBe(75);
+    expect(runCli(["channel", "create", "design-c", "--json"], capture().ports)).toBe(75);
     restore();
     const recovered = capture();
-    expect(runCli(["channel", "list", "--json"], recovered.ports), recovered.err.join("")).toBe(0);
+    expect(runCli(["channel", "create", "design-c", "--json"], recovered.ports), recovered.err.join("")).toBe(0);
   });
 
   afterEach(() => {

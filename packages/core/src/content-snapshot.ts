@@ -617,60 +617,38 @@ export interface SnapshotArtifactV3 {
 /** The format-3-only Handoff record: the legacy shape over the V3 Artifact. */
 export type SnapshotHandoffV3 = Omit<SnapshotHandoff, "artifact"> & { artifact: SnapshotArtifactV3 | null };
 
-/** One exported Channel message's closed snapshot record (section 38.8). */
+/** One exported Channel message's closed snapshot record, rebuilt under ADR-0034 (section 38.8). */
 export interface SnapshotChannelMessage {
-  id: string;
-  senderParticipantId: string;
+  seq: number;
+  senderHandle: string;
   kind: "report" | "question" | "relay_request";
+  toHandle: string | null;
+  ref: string | null;
   bodyContent: SnapshotBodyContent;
-  assignmentId: string | null;
-  assignmentLate: boolean;
-  relayToParticipantId: string | null;
-  contextSession: string | null;
-  contextNode: string | null;
-  contextAttempt: string | null;
   handled: boolean;
   handledAt: string | null;
-  handledByParticipantId: string | null;
-  handledByKind: "participant" | "user" | null;
   handleNote: string | null;
   createdAt: string;
 }
 
-/** One exported participant's closed snapshot record (section 38.8). */
+/** One exported participant's closed snapshot record, rebuilt under ADR-0034 (section 38.8). */
 export interface SnapshotChannelParticipant {
-  id: string;
-  role: "main" | "worker" | "judge";
   handle: string;
-  nativeProvenance: string[];
-  active: boolean;
-  registeredAt: string;
-  deactivatedAt: string | null;
+  role: "main" | "worker" | "judge";
+  addedAt: string;
+  removedAt: string | null;
 }
 
-/** One exported assignment's closed snapshot record (section 38.8). */
-export interface SnapshotChannelAssignment {
-  id: string;
-  participantId: string | null;
-  label: string;
-  state: "open" | "closed";
-  createdAt: string;
-  closedAt: string | null;
-}
-
-/** One exported Channel's closed snapshot shard (section 38.8). */
+/** One exported Channel's closed snapshot shard, rebuilt under ADR-0034 (section 38.8). */
 export interface SnapshotChannelShard {
   id: string;
+  name: string;
   title: string | null;
   state: "open" | "closed";
-  creatorKind: "registered_project" | "unregistered_workspace" | "user";
-  creatorId: string | null;
+  main: string;
   createdAt: string;
   closedAt: string | null;
-  closedByParticipantId: string | null;
-  closedByKind: "participant" | "user" | null;
   participants: SnapshotChannelParticipant[];
-  assignments: SnapshotChannelAssignment[];
   messages: SnapshotChannelMessage[];
 }
 

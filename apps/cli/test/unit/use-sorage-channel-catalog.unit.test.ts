@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { buildProgram } from "../../src/main";
 
-/** The shipped Channel catalog is the twelve executable leaf commands; group commands are not catalog entries. */
+/** The shipped Channel catalog is the nine executable leaf commands; group commands are not catalog entries. */
 const catalogPath = fileURLToPath(new URL("../../../../skills/use-sorage/references/channels.md", import.meta.url));
 
 interface CatalogLine {
@@ -113,40 +113,31 @@ describe("the shipped Channel catalog", () => {
     }
   });
 
-  it("registers every root global interface 38.4 requires the Channel catalog to use", () => {
-    for (const flag of ["--json", "--limit", "--cursor", "--as-user", "--expected-row-version"]) {
+  it("registers every root global the rebuilt Channel catalog uses", () => {
+    for (const flag of ["--json", "--limit"]) {
       expect([...rootFlags], flag).toContain(flag);
     }
   });
 
-  it("carries the root globals interface 38.4 requires on the documented commands", () => {
+  it("carries the rebuilt surface's globals on exactly the documented commands", () => {
     for (const line of catalog) expect(line.flags, line.text).toContain("--json");
     for (const path of leaves.keys()) {
       const flags = flagsOf(path);
-      if (path === "list" || path === "messages") {
+      if (path === "messages") {
         expect(flags, path).toContain("--limit");
-        expect(flags, path).toContain("--cursor");
       } else {
         expect(flags, path).not.toContain("--limit");
-        expect(flags, path).not.toContain("--cursor");
       }
     }
-    for (const path of [
-      "close",
-      "participant add",
-      "participant deactivate",
-      "assignment add",
-      "assignment close",
-      "handle",
-    ]) {
-      expect(flagsOf(path), path).toContain("--as-user");
-    }
-    expect(flagsOf("handle")).toContain("--expected-row-version");
-    expect(flagsOf("submit")).toContain("--replay-only");
-    for (const path of [...leaves.keys()].filter((leaf) => leaf !== "submit")) {
-      expect(flagsOf(path), path).not.toContain("--replay-only");
-    }
+    // The removed machinery never returns: no cursor, no version comparison, no
+    // participant assertion, no keys, no replay-only, no confirmation.
     const excluded = [
+      "--cursor",
+      "--expected-row-version",
+      "--as-user",
+      "--as-participant",
+      "--idempotency-key",
+      "--replay-only",
       "--confirm",
       "--confirm-pinned",
       "--expected-revision",

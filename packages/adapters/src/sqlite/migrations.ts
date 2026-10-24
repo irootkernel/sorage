@@ -531,105 +531,78 @@ ALTER TABLE pending_fs_ops ADD COLUMN content_id TEXT;
 };
 
 /**
- * The TASK-109 additive Channel domain migration (CHN-001 to CHN-009, SHR-009,
- * interface section 38.7): pure additive DDL that rebuilds no existing table,
- * so `events` keeps its v9/v10 shape and only gains the Channel association
- * trigger. The four Channel tables carry the closed domain constraints at the
- * database level — lifecycle states, roles, message kinds, the relay target's
- * presence exactly on `relay_request`, the one-main invariant through a partial
- * unique index, handle uniqueness inside one Channel, closing and deactivation
- * coherence, the unhandled/handled processing row version of 1/2, and the
- * NOT NULL one-to-one reference from a message to its immutable content
- * record — while application validation owns the closed metadata and
- * same-Channel membership rules the mutation transaction enforces.
+ * The TASK-123 rebuilt Channel domain migration (CHN-001 to CHN-014, SHR-009,
+ * interface sections 38.7 and 38.3): the version-11 slot is replaced in place
+ * under the migration name `channels-v2` before first publication, so a
+ * development home holding `11 / channels-v1` is refused by the existing
+ * migration-name check rather than migrated. Pure additive DDL that rebuilds no
+ * existing table, so `events` keeps its v9/v10 shape and only gains the Channel
+ * association trigger over the six rebuilt event names. The three Channel
+ * tables carry the closed domain constraints at the database level — lifecycle
+ * states, roles, message kinds, the relay target's presence exactly on
+ * `relay_request`, the one-main invariant through a partial unique index, handle
+ * uniqueness inside one Channel, per-Channel sequence numbers as the message
+ * primary key, the handled/handled-at/handled-note coherence, and the NOT NULL
+ * reference from a message to its immutable shared content record — while
+ * application validation owns the closed event metadata and same-Channel
+ * membership rules the mutation transaction enforces.
  */
 export const CHANNEL_DOMAIN_MIGRATION: Migration = {
   version: 11,
-  name: "channels-v1",
+  name: "channels-v2",
   sql: `
 CREATE TABLE channels (
   id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
   title TEXT,
-  state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
-  creator_kind TEXT NOT NULL CHECK (creator_kind IN ('registered_project', 'unregistered_workspace', 'user')),
-  creator_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  closed_at TEXT,
-  closed_by_participant_id TEXT,
-  closed_by_kind TEXT CHECK (closed_by_kind IS NULL OR closed_by_kind IN ('participant', 'user')),
-  CHECK ((state = 'open' AND closed_at IS NULL AND closed_by_participant_id IS NULL AND closed_by_kind IS NULL)
-    OR (state = 'closed' AND closed_at IS NOT NULL AND closed_by_kind IS NOT NULL))
-);
-
-CREATE INDEX idx_channels_state_created ON channels(state, created_at DESC, id DESC);
-
-CREATE TABLE channel_participants (
-  id TEXT PRIMARY KEY,
-  channel_id TEXT NOT NULL REFERENCES channels(id),
-  role TEXT NOT NULL CHECK (role IN ('main', 'worker', 'judge')),
-  handle TEXT NOT NULL,
-  native_provenance_json TEXT NOT NULL,
-  active INTEGER NOT NULL CHECK (active IN (0, 1)),
-  registered_at TEXT NOT NULL,
-  deactivated_at TEXT,
-  CHECK ((active = 1 AND deactivated_at IS NULL) OR (active = 0 AND deactivated_at IS NOT NULL))
-);
-
-CREATE UNIQUE INDEX idx_channel_participants_handle ON channel_participants(channel_id, handle);
-CREATE UNIQUE INDEX idx_channel_one_main ON channel_participants(channel_id) WHERE role = 'main';
-CREATE INDEX idx_channel_participants_order ON channel_participants(channel_id, registered_at, id);
-
-CREATE TABLE channel_assignments (
-  id TEXT PRIMARY KEY,
-  channel_id TEXT NOT NULL REFERENCES channels(id),
-  participant_id TEXT REFERENCES channel_participants(id),
-  label TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('open', 'closed')),
   created_at TEXT NOT NULL,
   closed_at TEXT,
   CHECK ((state = 'open' AND closed_at IS NULL) OR (state = 'closed' AND closed_at IS NOT NULL))
 );
 
-CREATE INDEX idx_channel_assignments_order ON channel_assignments(channel_id, created_at, id);
+CREATE INDEX idx_channels_state_created ON channels(state, created_at DESC, id DESC);
+
+CREATE TABLE channel_participants (
+  channel_id TEXT NOT NULL REFERENCES channels(id),
+  handle TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('main', 'worker', 'judge')),
+  added_at TEXT NOT NULL,
+  removed_at TEXT,
+  PRIMARY KEY (channel_id, handle)
+);
+
+CREATE UNIQUE INDEX idx_channel_one_main ON channel_participants(channel_id) WHERE role = 'main';
 
 CREATE TABLE channel_messages (
-  id TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL REFERENCES channels(id),
-  sender_participant_id TEXT NOT NULL REFERENCES channel_participants(id),
+  seq INTEGER NOT NULL CHECK (seq >= 1),
   sender_handle TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('report', 'question', 'relay_request')),
+  to_handle TEXT,
+  ref TEXT,
   content_record_id TEXT NOT NULL REFERENCES content_records(id),
-  assignment_id TEXT REFERENCES channel_assignments(id),
-  assignment_late INTEGER NOT NULL CHECK (assignment_late IN (0, 1)),
-  relay_to_participant_id TEXT REFERENCES channel_participants(id),
-  context_session TEXT,
-  context_node TEXT,
-  context_attempt TEXT,
   handled INTEGER NOT NULL CHECK (handled IN (0, 1)),
   handled_at TEXT,
-  handled_by_participant_id TEXT,
-  handled_by_kind TEXT CHECK (handled_by_kind IS NULL OR handled_by_kind IN ('participant', 'user')),
   handle_note TEXT,
-  processing_row_version INTEGER NOT NULL CHECK (processing_row_version IN (1, 2)),
   created_at TEXT NOT NULL,
-  CHECK ((kind = 'relay_request' AND relay_to_participant_id IS NOT NULL)
-    OR (kind != 'relay_request' AND relay_to_participant_id IS NULL)),
-  CHECK ((handled = 0 AND processing_row_version = 1 AND handled_at IS NULL
-      AND handled_by_participant_id IS NULL AND handled_by_kind IS NULL AND handle_note IS NULL)
-    OR (handled = 1 AND processing_row_version = 2 AND handled_at IS NOT NULL AND handled_by_kind IS NOT NULL))
+  PRIMARY KEY (channel_id, seq),
+  FOREIGN KEY (channel_id, sender_handle) REFERENCES channel_participants(channel_id, handle),
+  FOREIGN KEY (channel_id, to_handle) REFERENCES channel_participants(channel_id, handle),
+  CHECK ((kind = 'relay_request' AND to_handle IS NOT NULL) OR (kind != 'relay_request' AND to_handle IS NULL)),
+  CHECK ((handled = 0 AND handled_at IS NULL AND handle_note IS NULL)
+      OR (handled = 1 AND handled_at IS NOT NULL))
 );
 
 CREATE UNIQUE INDEX idx_channel_messages_record ON channel_messages(content_record_id);
-CREATE INDEX idx_channel_messages_order ON channel_messages(channel_id, created_at DESC, id DESC);
-CREATE INDEX idx_channel_messages_unhandled ON channel_messages(channel_id, created_at DESC, id DESC) WHERE handled = 0;
-CREATE INDEX idx_channel_messages_assignment ON channel_messages(assignment_id);
+CREATE INDEX idx_channel_messages_unhandled ON channel_messages(channel_id, seq) WHERE handled = 0;
+CREATE INDEX idx_channel_messages_unhandled_identity
+  ON channel_messages(channel_id, sender_handle, kind, to_handle, ref) WHERE handled = 0;
 
 CREATE TRIGGER events_channel_association
   BEFORE INSERT ON events
-  WHEN NEW.event_type IN ('CHANNEL_CREATED', 'CHANNEL_CLOSED', 'CHANNEL_PARTICIPANT_REGISTERED',
-      'CHANNEL_PARTICIPANT_DEACTIVATED', 'CHANNEL_ASSIGNMENT_CREATED', 'CHANNEL_ASSIGNMENT_CLOSED',
-      'CHANNEL_MESSAGE_SUBMITTED', 'CHANNEL_MESSAGE_HANDLED')
+  WHEN NEW.event_type IN ('CHANNEL_CREATED', 'CHANNEL_PARTICIPANT_ADDED', 'CHANNEL_PARTICIPANT_REMOVED',
+      'CHANNEL_MESSAGE_POSTED', 'CHANNEL_MESSAGE_ACKED', 'CHANNEL_CLOSED')
     AND (NEW.handoff_id IS NOT NULL OR NEW.memo_id IS NOT NULL)
   BEGIN
     SELECT RAISE(ABORT, 'invalid Channel event association');

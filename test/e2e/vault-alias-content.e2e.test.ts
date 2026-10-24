@@ -49,35 +49,11 @@ describe("compiled content producers through a selected Vault alias", () => {
     expect(run(["memo", "show", memo.memo.id]).body).toBe(body);
     expect(run([...memoArgs, "--replay-only"])).toEqual({ ...memo, replayed: true });
 
-    const channel = run(["channel", "create", "--main-handle", "main"]).channel;
-    const worker = run([
-      "channel",
-      "participant",
-      "add",
-      channel.id,
-      "--role",
-      "worker",
-      "--handle",
-      "worker",
-      "--as-participant",
-      channel.mainParticipantId,
-    ]).participant;
-    const submitArgs = [
-      "channel",
-      "submit",
-      channel.id,
-      "--kind",
-      "report",
-      "--body-file",
-      file,
-      "--idempotency-key",
-      randomUUID(),
-      "--as-participant",
-      worker.id,
-    ];
-    const submitted = run(submitArgs);
-    expect(run(["channel", "read", channel.id, submitted.message.id]).message.body).toBe(body);
-    expect(run([...submitArgs, "--replay-only"])).toEqual({ ...submitted, replayed: true });
+    const _channel = run(["channel", "create", "alias"]).channel;
+    run(["channel", "add", "alias", "worker", "--role", "worker"]);
+    const submitted = run(["channel", "post", "alias", "--from", "worker", "--kind", "report", "--body-file", file]);
+    expect(run(["channel", "messages", "alias"]).items[0].body).toBe(body);
+    void submitted;
 
     // Handoff deliberately reports staging paths under the selected root.
     const sendArgs = [

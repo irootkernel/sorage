@@ -1,65 +1,68 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import {
-  addAssignment,
+  ackMessages,
   addParticipant,
   backupRestore,
   backupVerify,
   canonicalJson,
   canonicalJsonLine,
-  closeAssignment,
   closeChannel,
   createChannel,
-  deactivateParticipant,
   exportSnapshot,
-  handleChannelMessage,
-  projectActor,
-  readChannelMessage,
+  initializeInstallation,
+  listChannelMessages,
+  postMessage,
+  removeParticipant,
   showChannel,
-  submitMessage,
-  type ChannelActorAssertion,
 } from "@sorage/core";
+import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { captureChannelBodyText, createNodeChannelPorts, type NodeChannelPorts } from "../../src/channels";
+import { createNodeInitPorts } from "../../src/init-ports";
 import { openSorageDatabase } from "../../src/sqlite/connection";
 import { FakeClock } from "../../src/testkit/fakes";
-import { memoInstallation, unwrap } from "../fixtures/memo-installation";
+import { unwrap } from "../fixtures/memo-installation";
 
-// Real SQLite and filesystem on isolated temporary SORAGE_HOME installations;
-// the Channel history is seeded through the real runtime mutations, never raw
-// rows, and the export/verify/restore surface under test is the production
-// backup command ports (CHN-009, SHR-010, section 38.8).
+/**
+ * The TASK-123 rebuilt format-3 Channel snapshot round trip on real SQLite, a
+ * real Vault, and the real backup ports (CHN-009, section 38.8): names,
+ * participant handles with their removal state, per-Channel sequence numbers,
+ * and handled state survive export → verify → restore into a fresh
+ * installation; a file-backed body carries as exact raw bytes digested in the
+ * manifest; an unmaterialized current body refuses the export closed; and a
+ * development snapshot carrying an old Channel shard key set or an old
+ * Channel event name fails closed validation with `VAULT_INTEGRITY_ERROR`
+ * rather than being converted.
+ */
 
-type Installation = ReturnType<typeof memoInstallation>;
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  delete process.env.SORAGE_HOME;
 });
 
-const CHANNEL_TIME = "2026-10-20T00:00:00.000Z";
-const CREATOR = projectActor("11111111-2222-4333-8444-555555555555");
-const MAIN_HANDLE = "\uFEFF orchestrator ";
-const WORKER_HANDLE = " worker ";
-const WORKER_NATIVE = ["", "\t", "nul\u0000"];
-const RELAY_BODY = "relay: please proceed";
-const INLINE_BODY = "done\uFEFF report body";
-const BEYOND_HEAD_BODY = `\uFEFF${" ".repeat(70_000)}tail content\r\nno-final-LF`;
-const HANDLE_NOTE = "handled\uFEFF";
+const CHANNEL_TIME = "2026-10-24T00:00:00.000Z";
+const FILE_BODY = `file-backed ${"x".repeat(70_000)}body\r\n`;
 
-function installation(): Installation {
-  const value = memoInstallation();
-  cleanups.push(value.cleanup);
-  return value;
+interface Installation {
+  home: string;
+  vault: string;
 }
 
-function ports(value: Installation, source?: Installation) {
-  return createNodeBackupCommandPorts({
-    env: { SORAGE_HOME: value.home },
-    userHome: value.home,
-    sourcePath: source?.vault,
-  });
+function installation(prefix: string): Installation {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+  process.env.SORAGE_HOME = home;
+  unwrap(
+    initializeInstallation(
+      createNodeInitPorts({ env: { SORAGE_HOME: home }, userHome: home, clock: new FakeClock() }),
+      { vaultPath: join(home, "vault") },
+    ),
+  );
+  return { home, vault: join(home, "vault") };
 }
 
 function channelPorts(value: Installation): NodeChannelPorts {
@@ -72,11 +75,11 @@ function channelPorts(value: Installation): NodeChannelPorts {
   return created;
 }
 
-function accepted(portsInstance: NodeChannelPorts, text: string) {
+function accepted(instance: NodeChannelPorts, text: string) {
   return unwrap(
     captureChannelBodyText(text, {
-      maxBytes: portsInstance.maxBytes,
-      stateDir: portsInstance.stateDir,
+      maxBytes: instance.maxBytes,
+      stateDir: instance.stateDir,
       spoolId: randomUUID(),
     }),
   );
@@ -86,566 +89,359 @@ function step(instance: NodeChannelPorts, seconds: number): void {
   (instance.clock as FakeClock).advance(seconds * 1000);
 }
 
-function channelTime(seconds: number): string {
-  return new Date(Date.parse(CHANNEL_TIME) + seconds * 1000).toISOString();
+function backupPorts(value: Installation, source?: Installation) {
+  return createNodeBackupCommandPorts({
+    env: { SORAGE_HOME: value.home },
+    userHome: value.home,
+    sourcePath: source?.vault,
+  });
 }
 
-interface SeededChannel {
-  channelId: string;
-  mainId: string;
-  workerId: string;
-  judgeId: string;
-  assignmentOpenId: string;
-  assignmentClosedId: string;
-  relayMessageId: string;
-  handledMessageId: string;
-  fileMessageId: string;
-}
-
-function seedSnapshotChannel(instance: NodeChannelPorts): SeededChannel {
-  const asMain = (participantId: string): ChannelActorAssertion => ({ actor: CREATOR, asParticipant: participantId });
+/** One Channel whose history exercises every rebuilt record shape. */
+function seedChannel(value: Installation): void {
+  const instance = channelPorts(value);
   step(instance, 1);
-  const created = unwrap(
-    createChannel(instance, { creator: CREATOR, mainHandle: MAIN_HANDLE, title: "Snapshot roundtrip" }),
-  );
-  const channelId = created.channel.id;
-  const mainId = created.channel.mainParticipantId;
+  unwrap(createChannel(instance, { name: "aq-run-42", title: "Round trip", main: "orchestrator" }));
   step(instance, 1);
-  const worker = unwrap(
-    addParticipant(instance, {
-      channelId,
-      assertion: asMain(mainId),
-      role: "worker",
-      handle: WORKER_HANDLE,
-      nativeProvenance: WORKER_NATIVE,
+  unwrap(addParticipant(instance, { channelRef: "aq-run-42", handle: "worker-1", role: "worker" }));
+  step(instance, 1);
+  unwrap(addParticipant(instance, { channelRef: "aq-run-42", handle: "judge-1", role: "judge" }));
+  step(instance, 1);
+  unwrap(
+    postMessage(instance, {
+      channelRef: "aq-run-42",
+      from: "worker-1",
+      kind: "report",
+      ref: "pr-42",
+      accepted: accepted(instance, "inline report"),
     }),
   );
   step(instance, 1);
-  const judge = unwrap(
-    addParticipant(instance, { channelId, assertion: asMain(mainId), role: "judge", handle: "judge" }),
+  unwrap(
+    postMessage(instance, {
+      channelRef: "aq-run-42",
+      from: "worker-1",
+      kind: "relay_request",
+      to: "judge-1",
+      accepted: accepted(instance, "please relay"),
+    }),
   );
   step(instance, 1);
-  const assignmentOpen = unwrap(
-    addAssignment(instance, { channelId, assertion: asMain(mainId), participantId: worker.id, label: "Do B2" }),
+  unwrap(
+    postMessage(instance, {
+      channelRef: "aq-run-42",
+      from: "judge-1",
+      kind: "question",
+      accepted: accepted(instance, FILE_BODY),
+    }),
   );
   step(instance, 1);
-  const assignmentClosed = unwrap(addAssignment(instance, { channelId, assertion: asMain(mainId), label: "Review" }));
+  unwrap(ackMessages(instance, { channelRef: "aq-run-42", seqs: [1], note: "reviewed" }));
   step(instance, 1);
-  unwrap(closeAssignment(instance, { channelId, assignmentId: assignmentClosed.id, assertion: asMain(mainId) }));
-  const relayInput = accepted(instance, RELAY_BODY);
-  const inlineInput = accepted(instance, INLINE_BODY);
-  const fileInput = accepted(instance, BEYOND_HEAD_BODY);
-  try {
-    step(instance, 1);
-    const relay = unwrap(
-      submitMessage(instance, {
-        channelId,
-        senderParticipantId: worker.id,
-        kind: "relay_request",
-        accepted: relayInput,
-        actor: CREATOR,
-        assignmentId: assignmentOpen.id,
-        relayToParticipantId: judge.id,
-        contextSession: "",
-        contextNode: "node\twith\ttabs",
-        contextAttempt: "attempt\u0000nul",
-      }),
-    );
-    step(instance, 1);
-    const handled = unwrap(
-      submitMessage(instance, {
-        channelId,
-        senderParticipantId: mainId,
-        kind: "report",
-        accepted: inlineInput,
-        actor: CREATOR,
-        assignmentId: assignmentClosed.id,
-      }),
-    );
-    step(instance, 1);
-    unwrap(
-      handleChannelMessage(instance, {
-        channelId,
-        messageId: handled.message.id,
-        assertion: asMain(mainId),
-        expectedRowVersion: 1,
-        note: HANDLE_NOTE,
-      }),
-    );
-    step(instance, 1);
-    const fileMessage = unwrap(
-      submitMessage(instance, {
-        channelId,
-        senderParticipantId: mainId,
-        kind: "question",
-        accepted: fileInput,
-        actor: CREATOR,
-      }),
-    );
-    step(instance, 1);
-    unwrap(
-      handleChannelMessage(instance, {
-        channelId,
-        messageId: fileMessage.message.id,
-        assertion: { actor: { kind: "user", id: null }, asUser: true },
-        expectedRowVersion: 1,
-      }),
-    );
-    step(instance, 1);
-    unwrap(deactivateParticipant(instance, { channelId, participantId: judge.id, assertion: asMain(mainId) }));
-    step(instance, 1);
-    unwrap(closeChannel(instance, { channelId, assertion: asMain(mainId) }));
-    return {
-      channelId,
-      mainId,
-      workerId: worker.id,
-      judgeId: judge.id,
-      assignmentOpenId: assignmentOpen.id,
-      assignmentClosedId: assignmentClosed.id,
-      relayMessageId: relay.message.id,
-      handledMessageId: handled.message.id,
-      fileMessageId: fileMessage.message.id,
-    };
-  } finally {
-    instance.releaseAcceptedBody(relayInput);
-    instance.releaseAcceptedBody(inlineInput);
-    instance.releaseAcceptedBody(fileInput);
-  }
+  unwrap(removeParticipant(instance, { channelRef: "aq-run-42", handle: "judge-1" }));
+  step(instance, 1);
+  unwrap(closeChannel(instance, { channelRef: "aq-run-42" }));
 }
 
-function shardPathOf(value: Installation, channelId: string): string {
-  return join(value.vault, "snapshots", "channels", channelId.slice(0, 2), `${channelId}.json`);
-}
+describe("the rebuilt Channel snapshot round trip", () => {
+  it("preserves names, handles, sequence numbers, and handled state through export, verify, and restore", () => {
+    const source = installation("sorage-channelsnap-source-");
+    seedChannel(source);
+    unwrap(exportSnapshot(unwrap(backupPorts(source).exportPorts())));
+    expect(backupVerify(unwrap(backupPorts(source).verifyPorts()), { now: new Date() })).toMatchObject({ ok: true });
 
-function readManifest(value: Installation): {
-  counts: { channels: number; events: number };
-  contentDigests: Record<string, string>;
-} {
-  return JSON.parse(readFileSync(join(value.vault, "snapshots", "manifest.json"), "utf8")) as {
-    counts: { channels: number; events: number };
-    contentDigests: Record<string, string>;
-  };
-}
-
-function rowsOf(value: Installation, table: string): Array<Record<string, unknown>> {
-  const db = openSorageDatabase(value.database);
-  try {
-    return db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all() as Array<Record<string, unknown>>;
-  } finally {
-    db.close();
-  }
-}
-
-function channelEventRows(value: Installation): Array<Record<string, unknown>> {
-  const db = openSorageDatabase(value.database);
-  try {
-    return db
-      .prepare(
-        "SELECT id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at FROM events WHERE event_type LIKE 'CHANNEL_%' ORDER BY id",
-      )
-      .all() as Array<Record<string, unknown>>;
-  } finally {
-    db.close();
-  }
-}
-
-function contentRecordIds(value: Installation): string[] {
-  return rowsOf(value, "content_records").map((row) => String(row.id));
-}
-
-function channelContentFileDigests(value: Installation): Record<string, string> {
-  const root = join(value.vault, "content", "channel");
-  const digests: Record<string, string> = {};
-  if (!existsSync(root)) return digests;
-  for (const channelId of readdirSync(root)) {
-    for (const name of readdirSync(join(root, channelId))) {
-      const bytes = readFileSync(join(root, channelId, name));
-      digests[`content/channel/${channelId}/${name}`] = createHash("sha256").update(bytes).digest("hex");
-    }
-  }
-  return digests;
-}
-
-function channelInventory(value: Installation) {
-  return {
-    channels: rowsOf(value, "channels"),
-    participants: rowsOf(value, "channel_participants"),
-    assignments: rowsOf(value, "channel_assignments"),
-    messages: rowsOf(value, "channel_messages"),
-    events: channelEventRows(value),
-    contentRecords: contentRecordIds(value),
-    contentFiles: channelContentFileDigests(value),
-    config: readFileSync(join(value.home, "config.yaml")),
-    marker: readFileSync(join(value.vault, ".sorage-vault.json")),
-  };
-}
-
-function refusesBeforeImport(source: Installation, code = "VAULT_INTEGRITY_ERROR") {
-  expect(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date() })).toMatchObject({
-    ok: false,
-    error: { code },
-  });
-  const target = installation();
-  const before = channelInventory(target);
-  for (const dryRun of [true, false]) {
-    expect(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun })).toMatchObject({
-      ok: false,
-      error: { code },
-    });
-    expect(channelInventory(target)).toEqual(before);
-  }
-}
-
-function healthyExport(): { source: Installation; seed: SeededChannel } {
-  const source = installation();
-  const instance = channelPorts(source);
-  const seed = seedSnapshotChannel(instance);
-  unwrap(exportSnapshot(unwrap(ports(source).exportPorts())));
-  return { source, seed };
-}
-
-/** Rewrites shard, content file, and manifest so one file body carries `bytes` with a self-consistent recorded identity. */
-function rewriteFileBody(source: Installation, seed: SeededChannel, bytes: Buffer) {
-  const manifestPath = join(source.vault, "snapshots", "manifest.json");
-  const manifest = readManifest(source);
-  const contentKey = Object.keys(manifest.contentDigests)[0] as string;
-  const shardPath = shardPathOf(source, seed.channelId);
-  const shard = JSON.parse(readFileSync(shardPath, "utf8")) as {
-    messages: Array<{ id: string; bodyContent: Record<string, unknown> }>;
-  };
-  const message = shard.messages.find((row) => row.id === seed.fileMessageId);
-  if (message === undefined) throw new Error("file-backed fixture message missing");
-  const sha = createHash("sha256").update(bytes).digest("hex");
-  message.bodyContent = { contentPath: contentKey, sizeBytes: bytes.length, sha256: sha };
-  writeFileSync(shardPath, canonicalJson(shard));
-  writeFileSync(join(source.vault, "snapshots", contentKey), bytes);
-  manifest.contentDigests[contentKey] = sha;
-  writeFileSync(manifestPath, canonicalJson(manifest));
-}
-
-describe("Channel snapshot export, verify, and restore on real SQLite and filesystem", () => {
-  it("round-trips the complete history with exact verbatim bytes, fresh private ids, and no receipts", () => {
-    const { source, seed } = healthyExport();
-    const shardPath = shardPathOf(source, seed.channelId);
+    const seededId = unwrap(showChannel(channelPorts(source), { channelRef: "aq-run-42" })).channel.id;
+    const shardPath = join(source.vault, "snapshots", "channels", seededId.slice(0, 2), `${seededId}.json`);
     expect(existsSync(shardPath)).toBe(true);
-    const manifest = readManifest(source);
-    expect(manifest.counts.channels).toBe(1);
-    const digestKeys = Object.keys(manifest.contentDigests);
-    expect(digestKeys).toHaveLength(1);
-    const contentKey = digestKeys[0] as string;
-    expect(contentKey.startsWith(`content/channel/${seed.channelId}/`)).toBe(true);
-    const carried = readFileSync(join(source.vault, "snapshots", contentKey));
-    expect(carried).toEqual(Buffer.from(BEYOND_HEAD_BODY, "utf8"));
-    expect(createHash("sha256").update(carried).digest("hex")).toBe(manifest.contentDigests[contentKey]);
-
     const shard = JSON.parse(readFileSync(shardPath, "utf8")) as {
       id: string;
+      name: string;
+      title: string | null;
       state: string;
-      title: string;
-      participants: Array<{ id: string; role: string; handle: string; nativeProvenance: string[]; active: boolean }>;
-      assignments: Array<{ id: string; state: string }>;
-      messages: Array<Record<string, unknown>>;
+      main: string;
+      closedAt: string | null;
+      participants: Array<{ handle: string; role: string; addedAt: string; removedAt: string | null }>;
+      messages: Array<{
+        seq: number;
+        senderHandle: string;
+        kind: string;
+        toHandle: string | null;
+        ref: string | null;
+        handled: boolean;
+        handledAt: string | null;
+        handleNote: string | null;
+        bodyContent: Record<string, unknown>;
+      }>;
     };
-    expect(shard.id).toBe(seed.channelId);
+    expect(shard.name).toBe("aq-run-42");
+    expect(shard.title).toBe("Round trip");
     expect(shard.state).toBe("closed");
-    expect(shard.title).toBe("Snapshot roundtrip");
-    const wireMain = shard.participants.find((participant) => participant.role === "main");
-    expect(wireMain?.handle).toBe(MAIN_HANDLE);
-    const wireWorker = shard.participants.find((participant) => participant.role === "worker");
-    expect(wireWorker?.handle).toBe(WORKER_HANDLE);
-    expect(wireWorker?.nativeProvenance).toEqual(WORKER_NATIVE);
-    const relayRow = shard.messages.find((message) => message.id === seed.relayMessageId);
-    expect(relayRow).toMatchObject({
-      kind: "relay_request",
-      assignmentId: seed.assignmentOpenId,
-      assignmentLate: false,
-      relayToParticipantId: seed.judgeId,
-      contextSession: "",
-      contextNode: "node\twith\ttabs",
-      contextAttempt: "attempt\u0000nul",
-      handled: false,
-      handledAt: null,
-      handledByKind: null,
-      handleNote: null,
-    });
-    const handledRow = shard.messages.find((message) => message.id === seed.handledMessageId);
-    expect(handledRow).toMatchObject({
-      assignmentId: seed.assignmentClosedId,
-      assignmentLate: true,
-      handled: true,
-      handledByKind: "participant",
-      handleNote: HANDLE_NOTE,
-    });
-    const fileRow = shard.messages.find((message) => message.id === seed.fileMessageId);
-    expect(fileRow).toMatchObject({
-      handled: true,
-      handledByKind: "user",
-      handledByParticipantId: null,
-    });
-    expect((fileRow?.bodyContent as { contentPath: string }).contentPath).toBe(contentKey);
+    expect(shard.main).toBe("orchestrator");
+    expect(shard.participants.find((participant) => participant.handle === "worker-1")?.removedAt).toBeNull();
+    expect(shard.participants.find((participant) => participant.handle === "judge-1")?.removedAt).not.toBeNull();
+    expect(shard.messages.map((message) => [message.seq, message.kind, message.toHandle, message.handled])).toEqual([
+      [1, "report", null, true],
+      [2, "relay_request", "judge-1", false],
+      [3, "question", null, false],
+    ]);
+    expect(shard.messages[0]?.ref).toBe("pr-42");
+    expect(shard.messages[0]?.handleNote).toBe("reviewed");
+    expect(shard.messages[0]?.bodyContent).toEqual({ inline: "inline report" });
+    expect(shard.messages[2]?.bodyContent).toMatchObject({ sizeBytes: Buffer.byteLength(FILE_BODY, "utf8") });
 
-    expect(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date() })).toMatchObject({ ok: true });
+    const target = installation("sorage-channelsnap-target-");
+    const restored = backupRestore(unwrap(backupPorts(target, source).restorePorts()), { dryRun: false });
+    expect(restored.ok, JSON.stringify(restored)).toBe(true);
 
-    const target = installation();
-    const outcome = unwrap(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun: false }));
-    expect(outcome.dryRun).toBe(false);
-
-    const participants = rowsOf(target, "channel_participants");
-    expect(participants.map((row) => String(row.id)).sort()).toEqual([seed.mainId, seed.workerId, seed.judgeId].sort());
-    const mainRow = participants.find((row) => String(row.id) === seed.mainId);
-    expect(mainRow?.handle).toBe(MAIN_HANDLE);
-    const workerRow = participants.find((row) => String(row.id) === seed.workerId);
-    expect(workerRow?.handle).toBe(WORKER_HANDLE);
-    expect(JSON.parse(String(workerRow?.native_provenance_json))).toEqual(WORKER_NATIVE);
-    const judgeRow = participants.find((row) => String(row.id) === seed.judgeId);
-    expect(judgeRow?.active).toBe(0);
-    expect(judgeRow?.deactivated_at).toBe(channelTime(12));
-
-    const messages = rowsOf(target, "channel_messages");
-    const relayDb = messages.find((row) => String(row.id) === seed.relayMessageId);
-    expect(relayDb).toMatchObject({
-      sender_handle: WORKER_HANDLE,
-      assignment_late: 0,
-      context_session: "",
-      context_node: "node\twith\ttabs",
-      context_attempt: "attempt\u0000nul",
-      handled: 0,
-      processing_row_version: 1,
-    });
-    const handledDb = messages.find((row) => String(row.id) === seed.handledMessageId);
-    expect(handledDb).toMatchObject({
-      assignment_late: 1,
-      handled: 1,
-      handled_by_kind: "participant",
-      handle_note: HANDLE_NOTE,
-      processing_row_version: 2,
-    });
-    const fileDb = messages.find((row) => String(row.id) === seed.fileMessageId);
-    expect(fileDb).toMatchObject({
-      handled: 1,
-      handled_by_kind: "user",
-      handled_by_participant_id: null,
-      processing_row_version: 2,
-    });
-
-    const sourceRecords = new Set(contentRecordIds(source));
-    const targetRecords = contentRecordIds(target);
-    expect(targetRecords).toHaveLength(sourceRecords.size);
-    expect(targetRecords.some((id) => sourceRecords.has(id))).toBe(false);
-    const targetFiles = channelContentFileDigests(target);
-    expect(Object.keys(targetFiles)).toHaveLength(1);
-    expect(Object.values(targetFiles)[0]).toBe(manifest.contentDigests[contentKey]);
-
-    const ledger = (value: Installation) =>
-      channelEventRows(value).map(({ metadata_json, ...event }) => ({
-        ...event,
-        metadata: JSON.parse(String(metadata_json)),
-      }));
-    expect(ledger(target)).toEqual(ledger(source));
-    expect(rowsOf(target, "idempotency_keys")).toEqual([]);
-
-    const targetChannelPorts = channelPorts(target);
-    const fileDetail = unwrap(readChannelMessage(targetChannelPorts, seed.channelId, seed.fileMessageId));
-    expect(fileDetail.body).toBe(BEYOND_HEAD_BODY);
-    expect(fileDetail.handled).toBe(true);
-    expect(fileDetail.handledByKind).toBe("user");
-    const inlineDetail = unwrap(readChannelMessage(targetChannelPorts, seed.channelId, seed.handledMessageId));
-    expect(inlineDetail.body).toBe(INLINE_BODY);
-    expect(inlineDetail.handleNote).toBe(HANDLE_NOTE);
-    const relayDetail = unwrap(readChannelMessage(targetChannelPorts, seed.channelId, seed.relayMessageId));
-    expect(relayDetail.body).toBe(RELAY_BODY);
-    expect(relayDetail.handled).toBe(false);
-    const shown = unwrap(showChannel(targetChannelPorts, seed.channelId));
-    expect(shown.state).toBe("closed");
-    expect(shown.participants.map((participant) => participant.handle)).toEqual([MAIN_HANDLE, WORKER_HANDLE, "judge"]);
-    expect(shown.assignments.map((assignment) => assignment.state)).toEqual(["open", "closed"]);
+    const view = unwrap(showChannel(channelPorts(target), { channelRef: "aq-run-42" })).channel;
+    expect(view.title).toBe("Round trip");
+    expect(view.state).toBe("closed");
+    expect(view.main).toBe("orchestrator");
+    expect(view.messageCount).toBe(3);
+    expect(view.unhandledCount).toBe(2);
+    const handles = view.participants.map((participant) => [participant.handle, participant.removedAt === null]);
+    expect(handles).toContainEqual(["orchestrator", true]);
+    expect(handles).toContainEqual(["worker-1", true]);
+    expect(handles).toContainEqual(["judge-1", false]);
+    const messages = unwrap(listChannelMessages(channelPorts(target), { channelRef: "aq-run-42", all: true })).items;
+    expect(messages.map((message) => [message.seq, message.kind, message.from, message.to, message.handled])).toEqual([
+      [1, "report", "worker-1", null, true],
+      [2, "relay_request", "worker-1", "judge-1", false],
+      [3, "question", "judge-1", null, false],
+    ]);
+    expect(messages[0]?.handleNote).toBe("reviewed");
+    expect(messages[2]?.body).toBe(FILE_BODY);
+    expect(messages[2]?.bodyPath).not.toBeNull();
+    // Acks keep working on the restored home and the sequence stays dense.
+    const acked = unwrap(ackMessages(channelPorts(target), { channelRef: "aq-run-42", seqs: [2] }));
+    expect(acked.handled).toEqual([2]);
+    expect(acked.alreadyHandled).toEqual([]);
   });
 
-  it("dry-run plans the restore without mutating the target", () => {
-    const { source } = healthyExport();
-    const target = installation();
-    const before = channelInventory(target);
-    const plan = unwrap(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun: true }));
-    if (plan.dryRun !== true) throw new Error("expected a dry-run plan");
-    expect(plan.wouldCreate.events).toBe(readManifest(source).counts.events);
-    expect(channelInventory(target)).toEqual(before);
-    expect(existsSync(join(target.vault, "content", "channel"))).toBe(false);
-  });
-
-  it.each([
-    [
-      "a null shard",
-      (source: Installation, seed: SeededChannel) => writeFileSync(shardPathOf(source, seed.channelId), "null"),
-    ],
-    [
-      "an array shard",
-      (source: Installation, seed: SeededChannel) => writeFileSync(shardPathOf(source, seed.channelId), "[]"),
-    ],
-    [
-      "an unknown shard key",
-      (source: Installation, seed: SeededChannel) => {
-        const shardPath = shardPathOf(source, seed.channelId);
-        const shard = JSON.parse(readFileSync(shardPath, "utf8")) as Record<string, unknown>;
-        writeFileSync(shardPath, canonicalJson({ ...shard, extra: 1 }));
-      },
-    ],
-    [
-      "noncanonical shard bytes",
-      (source: Installation, seed: SeededChannel) => {
-        const shardPath = shardPathOf(source, seed.channelId);
-        const shard = JSON.parse(readFileSync(shardPath, "utf8")) as Record<string, unknown>;
-        writeFileSync(shardPath, JSON.stringify(shard));
-      },
-    ],
-  ])("refuses %s as a typed integrity failure before adoption", (_name, corrupt) => {
-    const { source, seed } = healthyExport();
-    corrupt(source, seed);
-    refusesBeforeImport(source);
-  });
-
-  it("refuses a ledger-only Channel event appended without its shard", () => {
-    const { source } = healthyExport();
-    const manifestPath = join(source.vault, "snapshots", "manifest.json");
-    const eventsPath = join(source.vault, "snapshots", "events.jsonl");
-    writeFileSync(
-      eventsPath,
-      `${readFileSync(eventsPath, "utf8")}${canonicalJsonLine({
-        id: randomUUID(),
-        handoffId: null,
-        memoId: null,
-        eventType: "CHANNEL_CREATED",
-        actorKind: "user",
-        actorId: null,
-        rowVersion: null,
-        metadata: { channelId: randomUUID(), mainParticipantId: randomUUID() },
-        createdAt: "2026-10-20T00:00:30.000Z",
-      })}`,
+  it("refuses the export when a current file-backed body is unmaterialized", () => {
+    const source = installation("sorage-channelsnap-pending-");
+    const instance = channelPorts(source);
+    unwrap(createChannel(instance, { name: "pending" }));
+    unwrap(addParticipant(instance, { channelRef: "pending", handle: "w1", role: "worker" }));
+    unwrap(
+      postMessage(instance, {
+        channelRef: "pending",
+        from: "w1",
+        kind: "report",
+        accepted: accepted(instance, FILE_BODY),
+      }),
     );
-    const manifest = readManifest(source);
-    manifest.counts.events += 1;
-    writeFileSync(manifestPath, canonicalJson(manifest));
-    refusesBeforeImport(source);
-  });
-
-  it("refuses a manifest Channel count above an emptied shard family", () => {
-    const { source, seed } = healthyExport();
-    rmSync(join(source.vault, "snapshots", "channels"), { recursive: true, force: true });
-    expect(readManifest(source).counts.channels).toBe(1);
-    expect(shardPathOf(source, seed.channelId)).toBeDefined();
-    refusesBeforeImport(source);
-  });
-
-  it.each([
-    [
-      "a removed content file",
-      (source: Installation) => {
-        const contentKey = Object.keys(readManifest(source).contentDigests)[0] as string;
-        rmSync(join(source.vault, "snapshots", contentKey));
-      },
-    ],
-    [
-      "a tampered content byte",
-      (source: Installation) => {
-        const contentKey = Object.keys(readManifest(source).contentDigests)[0] as string;
-        const path = join(source.vault, "snapshots", contentKey);
-        writeFileSync(path, Buffer.concat([readFileSync(path).subarray(0, 5), Buffer.from("X")]));
-      },
-    ],
-    [
-      "a symlinked content file",
-      (source: Installation) => {
-        const contentKey = Object.keys(readManifest(source).contentDigests)[0] as string;
-        const path = join(source.vault, "snapshots", contentKey);
-        const outside = join(source.home, "outside-body.txt");
-        writeFileSync(outside, readFileSync(path));
-        rmSync(path);
-        symlinkSync(outside, path);
-      },
-    ],
-  ])("refuses %s before adoption", (_name, corrupt) => {
-    const { source } = healthyExport();
-    corrupt(source);
-    refusesBeforeImport(source);
-  });
-
-  it.each([
-    ["invalid UTF-8", Buffer.from([0xff, 0x41])],
-    ["a NUL byte", Buffer.from("ok\0ok")],
-    ["an all-whitespace body", Buffer.from(" \t\r\n ")],
-  ])("refuses a self-consistent identity over %s with a valid recorded size and digest", (_name, bytes) => {
-    const { source, seed } = healthyExport();
-    rewriteFileBody(source, seed, bytes);
-    refusesBeforeImport(source);
-  });
-
-  it("refuses restore onto a Channel-only target that the pre-Channel census already sees through its events", () => {
-    const { source } = healthyExport();
-    const target = installation();
-    const instance = channelPorts(target);
-    seedSnapshotChannel(instance);
-    const before = channelInventory(target);
-    expect(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun: false })).toMatchObject({
-      ok: false,
-      error: { code: "RESTORE_TARGET_NOT_EMPTY" },
-    });
-    expect(channelInventory(target)).toEqual(before);
-  });
-
-  it("refuses restore onto a deliberately partial Channel-only target whose ledger rows were removed by owned test SQL", () => {
-    const { source } = healthyExport();
-    const target = installation();
-    const instance = channelPorts(target);
-    const created = unwrap(
-      createChannel(instance, { creator: { kind: "user", id: null }, mainHandle: "solo-main", title: null }),
-    );
-    const messageInput = accepted(instance, "committed message body");
+    // Leave the committed body unmaterialized with no pending intent, exactly
+    // the state an interrupted activation can leave behind.
+    const db = openSorageDatabase(join(source.home, "state", "sorage.sqlite3"));
     try {
-      unwrap(
-        submitMessage(instance, {
-          channelId: created.channel.id,
-          senderParticipantId: created.channel.mainParticipantId,
-          kind: "report",
-          accepted: messageInput,
-          actor: { kind: "user", id: null },
-        }),
-      );
-    } finally {
-      instance.releaseAcceptedBody(messageInput);
-    }
-    // The deliberate corruption boundary of the P2A amendment: drop the
-    // append-only guard, remove the ledger rows on this isolated fixture,
-    // re-arm the guard, and checkpoint so the preservation baseline is stable.
-    const db = openSorageDatabase(target.database);
-    try {
-      db.exec("DROP TRIGGER events_append_only_delete");
-      db.exec("DELETE FROM events");
-      db.exec(
-        "CREATE TRIGGER events_append_only_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events is append-only'); END",
-      );
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      db.exec("BEGIN IMMEDIATE");
+      db.prepare("UPDATE content_records SET materialized = 0 WHERE inline_text IS NULL").run();
+      db.prepare("DELETE FROM pending_fs_ops").run();
+      db.exec("COMMIT");
     } finally {
       db.close();
     }
-    for (const table of [
-      "projects",
-      "handoffs",
-      "artifacts",
-      "review_notes",
-      "deletion_requests",
-      "events",
-      "project_memos",
-    ]) {
-      expect(rowsOf(target, table)).toEqual([]);
+    const exported = exportSnapshot(unwrap(backupPorts(source).exportPorts()));
+    expect(exported.ok).toBe(false);
+    if (!exported.ok) {
+      expect(exported.error.code).toBe("CONTENT_MATERIALIZING");
+      expect(exported.error.message).toContain("waiting for its committed activation");
     }
-    expect(rowsOf(target, "channels")).toHaveLength(1);
-    expect(rowsOf(target, "channel_participants")).toHaveLength(1);
-    expect(rowsOf(target, "channel_messages")).toHaveLength(1);
-    expect(contentRecordIds(target)).toHaveLength(1);
-    const before = channelInventory(target);
-    expect(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun: false })).toMatchObject({
-      ok: false,
-      error: { code: "RESTORE_TARGET_NOT_EMPTY" },
+  });
+
+  it("refuses a development snapshot carrying an old Channel shard key set with VAULT_INTEGRITY_ERROR", () => {
+    const source = installation("sorage-channelsnap-oldshard-");
+    const instance = channelPorts(source);
+    unwrap(createChannel(instance, { name: "legacy" }));
+    unwrap(exportSnapshot(unwrap(backupPorts(source).exportPorts())));
+    const seededId = unwrap(showChannel(channelPorts(source), { channelRef: "legacy" })).channel.id;
+    const shardPath = join(source.vault, "snapshots", "channels", seededId.slice(0, 2), `${seededId}.json`);
+    const shard = JSON.parse(readFileSync(shardPath, "utf8")) as Record<string, unknown>;
+    // The TASK-109 shard shape: creator provenance, participant UUIDs, and an
+    // assignment roster, with the rebuilt keys absent.
+    const legacy: Record<string, unknown> = {
+      id: shard.id,
+      title: shard.title,
+      state: shard.state,
+      creatorKind: "user",
+      creatorId: null,
+      createdAt: shard.createdAt,
+      closedAt: shard.closedAt,
+      closedByParticipantId: null,
+      closedByKind: null,
+      participants: (shard.participants as Array<Record<string, unknown>>).map((participant) => ({
+        id: randomUUID(),
+        role: participant.role,
+        handle: participant.handle,
+        nativeProvenance: [],
+        active: participant.removedAt === null,
+        registeredAt: participant.addedAt,
+        deactivatedAt: participant.removedAt,
+      })),
+      assignments: [],
+      messages: (shard.messages as Array<Record<string, unknown>>).map((message) => ({
+        id: randomUUID(),
+        senderParticipantId: randomUUID(),
+        kind: message.kind,
+        bodyContent: message.bodyContent,
+        assignmentId: null,
+        assignmentLate: false,
+        relayToParticipantId: null,
+        contextSession: null,
+        contextNode: null,
+        contextAttempt: null,
+        handled: message.handled,
+        handledAt: message.handledAt,
+        handledByParticipantId: null,
+        handledByKind: null,
+        handleNote: message.handleNote,
+        createdAt: message.createdAt,
+      })),
+    };
+    writeFileSync(shardPath, `${canonicalJson(legacy)}\n`);
+
+    const verify = backupVerify(unwrap(backupPorts(source).verifyPorts()), { now: new Date() });
+    expect(verify.ok).toBe(false);
+    if (!verify.ok) expect(verify.error.code).toBe("VAULT_INTEGRITY_ERROR");
+  });
+
+  it("refuses a development snapshot carrying an old Channel event name with VAULT_INTEGRITY_ERROR", () => {
+    const source = installation("sorage-channelsnap-oldevent-");
+    const instance = channelPorts(source);
+    unwrap(createChannel(instance, { name: "legacy" }));
+    unwrap(addParticipant(instance, { channelRef: "legacy", handle: "w1", role: "worker" }));
+    unwrap(exportSnapshot(unwrap(backupPorts(source).exportPorts())));
+    const eventsPath = join(source.vault, "snapshots", "events.jsonl");
+    const lines = readFileSync(eventsPath, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0);
+    const renamed = lines.map((line) => {
+      const parsed = JSON.parse(line) as { eventType: string; metadata?: Record<string, unknown> };
+      return parsed.eventType === "CHANNEL_PARTICIPANT_ADDED"
+        ? canonicalJsonLine({
+            ...parsed,
+            eventType: "CHANNEL_PARTICIPANT_REGISTERED",
+            metadata: { ...(parsed.metadata ?? {}), participantId: randomUUID() },
+          })
+        : line;
     });
-    expect(channelInventory(target)).toEqual(before);
+    writeFileSync(eventsPath, `${renamed.join("\n")}\n`);
+
+    const verify = backupVerify(unwrap(backupPorts(source).verifyPorts()), { now: new Date() });
+    expect(verify.ok).toBe(false);
+    if (!verify.ok) {
+      // The closed validation refuses the snapshot before import: the old
+      // event name is either the allowlist's unknown type or the
+      // reconciliation's missing-addition finding, never a conversion.
+      expect(verify.error.code).toBe("VAULT_INTEGRITY_ERROR");
+      expect(verify.error.message).toMatch(/does not define|no addition event/);
+    }
+  });
+
+  it("round-trips a roster mixing BMP private-use and supplementary-plane handles in code-point order (decision item 6)", () => {
+    const source = installation("sorage-channelsnap-codepoint-");
+    const instance = channelPorts(source);
+    const e000 = "\uE000worker";
+    const u10000 = "\u{10000}worker";
+    unwrap(createChannel(instance, { name: "mixed" }));
+    unwrap(addParticipant(instance, { channelRef: "mixed", handle: u10000, role: "worker" }));
+    unwrap(addParticipant(instance, { channelRef: "mixed", handle: e000, role: "worker" }));
+    unwrap(
+      postMessage(instance, {
+        channelRef: "mixed",
+        from: e000,
+        kind: "report",
+        accepted: accepted(instance, "bpm body"),
+      }),
+    );
+    unwrap(
+      postMessage(instance, {
+        channelRef: "mixed",
+        from: u10000,
+        kind: "report",
+        accepted: accepted(instance, "supplementary body"),
+      }),
+    );
+    unwrap(exportSnapshot(unwrap(backupPorts(source).exportPorts())));
+    expect(backupVerify(unwrap(backupPorts(source).verifyPorts()), { now: new Date() })).toMatchObject({ ok: true });
+    const channelId = unwrap(showChannel(channelPorts(source), { channelRef: "mixed" })).channel.id;
+    const shardPath = join(source.vault, "snapshots", "channels", channelId.slice(0, 2), `${channelId}.json`);
+    const shard = JSON.parse(readFileSync(shardPath, "utf8")) as {
+      participants: Array<{ handle: string }>;
+    };
+    // Code-point order: U+E000 sorts before U+10000; UTF-16 units would not.
+    expect(shard.participants.map((participant) => participant.handle)).toEqual(["main", e000, u10000]);
+    const target = installation("sorage-channelsnap-codepoint-target-");
+    const restored = backupRestore(unwrap(backupPorts(target, source).restorePorts()), { dryRun: false });
+    expect(restored.ok, JSON.stringify(restored)).toBe(true);
+    const view = unwrap(showChannel(channelPorts(target), { channelRef: "mixed" })).channel;
+    expect(view.participants.map((participant) => participant.handle)).toEqual(["main", e000, u10000]);
+    expect(view.messageCount).toBe(2);
+  });
+
+  it("refuses a duplicate Channel name across shards with VAULT_INTEGRITY_ERROR at verify and restore (decision item 17)", () => {
+    const source = installation("sorage-channelsnap-dupname-");
+    const instance = channelPorts(source);
+    unwrap(createChannel(instance, { name: "aq-dup" }));
+    unwrap(exportSnapshot(unwrap(backupPorts(source).exportPorts())));
+    const channelId = unwrap(showChannel(channelPorts(source), { channelRef: "aq-dup" })).channel.id;
+    // Clone the shard under a fresh id but the SAME name; the manifest count
+    // and content inventory stay coherent so only the name rule refuses.
+    const shardPath = join(source.vault, "snapshots", "channels", channelId.slice(0, 2), `${channelId}.json`);
+    const cloneId = "10000000-0000-4000-8000-000000000009";
+    // Clone the canonical bytes with only the id substituted, so the clone is
+    // itself canonical; the id also appears nowhere else in the shard.
+    const shardBytes = readFileSync(shardPath, "utf8");
+    const cloneBytes = [...shardBytes.split(channelId)].join(cloneId);
+    const cloneDir = join(source.vault, "snapshots", "channels", cloneId.slice(0, 2));
+    mkdirSync(cloneDir, { recursive: true });
+    writeFileSync(join(cloneDir, `${cloneId}.json`), cloneBytes);
+    const manifestPath = join(source.vault, "snapshots", "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { counts: { channels: number } };
+    manifest.counts.channels = 2;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const verify = backupVerify(unwrap(backupPorts(source).verifyPorts()), { now: new Date() });
+    expect(verify.ok).toBe(false);
+    if (!verify.ok) {
+      expect(verify.error.code).toBe("VAULT_INTEGRITY_ERROR");
+      expect(verify.error.message).toContain("repeats a Channel name");
+    }
+    const target = installation("sorage-channelsnap-dupname-target-");
+    const restored = backupRestore(unwrap(backupPorts(target, source).restorePorts()), { dryRun: false });
+    expect(restored.ok).toBe(false);
+    if (!restored.ok) {
+      expect(restored.error.code).toBe("VAULT_INTEGRITY_ERROR");
+      expect(restored.error.message).toContain("repeats a Channel name");
+    }
+  });
+
+  it("carries the file-backed body's digest in the manifest's content inventory", () => {
+    const source = installation("sorage-channelsnap-digest-");
+    const instance = channelPorts(source);
+    unwrap(createChannel(instance, { name: "digest" }));
+    unwrap(addParticipant(instance, { channelRef: "digest", handle: "w1", role: "worker" }));
+    unwrap(
+      postMessage(instance, {
+        channelRef: "digest",
+        from: "w1",
+        kind: "report",
+        accepted: accepted(instance, FILE_BODY),
+      }),
+    );
+    unwrap(exportSnapshot(unwrap(backupPorts(source).exportPorts())));
+    const manifest = JSON.parse(readFileSync(join(source.vault, "snapshots", "manifest.json"), "utf8")) as {
+      counts: { channels: number };
+      contentDigests: Record<string, string>;
+    };
+    expect(manifest.counts.channels).toBe(1);
+    const keys = Object.keys(manifest.contentDigests);
+    expect(keys).toHaveLength(1);
+    const key = keys[0] as string;
+    expect(key.startsWith("content/channel/")).toBe(true);
+    const carried = readFileSync(join(source.vault, "snapshots", key));
+    expect(carried.equals(Buffer.from(FILE_BODY, "utf8"))).toBe(true);
+    expect(manifest.contentDigests[key]).toBe(createHash("sha256").update(carried).digest("hex"));
   });
 });

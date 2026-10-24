@@ -48,23 +48,21 @@ export function isCommonContentEventType(value: string): value is CommonContentE
 }
 
 /**
- * The Channel domain family of TASK-109 (CHN-005, interface section 38.9). From
- * the TASK-109 runtime this build appends it to the live ledger behind the
- * mutation transaction; the frozen per-format snapshot families below still
- * exclude it until the format-3 Channel family admission of the same Task's
- * snapshot boundary, so a recognized Channel domain event name in a snapshot
- * this build reads stays a later representation that fails closed before
- * import instead of surfacing as unknown-event corruption.
+ * The Channel domain family rebuilt under ADR-0034 (CHN-005, CHN-013, interface
+ * section 38.9): six User-actor types with the acting participant handle in
+ * closed metadata, appended inside the mutation transaction from the TASK-123
+ * runtime; a duplicate post and every idempotent repeat append nothing. The
+ * frozen per-format snapshot families below admit the family in format 3, and
+ * an old Channel event name in a snapshot fails closed before import instead
+ * of surfacing as unknown-event corruption.
  */
 export const CHANNEL_DOMAIN_EVENT_TYPES = [
   "CHANNEL_CREATED",
   "CHANNEL_CLOSED",
-  "CHANNEL_PARTICIPANT_REGISTERED",
-  "CHANNEL_PARTICIPANT_DEACTIVATED",
-  "CHANNEL_ASSIGNMENT_CREATED",
-  "CHANNEL_ASSIGNMENT_CLOSED",
-  "CHANNEL_MESSAGE_SUBMITTED",
-  "CHANNEL_MESSAGE_HANDLED",
+  "CHANNEL_PARTICIPANT_ADDED",
+  "CHANNEL_PARTICIPANT_REMOVED",
+  "CHANNEL_MESSAGE_POSTED",
+  "CHANNEL_MESSAGE_ACKED",
 ] as const;
 export type ChannelDomainEventType = (typeof CHANNEL_DOMAIN_EVENT_TYPES)[number];
 

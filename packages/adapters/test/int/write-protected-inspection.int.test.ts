@@ -1,4 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -11,28 +12,35 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { join, relative } from "node:path";
-import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+import { knownSchemaMaximum, listChannelMessages, recoverSend, showChannel } from "@sorage/core";
+
+interface AppErrorLike {
+  code: string;
+  message: string;
+  recovery?: { suggestedCommand: string };
+}
 import { afterEach, describe, expect, it } from "vitest";
-import { knownSchemaMaximum, recoverSend, submitMessageReplayOnly } from "@sorage/core";
+import { createNodeChannelPorts } from "../../src/channels";
 import { inspectPreflight } from "../../src/preflight";
+import { openCoveredReadStorage } from "../../src/read-storage";
 import { createNodeSendRecoveryPorts } from "../../src/send-recovery";
-import { createNodeChannelRecoveryPorts } from "../../src/channels";
 import { makeTempHome } from "../../src/testkit/temp-home";
 
 /**
- * The TASK-119 write-protected-installation inspection contract (V3): a
- * stable, readable installation whose database and WAL cannot be written —
- * with the retained receipts living only in an uncheckpointed WAL held open
- * by a live connection — still inspects coherently, because the private
- * copies are made owner-writable while the live installation is never
- * written. Preflight reports its real verdict, both replay-only modes return
- * their normal recovery results, the full home inventory (main bytes, WAL
- * bytes, SHM presence and bytes, modes, mtimes, every other file including
- * the Vault) stays identical, an absent SHM stays absent, and genuine
- * refusals (a live fence) still refuse.
+ * The TASK-119 write-protected-installation inspection contract (V3) under the
+ * TASK-123 rebuilt Channel surface: a stable, readable installation whose
+ * database and WAL cannot be written — with a retained send receipt and a
+ * committed Channel message living only in an uncheckpointed WAL held open by
+ * a live connection — still inspects coherently, because the private copies
+ * are made owner-writable while the live installation is never written.
+ * Preflight reports its real verdict, `send --replay-only` returns its normal
+ * recovery result, the covered Channel reads (`messages`, `list`, `show`)
+ * return the WAL-committed Channel message through the TASK-122 primitive
+ * with nothing written, the full home inventory stays identical, an absent
+ * SHM stays absent, and genuine refusals (a live fence) still refuse.
  */
 
 const entry = fileURLToPath(new URL("../../../../apps/cli/src/main.ts", import.meta.url));
@@ -65,26 +73,24 @@ interface ProtectedInstallation {
   databasePath: string;
   installationId: string;
   sendKey: string;
-  channelKey: string;
+  channelName: string;
   channelBody: string;
   body: string;
   sentHandoffId: string;
-  submittedMessageId: string;
-  channelId: string;
-  mainParticipantId: string;
+  postedSeq: number;
   snapshot(): string[];
   replaySend(): ReturnType<typeof recoverSend>;
-  replayChannel(): ReturnType<typeof submitMessageReplayOnly>;
+  readChannelMessages(): ReturnType<typeof listChannelMessages> | { ok: false; error: AppErrorLike };
+  showChannelView(): ReturnType<typeof showChannel>;
   preflight(): ReturnType<typeof inspectPreflight>;
 }
 
 /**
- * One installation whose retained send and Channel receipts are committed
- * only into the uncheckpointed WAL: a live connection holds the WAL open
- * across the spawning CLI writers, the database and WAL files are then made
+ * One installation whose retained send receipt and committed Channel message
+ * live only in the uncheckpointed WAL: a read transaction opened before the
+ * writers spawn pins the WAL mark, the database and WAL files are then made
  * read-only, and the saved modes are restored before the temporary tree is
- * removed. The holder connection keeps its writable SHM, exactly like a
- * concurrent reader on a write-protected installation.
+ * removed.
  */
 function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): ProtectedInstallation {
   const temp = makeTempHome("sorage-write-protected-");
@@ -108,14 +114,14 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
   run(["init", "--non-interactive"]);
   run(["project", "add", "--name", "sender", "--dir", work]);
   run(["project", "add", "--name", "recipient", "--dir", recipient]);
-  const created = run(["channel", "create", "--main-handle", "orchestrator", "--as-user"]) as {
-    channel: { id: string; mainParticipantId: string };
-  };
+  const channelName = "aq-wp";
+  run(["channel", "create", channelName, "--main", "orchestrator"]);
+  run(["channel", "add", channelName, "worker-1", "--role", "worker"]);
   const databasePath = join(home, "state", "sorage.sqlite3");
-  // A read transaction opened before the keyed writers spawn: its snapshot
-  // pins the WAL mark, so the writers' per-process close checkpoints cannot
-  // move their committed frames into the main file, and both receipts stay in
-  // the uncheckpointed WAL (V3).
+  // A read transaction opened before the writers spawn: its snapshot pins the
+  // WAL mark, so the writers' per-process close checkpoints cannot move their
+  // committed frames into the main file, and the retained rows stay in the
+  // uncheckpointed WAL (V3).
   const holder = new DatabaseSync(databasePath);
   holder.exec("BEGIN");
   holder.prepare("SELECT COUNT(*) AS n FROM projects").get();
@@ -133,30 +139,27 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
     "--idempotency-key",
     sendKey,
   ]) as { handoffs: Array<{ handoffId: string }> };
-  const channelBody = "channel receipt body";
-  const channelKey = `channel-key-${randomUUID()}`;
-  const submitted = run([
+  const channelBody = "channel committed body";
+  const posted = run([
     "channel",
-    "submit",
-    created.channel.id,
-    "--as-participant",
-    created.channel.mainParticipantId,
+    "post",
+    channelName,
+    "--from",
+    "worker-1",
     "--kind",
     "report",
     "--body",
     channelBody,
-    "--idempotency-key",
-    channelKey,
-  ]) as { message: { id: string } };
-  // Both receipts are committed in the WAL and absent from the main file; the
-  // verifier is a fresh connection because the pinning holder's snapshot
-  // predates the writes it must not observe.
+  ]) as { message: { seq: number } };
+  // Both retained rows are committed in the WAL and absent from the main file.
   const verifier = new DatabaseSync(databasePath);
   try {
-    const receipts = verifier
-      .prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE key IN (?, ?)")
-      .get(sendKey, channelKey) as { n: number };
-    expect(receipts.n).toBe(2);
+    const receipts = verifier.prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE key = ?").get(sendKey) as {
+      n: number;
+    };
+    expect(receipts.n).toBe(1);
+    const messages = verifier.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number };
+    expect(messages.n).toBe(1);
   } finally {
     verifier.close();
   }
@@ -164,10 +167,12 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
   copyFileSync(databasePath, mainOnly);
   const bare = new DatabaseSync(mainOnly, { readOnly: true });
   try {
-    const mainOnlyReceipts = bare
-      .prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE key IN (?, ?)")
-      .get(sendKey, channelKey) as { n: number };
+    const mainOnlyReceipts = bare.prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE key = ?").get(sendKey) as {
+      n: number;
+    };
     expect(mainOnlyReceipts.n).toBe(0);
+    const mainOnlyMessages = bare.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number };
+    expect(mainOnlyMessages.n).toBe(0);
   } finally {
     bare.close();
     rmSync(mainOnly, { force: true });
@@ -177,8 +182,7 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
     // A newer schema row committed only into the uncheckpointed WAL (K1): the
     // pinning read snapshot predates it, so no close checkpoint can move it
     // into the main file, and the verdict-deciding schema state lives only in
-    // the WAL. Inserted after `config show`, whose operational open would
-    // refuse the newer history.
+    // the WAL.
     const orphan = new DatabaseSync(databasePath);
     try {
       orphan
@@ -202,10 +206,8 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
       expect(mainProbe.prepare("SELECT MAX(version) AS n FROM schema_migrations").get()).toMatchObject({
         n: knownSchemaMaximum(),
       });
-      const mainOnlyReceipts = mainProbe
-        .prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE key IN (?, ?)")
-        .get(sendKey, channelKey) as { n: number };
-      expect(mainOnlyReceipts.n).toBe(0);
+      const mainOnlyMessages = mainProbe.prepare("SELECT COUNT(*) AS n FROM channel_messages").get() as { n: number };
+      expect(mainOnlyMessages.n).toBe(0);
     } finally {
       mainProbe.close();
       rmSync(orphanMainOnly, { force: true });
@@ -224,6 +226,26 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
     for (const [path, mode] of savedModes) chmodSync(path, mode);
   });
   const clock = { now: () => new Date() };
+  const coveredMessages = () => {
+    const storage = openCoveredReadStorage({
+      surface: "channel",
+      vaultAdmission: true,
+      env: { SORAGE_HOME: home },
+      userHome: root,
+    });
+    if (!storage.ok)
+      return storage as unknown as {
+        ok: false;
+        error: { code: string; message: string; recovery?: { suggestedCommand: string } };
+      };
+    const ports = createNodeChannelPorts({ database: storage.value.db, env: { SORAGE_HOME: home }, userHome: root });
+    try {
+      return listChannelMessages(ports, { channelRef: channelName });
+    } finally {
+      ports.close();
+      storage.value.close();
+    }
+  };
   return {
     root,
     home,
@@ -232,13 +254,11 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
     databasePath,
     installationId,
     sendKey,
-    channelKey,
+    channelName,
     channelBody,
     body,
     sentHandoffId: sent.handoffs[0]?.handoffId ?? "",
-    submittedMessageId: submitted.message.id,
-    channelId: created.channel.id,
-    mainParticipantId: created.channel.mainParticipantId,
+    postedSeq: posted.message.seq,
     snapshot: () => inventory(home),
     replaySend: () =>
       recoverSend(
@@ -259,28 +279,23 @@ function protectedInstallation(shmAbsent = false, orphanFutureSchema = false): P
           userHome: root,
         },
       ),
-    replayChannel: () =>
-      submitMessageReplayOnly(
-        createNodeChannelRecoveryPorts({
-          env: { SORAGE_HOME: home },
-          userHome: root,
-          inspection: { scratchParent: scratch },
-        }),
-        {
-          installationId,
-          maxBytes: 1024 * 1024 * 100,
-          channelId: created.channel.id,
-          senderParticipantId: created.channel.mainParticipantId,
-          kind: "report",
-          accepted: {
-            kind: "text",
-            text: channelBody,
-            sizeBytes: Buffer.byteLength(channelBody, "utf8"),
-            sha256: createHash("sha256").update(channelBody, "utf8").digest("hex"),
-          },
-          idempotencyKey: channelKey,
-        },
-      ),
+    readChannelMessages: coveredMessages,
+    showChannelView: () => {
+      const storage = openCoveredReadStorage({
+        surface: "channel",
+        vaultAdmission: true,
+        env: { SORAGE_HOME: home },
+        userHome: root,
+      });
+      if (!storage.ok) return { ok: false, error: storage.error } as const;
+      const ports = createNodeChannelPorts({ database: storage.value.db, env: { SORAGE_HOME: home }, userHome: root });
+      try {
+        return showChannel(ports, { channelRef: channelName });
+      } finally {
+        ports.close();
+        storage.value.close();
+      }
+    },
     preflight: () => inspectPreflight(home, { scratchParent: scratch, userHome: root }),
   };
 }
@@ -295,9 +310,6 @@ describe("the shared private-copy inspection on a write-protected installation (
   });
 
   it("decides preflight's verdict from the uncheckpointed WAL, not the main file (K1, V3)", () => {
-    // The verdict-deciding schema state — a newer migration row — is committed
-    // only into the WAL, so a main-only observation of the same installation
-    // answers a different verdict than the WAL-inclusive live inspection.
     const f = protectedInstallation(false, true);
     expect(statSync(`${f.databasePath}-wal`).size).toBeGreaterThan(0);
     const mainOnlyHome = join(f.root, "main-only-home");
@@ -320,24 +332,40 @@ describe("the shared private-copy inspection on a write-protected installation (
     expect(f.snapshot()).toEqual(before);
   });
 
-  it("channel submit --replay-only returns the retained message from the uncheckpointed WAL with the installation untouched", () => {
+  it("covered Channel reads return the WAL-committed message with the installation untouched", () => {
     const f = protectedInstallation();
     const before = f.snapshot();
-    const result = f.replayChannel();
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.message.id).toBe(f.submittedMessageId);
+    const page = f.readChannelMessages();
+    expect(page.ok, JSON.stringify(page)).toBe(true);
+    if (page.ok) {
+      expect(page.value.items.map((item) => [item.seq, item.from, item.body])).toEqual([
+        [f.postedSeq, "worker-1", f.channelBody],
+      ]);
+    }
+    const view = f.showChannelView();
+    expect(view.ok).toBe(true);
+    if (view.ok) expect(view.value.channel.unhandledCount).toBe(1);
     expect(f.snapshot()).toEqual(before);
   });
 
-  it("inspects normally when the SHM file is absent, and the absent SHM stays absent", () => {
+  it("keeps the absent SHM absent: preflight still inspects, and the covered Channel read refuses the sidecar gap (38.11)", () => {
     const f = protectedInstallation(true);
     const shm = `${f.databasePath}-shm`;
     expect(statSync(`${f.databasePath}-wal`).size).toBeGreaterThan(0);
     const before = f.snapshot();
+    // The owner-writable private copy still serves preflight.
     expect(f.preflight().status).toBe("compatible");
-    const replay = f.replayChannel();
+    // A WAL longer than its header without its -shm selects no zero-write
+    // path: the covered Channel read refuses with the surface's typed
+    // open-contention refusal, creating no sidecar and writing nothing.
+    const page = f.readChannelMessages();
+    expect(page.ok).toBe(false);
+    if (!page.ok) {
+      expect(page.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(page.error.message).toContain("Channel storage is contended");
+    }
+    const replay = f.replaySend();
     expect(replay.ok).toBe(true);
-    if (replay.ok) expect(replay.value.message.id).toBe(f.submittedMessageId);
     expect(f.snapshot()).toEqual(before);
     expect(statSync(shm, { throwIfNoEntry: false })).toBeUndefined();
   });
@@ -349,9 +377,6 @@ describe("the shared private-copy inspection on a write-protected installation (
     writeFileSync(lock, lockBody);
     const before = f.snapshot();
     expect(f.preflight().status).toBe("unverifiable");
-    const replay = f.replayChannel();
-    expect(replay.ok).toBe(false);
-    if (!replay.ok) expect(replay.error.code).toBe("SERVICE_PAUSED");
     expect(f.snapshot()).toEqual(before);
     expect(readFileSync(lock, "utf8")).toBe(lockBody);
   });

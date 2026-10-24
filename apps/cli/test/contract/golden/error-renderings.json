@@ -1492,7 +1492,7 @@
     "exitCode": 66,
     "httpStatus": 404,
     "recovery": {
-      "suggestedCommand": "Verify the UUID with sorage channel list"
+      "suggestedCommand": "Verify the Channel name or UUID with sorage channel list"
     },
     "renderedExitCode": 66,
     "json": {
@@ -1502,21 +1502,21 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Verify the UUID with sorage channel list"
+          "suggestedCommand": "Verify the Channel name or UUID with sorage channel list"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "CHN_NOT_FOUND: rendering probe\nRecovery: Verify the UUID with sorage channel list\n"
+    "human": "CHN_NOT_FOUND: rendering probe\nRecovery: Verify the Channel name or UUID with sorage channel list\n"
   },
   {
     "code": "CHN_MESSAGE_NOT_FOUND",
     "exitCode": 66,
     "httpStatus": 404,
     "recovery": {
-      "suggestedCommand": "Verify the message UUID with sorage channel messages <channel>"
+      "suggestedCommand": "Verify the sequence number with sorage channel messages <channel> --all"
     },
     "renderedExitCode": 66,
     "json": {
@@ -1526,21 +1526,21 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Verify the message UUID with sorage channel messages <channel>"
+          "suggestedCommand": "Verify the sequence number with sorage channel messages <channel> --all"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "CHN_MESSAGE_NOT_FOUND: rendering probe\nRecovery: Verify the message UUID with sorage channel messages <channel>\n"
+    "human": "CHN_MESSAGE_NOT_FOUND: rendering probe\nRecovery: Verify the sequence number with sorage channel messages <channel> --all\n"
   },
   {
     "code": "CHN_PARTICIPANT_NOT_FOUND",
     "exitCode": 66,
     "httpStatus": 404,
     "recovery": {
-      "suggestedCommand": "Verify the participant with sorage channel show <channel>"
+      "suggestedCommand": "Verify the handle with sorage channel show <channel>; a removed handle is re-added with sorage channel add"
     },
     "renderedExitCode": 66,
     "json": {
@@ -1550,45 +1550,21 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Verify the participant with sorage channel show <channel>"
+          "suggestedCommand": "Verify the handle with sorage channel show <channel>; a removed handle is re-added with sorage channel add"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "CHN_PARTICIPANT_NOT_FOUND: rendering probe\nRecovery: Verify the participant with sorage channel show <channel>\n"
-  },
-  {
-    "code": "CHN_ASSIGNMENT_NOT_FOUND",
-    "exitCode": 66,
-    "httpStatus": 404,
-    "recovery": {
-      "suggestedCommand": "Verify the assignment with sorage channel show <channel>"
-    },
-    "renderedExitCode": 66,
-    "json": {
-      "ok": false,
-      "error": {
-        "code": "CHN_ASSIGNMENT_NOT_FOUND",
-        "message": "rendering probe",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Verify the assignment with sorage channel show <channel>"
-        }
-      },
-      "meta": {
-        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
-      }
-    },
-    "human": "CHN_ASSIGNMENT_NOT_FOUND: rendering probe\nRecovery: Verify the assignment with sorage channel show <channel>\n"
+    "human": "CHN_PARTICIPANT_NOT_FOUND: rendering probe\nRecovery: Verify the handle with sorage channel show <channel>; a removed handle is re-added with sorage channel add\n"
   },
   {
     "code": "CHN_INVALID_INPUT",
     "exitCode": 64,
     "httpStatus": 422,
     "recovery": {
-      "suggestedCommand": "Check Channel fields, Unicode, message kind, and expected Row Version"
+      "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
     },
     "renderedExitCode": 64,
     "json": {
@@ -1598,14 +1574,14 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Check Channel fields, Unicode, message kind, and expected Row Version"
+          "suggestedCommand": "Check the Channel name, handles, message kind, --to rule and bounds"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "CHN_INVALID_INPUT: rendering probe\nRecovery: Check Channel fields, Unicode, message kind, and expected Row Version\n"
+    "human": "CHN_INVALID_INPUT: rendering probe\nRecovery: Check the Channel name, handles, message kind, --to rule and bounds\n"
   },
   {
     "code": "CHN_TOO_LARGE",
@@ -1636,7 +1612,7 @@
     "exitCode": 65,
     "httpStatus": 409,
     "recovery": {
-      "suggestedCommand": "Reopen is not offered in M9; use or create another Channel explicitly"
+      "suggestedCommand": "Reopen is not offered; use or create another Channel explicitly"
     },
     "renderedExitCode": 65,
     "json": {
@@ -1646,86 +1622,14 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Reopen is not offered in M9; use or create another Channel explicitly"
+          "suggestedCommand": "Reopen is not offered; use or create another Channel explicitly"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "CHN_CLOSED: rendering probe\nRecovery: Reopen is not offered in M9; use or create another Channel explicitly\n"
-  },
-  {
-    "code": "CHN_PARTICIPANT_INACTIVE",
-    "exitCode": 65,
-    "httpStatus": 409,
-    "recovery": {
-      "suggestedCommand": "Main or the User registers an active participant for further submissions"
-    },
-    "renderedExitCode": 65,
-    "json": {
-      "ok": false,
-      "error": {
-        "code": "CHN_PARTICIPANT_INACTIVE",
-        "message": "rendering probe",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Main or the User registers an active participant for further submissions"
-        }
-      },
-      "meta": {
-        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
-      }
-    },
-    "human": "CHN_PARTICIPANT_INACTIVE: rendering probe\nRecovery: Main or the User registers an active participant for further submissions\n"
-  },
-  {
-    "code": "CHN_FORBIDDEN_ROLE",
-    "exitCode": 77,
-    "httpStatus": 403,
-    "recovery": {
-      "suggestedCommand": "Run as the main participant or with --as-user"
-    },
-    "renderedExitCode": 77,
-    "json": {
-      "ok": false,
-      "error": {
-        "code": "CHN_FORBIDDEN_ROLE",
-        "message": "rendering probe",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "Run as the main participant or with --as-user"
-        }
-      },
-      "meta": {
-        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
-      }
-    },
-    "human": "CHN_FORBIDDEN_ROLE: rendering probe\nRecovery: Run as the main participant or with --as-user\n"
-  },
-  {
-    "code": "CHN_REPLAY_UNAVAILABLE",
-    "exitCode": 75,
-    "httpStatus": 409,
-    "recovery": {
-      "suggestedCommand": "The original outcome is unknown; retain the original key and input without executing again"
-    },
-    "renderedExitCode": 75,
-    "json": {
-      "ok": false,
-      "error": {
-        "code": "CHN_REPLAY_UNAVAILABLE",
-        "message": "rendering probe",
-        "details": {},
-        "recovery": {
-          "suggestedCommand": "The original outcome is unknown; retain the original key and input without executing again"
-        }
-      },
-      "meta": {
-        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
-      }
-    },
-    "human": "CHN_REPLAY_UNAVAILABLE: rendering probe\nRecovery: The original outcome is unknown; retain the original key and input without executing again\n"
+    "human": "CHN_CLOSED: rendering probe\nRecovery: Reopen is not offered; use or create another Channel explicitly\n"
   },
   {
     "code": "INTERNAL_ERROR",

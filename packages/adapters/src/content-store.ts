@@ -2235,15 +2235,15 @@ export function validateChannelContentLinks(db: SorageSqlite): Result<void, AppE
     }
     const dangling = db
       .prepare(
-        "SELECT m.id AS message_id, m.content_record_id AS content_record_id FROM channel_messages m LEFT JOIN content_records c ON c.id = m.content_record_id WHERE c.id IS NULL OR m.content_record_id IS NULL LIMIT 1",
+        "SELECT m.channel_id AS channel_id, m.seq AS seq, m.content_record_id AS content_record_id FROM channel_messages m LEFT JOIN content_records c ON c.id = m.content_record_id WHERE c.id IS NULL OR m.content_record_id IS NULL LIMIT 1",
       )
-      .get() as { message_id: string; content_record_id: string | null } | null | undefined;
+      .get() as { channel_id: string; seq: number; content_record_id: string | null } | null | undefined;
     if (dangling !== null && dangling !== undefined) {
       return err(
         appError(
           "STORAGE_INTEGRITY_ERROR",
-          `The Channel message ${dangling.message_id} references content record ${String(dangling.content_record_id)}, which is missing; the Channel content links could not be verified.`,
-          { messageId: dangling.message_id, contentRecordId: dangling.content_record_id },
+          `The Channel ${dangling.channel_id} message ${String(dangling.seq)} references content record ${String(dangling.content_record_id)}, which is missing; the Channel content links could not be verified.`,
+          { channelId: dangling.channel_id, seq: dangling.seq, contentRecordId: dangling.content_record_id },
         ),
       );
     }

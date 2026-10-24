@@ -1,51 +1,61 @@
 import { describe, expect, it } from "vitest";
+import type { AppError, Result } from "../../src/errors";
 import {
-  CHANNEL_PREVIEW_BYTES,
-  channelPreviewOf,
-  checkChannelBodyText,
-  composeChannelRequestDigest,
-  normalizeChannelTitle,
-  validateChannelHandle,
-  validateChannelEventMetadata,
-  validateContextField,
-  validateNativeProvenance,
-  submitMessageReplayOnly,
-  type ChannelRecoveryPorts,
-  type StoredChannelSubmitReceipt,
   type AcceptedChannelBody,
+  ackMessages,
+  addParticipant,
+  CHANNEL_NAME_BYTES,
+  type ChannelCommandPorts,
+  type ChannelContentPlan,
+  type ChannelEventInput,
+  type ChannelReader,
+  type ChannelRecord,
+  type ChannelRepository,
+  type ChannelTransaction,
+  channelBodyRoutesFile,
+  channelDomainEvent,
+  channelError,
+  checkChannelBodyText,
+  closeChannel,
+  createChannel,
+  isChannelUuid,
+  type MessageRecord,
+  normalizeChannelTitle,
+  type ParticipantRecord,
+  postMessage,
+  removeParticipant,
+  validateChannelEventMetadata,
+  validateChannelHandle,
+  validateChannelName,
+  validateHandleNote,
+  validateMessageRef,
 } from "../../src/channels";
-import { appError, err, ok } from "../../src/errors";
 import { utf8ByteLength } from "../../src/content";
+import { appError, err, ok } from "../../src/errors";
 
-const BODY: AcceptedChannelBody = { kind: "text", text: "report body", sizeBytes: 11, sha256: "0".repeat(64) };
+const CHANNEL = "aaaaaaaa-0000-4000-8000-000000000001";
+const _CONTENT = "aaaaaaaa-0000-4000-8000-0000000000c1";
+const _CONTENT_2 = "aaaaaaaa-0000-4000-8000-0000000000c2";
+const STAMP = "2026-10-24T00:00:00.000Z";
 
-// The explicit provenance line separators, composed so this source file never
-// carries a raw control scalar: LF, CR, VT, FF, NEL, LS, and PS.
-const LINE_SEPARATORS = [
-  "\n",
-  "\r",
-  "\v",
-  "\f",
-  String.fromCharCode(0x85),
-  String.fromCharCode(0x2028),
-  String.fromCharCode(0x2029),
-];
+const BODY: AcceptedChannelBody = { kind: "text", text: "report body", sizeBytes: 11, sha256: "a".repeat(64) };
+const OTHER_BODY: AcceptedChannelBody = { kind: "text", text: "other body", sizeBytes: 10, sha256: "b".repeat(64) };
 
-describe("channel bounds and preview rules", () => {
-  it("accepts null or a trimmed single-line title within the scalar and byte bounds", () => {
-    expect(normalizeChannelTitle(null).ok).toBe(true);
-    const trimmed = normalizeChannelTitle("  Orbit  ");
-    expect(trimmed.ok && trimmed.value).toBe("Orbit");
-    expect(normalizeChannelTitle("x".repeat(201)).ok).toBe(false);
-    expect(normalizeChannelTitle("line\nbreak").ok).toBe(false);
-    expect(normalizeChannelTitle("x".repeat(801)).ok).toBe(false);
+describe("channel bounds and identity rules", () => {
+  it("keeps the name rule identity-exact and refuses a UUID-shaped name", () => {
+    const name = validateChannelName(" worker-1 ");
+    expect(name.ok && name.value).toBe(" worker-1 ");
+    expect(validateChannelName("").ok).toBe(false);
+    expect(validateChannelName("x".repeat(65)).ok).toBe(false);
+    expect(validateChannelName("x".repeat(257)).ok).toBe(false);
+    expect(validateChannelName("tab\there").ok).toBe(false);
+    expect(validateChannelName(CHANNEL).ok).toBe(false);
+    expect(isChannelUuid(CHANNEL)).toBe(true);
   });
 
   it("keeps handle bounds identity-exact with only the empty string empty", () => {
     const handle = validateChannelHandle(" worker-1 ");
     expect(handle.ok && handle.value).toBe(" worker-1 ");
-    // Whitespace and a lone byte-order mark are nonempty byte-exact handles;
-    // only the empty string is empty, and control scalars stay forbidden.
     expect(validateChannelHandle("  ").ok).toBe(true);
     expect(validateChannelHandle("\uFEFF").ok).toBe(true);
     expect(validateChannelHandle("").ok).toBe(false);
@@ -54,523 +64,564 @@ describe("channel bounds and preview rules", () => {
     expect(validateChannelHandle("x".repeat(65)).ok).toBe(false);
   });
 
-  it("records native provenance verbatim: empty entries valid, line separators refused, TAB and NUL kept", () => {
-    const empty = validateNativeProvenance([""]);
-    expect(empty.ok && empty.value).toEqual([""]);
-    const absent = validateNativeProvenance([]);
-    expect(absent.ok && absent.value).toEqual([]);
-    expect(validateNativeProvenance(["tab\tnul\0kept", "\uFEFFbom-native"]).ok).toBe(true);
-    for (const separator of LINE_SEPARATORS) {
-      expect(validateNativeProvenance([`bad${separator}entry`]).ok).toBe(false);
-    }
-    expect(validateNativeProvenance([`bad${String.fromCharCode(0xd800)}surrogate`]).ok).toBe(false);
-    expect(validateNativeProvenance(["a", "b", "c", "d", "e"]).ok).toBe(false);
-    expect(validateNativeProvenance(["x".repeat(257)]).ok).toBe(false);
+  it("accepts null or a trimmed single-line title within the bounds", () => {
+    expect(normalizeChannelTitle(null).ok).toBe(true);
+    const trimmed = normalizeChannelTitle("  Orbit  ");
+    expect(trimmed.ok && trimmed.value).toBe("Orbit");
+    expect(normalizeChannelTitle("x".repeat(201)).ok).toBe(false);
+    expect(normalizeChannelTitle("line\nbreak").ok).toBe(false);
+    expect(normalizeChannelTitle("x".repeat(801)).ok).toBe(false);
   });
 
-  it("keeps context verbatim under the same provenance single-line rule", () => {
-    expect(validateContextField("tab\tnul\0verbatim").ok).toBe(true);
-    const empty = validateContextField("");
-    expect(empty.ok && empty.value).toBe("");
-    const absent = validateContextField(null);
-    expect(absent.ok && absent.value).toBeNull();
-    for (const separator of LINE_SEPARATORS) {
-      expect(validateContextField(`ctx${separator}line`).ok).toBe(false);
-    }
-    expect(validateContextField(`bad${String.fromCharCode(0xdfff)}surrogate`).ok).toBe(false);
-    expect(validateContextField("x".repeat(201)).ok).toBe(false);
-    expect(validateContextField("x".repeat(801)).ok).toBe(false);
+  it("trims a supplied reference and keeps an absent one null", () => {
+    const reference = validateMessageRef("  pr-42 ");
+    expect(reference.ok && reference.value).toBe("pr-42");
+    expect(validateMessageRef(null).ok && (validateMessageRef(null) as { value: string | null }).value).toBeNull();
+    expect(validateMessageRef("x".repeat(201)).ok).toBe(false);
+    expect(validateMessageRef("x".repeat(801)).ok).toBe(false);
+    expect(validateMessageRef("line\nbreak").ok).toBe(false);
   });
 
-  it("rejects a blank-after-trim or NUL body and bounds the accepted size", () => {
+  it("bounds the handling note and the body text", () => {
+    expect(validateHandleNote(null).ok).toBe(true);
+    expect(validateHandleNote("done").ok).toBe(true);
+    expect(validateHandleNote("x".repeat(8001)).ok).toBe(false);
     expect(checkChannelBodyText(" \r\n\t ", 1024).ok).toBe(false);
     expect(checkChannelBodyText("report", 1024).ok).toBe(true);
-    // The NUL is composed, never a raw byte in this source file.
     const nulBody = `bad${String.fromCharCode(0)}body`;
-    const nul = checkChannelBodyText(nulBody, 1024);
-    expect(nul.ok).toBe(false);
-    expect(!nul.ok && nul.error.code).toBe("CHN_INVALID_INPUT");
+    expect(checkChannelBodyText(nulBody, 1024).ok).toBe(false);
     const tooLarge = checkChannelBodyText("x".repeat(11), 10);
     expect(tooLarge.ok).toBe(false);
     expect(!tooLarge.ok && tooLarge.error.code).toBe("CHN_TOO_LARGE");
   });
 
-  it("truncates the preview at the 512-byte scalar boundary with an honest flag", () => {
-    const ascii = channelPreviewOf("x".repeat(600), 600);
-    expect(ascii.bodyPreview.length).toBe(CHANNEL_PREVIEW_BYTES);
-    expect(ascii.bodyPreviewTruncated).toBe(true);
-    // 171 three-byte scalars are 513 bytes: the rule admits 170 of them (510
-    // bytes) and marks truncation against the 513-byte total.
-    const multibyte = channelPreviewOf("\uc544".repeat(171), 513);
-    expect(utf8ByteLength(multibyte.bodyPreview)).toBe(510);
-    expect(multibyte.bodyPreviewTruncated).toBe(true);
-    const exact = channelPreviewOf("short", 5);
-    expect(exact.bodyPreviewTruncated).toBe(false);
+  it("routes a body to the Vault only above the shared inline threshold", () => {
+    expect(channelBodyRoutesFile({ ...BODY, sizeBytes: 65_536, text: "x" })).toBe(false);
+    expect(channelBodyRoutesFile({ ...BODY, sizeBytes: 65_537, text: "x" })).toBe(true);
   });
 });
 
-describe("channel request identity", () => {
-  it("binds the accepted body's captured identity deterministically", () => {
-    const base = {
-      operation: "channel-submit",
-      installationId: "11111111-2222-4333-8444-555555555555",
-      channelId: "aaaaaaaa-0000-4000-8000-000000000001",
-      fields: { kind: "report" as const },
-    };
-    const first = composeChannelRequestDigest({ ...base, body: { sha256: "a".repeat(64), sizeBytes: 3 } });
-    expect(composeChannelRequestDigest({ ...base, body: { sha256: "a".repeat(64), sizeBytes: 3 } })).toBe(first);
-    expect(composeChannelRequestDigest({ ...base, body: { sha256: "b".repeat(64), sizeBytes: 3 } })).not.toBe(first);
-    expect(
-      composeChannelRequestDigest({
-        ...base,
-        fields: { kind: "question" as const },
-        body: { sha256: "a".repeat(64), sizeBytes: 3 },
-      }),
-    ).not.toBe(first);
-  });
-});
-
-describe("channel event metadata closed shapes", () => {
-  it("accepts the exact creation metadata and rejects any drift", () => {
-    const created = {
-      channelId: "aaaaaaaa-0000-4000-8000-000000000001",
-      mainParticipantId: "bbbbbbbb-0000-4000-8000-000000000002",
-    };
-    expect(validateChannelEventMetadata("CHANNEL_CREATED", created).ok).toBe(true);
-    expect(validateChannelEventMetadata("CHANNEL_CREATED", { ...created, extra: 1 }).ok).toBe(false);
-    expect(validateChannelEventMetadata("CHANNEL_CREATED", { channelId: created.channelId }).ok).toBe(false);
-    expect(validateChannelEventMetadata("CHANNEL_CREATED", { ...created, mainParticipantId: "not-a-uuid" }).ok).toBe(
+describe("closed event metadata", () => {
+  it("carries the acting handle in every event and refuses any other free text", () => {
+    const base = { channelId: CHANNEL, actingHandle: "main" };
+    expect(validateChannelEventMetadata("CHANNEL_CREATED", { ...base, mainHandle: "main", extra: 1 }).ok).toBe(false);
+    expect(validateChannelEventMetadata("CHANNEL_CREATED", { channelId: CHANNEL, actingHandle: "main" }).ok).toBe(
       false,
     );
-  });
-
-  it("pins submission row version 1, handling row version 2, and worker/judge registration only", () => {
-    const submission = {
-      channelId: "aaaaaaaa-0000-4000-8000-000000000001",
-      participantId: "bbbbbbbb-0000-4000-8000-000000000002",
-      messageId: "cccccccc-0000-4000-8000-000000000003",
-      kind: "relay_request" as const,
-      assignmentId: null,
-      assignmentLate: false,
-      relayToParticipantId: "dddddddd-0000-4000-8000-000000000004",
-      processingRowVersion: 1,
-    };
-    expect(validateChannelEventMetadata("CHANNEL_MESSAGE_SUBMITTED", submission).ok).toBe(true);
+    expect(validateChannelEventMetadata("CHANNEL_CLOSED", { ...base }).ok).toBe(true);
     expect(
-      validateChannelEventMetadata("CHANNEL_MESSAGE_SUBMITTED", { ...submission, processingRowVersion: 2 }).ok,
-    ).toBe(false);
-    expect(
-      validateChannelEventMetadata("CHANNEL_MESSAGE_HANDLED", {
-        channelId: submission.channelId,
-        actingParticipantId: null,
-        messageId: submission.messageId,
-        processingRowVersion: 2,
-      }).ok,
+      validateChannelEventMetadata("CHANNEL_PARTICIPANT_ADDED", { ...base, handle: "w1", role: "worker" }).ok,
     ).toBe(true);
     expect(
-      validateChannelEventMetadata("CHANNEL_PARTICIPANT_REGISTERED", {
-        channelId: submission.channelId,
-        actingParticipantId: null,
-        participantId: submission.participantId,
-        role: "main",
-      }).ok,
+      validateChannelEventMetadata("CHANNEL_PARTICIPANT_REMOVED", { ...base, handle: "w1", role: "worker" }).ok,
+    ).toBe(false);
+    expect(
+      validateChannelEventMetadata("CHANNEL_MESSAGE_POSTED", { ...base, seq: 1, kind: "report", toHandle: null }).ok,
+    ).toBe(true);
+    expect(
+      validateChannelEventMetadata("CHANNEL_MESSAGE_POSTED", { ...base, seq: 1, kind: "relay_request", toHandle: "w2" })
+        .ok,
+    ).toBe(true);
+    expect(
+      validateChannelEventMetadata("CHANNEL_MESSAGE_POSTED", { ...base, seq: 1, kind: "report", toHandle: "w2" }).ok,
+    ).toBe(false);
+    expect(validateChannelEventMetadata("CHANNEL_MESSAGE_ACKED", { ...base, seq: 0 }).ok).toBe(false);
+    expect(validateChannelEventMetadata("CHANNEL_MESSAGE_ACKED", { ...base, seq: 1.5 }).ok).toBe(false);
+    expect(
+      validateChannelEventMetadata("CHANNEL_CLOSED", { channelId: CHANNEL, actingHandle: "main", body: "text" }).ok,
     ).toBe(false);
   });
 });
 
-describe("channel submit replay-only", () => {
-  const input = {
-    installationId: "11111111-2222-4333-8444-555555555555",
-    maxBytes: 1024,
-    channelId: "aaaaaaaa-0000-4000-8000-000000000001",
-    senderParticipantId: "bbbbbbbb-0000-4000-8000-000000000002",
-    kind: "report" as const,
-    accepted: BODY,
-    idempotencyKey: "key-1",
+/**
+ * An in-memory ChannelRepository over plain maps: the command functions' full
+ * idempotency, duplicate, and event behavior runs against it, with the
+ * transaction boundary recorded so tests can assert what committed.
+ */
+function fakeRepository() {
+  const channels = new Map<string, ChannelRecord>();
+  const rosters = new Map<string, Map<string, ParticipantRecord>>();
+  const messages = new Map<string, MessageRecord[]>();
+  const contents = new Map<string, { inlineText: string | null; storageKey: string | null; materialized: boolean }>();
+  const events: Array<{ id: string; input: ChannelEventInput; createdAt: string }> = [];
+  let idCounter = 0;
+  const nextId = (): string => `aaaaaaaa-0000-4000-8000-${String(++idCounter).padStart(12, "0")}`;
+
+  const insertParticipantRow = (
+    channelId: string,
+    handle: string,
+    role: ParticipantRecord["role"],
+    addedAt: string,
+  ): Result<void> => {
+    const roster = rosters.get(channelId) ?? new Map<string, ParticipantRecord>();
+    roster.set(handle, { channelId, handle, role, addedAt, removedAt: null });
+    rosters.set(channelId, roster);
+    return ok(undefined);
   };
 
-  function recovery(observation: {
-    installationId: string;
-    migrationVersion: number;
-    receipt?: StoredChannelSubmitReceipt | null;
-  }): ChannelRecoveryPorts {
-    return {
-      clock: { now: () => new Date("2026-10-20T00:00:00.000Z") },
-      bodies: {
-        proveAcceptedNonBlank: () => ok(undefined),
-        readAcceptedPreviewSeed: () => ok(""),
-      },
-      inspect: (consume) =>
-        consume({
-          installationId: observation.installationId,
-          migrationVersion: observation.migrationVersion,
-          receipts: {
-            submitReceipt: () => ok(observation.receipt ?? null),
-          },
-          contentState: () => ok({ representation: "file", materialized: true }),
-        }),
-    };
-  }
-
-  const digest = composeChannelRequestDigest({
-    operation: "channel-submit",
-    installationId: input.installationId,
-    channelId: input.channelId,
-    fields: {
-      senderParticipantId: input.senderParticipantId,
-      kind: input.kind,
-      assignmentId: null,
-      relayToParticipantId: null,
-      contextSession: null,
-      contextNode: null,
-      contextAttempt: null,
+  const transaction: ChannelTransaction = {
+    channelByName: (name) => ok(channels.get([...channels.values()].find((c) => c.name === name)?.id ?? "") ?? null),
+    channelById: (id) => ok(channels.get(id) ?? null),
+    participants: (channelId) => ok([...(rosters.get(channelId)?.values() ?? [])]),
+    participant: (channelId, handle) => ok(rosters.get(channelId)?.get(handle) ?? null),
+    messageBySeq: (channelId, seq) => ok(messages.get(channelId)?.find((message) => message.seq === seq) ?? null),
+    pageMessages: (channelId, query, limit) =>
+      ok(
+        (messages.get(channelId) ?? [])
+          .filter(
+            (message) =>
+              (query.handling === "all" || !message.handled) &&
+              (query.afterSeq === null || message.seq > query.afterSeq) &&
+              (query.fromHandle === null || message.senderHandle === query.fromHandle) &&
+              (query.kind === null || message.kind === query.kind),
+          )
+          .slice(0, limit),
+      ),
+    counters: (channelId) => {
+      const all = messages.get(channelId) ?? [];
+      return ok({ total: all.length, unhandled: all.filter((message) => !message.handled).length });
     },
-    body: { sha256: BODY.sha256, sizeBytes: BODY.sizeBytes },
-  });
+    findUnhandledDuplicate: (channelId, senderHandle, kind, toHandle, ref, sha) =>
+      ok(
+        (messages.get(channelId) ?? []).find(
+          (message) =>
+            !message.handled &&
+            message.senderHandle === senderHandle &&
+            message.kind === kind &&
+            message.toHandle === toHandle &&
+            message.ref === ref &&
+            message.content.sha256 === sha,
+        ) ?? null,
+      ),
+    nextSeq: (channelId) => ok((messages.get(channelId) ?? []).reduce((max, m) => Math.max(max, m.seq), 0) + 1),
+    commitContent: (plan: ChannelContentPlan, _owner, createdAt) => {
+      expect(createdAt).toBe(STAMP);
+      contents.set(plan.contentId, {
+        inlineText: plan.kind === "inline" ? plan.text : null,
+        storageKey: plan.kind === "file" ? plan.storageKey : null,
+        materialized: plan.kind === "inline",
+      });
+      return ok(undefined);
+    },
+    insertMessage: (row) => {
+      const list = messages.get(row.channelId) ?? [];
+      list.push(row);
+      messages.set(row.channelId, list);
+      contents.set(row.content.recordId, {
+        inlineText: row.content.inlineText,
+        storageKey: row.content.storageKey,
+        materialized: row.content.representation === "inline",
+      });
+      return ok(undefined);
+    },
+    insertChannel: (row) => {
+      channels.set(row.id, row);
+      rosters.set(row.id, new Map());
+      messages.set(row.id, []);
+      return ok(undefined);
+    },
+    insertParticipant: insertParticipantRow,
+    reRegisterParticipant: (channelId, handle, addedAt) => {
+      const roster = rosters.get(channelId);
+      const existing = roster?.get(handle);
+      if (roster !== undefined && existing !== undefined) roster.set(handle, { ...existing, addedAt, removedAt: null });
+      return ok(undefined);
+    },
+    removeParticipant: (channelId, handle, removedAt) => {
+      const roster = rosters.get(channelId);
+      const existing = roster?.get(handle);
+      if (roster !== undefined && existing !== undefined) roster.set(handle, { ...existing, removedAt });
+      return ok(undefined);
+    },
+    closeChannelRow: (id, closedAt) => {
+      const existing = channels.get(id);
+      if (existing === undefined || existing.state === "closed") return ok("unchanged" as const);
+      channels.set(id, { ...existing, state: "closed", closedAt });
+      return ok("changed" as const);
+    },
+    markHandled: (channelId, seq, handledAt, note) => {
+      const list = messages.get(channelId) ?? [];
+      const message = list.find((entry) => entry.seq === seq);
+      if (message === undefined || message.handled) return err(appError("STORAGE_INTEGRITY_ERROR", "fake"));
+      message.handled = true;
+      message.handledAt = handledAt;
+      message.handleNote = note;
+      return ok(undefined);
+    },
+    appendEvent: (id, input, createdAt) => {
+      const row = channelDomainEvent(id, input, createdAt);
+      const checked = validateChannelEventMetadata(
+        row.eventType as Parameters<typeof validateChannelEventMetadata>[0],
+        row.metadata,
+      );
+      if (!checked.ok) return checked;
+      events.push({ id, input, createdAt });
+      return ok(undefined);
+    },
+  };
 
-  it("refuses a database below the channel floor with STORAGE_SCHEMA_UNSUPPORTED", () => {
-    const outcome = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 10 }),
-      input,
-    );
-    expect(!outcome.ok && outcome.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
-  });
+  const reader: ChannelReader = {
+    channelByName: transaction.channelByName,
+    channelById: transaction.channelById,
+    participants: transaction.participants,
+    participant: transaction.participant,
+    pageMessages: transaction.pageMessages,
+    counters: transaction.counters,
+    listChannels: (filter) =>
+      ok(
+        [...channels.values()]
+          .filter((channel) => filter.state === "all" || channel.state === filter.state)
+          .map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            title: channel.title,
+            state: channel.state,
+            main: [...(rosters.get(channel.id)?.values() ?? [])].find((p) => p.role === "main")?.handle ?? "",
+            createdAt: channel.createdAt,
+            closedAt: channel.closedAt,
+          })),
+      ),
+  };
 
-  it("replays the retained original outcome before any live-state eligibility", () => {
-    const receipt: StoredChannelSubmitReceipt = {
-      requestHash: digest,
-      message: validOriginalSummary(),
-    };
-    const outcome = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 11, receipt }),
-      input,
-    );
-    expect(outcome.ok && outcome.value.message.handled).toBe(false);
-  });
+  const repository: ChannelRepository = {
+    run: (work) => work(transaction),
+    read: (work) => work(reader),
+  };
+  return { repository, channels, rosters, messages, contents, events, nextId };
+}
 
-  function validOriginalSummary(): StoredChannelSubmitReceipt["message"] {
-    return {
-      id: "cccccccc-0000-4000-8000-000000000003",
-      channelId: input.channelId,
-      kind: "report",
-      senderParticipantId: input.senderParticipantId,
-      senderHandle: "worker",
-      assignmentId: null,
-      assignmentLate: false,
-      relayToParticipantId: null,
-      contextSession: null,
-      contextNode: null,
-      contextAttempt: null,
-      handled: false,
-      handledAt: null,
-      handledByParticipantId: null,
-      handledByKind: null,
-      handleNote: null,
-      processingRowVersion: 1,
-      createdAt: "2026-10-20T00:00:00.000Z",
-      bodyBytes: 11,
-      bodyPreview: "report body",
-      bodyPreviewTruncated: false,
-    };
-  }
+interface Harness {
+  ports: ChannelCommandPorts;
+  repo: ReturnType<typeof fakeRepository>;
+  activation: { status: "completed" | "paused" };
+  binding: string;
+  warnings: string[];
+}
 
-  it("reports an unknown outcome for a missing receipt, a conflict for a changed request, and an integrity refusal for a malformed one", () => {
-    const missing = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 11 }),
-      input,
-    );
-    expect(!missing.ok && missing.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-    // A fully valid retained receipt under a different request hash conflicts;
-    // the malformed receipt is a separate integrity refusal.
-    const validReceipt: StoredChannelSubmitReceipt = {
-      requestHash: "f".repeat(64),
-      message: validOriginalSummary(),
-    };
-    const conflict = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 11, receipt: validReceipt }),
-      input,
-    );
-    expect(!conflict.ok && conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
-    const malformed: StoredChannelSubmitReceipt = {
-      requestHash: digest,
-      message: {} as StoredChannelSubmitReceipt["message"],
-    };
-    const refused = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 11, receipt: malformed }),
-      input,
-    );
-    expect(!refused.ok && refused.error.code).toBe("STORAGE_INTEGRITY_ERROR");
-    const otherInstallation = submitMessageReplayOnly(
-      recovery({ installationId: "99999999-9999-4999-8999-999999999999", migrationVersion: 11, receipt: validReceipt }),
-      input,
-    );
-    expect(!otherInstallation.ok && otherInstallation.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-  });
-
-  it("rejects a blank accepted body before any inspection", () => {
-    const blank = submitMessageReplayOnly(recovery({ installationId: input.installationId, migrationVersion: 11 }), {
-      ...input,
-      accepted: { kind: "text", text: "  ", sizeBytes: 2, sha256: "0".repeat(64) },
-    });
-    expect(!blank.ok && blank.error.code).toBe("CHN_INVALID_INPUT");
-  });
-
-  it("samples the lookup Clock inside the captured inspection so capture time cannot revive an expired receipt", () => {
-    // The inspect callback models a capture that advanced the Clock by one
-    // second before the receipt read runs.
-    const baseMs = Date.parse("2026-10-20T00:00:00.000Z");
-    let currentMs = baseMs;
-    const clock = { now: () => new Date(currentMs) };
-    const recoveryWithDelay: ChannelRecoveryPorts = {
-      clock,
-      bodies: {
-        proveAcceptedNonBlank: () => ok(undefined),
-        readAcceptedPreviewSeed: () => ok(BODY.text),
+function harness(): Harness {
+  const repo = fakeRepository();
+  const activation = { status: "completed" as "completed" | "paused" };
+  const binding = "/vault";
+  const warnings: string[] = [];
+  const ports: ChannelCommandPorts = {
+    installationId: "installation",
+    maxBytes: 1024 * 1024,
+    defaultPageSize: 50,
+    channels: repo.repository,
+    bodies: {
+      proveAcceptedNonBlank: () => ok(undefined),
+      resolveBody: (ref) => {
+        const content = repo.contents.get(ref.recordId);
+        if (content === undefined) return err(appError("STORAGE_INTEGRITY_ERROR", "missing record"));
+        if (content.inlineText !== null) return ok({ state: "inline" as const, text: content.inlineText });
+        if (!content.materialized) return ok({ state: "pending" as const });
+        return ok({ state: "materialized" as const, text: "file body", path: `/vault/${content.storageKey ?? ""}` });
       },
-      inspect: (consume) => {
-        currentMs = baseMs + 1000;
-        return consume({
-          installationId: input.installationId,
-          migrationVersion: 11,
-          receipts: {
-            // Expiry is judged against the post-capture sample: a receipt
-            // expiring exactly at the sampled now is expired, and one expiring
-            // strictly later is eligible.
-            submitReceipt: (_key, _scope, now) => {
-              const sampled = Date.parse(now);
-              expect(sampled).toBe(baseMs + 1000);
-              return ok({
-                requestHash: digest,
-                message: validOriginalSummary(),
-              });
-            },
-          },
-          contentState: () => ok({ representation: "file", materialized: true }),
-        });
-      },
-    };
-    const outcome = submitMessageReplayOnly(recoveryWithDelay, input);
-    expect(outcome.ok).toBe(true);
-    // Equality expiry: a receipt whose expiresAt equals the in-inspection now
-    // must read as expired (CHN_REPLAY_UNAVAILABLE), never revived.
-    const equalityExpired: ChannelRecoveryPorts = {
-      clock,
-      bodies: {
-        proveAcceptedNonBlank: () => ok(undefined),
-        readAcceptedPreviewSeed: () => ok(BODY.text),
-      },
-      inspect: (consume) => {
-        currentMs = baseMs + 1000;
-        return consume({
-          installationId: input.installationId,
-          migrationVersion: 11,
-          receipts: {
-            submitReceipt: (_key, _scope, now) => {
-              // The strict eligibility rule the adapter's SQL applies:
-              // expires_at > now, equality expired.
-              const expiresAtMs = baseMs + 1000;
-              return ok(
-                Date.parse("2026-10-20T00:00:01.000Z") === expiresAtMs && expiresAtMs > Date.parse(now)
-                  ? { requestHash: digest, message: validOriginalSummary() }
-                  : null,
-              );
-            },
-          },
-          contentState: () => ok({ representation: "file", materialized: true }),
-        });
-      },
-    };
-    const refused = submitMessageReplayOnly(equalityExpired, input);
-    expect(!refused.ok && refused.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-  });
+    },
+    staging: {
+      freshBinding: () => ok({ vaultPath: binding }),
+      stageAccepted: (accepted) =>
+        ok({ stagedPath: "staging/x", sizeBytes: accepted.sizeBytes, sha256: accepted.sha256 }),
+      activateContent: () => ok({ status: activation.status }),
+    },
+    clock: { now: () => new Date(Date.parse(STAMP)) },
+    ids: { next: repo.nextId },
+    disclosures: {
+      backupEnabled: false,
+      thresholdBytes: 1,
+      largeContent: () => {},
+      completionWarning: (t) => warnings.push(t),
+    },
+  };
+  return { ports, repo, activation, binding, warnings };
+}
 
-  it("rejects malformed assignment inputs without inspecting while preserving recovery for valid changed UUIDs", () => {
-    let inspections = 0;
-    const original = recovery({ installationId: input.installationId, migrationVersion: 11 });
-    const ports: ChannelRecoveryPorts = {
-      ...original,
-      inspect: (consume) => {
-        inspections += 1;
-        return original.inspect(consume);
-      },
-    };
-    for (const assignmentId of ["", "not-a-uuid", 0, false, {}, []]) {
-      const refused = submitMessageReplayOnly(ports, { ...input, assignmentId });
-      expect(!refused.ok && refused.error.code).toBe("CHN_ASSIGNMENT_NOT_FOUND");
-    }
-    expect(inspections).toBe(0);
-    const changedInput = { ...input, assignmentId: "dddddddd-0000-4000-8000-000000000004" };
-    const unavailable = submitMessageReplayOnly(ports, changedInput);
-    expect(!unavailable.ok && unavailable.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-    expect(inspections).toBe(1);
-    const conflict = submitMessageReplayOnly(
-      recovery({
-        installationId: input.installationId,
-        migrationVersion: 11,
-        receipt: { requestHash: digest, message: validOriginalSummary() },
-      }),
-      changedInput,
+const unwrap = <T>(result: Result<T, AppError>): T => {
+  if (!result.ok) throw new Error(`unexpected failure: ${result.error.code} ${result.error.message}`);
+  return result.value;
+};
+
+describe("the rebuilt command behavior", () => {
+  it("creates idempotently and refuses a closed name or a different main handle", () => {
+    const { ports, repo } = harness();
+    const first = unwrap<{ channel: { id: string; main: string; participantCount: number }; existing: boolean }>(
+      createChannel(ports, { name: "aq-run-42", main: "orchestrator" }),
     );
-    expect(!conflict.ok && conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(first.existing).toBe(false);
+    expect(first.channel.main).toBe("orchestrator");
+    expect(first.channel.participantCount).toBe(1);
+    const repeat = unwrap(createChannel(ports, { name: "aq-run-42", main: "orchestrator" }));
+    expect(repeat.existing).toBe(true);
+    expect(repeat.channel.id).toBe(first.channel.id);
+    const differentMain = createChannel(ports, { name: "aq-run-42", main: "other" });
+    expect(differentMain.ok).toBe(false);
+    expect(!differentMain.ok && differentMain.error.code).toBe("CHN_INVALID_INPUT");
+    unwrap(closeChannel(ports, { channelRef: "aq-run-42" }));
+    const closed = createChannel(ports, { name: "aq-run-42", main: "orchestrator" });
+    expect(!closed.ok && closed.error.code).toBe("CHN_CLOSED");
+    expect(repo.events.map((entry) => entry.input.type)).toEqual(["CHANNEL_CREATED", "CHANNEL_CLOSED"]);
   });
 
-  it("keeps relay-target parity with the normal submit path before any inspection", () => {
-    const missingTarget = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 11 }),
-      { ...input, kind: "relay_request" as const, relayToParticipantId: undefined },
+  it("adds, removes and re-adds idempotently with the role kept", () => {
+    const { ports, repo } = harness();
+    unwrap(createChannel(ports, { name: "c" }));
+    const added = unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    expect(added.participant.removedAt).toBeNull();
+    const repeat = unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    expect(repeat.participant.addedAt).toBe(added.participant.addedAt);
+    const differentRole = addParticipant(ports, { channelRef: "c", handle: "w1", role: "judge" });
+    expect(!differentRole.ok && differentRole.error.code).toBe("CHN_INVALID_INPUT");
+    const removed = unwrap(removeParticipant(ports, { channelRef: "c", handle: "w1" }));
+    expect(removed.participant.removedAt).toBe(STAMP);
+    const removeRepeat = unwrap(removeParticipant(ports, { channelRef: "c", handle: "w1" }));
+    expect(removeRepeat.participant.removedAt).toBe(STAMP);
+    const reAdded = unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    expect(reAdded.participant.removedAt).toBeNull();
+    expect(reAdded.participant.addedAt).toBe(STAMP);
+    const removeMain = removeParticipant(ports, { channelRef: "c", handle: "main" });
+    expect(!removeMain.ok && removeMain.error.code).toBe("CHN_INVALID_INPUT");
+    const removeGhost = removeParticipant(ports, { channelRef: "c", handle: "ghost" });
+    expect(!removeGhost.ok && removeGhost.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
+    expect(repo.events.map((entry) => entry.input.type)).toEqual([
+      "CHANNEL_CREATED",
+      "CHANNEL_PARTICIPANT_ADDED",
+      "CHANNEL_PARTICIPANT_REMOVED",
+      "CHANNEL_PARTICIPANT_ADDED",
+    ]);
+    const reAddedDifferentRole = addParticipant(ports, { channelRef: "c", handle: "w1", role: "judge" });
+    expect(!reAddedDifferentRole.ok && reAddedDifferentRole.error.code).toBe("CHN_INVALID_INPUT");
+  });
+
+  it("proves the duplicate-by-content rule over the three identity shapes", () => {
+    const { ports, repo } = harness();
+    const channelId = unwrap(createChannel(ports, { name: "c" })).channel.id;
+    unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    unwrap(addParticipant(ports, { channelRef: "c", handle: "w2", role: "judge" }));
+
+    // Shape one: a plain report with NULL --to and NULL --ref.
+    const first = unwrap(postMessage(ports, { channelRef: "c", from: "w1", kind: "report", accepted: BODY }));
+    expect(first.duplicate).toBe(false);
+    expect(first.message.seq).toBe(1);
+    const retry = unwrap(postMessage(ports, { channelRef: "c", from: "w1", kind: "report", accepted: BODY }));
+    expect(retry.duplicate).toBe(true);
+    expect(retry.message.seq).toBe(1);
+
+    // Shape two: a non-NULL --ref distinguishes identities.
+    const withRef = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w1", kind: "report", ref: "pr-42", accepted: BODY }),
     );
-    expect(!missingTarget.ok && missingTarget.error.code).toBe("CHN_INVALID_INPUT");
-    const forbiddenTarget = submitMessageReplayOnly(
-      recovery({ installationId: input.installationId, migrationVersion: 11 }),
-      { ...input, relayToParticipantId: "dddddddd-0000-4000-8000-000000000004" },
+    expect(withRef.duplicate).toBe(false);
+    const withRefRetry = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w1", kind: "report", ref: "pr-42", accepted: BODY }),
     );
-    expect(!forbiddenTarget.ok && forbiddenTarget.error.code).toBe("CHN_INVALID_INPUT");
-  });
+    expect(withRefRetry.duplicate).toBe(true);
+    expect(withRefRetry.message.seq).toBe(withRef.message.seq);
+    const refMiss = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w1", kind: "report", ref: "pr-43", accepted: BODY }),
+    );
+    expect(refMiss.duplicate).toBe(false);
 
-  it("returns an inline recorded outcome with false and never probes", () => {
-    let probes = 0;
-    const base = recovery({
-      installationId: input.installationId,
-      migrationVersion: 11,
-      receipt: { requestHash: digest, message: validOriginalSummary() },
-    });
-    const ports: ChannelRecoveryPorts = {
-      ...base,
-      inspect: (consume) =>
-        base.inspect((observation) =>
-          consume({
-            ...observation,
-            contentState: () => {
-              probes += 1;
-              return err(appError("STORAGE_INTEGRITY_ERROR", "probe must not run for inline content"));
-            },
-          }),
-        ),
-    };
-    const outcome = submitMessageReplayOnly(ports, input);
-    expect(outcome.ok).toBe(true);
-    if (outcome.ok) {
-      expect(outcome.value.contentActivating).toBe(false);
-      expect(outcome.value.message).toEqual(validOriginalSummary());
-    }
-    expect(probes).toBe(0);
-  });
+    // Shape three: a relay_request with --to; and the sender is part of the identity.
+    const relay = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w1", kind: "relay_request", to: "w2", accepted: BODY }),
+    );
+    expect(relay.duplicate).toBe(false);
+    const relayRetry = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w1", kind: "relay_request", to: "w2", accepted: BODY }),
+    );
+    expect(relayRetry.duplicate).toBe(true);
+    const otherBody = unwrap(postMessage(ports, { channelRef: "c", from: "w1", kind: "report", accepted: OTHER_BODY }));
+    expect(otherBody.duplicate).toBe(false);
+    const sameBodyOtherSender = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w2", kind: "report", accepted: BODY }),
+    );
+    expect(sameBodyOtherSender.duplicate).toBe(false);
 
-  it("derives a file-backed recorded outcome read-only and discloses an unobservable state", () => {
-    const spool: AcceptedChannelBody = {
-      kind: "spool",
-      spoolPath: "/spool/original",
-      sizeBytes: 70_000,
+    // An identical post after the original was handled creates a new message.
+    unwrap(ackMessages(ports, { channelRef: "c", seqs: [1] }));
+    const afterAck = unwrap(postMessage(ports, { channelRef: "c", from: "w1", kind: "report", accepted: BODY }));
+    expect(afterAck.duplicate).toBe(false);
+    expect(afterAck.message.seq).toBeGreaterThan(1);
+
+    // A retry after close still reports the duplicate (the check runs first);
+    // only a genuinely fresh post meets the closed refusal.
+    const beforeClose = repo.messages.get(channelId)?.length ?? 0;
+    unwrap(closeChannel(ports, { channelRef: "c" }));
+    const closedRetry = unwrap(
+      postMessage(ports, { channelRef: "c", from: "w1", kind: "report", ref: "pr-42", accepted: BODY }),
+    );
+    expect(closedRetry.duplicate).toBe(true);
+    const closedDuplicate = unwrap(postMessage(ports, { channelRef: "c", from: "w2", kind: "report", accepted: BODY }));
+    expect(closedDuplicate.duplicate).toBe(true);
+    const freshBody: AcceptedChannelBody = {
+      kind: "text",
+      text: "fresh identity",
+      sizeBytes: 13,
       sha256: "e".repeat(64),
     };
-    const fields = {
-      senderParticipantId: input.senderParticipantId,
-      kind: "report" as const,
-      assignmentId: null,
-      relayToParticipantId: null,
-      contextSession: null,
-      contextNode: null,
-      contextAttempt: null,
-    };
-    const spoolDigest = composeChannelRequestDigest({
-      operation: "channel-submit",
-      installationId: input.installationId,
-      channelId: input.channelId,
-      fields,
-      body: { sha256: spool.sha256, sizeBytes: spool.sizeBytes },
-    });
-    const recorded = { ...validOriginalSummary(), bodyBytes: 70_000, bodyPreview: "", bodyPreviewTruncated: true };
-    const withState = (
-      state: { representation: "inline" | "file"; materialized: boolean } | null,
-      warnings: string[],
-    ): ChannelRecoveryPorts => {
-      const base = recovery({
-        installationId: input.installationId,
-        migrationVersion: 11,
-        receipt: { requestHash: spoolDigest, message: recorded },
-      });
-      return {
-        ...base,
-        warnings: (text) => warnings.push(text),
-        inspect: (consume) =>
-          base.inspect((observation) =>
-            consume({
-              ...observation,
-              contentState: () =>
-                state === null
-                  ? err(
-                      appError(
-                        "STORAGE_INTEGRITY_ERROR",
-                        "The committed Channel message or its content record is missing.",
-                      ),
-                    )
-                  : ok(state),
-            }),
-          ),
-      };
-    };
-    const observed = [
-      withState({ representation: "file", materialized: true }, []),
-      withState({ representation: "file", materialized: false }, []),
-    ];
-    const materialized = submitMessageReplayOnly(observed[0] as ChannelRecoveryPorts, { ...input, accepted: spool });
-    expect(materialized.ok && materialized.value.contentActivating).toBe(false);
-    const unmaterialized = submitMessageReplayOnly(observed[1] as ChannelRecoveryPorts, { ...input, accepted: spool });
-    expect(unmaterialized.ok && unmaterialized.value.contentActivating).toBe(true);
-    const warnings: string[] = [];
-    const unobservable = submitMessageReplayOnly(withState(null, warnings), { ...input, accepted: spool });
-    expect(unobservable.ok).toBe(true);
-    if (unobservable.ok) {
-      expect(unobservable.value.contentActivating).toBe(true);
-      expect(unobservable.value.message).toEqual(recorded);
-    }
-    expect(warnings).toEqual([
-      `the content-state probe for message ${recorded.id} failed (The committed Channel message or its content record is missing.); activation is not confirmed and contentActivating is reported as true`,
-    ]);
+    const freshAfterClose = postMessage(ports, { channelRef: "c", from: "w1", kind: "report", accepted: freshBody });
+    expect(!freshAfterClose.ok && freshAfterClose.error.code).toBe("CHN_CLOSED");
+    expect(repo.messages.get(channelId)?.length ?? 0).toBe(beforeClose);
+
+    // Exactly one posting event per created message, none for duplicates.
+    const posted = repo.events.filter((entry) => entry.input.type === "CHANNEL_MESSAGE_POSTED");
+    expect(posted.length).toBe(repo.messages.get(channelId)?.length);
   });
 
-  it("keeps receipt-validation results without probing the content state", () => {
-    let probes = 0;
-    const withCountingProbe = (ports: ChannelRecoveryPorts): ChannelRecoveryPorts => ({
-      ...ports,
-      inspect: (consume) =>
-        ports.inspect((observation) =>
-          consume({
-            ...observation,
-            contentState: () => {
-              probes += 1;
-              return ok({ representation: "file", materialized: false });
-            },
-          }),
-        ),
+  it("keeps posting upstream-only and validates the relay target", () => {
+    const { ports } = harness();
+    unwrap(createChannel(ports, { name: "c" }));
+    unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    const mainPost = postMessage(ports, { channelRef: "c", from: "main", kind: "report", accepted: BODY });
+    expect(!mainPost.ok && mainPost.error.code).toBe("CHN_INVALID_INPUT");
+    expect(!mainPost.ok && mainPost.error.message).toContain("upstream");
+    const relayWithoutTo = postMessage(ports, { channelRef: "c", from: "w1", kind: "relay_request", accepted: BODY });
+    expect(!relayWithoutTo.ok && relayWithoutTo.error.code).toBe("CHN_INVALID_INPUT");
+    const toWithReport = postMessage(ports, {
+      channelRef: "c",
+      from: "w1",
+      kind: "report",
+      to: "main",
+      accepted: BODY,
     });
-    const conflict = submitMessageReplayOnly(
-      withCountingProbe(
-        recovery({
-          installationId: input.installationId,
-          migrationVersion: 11,
-          receipt: { requestHash: "f".repeat(64), message: validOriginalSummary() },
+    expect(!toWithReport.ok && toWithReport.error.code).toBe("CHN_INVALID_INPUT");
+    const ghostTarget = postMessage(ports, {
+      channelRef: "c",
+      from: "w1",
+      kind: "relay_request",
+      to: "ghost",
+      accepted: BODY,
+    });
+    expect(!ghostTarget.ok && ghostTarget.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
+    const removedSenderHarness = harness();
+    unwrap(createChannel(removedSenderHarness.ports, { name: "c" }));
+    unwrap(addParticipant(removedSenderHarness.ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    unwrap(removeParticipant(removedSenderHarness.ports, { channelRef: "c", handle: "w1" }));
+    const removed = postMessage(removedSenderHarness.ports, {
+      channelRef: "c",
+      from: "w1",
+      kind: "report",
+      accepted: BODY,
+    });
+    expect(!removed.ok && removed.error.code).toBe("CHN_PARTICIPANT_NOT_FOUND");
+  });
+
+  it("acks all-or-nothing with alreadyHandled and immutable decisions", () => {
+    const { ports, repo } = harness();
+    unwrap(createChannel(ports, { name: "c" }));
+    unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    for (let index = 0; index < 3; index += 1) {
+      unwrap(
+        postMessage(ports, {
+          channelRef: "c",
+          from: "w1",
+          kind: "report",
+          accepted: { ...BODY, text: `body ${index}`, sha256: `${String(index)}`.repeat(64) },
         }),
-      ),
-      input,
+      );
+    }
+    const missing = ackMessages(ports, { channelRef: "c", seqs: [1, 99] });
+    expect(!missing.ok && missing.error.code).toBe("CHN_MESSAGE_NOT_FOUND");
+    expect(!missing.ok && missing.error.message).toContain("99");
+    const partial = unwrap(ackMessages(ports, { channelRef: "c", seqs: [1, 2], note: "reviewed" }));
+    expect(partial.handled).toEqual([1, 2]);
+    expect(partial.alreadyHandled).toEqual([]);
+    expect(partial.note).toBe("reviewed");
+    const repeat = unwrap(ackMessages(ports, { channelRef: "c", seqs: [2, 3] }));
+    expect(repeat.handled).toEqual([3]);
+    expect(repeat.alreadyHandled).toEqual([2]);
+    const acked = repo.events.filter((entry) => entry.input.type === "CHANNEL_MESSAGE_ACKED");
+    expect(acked.length).toBe(3);
+    unwrap(closeChannel(ports, { channelRef: "c" }));
+    const afterClose = unwrap(ackMessages(ports, { channelRef: "c", seqs: [3] }));
+    expect(afterClose.alreadyHandled).toEqual([3]);
+  });
+
+  it("carries the acting handle in every emitted event", () => {
+    const { ports, repo } = harness();
+    unwrap(createChannel(ports, { name: "c", main: "boss" }));
+    unwrap(addParticipant(ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    unwrap(postMessage(ports, { channelRef: "c", from: "w1", kind: "relay_request", to: "boss", accepted: BODY }));
+    unwrap(ackMessages(ports, { channelRef: "c", seqs: [1] }));
+    unwrap(removeParticipant(ports, { channelRef: "c", handle: "w1" }));
+    unwrap(closeChannel(ports, { channelRef: "c" }));
+    const byType = new Map(repo.events.map((entry) => [entry.input.type, entry.input]));
+    expect((byType.get("CHANNEL_CREATED") as { actingHandle: string }).actingHandle).toBe("boss");
+    expect((byType.get("CHANNEL_PARTICIPANT_ADDED") as { actingHandle: string; handle: string }).actingHandle).toBe(
+      "boss",
     );
-    expect(!conflict.ok && conflict.error.code).toBe("IDEMPOTENCY_CONFLICT");
-    const missing = submitMessageReplayOnly(
-      withCountingProbe(recovery({ installationId: input.installationId, migrationVersion: 11 })),
-      input,
+    expect((byType.get("CHANNEL_PARTICIPANT_ADDED") as { actingHandle: string; handle: string }).handle).toBe("w1");
+    const posted = byType.get("CHANNEL_MESSAGE_POSTED") as { actingHandle: string; toHandle: string };
+    expect(posted.actingHandle).toBe("w1");
+    expect(posted.toHandle).toBe("boss");
+    expect((byType.get("CHANNEL_MESSAGE_ACKED") as { actingHandle: string }).actingHandle).toBe("boss");
+    expect((byType.get("CHANNEL_PARTICIPANT_REMOVED") as { actingHandle: string; handle: string }).handle).toBe("w1");
+    expect((byType.get("CHANNEL_CLOSED") as { actingHandle: string }).actingHandle).toBe("boss");
+  });
+
+  it("rolls back with CONFIG_CONFLICT when the Vault binding changed after staging", () => {
+    const harnessInstance = harness();
+    const fileBody: AcceptedChannelBody = {
+      kind: "text",
+      text: "x".repeat(65_537),
+      sizeBytes: 65_537,
+      sha256: "c".repeat(64),
+    };
+    unwrap(createChannel(harnessInstance.ports, { name: "c" }));
+    unwrap(addParticipant(harnessInstance.ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    const conflictChannelId = unwrap(createChannel(harnessInstance.ports, { name: "c" })).channel.id;
+    unwrap(addParticipant(harnessInstance.ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    const before = harnessInstance.repo.messages.get(conflictChannelId)?.length ?? 0;
+    // The staged binding differs from the in-transaction re-read.
+    const original = harnessInstance.ports.staging.freshBinding;
+    let calls = 0;
+    harnessInstance.ports.staging.freshBinding = () => {
+      calls += 1;
+      return calls === 1 ? original() : ok({ vaultPath: "/moved-vault" });
+    };
+    const conflict = postMessage(harnessInstance.ports, {
+      channelRef: "c",
+      from: "w1",
+      kind: "report",
+      accepted: fileBody,
+    });
+    expect(!conflict.ok && conflict.error.code).toBe("CONFIG_CONFLICT");
+    expect(harnessInstance.repo.messages.get(conflictChannelId)?.length ?? 0).toBe(before);
+  });
+
+  it("keeps a committed post with a paused activation reportable as pending (CHN-012)", () => {
+    const harnessInstance = harness();
+    harnessInstance.activation.status = "paused";
+    const fileBody: AcceptedChannelBody = {
+      kind: "text",
+      text: "x".repeat(65_537),
+      sizeBytes: 65_537,
+      sha256: "d".repeat(64),
+    };
+    const pausedChannelId = unwrap(createChannel(harnessInstance.ports, { name: "c" })).channel.id;
+    unwrap(addParticipant(harnessInstance.ports, { channelRef: "c", handle: "w1", role: "worker" }));
+    const posted = unwrap(
+      postMessage(harnessInstance.ports, { channelRef: "c", from: "w1", kind: "report", accepted: fileBody }),
     );
-    expect(!missing.ok && missing.error.code).toBe("CHN_REPLAY_UNAVAILABLE");
-    const malformed = submitMessageReplayOnly(
-      withCountingProbe(
-        recovery({
-          installationId: input.installationId,
-          migrationVersion: 11,
-          receipt: { requestHash: digest, message: {} as StoredChannelSubmitReceipt["message"] },
-        }),
-      ),
-      input,
-    );
-    expect(!malformed.ok && malformed.error.code).toBe("STORAGE_INTEGRITY_ERROR");
-    expect(probes).toBe(0);
+    expect(posted.duplicate).toBe(false);
+    expect(posted.message.body).toBeNull();
+    expect(posted.message.bodyPath).toBeNull();
+    expect(posted.message.bodyPending).toBe(true);
+    expect(harnessInstance.repo.messages.get(pausedChannelId)?.length).toBe(1);
+  });
+
+  it("refines the shared typed errors for the Channel surface", () => {
+    const materializing = channelError(appError("CONTENT_MATERIALIZING", "x"));
+    expect(materializing.recovery?.suggestedCommand).toContain("needs no resubmission");
+    const integrity = channelError(appError("STORAGE_INTEGRITY_ERROR", "x"));
+    expect(integrity.recovery?.suggestedCommand).toContain("sorage doctor");
+    const schema = channelError(appError("STORAGE_SCHEMA_UNSUPPORTED", "x"));
+    expect(schema.recovery?.suggestedCommand).toContain("never downgrade");
+    expect(channelError(appError("CHN_NOT_FOUND", "x")).code).toBe("CHN_NOT_FOUND");
+  });
+
+  it("keeps the name bound within its byte budget", () => {
+    expect(utf8ByteLength("\uc544".repeat(86))).toBeGreaterThan(CHANNEL_NAME_BYTES);
+    expect(validateChannelName("\uc544".repeat(86)).ok).toBe(false);
   });
 });

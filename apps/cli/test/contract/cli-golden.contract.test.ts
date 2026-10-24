@@ -83,45 +83,80 @@ describe("cli golden snapshots", () => {
   });
 
   it("pins vault move without --as-user refusing with USER_CONTEXT_REQUIRED", () => {
-    const init = runCli(["init", "--non-interactive"], "/tmp/sorage-golden-home2");
-    expect(init.status).toBe(0);
-    const run = runCli(["vault", "move", "--to", "/tmp/sorage-golden-moved"], "/tmp/sorage-golden-home2");
-    expect(run.status).toBe(77);
-    expect(run.stdout).toBe("");
-    const golden = readFileSync(`${goldenDir}vault-move-requires-user-context.txt`, "utf8");
-    expect(run.stderr).toBe(golden);
+    const parent = mkdtempSync(join(tmpdir(), "sorage-golden-move-"));
+    const home = join(parent, "home");
+    try {
+      const init = runCli(["init", "--non-interactive"], home);
+      expect(init.status).toBe(0);
+      const run = runCli(["vault", "move", "--to", join(parent, "moved")], home);
+      expect(run.status).toBe(77);
+      expect(run.stdout).toBe("");
+      const golden = readFileSync(`${goldenDir}vault-move-requires-user-context.txt`, "utf8").replaceAll(
+        "/tmp/sorage-golden-moved",
+        join(parent, "moved").replaceAll("\\", "/"),
+      );
+      expect(run.stderr).toBe(golden);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("pins backup restore without --as-user refusing with USER_CONTEXT_REQUIRED", () => {
-    const run = runCli(
-      ["backup", "restore", "--from", "/tmp/sorage-golden-restore-source", "--dry-run"],
-      "/tmp/sorage-golden-home2",
-    );
-    expect(run.status).toBe(77);
-    expect(run.stdout).toBe("");
-    const golden = readFileSync(`${goldenDir}backup-restore-requires-user-context.txt`, "utf8");
-    expect(run.stderr).toBe(golden);
+    const parent = mkdtempSync(join(tmpdir(), "sorage-golden-restore-"));
+    const home = join(parent, "home");
+    const source = join(parent, "restore-source");
+    try {
+      const init = runCli(["init", "--non-interactive"], home);
+      expect(init.status).toBe(0);
+      const run = runCli(["backup", "restore", "--from", source, "--dry-run"], home);
+      expect(run.status).toBe(77);
+      expect(run.stdout).toBe("");
+      const golden = readFileSync(`${goldenDir}backup-restore-requires-user-context.txt`, "utf8").replaceAll(
+        "/tmp/sorage-golden-restore-source",
+        source.replaceAll("\\", "/"),
+      );
+      expect(run.stderr).toBe(golden);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("pins backup restore against a directory that is not a Vault", () => {
-    const run = runCli(
-      ["backup", "restore", "--from", "/tmp/sorage-golden-not-a-vault", "--dry-run", "--as-user"],
-      "/tmp/sorage-golden-home2",
-    );
-    expect(run.status).toBe(73);
-    expect(run.stdout).toBe("");
-    const golden = readFileSync(`${goldenDir}backup-restore-invalid-vault.txt`, "utf8");
-    expect(run.stderr).toBe(golden);
+    const parent = mkdtempSync(join(tmpdir(), "sorage-golden-invalid-"));
+    const home = join(parent, "home");
+    const notAVault = join(parent, "not-a-vault");
+    try {
+      const init = runCli(["init", "--non-interactive"], home);
+      expect(init.status).toBe(0);
+      const run = runCli(["backup", "restore", "--from", notAVault, "--dry-run", "--as-user"], home);
+      expect(run.status).toBe(73);
+      expect(run.stdout).toBe("");
+      const golden = readFileSync(`${goldenDir}backup-restore-invalid-vault.txt`, "utf8").replaceAll(
+        "/tmp/sorage-golden-not-a-vault",
+        notAVault.replaceAll("\\", "/"),
+      );
+      expect(run.stderr).toBe(golden);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it("exits 2 when backup restore passes neither or both of --dry-run and --confirm", () => {
-    const run = runCli(
-      ["backup", "restore", "--from", "/tmp/sorage-golden-restore-source", "--as-user"],
-      "/tmp/sorage-golden-home2",
-    );
-    expect(run.status).toBe(2);
-    expect(run.stdout).toBe("");
-    const golden = readFileSync(`${goldenDir}backup-restore-needs-exactly-one-mode.txt`, "utf8");
-    expect(run.stderr).toBe(golden);
+    const parent = mkdtempSync(join(tmpdir(), "sorage-golden-modes-"));
+    const home = join(parent, "home");
+    try {
+      const init = runCli(["init", "--non-interactive"], home);
+      expect(init.status).toBe(0);
+      const run = runCli(["backup", "restore", "--from", join(parent, "restore-source"), "--as-user"], home);
+      expect(run.status).toBe(2);
+      expect(run.stdout).toBe("");
+      const golden = readFileSync(`${goldenDir}backup-restore-needs-exactly-one-mode.txt`, "utf8").replaceAll(
+        "/tmp/sorage-golden-restore-source",
+        join(parent, "restore-source").replaceAll("\\", "/"),
+      );
+      expect(run.stderr).toBe(golden);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
