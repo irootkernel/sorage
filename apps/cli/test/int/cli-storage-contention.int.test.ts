@@ -1091,30 +1091,13 @@ describe("a write-protected installation (TASK-119)", () => {
         "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.\n",
     );
 
+    // A covered zero-write read succeeds on the write-protected installation
+    // with its normal output (SHR-015's EPIC-018 amendment; storage opens
+    // read-only through the shared covered-read primitive).
     const project = capture();
-    expect(runCli(["project", "list", "--json"], project.ports)).toBe(75);
-    const projectEnvelope = envelopeOf(project);
-    expect(projectEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-    expect(projectEnvelope.error?.message).toContain("Project storage is write-protected");
-    expect(projectEnvelope.error?.recovery?.suggestedCommand).toBe(
-      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.",
-    );
-    expect(projectEnvelope.error?.recovery?.suggestedCommand).not.toContain("idempotency");
-    expect(projectEnvelope.error?.recovery?.suggestedCommand).not.toContain("mode");
-    expect(projectEnvelope.error?.recovery?.suggestedCommand).not.toContain("--replay-only");
-
-    const projectHuman = capture();
-    expect(runCli(["project", "list"], projectHuman.ports)).toBe(75);
-    const projectHumanText = projectHuman.err.join("");
-    expect(projectHumanText).toBe(
-      "STORAGE_INSPECTION_UNAVAILABLE: Project storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.\n" +
-        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.\n",
-    );
-    // Project surfaces take no idempotency key and have no replay-only mode,
-    // so no key, mode, or replay-only guidance appears (S1).
-    expect(projectHumanText).not.toContain("idempotency");
-    expect(projectHumanText).not.toContain("mode");
-    expect(projectHumanText).not.toContain("replay-only");
+    expect(runCli(["project", "list", "--json"], project.ports)).toBe(0);
+    expect(project.out.join("")).toContain("alpha");
+    expect(runCli(["project", "list"], capture().ports)).toBe(0);
 
     // A genuine usage error keeps exit 2 under write protection.
     const usage = capture();

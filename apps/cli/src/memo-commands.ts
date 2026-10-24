@@ -6,11 +6,14 @@ import {
   sweepMemoAcceptedInputs,
   type NodeMemoPorts,
 } from "@sorage/adapters/src/memo-command-ports";
+import { appCommandErrorOf } from "@sorage/adapters/src/daemon-command-ports";
+import { type CoveredReadStorage, openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
 import { captureMemoBodyFile, captureMemoBodyText } from "@sorage/adapters/src/memo-body-file";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   addMemo,
   appError,
+  err,
   largeContentDisclosureMessage,
   listMemos,
   mutateMemo,
@@ -29,12 +32,23 @@ import {
 import { Option, Command } from "commander";
 
 type Operation = "add" | "list" | "show" | "update" | "done" | "dismiss" | "reopen";
+/** Whether a failure rendering also records the failure in the installation log. */
+export interface MemoRenderOptions {
+  /** `false` for the covered zero-write reads of RDR-001, which never create the log. */
+  log?: boolean;
+}
+
 interface MemoCliOutput {
   out(text: string): void;
-  fail(error: AppError, json: boolean): void;
+  fail(error: AppError, json: boolean, options?: MemoRenderOptions): void;
   requestId(): string;
   /** The diagnostic sink for the large-content Git-history disclosure: stderr, never stdout, never the JSON DTO (WR2). */
   warn(text: string): void;
+  /**
+   * The existing pre-initialization gate (INIT-011, INIT-012), which the
+   * covered reads enter through and render without a log write (RDR-001).
+   */
+  requireInitialized(json: boolean): boolean;
 }
 
 /** Captures the selected body source once: small text stays in the request, larger accepted input reaches the application as its private spool. */
@@ -102,7 +116,9 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
     const globals = command.optsWithGlobals();
     const json = globals.json === true;
     const mutation = operation !== "list" && operation !== "show";
-    const invalid = (message: string) => output.fail(appError("MEMO_INVALID_INPUT", message), json);
+    // A covered read renders every failure, usage errors included, without the log (RDR-001).
+    const render: MemoRenderOptions | undefined = mutation ? undefined : { log: false };
+    const invalid = (message: string) => output.fail(appError("MEMO_INVALID_INPUT", message), json, render);
     if (options.body !== undefined && options.bodyFile !== undefined)
       return invalid("Choose one Memo body source: --body or --body-file");
     if (globals.as !== undefined || globals.confirm !== undefined)
@@ -118,10 +134,11 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       options.idempotencyKey,
       mutation,
     );
-    if (!execution.ok) return output.fail(execution.error, json);
+    if (!execution.ok) return output.fail(execution.error, json, render);
     if (operation === "add" && options.title === undefined) return invalid("Memo add requires --title");
     if (mutation && operation !== "add" && globals.expectedRowVersion === undefined)
       return invalid("Memo mutations require --expected-row-version from the observed Memo");
+    if (!mutation) return runCoveredRead(operation, id, options, globals, json);
     // Existing native recovery remains separate from the Memo operation's own effects.
     const drained = createNodeVaultCommandPorts().drainAtStart();
     if (!drained.ok) return output.fail(drained.error, json);
@@ -160,10 +177,7 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       if (!body.ok) return output.fail(body.error, json);
       accepted = body.value.accepted;
       let projectId: string | undefined;
-      if (
-        options.project !== undefined ||
-        ((operation === "add" || operation === "list") && options.allProjects !== true)
-      ) {
+      if (options.project !== undefined || (operation === "add" && options.allProjects !== true)) {
         const selected = resolveMemoProject(
           ports.projectPorts,
           typeof options.project === "string" ? options.project : undefined,
@@ -172,18 +186,9 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
         if (!selected.ok) return output.fail(selected.error, json);
         projectId = selected.value;
       }
-      let result: Result<MemoReceipt | MemoPage | Memo>;
+      let result: Result<MemoReceipt | Memo>;
       if (operation === "add")
         result = addMemo(ports, { projectId, title: options.title, ...body.value.fields }, execution.value, accepted);
-      else if (operation === "list")
-        result = listMemos(ports, {
-          ...(options.allProjects === true ? { allProjects: true } : { projectId }),
-          ...(options.state === undefined ? {} : { state: options.state }),
-          ...(options.query === undefined ? {} : { query: options.query }),
-          ...(globals.limit === undefined ? {} : { limit: globals.limit }),
-          ...(globals.cursor === undefined ? {} : { cursor: globals.cursor }),
-        });
-      else if (operation === "show") result = showMemo(ports, id as string, projectId);
       else
         result = mutateMemo(
           ports,
@@ -243,6 +248,72 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       ports.close();
     }
   }
+
+  /**
+   * The covered zero-write Memo reads (RDR-001 to RDR-004): the existing
+   * pre-initialization gate, then read-only storage through the shared
+   * primitive injected into the Memo composition. No startup drain, no
+   * accepted-input sweep, no log write; every failure — returned or thrown —
+   * renders log-free, and the connection closes when the read ends.
+   */
+  function runCoveredRead(
+    operation: "list" | "show",
+    id: string | undefined,
+    options: Record<string, unknown>,
+    globals: Record<string, unknown>,
+    json: boolean,
+  ) {
+    const fail = (error: AppError) => output.fail(error, json, { log: false });
+    if (!output.requireInitialized(json)) return;
+    let storage: Result<CoveredReadStorage, AppError>;
+    try {
+      // The covered Memo reads keep their pre-Task Vault admission, read-only,
+      // with the same refusal envelope the drain produced (RDR-005).
+      storage = openCoveredReadStorage({ vaultAdmission: true });
+    } catch (error) {
+      storage = err(thrownMemoReadError(error));
+    }
+    if (!storage.ok) return fail(storage.error);
+    let ports: NodeMemoPorts | undefined;
+    try {
+      ports = createNodeMemoPorts({ database: storage.value.db });
+      const body = bodyInput(options, ports);
+      if (!body.ok) return fail(body.error);
+      let projectId: string | undefined;
+      if (options.project !== undefined || (operation === "list" && options.allProjects !== true)) {
+        const selected = resolveMemoProject(
+          ports.projectPorts,
+          typeof options.project === "string" ? options.project : undefined,
+          { path: process.cwd(), userHome: homedir() },
+        );
+        if (!selected.ok) return fail(selected.error);
+        projectId = selected.value;
+      }
+      const result: Result<MemoPage | Memo> =
+        operation === "list"
+          ? listMemos(ports, {
+              ...(options.allProjects === true ? { allProjects: true } : { projectId }),
+              ...(options.state === undefined ? {} : { state: options.state }),
+              ...(options.query === undefined ? {} : { query: options.query }),
+              ...(globals.limit === undefined ? {} : { limit: globals.limit }),
+              ...(globals.cursor === undefined ? {} : { cursor: globals.cursor }),
+            })
+          : showMemo(ports, id as string, projectId);
+      if (!result.ok) return fail(result.error);
+      if (json) output.out(`${JSON.stringify(successEnvelope(result.value, output.requestId()), null, 2)}\n`);
+      else renderMemo(result.value, output.out);
+    } catch (error) {
+      return fail(thrownMemoReadError(error));
+    } finally {
+      ports?.close();
+      storage.value.close();
+    }
+  }
+}
+
+/** A throw escaping a covered Memo read keeps its carried typed code, else the existing unclassified mapping. */
+function thrownMemoReadError(error: unknown): AppError {
+  return appCommandErrorOf(error) ?? memoStorageError(error);
 }
 
 function renderMemo(value: MemoReceipt | MemoPage | Memo, out: (text: string) => void): void {

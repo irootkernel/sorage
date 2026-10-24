@@ -1750,5 +1750,29 @@
       }
     },
     "human": "INTERNAL_ERROR: rendering probe\nRecovery: Inspect meta.requestId in ~/.sorage/logs/sorage.log\n"
+  },
+  {
+    "code": "STORAGE_MIGRATION_REQUIRED",
+    "exitCode": 78,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically"
+    },
+    "renderedExitCode": 78,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "STORAGE_MIGRATION_REQUIRED",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "STORAGE_MIGRATION_REQUIRED: rendering probe\nRecovery: Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically\n"
   }
 ]

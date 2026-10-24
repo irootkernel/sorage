@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
+import { type AppError, appError } from "@sorage/core";
 
 /** The normative lockfile set under `<home>/run` (domain-and-architecture section 19). */
 export type LockName = "config" | "daemon" | "backup" | "vault-move" | "migration" | "inbox-marker";
@@ -170,6 +171,20 @@ export function vaultMoveLockHeld(runDir: string): boolean {
   if (record === undefined) return false;
   const verdict = evaluateStaleness("vault-move", record, new Date(), isPidAlive);
   return !verdict.stale;
+}
+
+/**
+ * The `SERVICE_PAUSED` refusal a live vault-move.lock produces, in one place
+ * the intent drain and the covered Memo reads share so the two cannot drift
+ * apart. The message is the drain's existing wording, kept verbatim because
+ * RDR-005 preserves the covered reads' existing output.
+ */
+export function vaultMovePauseRefusal(lockPath: string | undefined): AppError {
+  return appError(
+    "SERVICE_PAUSED",
+    "A Vault move or restore is in progress; the intent drain paused instead of racing it.",
+    { lockPath },
+  );
 }
 
 /** Releases a lockfile; releasing an absent lock is not an error. */

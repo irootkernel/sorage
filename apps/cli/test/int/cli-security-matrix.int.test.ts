@@ -158,8 +158,10 @@ describe("matrix row 20: a full journey leaves no secret material in logs or JSO
     // The CLI logger is lazy and warn-only by design, so a purely successful
     // journey writes no log at all; one authorized failure produces a real log
     // whose content is then part of the assertion, never a vacuous scan.
+    // A covered read no longer creates the log on failure (RDR-001), so the
+    // journey forces its one real log through the non-covered fetch surface.
     const outsider = capture();
-    expect(runCli(["get", handoffId, "--json", "--as", "beta"], outsider.ports)).toBe(66);
+    expect(runCli(["fetch", handoffId, "--json", "--as", "beta"], outsider.ports)).toBe(66);
     const logFile = join(home, "logs", "sorage.log");
     expect(existsSync(logFile)).toBe(true);
     const logContent = readFileSync(logFile, "utf8");

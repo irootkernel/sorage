@@ -40,7 +40,7 @@ On 2026-10-23 Master directed that agents must send and read Handoffs, Project M
   - The read path uses SQLite's own read-only WAL access instead of hand-built WAL reconstruction.
   - Bodies are passed inline, and a file argument is accepted only inside the call's workspace (`cwd`), so the unsandboxed server cannot read a file the caller's sandbox denies.
   - Only messaging tools are exposed; administration and User-admin operations stay CLI-only.
-- **Zero-write reads.** Read commands open the database read-only and perform no startup recovery, migration, cleanup or log write. Writers keep WAL sidecars persistent so SQLite's read-only WAL access always applies; only when the sidecars are absent, meaning no connection is open and the main file is complete, a coherent in-memory copy of the main file serves the read.
+- **Zero-write reads.** Read commands open the database read-only and perform no startup recovery, migration, cleanup or log write. Writers keep WAL sidecars persistent; when the `-wal` is absent or no longer than its 32-byte header, a coherent in-memory copy of the main file serves the read, and otherwise SQLite's read-only WAL access does, as RDR-004 records.
 - **Channel rebuild.** Replace the Channel surface in full, as described in the target design below. Schema 11 and the format-3 Channel representation are replaced in place, because no published release and no real home carries them.
 - **`revise --body`.** Revisions accept inline text, like `send`, `memo` and `channel post`.
 - **Shared release.** v0.1.3 ships after this Epic, together with M8, M9 and EPIC-017.
@@ -74,7 +74,7 @@ On 2026-10-23 Master directed that agents must send and read Handoffs, Project M
   - It never runs `drainAtStart`, migration, spool sweeps or log writes.
   - Its failures render without creating the log file.
 - **Writer connections** set `SQLITE_FCNTL_PERSIST_WAL` so that `-wal` and `-shm` remain after close.
-- **Sidecars-absent fallback:** it loads the main file into a read-only in-memory database and checks file identity before and after the copy. It is implemented only if the feasibility probe shows it is needed.
+- **In-memory copy:** when the `-wal` is absent or no longer than its 32-byte header, it loads the main file into a read-only in-memory database and checks file identity before and after the copy (RDR-004).
 - **Rejected:** `immutable=1` and hand-built WAL reconstruction.
 
 ### Channel CLI

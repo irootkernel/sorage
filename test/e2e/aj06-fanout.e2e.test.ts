@@ -5,10 +5,15 @@ import { envelopeOf, makeTempDir, runCleanups, sorage } from "./helpers";
 /** AJ-06: fan-out independence through one dispatch group, including the scale variant. */
 afterAll(runCleanups);
 
-function registerFixture(
+/** One event-loop turn between synchronous child-process runs, so the scale variant's registration stretch never starves the worker RPC transport: one synchronous stretch of 104 spawns once exceeded the transport's fixed 60-second deadline under load. */
+async function yieldLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function registerFixture(
   prefix: string,
   recipients: number,
-): { home: string; sender: string; recipientDirs: string[]; slugs: string[] } {
+): Promise<{ home: string; sender: string; recipientDirs: string[]; slugs: string[] }> {
   const home = makeTempDir(`${prefix}-home-`);
   const sender = makeTempDir(`${prefix}-sender-`);
   const recipientDirs: string[] = [];
@@ -17,20 +22,22 @@ function registerFixture(
   if (init.status !== 0) throw new Error(`init failed: ${init.stderr}`);
   const addSender = sorage(["project", "add", "--name", "Sender", "--dir", sender], { home });
   if (addSender.status !== 0) throw new Error(`sender registration failed: ${addSender.stderr}`);
+  await yieldLoop();
   for (let index = 0; index < recipients; index += 1) {
     const dir = makeTempDir(`${prefix}-r${index}-`);
     const add = sorage(["project", "add", "--name", `Recipient ${index}`, "--dir", dir], { home });
     if (add.status !== 0) throw new Error(`recipient ${index} registration failed: ${add.stderr}`);
     recipientDirs.push(dir);
     slugs.push(`recipient-${index}`);
+    await yieldLoop();
   }
   writeFileSync(`${home}/brief.md`, "# Shared brief\n", "utf8");
   return { home, sender, recipientDirs, slugs };
 }
 
 describe("AJ-06 fan-out", () => {
-  it("fans out to three recipients whose review loops diverge independently", () => {
-    const fixture = registerFixture("aj06-3", 3);
+  it("fans out to three recipients whose review loops diverge independently", async () => {
+    const fixture = await registerFixture("aj06-3", 3);
     const run = sorage(
       [
         "send",
@@ -103,8 +110,8 @@ describe("AJ-06 fan-out", () => {
     }
   });
 
-  it("completes the one-hundred-recipient scale variant under one dispatch group", () => {
-    const fixture = registerFixture("aj06-100", 100);
+  it("completes the one-hundred-recipient scale variant under one dispatch group", async () => {
+    const fixture = await registerFixture("aj06-100", 100);
     const args = ["send"];
     for (const slug of fixture.slugs) args.push("--to", slug as string);
     args.push("--title", "At scale", "--file", `${fixture.home}/brief.md`, "--allow-external-source", "--json");
@@ -114,6 +121,7 @@ describe("AJ-06 fan-out", () => {
     expect(created.data.handoffs).toHaveLength(100);
     expect(created.data.dispatchGroupId).not.toBeNull();
     expect(new Set(created.data.handoffs.map((handoff) => handoff.handoffId)).size).toBe(100);
+    await yieldLoop();
     const verify = sorage(["vault", "verify", "--json"], { home: fixture.home });
     expect(verify.status).toBe(0);
   }, 240_000);

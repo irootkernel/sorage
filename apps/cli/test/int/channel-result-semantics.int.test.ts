@@ -156,10 +156,12 @@ vi.mock("@sorage/adapters/src/handoff-command-ports", async (original) => {
       const ports = actual.createNodeHandoffReadPorts(...args);
       if (fault.handoffListFailures > 0) {
         const listPage = ports.handoffs.listPage;
-        let remaining = fault.handoffListFailures;
         ports.handoffs.listPage = (...pageArgs: Parameters<typeof listPage>) => {
-          if (remaining > 0) {
-            remaining -= 1;
+          // The wait re-admits storage on every poll, so the composition is
+          // rebuilt per poll; the fault budget is global to the test, not per
+          // composition, matching one real transient listing failure.
+          if (fault.handoffListFailures > 0) {
+            fault.handoffListFailures -= 1;
             return err(appError("STORAGE_INSPECTION_UNAVAILABLE", "injected Handoff listing failure"));
           }
           return listPage(...pageArgs);

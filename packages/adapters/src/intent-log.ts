@@ -18,7 +18,7 @@ import {
 import { createSqliteEventLedger, type SqliteEventLedger } from "./events";
 import { completeCommonIntentTx, executeCommonIntent } from "./content-store";
 import { classifyContentIntentOwnership, contentIntentIntegrityError } from "@sorage/core";
-import { vaultMoveLockHeld } from "./lockfile";
+import { vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
 import { openVault } from "./vault";
 import { UnsafeManagedPathError, managedDirectory, managedFile, type managedLstat } from "./managed-paths";
@@ -190,11 +190,7 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
     drain(vaultPath: string): Result<DrainReport, AppError> {
       const paused = (): boolean => options.runDir !== undefined && vaultMoveLockHeld(options.runDir);
       const pauseError = (): AppError =>
-        appError(
-          "SERVICE_PAUSED",
-          "A Vault move or restore is in progress; the intent drain paused instead of racing it.",
-          { lockPath: options.runDir === undefined ? undefined : join(options.runDir, "vault-move.lock") },
-        );
+        vaultMovePauseRefusal(options.runDir === undefined ? undefined : join(options.runDir, "vault-move.lock"));
       // The lock is re-checked before every intent, not only at entry, so a move
       // that starts mid-drain cannot switch the Vault underneath in-flight
       // renames (RUN-014).

@@ -34,12 +34,14 @@ import {
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { appCommandErrorOf } from "@sorage/adapters/src/daemon-command-ports";
+import { type CoveredReadStorage, openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
   type AddProjectOutcome,
   type AppError,
+  type HandoffDetailReadPorts,
   type HandoffListFilters,
   type Result,
   acceptHandoff,
@@ -118,7 +120,7 @@ import {
   workspaceKey,
 } from "@sorage/core";
 import * as daemonModule from "@sorage/daemon";
-import { Command, InvalidArgumentError } from "commander";
+import { Command, InvalidArgumentError, Option } from "commander";
 import { buildCompletionScript } from "./completion";
 import { runPreflightCommand } from "./preflight-command";
 import { runSendRecoveryCommand } from "./send-recovery-command";
@@ -521,9 +523,12 @@ export function buildProgram(
     out: ports.out,
     requestId,
     warn: (text) => ports.err(text),
-    fail: (error, json) => {
-      reportExitCode(renderAppError(memoError(error), ports, json));
+    fail: (error, json, options) => {
+      reportExitCode(renderAppError(memoError(error), ports, json, undefined, options));
     },
+    // The covered Memo reads enter through the same pre-initialization gate as
+    // every other covered read, rendered without a log write (RDR-001).
+    requireInitialized: (json) => requireInitialized(ports, json, reportExitCode, true, { log: false }),
   });
 
   registerChannelCommands(program, {
@@ -591,22 +596,26 @@ export function buildProgram(
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
-      const result = listProjects(createNodeProjectPorts({ contentionSurface: "project" }));
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      if (json) {
-        ports.out(`${JSON.stringify(successEnvelope(result.value.map(renderListedProject), requestId()), null, 2)}\n`);
-      } else {
-        if (result.value.length === 0) ports.out("No Projects registered.\n");
-        for (const listed of result.value) {
-          const unbound = listed.unbound ? " (unbound)" : "";
-          ports.out(`${listed.project.slug}${unbound} — ${listed.project.displayName} [${listed.project.status}]\n`);
-          ports.out(`    bindings: ${listed.bindingCount}\n`);
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "project", (storage) => {
+        const result = listProjects(createNodeProjectPorts({ database: storage.db, contentionSurface: "project" }));
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
         }
-      }
+        if (json) {
+          ports.out(
+            `${JSON.stringify(successEnvelope(result.value.map(renderListedProject), requestId()), null, 2)}\n`,
+          );
+        } else {
+          if (result.value.length === 0) ports.out("No Projects registered.\n");
+          for (const listed of result.value) {
+            const unbound = listed.unbound ? " (unbound)" : "";
+            ports.out(`${listed.project.slug}${unbound} — ${listed.project.displayName} [${listed.project.status}]\n`);
+            ports.out(`    bindings: ${listed.bindingCount}\n`);
+          }
+        }
+      });
     });
 
   project
@@ -616,37 +625,42 @@ export function buildProgram(
     .action((slug, _options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
-      const result = showProject(createNodeProjectPorts({ contentionSurface: "project" }), slug);
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      if (json) {
-        ports.out(
-          `${JSON.stringify(
-            successEnvelope(
-              {
-                project: result.value.project,
-                bindings: result.value.bindings,
-                bindingCount: result.value.bindings.length,
-                unbound: result.value.project.status === "active" && result.value.bindings.length === 0,
-              },
-              requestId(),
-            ),
-            null,
-            2,
-          )}\n`,
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "project", (storage) => {
+        const result = showProject(
+          createNodeProjectPorts({ database: storage.db, contentionSurface: "project" }),
+          slug,
         );
-      } else {
-        ports.out(
-          `${result.value.project.slug} — ${result.value.project.displayName} [${result.value.project.status}]\n`,
-        );
-        if (result.value.bindings.length === 0) ports.out("  no bindings (unbound)\n");
-        for (const binding of result.value.bindings) {
-          ports.out(`  ${binding.bindingKind} ${binding.directory}\n`);
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
         }
-      }
+        if (json) {
+          ports.out(
+            `${JSON.stringify(
+              successEnvelope(
+                {
+                  project: result.value.project,
+                  bindings: result.value.bindings,
+                  bindingCount: result.value.bindings.length,
+                  unbound: result.value.project.status === "active" && result.value.bindings.length === 0,
+                },
+                requestId(),
+              ),
+              null,
+              2,
+            )}\n`,
+          );
+        } else {
+          ports.out(
+            `${result.value.project.slug} — ${result.value.project.displayName} [${result.value.project.status}]\n`,
+          );
+          if (result.value.bindings.length === 0) ports.out("  no bindings (unbound)\n");
+          for (const binding of result.value.bindings) {
+            ports.out(`  ${binding.bindingKind} ${binding.directory}\n`);
+          }
+        }
+      });
     });
 
   project
@@ -1060,7 +1074,7 @@ export function buildProgram(
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
       if (options.wait === true && typeof options.interval === "number" && options.interval < 1) {
         ports.err("sorage: inbox --wait polls at whole-second intervals; pass --interval 1 or more\n");
         ports.err("Run 'sorage inbox --help' for usage.\n");
@@ -1073,48 +1087,50 @@ export function buildProgram(
         reportExitCode(2);
         return;
       }
-      const readPorts = createNodeHandoffReadPorts();
-      if (options.wait === true) {
-        const intervalSeconds = typeof options.interval === "number" && options.interval >= 0 ? options.interval : 2;
-        const timeoutSeconds = typeof options.timeout === "number" && options.timeout >= 0 ? options.timeout : 300;
-        const query = listQueryOf(options, globals);
-        if (!query.ok) {
-          reportExitCode(renderAppError(query.error, ports, json));
-          return;
-        }
-        const waited = waitForNewInboxItems(readPorts, actorInputOf(globals), query.value, {
-          intervalSeconds,
-          timeoutSeconds,
-          sleepMs: blockingSleepMs,
-        });
-        if (!waited.ok) {
-          reportExitCode(renderAppError(waited.error, ports, json));
-          return;
-        }
-        if (waited.value.timedOut) {
-          if (json) {
-            ports.out(
-              `${JSON.stringify(successEnvelope({ handoffs: [], nextCursor: null }, requestId(), { timedOut: true }), null, 2)}\n`,
-            );
-          } else {
-            ports.out(`No new Handoff appeared within ${timeoutSeconds}s\n`);
+      withCoveredRead(ports, json, reportExitCode, "handoff", (storage) => {
+        const readPorts = createNodeHandoffReadPorts({ database: storage.db });
+        if (options.wait === true) {
+          const intervalSeconds = typeof options.interval === "number" && options.interval >= 0 ? options.interval : 2;
+          const timeoutSeconds = typeof options.timeout === "number" && options.timeout >= 0 ? options.timeout : 300;
+          const query = listQueryOf(options, globals);
+          if (!query.ok) {
+            reportExitCode(renderAppError(query.error, ports, json, undefined, { log: false }));
+            return;
           }
+          const waited = waitForNewInboxItems(pollingHandoffReadPorts(readPorts), actorInputOf(globals), query.value, {
+            intervalSeconds,
+            timeoutSeconds,
+            sleepMs: blockingSleepMs,
+          });
+          if (!waited.ok) {
+            reportExitCode(renderAppError(waited.error, ports, json, undefined, { log: false }));
+            return;
+          }
+          if (waited.value.timedOut) {
+            if (json) {
+              ports.out(
+                `${JSON.stringify(successEnvelope({ handoffs: [], nextCursor: null }, requestId(), { timedOut: true }), null, 2)}\n`,
+              );
+            } else {
+              ports.out(`No new Handoff appeared within ${timeoutSeconds}s\n`);
+            }
+            return;
+          }
+          reportListing({ handoffs: waited.value.handoffs, nextCursor: null }, ports, json, globals);
           return;
         }
-        reportListing({ handoffs: waited.value.handoffs, nextCursor: null }, ports, json, globals);
-        return;
-      }
-      const inboxQuery = listQueryOf(options, globals);
-      if (!inboxQuery.ok) {
-        reportExitCode(renderAppError(inboxQuery.error, ports, json));
-        return;
-      }
-      const result = listInbox(readPorts, actorInputOf(globals), inboxQuery.value);
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      reportListing(result.value, ports, json, globals);
+        const inboxQuery = listQueryOf(options, globals);
+        if (!inboxQuery.ok) {
+          reportExitCode(renderAppError(inboxQuery.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        const result = listInbox(readPorts, actorInputOf(globals), inboxQuery.value);
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        reportListing(result.value, ports, json, globals);
+      });
     });
 
   program
@@ -1131,24 +1147,26 @@ export function buildProgram(
     .action((options, command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
-      const outboxPorts = createNodeHandoffReadPorts();
-      const outboxQuery = listQueryOf(options, globals);
-      if (!outboxQuery.ok) {
-        reportExitCode(renderAppError(outboxQuery.error, ports, json));
-        return;
-      }
-      const result = listOutbox(
-        outboxPorts,
-        actorInputOf(globals),
-        outboxQuery.value,
-        options.currentWorkspace === true,
-      );
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      reportListing(result.value, ports, json, globals);
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "handoff", (storage) => {
+        const outboxPorts = createNodeHandoffReadPorts({ database: storage.db });
+        const outboxQuery = listQueryOf(options, globals);
+        if (!outboxQuery.ok) {
+          reportExitCode(renderAppError(outboxQuery.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        const result = listOutbox(
+          outboxPorts,
+          actorInputOf(globals),
+          outboxQuery.value,
+          options.currentWorkspace === true,
+        );
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        reportListing(result.value, ports, json, globals);
+      });
     });
 
   program
@@ -1157,21 +1175,23 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
-      const result = getHandoff(createNodeHandoffReadPorts(), actorInputOf(globals), id);
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      if (json) {
-        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "handoff", (storage) => {
+        const result = getHandoff(createNodeHandoffReadPorts({ database: storage.db }), actorInputOf(globals), id);
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
-      } else {
-        ports.out(`${result.value.title} (${result.value.id})
+        } else {
+          ports.out(`${result.value.title} (${result.value.id})
 `);
-        ports.out(`  state ${result.value.reviewState}, revision ${result.value.revision}, rowVersion ${result.value.rowVersion}
+          ports.out(`  state ${result.value.reviewState}, revision ${result.value.revision}, rowVersion ${result.value.rowVersion}
 `);
-      }
+        }
+      });
     });
 
   program
@@ -1206,23 +1226,29 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
-      const result = readHandoffTimeline(createNodeHandoffReadPorts(), actorInputOf(globals), id);
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      if (json) {
-        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
-`);
-      } else if (result.value.length === 0) {
-        ports.out("no events\n");
-      } else {
-        for (const event of result.value) {
-          const rowVersion = event.rowVersion === null ? "-" : String(event.rowVersion);
-          ports.out(`${event.eventType}  actor ${event.actorKind}  rowVersion ${rowVersion}\n`);
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "handoff", (storage) => {
+        const result = readHandoffTimeline(
+          createNodeHandoffReadPorts({ database: storage.db }),
+          actorInputOf(globals),
+          id,
+        );
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
         }
-      }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+`);
+        } else if (result.value.length === 0) {
+          ports.out("no events\n");
+        } else {
+          for (const event of result.value) {
+            const rowVersion = event.rowVersion === null ? "-" : String(event.rowVersion);
+            ports.out(`${event.eventType}  actor ${event.actorKind}  rowVersion ${rowVersion}\n`);
+          }
+        }
+      });
     });
 
   const review = program.command("review").description("read, create, withdraw, and remove Review Notes");
@@ -1233,21 +1259,23 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
-      if (!requireInitialized(ports, json, reportExitCode, true)) return;
-      const result = readReviewNote(createNodeHandoffReadPorts(), actorInputOf(globals), id);
-      if (!result.ok) {
-        reportExitCode(renderAppError(result.error, ports, json));
-        return;
-      }
-      if (json) {
-        ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "handoff", (storage) => {
+        const result = readReviewNote(createNodeHandoffReadPorts({ database: storage.db }), actorInputOf(globals), id);
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        if (json) {
+          ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}
 `);
-      } else if (result.value === null) {
-        ports.out("no Review Note\n");
-      } else {
-        ports.out(`${result.value.body}\n`);
-        ports.out(`  targetRevision ${result.value.targetRevision}, author ${result.value.authorKind}\n`);
-      }
+        } else if (result.value === null) {
+          ports.out("no Review Note\n");
+        } else {
+          ports.out(`${result.value.body}\n`);
+          ports.out(`  targetRevision ${result.value.targetRevision}, author ${result.value.authorKind}\n`);
+        }
+      });
     });
 
   review
@@ -2314,13 +2342,14 @@ function requireInitialized(
   json: boolean,
   reportExitCode: (code: number) => void,
   covered = false,
+  options: RenderOptions = {},
 ): boolean {
   const gate = createNodeConfigCommandPorts();
   const current = covered ? gate.store.readForOperation() : gate.store.read();
   if (current.ok && current.value !== null) return true;
   if (!current.ok) {
     // A present but broken configuration is doctor territory, not a gate case.
-    reportExitCode(renderAppError(current.error, ports, json));
+    reportExitCode(renderAppError(current.error, ports, json, undefined, options));
     return false;
   }
   const error: AppError = {
@@ -2329,7 +2358,7 @@ function requireInitialized(
     details: { expectedConfigPath: gate.configFile },
   };
   const id = requestId();
-  logCommandFailure(error, id);
+  if (options.log !== false) logCommandFailure(error, id);
   if (json) {
     ports.err(`${JSON.stringify(errorEnvelope(error, id), null, 2)}\n`);
   } else {
@@ -2369,13 +2398,17 @@ export function runCli(
   try {
     program.parse(argv, { from: "user" });
   } catch (error) {
+    // A covered zero-write read renders every failure without the log (RDR-001),
+    // including the parser-stage and composition-stage failures that reach this
+    // catch before or outside its action; the operand probe decides coverage.
+    const render: RenderOptions = { log: !coveredReadInvocation(program, argv) };
     const admission = schemaAdmissionOf(error);
-    if (admission !== null) return renderAppError(admission, ports, program.opts().json === true);
+    if (admission !== null) return renderAppError(admission, ports, program.opts().json === true, undefined, render);
     // A composition-thrown typed error (SHR-015 storage-preparation refusal or
     // configuration carrier) renders through the envelope path; genuine
     // commander parse and usage errors keep the exit-2 fallthrough below.
     const carried = appCommandErrorOf(error);
-    if (carried !== null) return renderAppError(carried, ports, program.opts().json === true);
+    if (carried !== null) return renderAppError(carried, ports, program.opts().json === true, undefined, render);
     const commanderError = error as { code?: string; exitCode?: number; message?: string };
     if (commanderError.code === "commander.invalidArgument") {
       const memoContext = memoNumericErrorContext(program, argv);
@@ -2384,6 +2417,8 @@ export function runCli(
           appError("MEMO_INVALID_INPUT", "Memo numeric values must be safe non-negative integers"),
           ports,
           memoContext.json,
+          undefined,
+          render,
         );
     }
     const informational = new Set([
@@ -2615,6 +2650,116 @@ function renderUsageError(error: unknown, program: Command, ports: OutputPorts):
   ports.err(`${program.name()}: ${message}\n`);
   ports.err(`Run '${program.name()} --help' for usage.\n`);
   return 2;
+}
+
+/** The operand paths of the covered zero-write read commands (RDR-001). */
+const COVERED_READ_OPERANDS: ReadonlyArray<readonly string[]> = [
+  ["inbox"],
+  ["outbox"],
+  ["get"],
+  ["events"],
+  ["review", "show"],
+  ["memo", "list"],
+  ["memo", "show"],
+  ["project", "list"],
+  ["project", "show"],
+];
+
+/**
+ * Whether an invocation names a covered zero-write read, decided from its
+ * operands alone through the same root-option probe the Memo numeric-error
+ * context uses, so parser-stage failures that never reach an action can still
+ * render without the log.
+ */
+export function coveredReadInvocation(program: Command, argv: string[]): boolean {
+  const probe = new Command().exitOverride().configureOutput({ writeOut: () => {}, writeErr: () => {} });
+  for (const option of program.options) probe.addOption(new Option(option.flags));
+  try {
+    const operands = probe.parseOptions(argv).operands;
+    return COVERED_READ_OPERANDS.some((path) => path.every((token, index) => operands[index] === token));
+  } catch {
+    return false;
+  }
+}
+
+/** Maps a throw escaping a covered read onto its typed envelope; nothing raw escapes. */
+function thrownReadError(error: unknown): AppError {
+  return (
+    schemaAdmissionOf(error) ??
+    appCommandErrorOf(error) ??
+    appError("INTERNAL_ERROR", `The read failed: ${error instanceof Error ? error.message : String(error)}`)
+  );
+}
+
+/**
+ * The covered zero-write read composition (RDR-001, RDR-002): storage opens
+ * read-only through the shared primitive, the body composes the existing
+ * domain ports over the injected connection, the connection closes when the
+ * body returns, and every failure — returned by the body or thrown by a
+ * composition — renders without creating the log. No drain, migration, spool
+ * sweep or cleanup runs on this path.
+ */
+export function withCoveredRead(
+  ports: OutputPorts,
+  json: boolean,
+  reportExitCode: (code: number) => void,
+  surface: "handoff" | "project",
+  body: (storage: CoveredReadStorage) => void,
+): void {
+  let storage: Result<CoveredReadStorage, AppError>;
+  try {
+    storage = openCoveredReadStorage({ surface });
+  } catch (error) {
+    storage = err(thrownReadError(error));
+  }
+  if (!storage.ok) {
+    reportExitCode(renderAppError(storage.error, ports, json, undefined, { log: false }));
+    return;
+  }
+  try {
+    body(storage.value);
+  } catch (error) {
+    reportExitCode(renderAppError(thrownReadError(error), ports, json, undefined, { log: false }));
+  } finally {
+    storage.value.close();
+  }
+}
+
+/**
+ * Re-admits storage on every listing page of a wait: each poll opens the
+ * covered read afresh, so a wait that started on the in-memory copy of a
+ * quiescent database follows a later writer onto its sidecars, and every
+ * poll's storage refusal flows through the wait's own retry classification.
+ * The actor scope and clock stay those of the initial composition.
+ */
+function pollingHandoffReadPorts(initial: HandoffDetailReadPorts): HandoffDetailReadPorts {
+  return {
+    ...initial,
+    handoffs: {
+      ...initial.handoffs,
+      listPage: (scope, filters, limit, afterSortKey) => {
+        let storage: Result<CoveredReadStorage, AppError>;
+        try {
+          storage = openCoveredReadStorage({ surface: "handoff" });
+        } catch (error) {
+          storage = err(thrownReadError(error));
+        }
+        if (!storage.ok) return err(storage.error);
+        try {
+          return createNodeHandoffReadPorts({ database: storage.value.db }).handoffs.listPage(
+            scope,
+            filters,
+            limit,
+            afterSortKey,
+          );
+        } catch (error) {
+          return err(thrownReadError(error));
+        } finally {
+          storage.value.close();
+        }
+      },
+    },
+  };
 }
 
 let processLogger: Logger | null | undefined;
@@ -2936,15 +3081,44 @@ function reportBackupConfig(
   }
 }
 
-export function renderAppError(error: AppError, ports: OutputPorts, json: boolean, recoveryOverride?: string): number {
+/** Whether a failure rendering also records the failure in the installation log. */
+export interface RenderOptions {
+  /**
+   * `false` for the covered zero-write reads of RDR-001, whose failures render
+   * without creating or rotating the installation log, including on failure.
+   * On such a render an `INTERNAL_ERROR` with no site recovery carries the
+   * log-free recovery — the covered reads never write the log the catalogue
+   * default points at, so the recovery names the request id and the retained
+   * output instead (the model of send-recovery and preflight's inspection
+   * guidance, and a property of the log-free render itself).
+   */
+  log?: boolean;
+}
+
+/** The log-free `INTERNAL_ERROR` recovery, so no covered-read route can miss it. */
+function logFreeInternalRecovery(requestId: string): string {
+  return `Retain request ${requestId} and this output, then retry the read. This failure wrote no installation log.`;
+}
+
+export function renderAppError(
+  error: AppError,
+  ports: OutputPorts,
+  json: boolean,
+  recoveryOverride?: string,
+  options: RenderOptions = {},
+): number {
   const spec = errorSpec(error.code);
   const id = requestId();
-  logCommandFailure(error, id);
+  const rendered: AppError =
+    options.log === false && error.code === "INTERNAL_ERROR" && error.recovery === undefined
+      ? { ...error, recovery: { suggestedCommand: logFreeInternalRecovery(id) } }
+      : error;
+  if (options.log !== false) logCommandFailure(error, id);
   if (json) {
-    ports.err(`${JSON.stringify(errorEnvelope(error, id), null, 2)}\n`);
+    ports.err(`${JSON.stringify(errorEnvelope(rendered, id), null, 2)}\n`);
   } else {
     ports.err(`${error.code}: ${error.message}\n`);
-    const recovery = recoveryOverride ?? error.recovery?.suggestedCommand ?? spec.recovery?.suggestedCommand;
+    const recovery = recoveryOverride ?? rendered.recovery?.suggestedCommand ?? spec.recovery?.suggestedCommand;
     if (recovery !== undefined) ports.err(`Recovery: ${recovery}\n`);
   }
   return spec.exitCode;

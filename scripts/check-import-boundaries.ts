@@ -38,6 +38,7 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
     "src/channel-command-ports",
     "src/memo-body-file",
     "src/preflight",
+    "src/read-storage",
     "src/send-recovery",
     "src/sleep",
   ],

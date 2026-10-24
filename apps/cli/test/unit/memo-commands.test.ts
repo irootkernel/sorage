@@ -14,9 +14,21 @@ describe("Memo CLI validation before opening storage", () => {
     const program = new Command();
     const out = vi.fn();
     const fail = vi.fn();
-    registerMemoCommands(program, { out, fail, warn: vi.fn(), requestId: () => "unused" });
+    registerMemoCommands(program, {
+      out,
+      fail,
+      warn: vi.fn(),
+      requestId: () => "unused",
+      // The covered reads reach storage only after validation; these cases stop earlier.
+      requireInitialized: () => true,
+    });
     program.parse(["memo", ...args], { from: "user" });
     expect(out).not.toHaveBeenCalled();
-    expect(fail).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ code: "MEMO_INVALID_INPUT" }), false);
+    expect(fail).toHaveBeenCalledTimes(1);
+    const [error, json, render] = fail.mock.calls[0] as [{ code: string }, boolean, { log?: boolean } | undefined];
+    expect(error.code).toBe("MEMO_INVALID_INPUT");
+    expect(json).toBe(false);
+    // Reads render log-free (RDR-001); mutations keep the default logging.
+    expect(render ?? {}).toEqual(args[0] === "list" || args[0] === "show" ? { log: false } : {});
   });
 });

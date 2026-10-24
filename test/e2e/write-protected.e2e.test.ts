@@ -16,11 +16,12 @@ import {
  * The TASK-119 compiled write-protected journey: a stable, readable
  * installation whose database and WAL are write-protected (the saved modes are
  * restored by the journey's cleanup) inspects normally — preflight reports
- * `compatible` and both replay-only modes return their retained results, all
- * with a byte-identical installation — while Channel, Handoff, and Project
- * operational commands refuse with the typed write-protected envelope at exit
- * 75, and genuine lock contention on a writable home still answers the
- * contention wording, never the write-protected one.
+ * `compatible`, both replay-only modes return their retained results, and the
+ * covered zero-write read `project list` returns its normal output, all with a
+ * byte-identical installation — while Channel and Handoff operational commands
+ * refuse with the typed write-protected envelope at exit 75, and genuine lock
+ * contention on a writable home still answers the contention wording, never
+ * the write-protected one.
  */
 
 afterEach(runCleanups);
@@ -33,10 +34,6 @@ const WRITE_PROTECTED_HANDOFF_MESSAGE =
   "Handoff storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.";
 const WRITE_PROTECTED_HANDOFF_RECOVERY =
   "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.";
-const WRITE_PROTECTED_PROJECT_MESSAGE =
-  "Project storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.";
-const WRITE_PROTECTED_PROJECT_RECOVERY =
-  "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.";
 
 /** One installation with retained keyed send and Channel receipts, then — by default — write-protected. */
 function protectedInstallation(protect = true): {
@@ -115,10 +112,20 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(replayed.replayed).toBe(true);
     expect(replayed.message.bodyPreview).toContain("channel body");
 
+    // A covered zero-write read succeeds on the write-protected installation
+    // with its normal output and writes nothing (SHR-015's EPIC-018 amendment).
+    const projectRead = sorage(["project", "list", "--json"], { home: f.home, cwd: f.work });
+    expect(projectRead.status, projectRead.stderr).toBe(0);
+    const projects = envelopeOf(projectRead).data as Array<{ slug: string }>;
+    expect(projects.map((project) => project.slug)).toEqual(["alpha"]);
+    const projectHuman = sorage(["project", "list"], { home: f.home, cwd: f.work });
+    expect(projectHuman.status, projectHuman.stderr).toBe(0);
+    expect(projectHuman.stdout).toContain("alpha");
+
     expect(storageProof(f.home)).toEqual(before);
   });
 
-  it("refuses Channel, Handoff, and Project operational commands with the typed write-protected envelope", () => {
+  it("refuses Channel and Handoff operational commands with the typed write-protected envelope", () => {
     const f = protectedInstallation();
 
     const channel = sorage(["channel", "list", "--json"], { home: f.home, cwd: f.work });
@@ -164,27 +171,6 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(sendHuman.stderr).toBe(
       `STORAGE_INSPECTION_UNAVAILABLE: ${WRITE_PROTECTED_HANDOFF_MESSAGE}\nRecovery: ${WRITE_PROTECTED_HANDOFF_RECOVERY}\n`,
     );
-
-    const project = sorage(["project", "list", "--json"], { home: f.home, cwd: f.work });
-    expect(project.status).toBe(75);
-    expect(project.stdout).toBe("");
-    const projectEnvelope = JSON.parse(project.stderr) as {
-      error: { code: string; message: string; recovery: { suggestedCommand: string } };
-    };
-    expect(projectEnvelope.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-    expect(projectEnvelope.error.message).toBe(WRITE_PROTECTED_PROJECT_MESSAGE);
-    expect(projectEnvelope.error.recovery.suggestedCommand).toBe(WRITE_PROTECTED_PROJECT_RECOVERY);
-
-    const projectHuman = sorage(["project", "list"], { home: f.home, cwd: f.work });
-    expect(projectHuman.status).toBe(75);
-    expect(projectHuman.stderr).toBe(
-      `STORAGE_INSPECTION_UNAVAILABLE: ${WRITE_PROTECTED_PROJECT_MESSAGE}\nRecovery: ${WRITE_PROTECTED_PROJECT_RECOVERY}\n`,
-    );
-    // Project surfaces take no idempotency key and have no replay-only mode,
-    // so no key, mode, or replay-only guidance appears (S1).
-    expect(projectHuman.stderr).not.toContain("idempotency");
-    expect(projectHuman.stderr).not.toContain("mode");
-    expect(projectHuman.stderr).not.toContain("replay-only");
   });
 
   it("still answers genuine lock contention with the contention wording on a writable home", () => {

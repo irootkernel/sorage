@@ -77,6 +77,7 @@ export const ERROR_CODES = [
   "CHN_FORBIDDEN_ROLE",
   "CHN_REPLAY_UNAVAILABLE",
   "INTERNAL_ERROR",
+  "STORAGE_MIGRATION_REQUIRED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -189,6 +190,8 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
   CHN_FORBIDDEN_ROLE: "Run as the main participant or with --as-user",
   CHN_REPLAY_UNAVAILABLE: "The original outcome is unknown; retain the original key and input without executing again",
   INTERNAL_ERROR: "Inspect meta.requestId in ~/.sorage/logs/sorage.log",
+  STORAGE_MIGRATION_REQUIRED:
+    "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically",
 };
 
 const HTTP_STATUS: Record<ErrorCode, number> = {
@@ -265,6 +268,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   CHN_FORBIDDEN_ROLE: 403,
   CHN_REPLAY_UNAVAILABLE: 409,
   INTERNAL_ERROR: 500,
+  STORAGE_MIGRATION_REQUIRED: 422,
 };
 
 const EXIT_CODE: Record<ErrorCode, number> = {
@@ -289,6 +293,7 @@ const EXIT_CODE: Record<ErrorCode, number> = {
   CHN_FORBIDDEN_ROLE: 77,
   CHN_REPLAY_UNAVAILABLE: 75,
   INTERNAL_ERROR: 1,
+  STORAGE_MIGRATION_REQUIRED: 78,
   AMBIGUOUS_PROJECT: 64,
   VAULT_CONTAINMENT: 64,
   CONFIRMATION_REQUIRED: 64,

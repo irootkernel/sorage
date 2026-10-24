@@ -43,7 +43,7 @@ const LOCKED_MESSAGE = /database is locked/i;
 const UNOPENABLE_MESSAGE = /unable to open database file/i;
 const READONLY_MESSAGE = /attempt to write a readonly database/i;
 
-type ContentionKind = "lock" | "open" | "readonly";
+export type ContentionKind = "lock" | "open" | "readonly";
 
 function codeOf(value: unknown): string | undefined {
   if (typeof value === "object" && value !== null && "code" in value) {
@@ -176,9 +176,19 @@ const RECOVERY: Record<ContentionSurface, Record<ContentionKind, string>> = {
 export function storageContentionOf(error: unknown, surface: ContentionSurface): AppError | null {
   const kind = contentionKindOf(error);
   if (kind === null) return null;
+  return contentionRefusal(surface, kind, String(error));
+}
+
+/**
+ * The same stamped refusal built directly from a storage state the caller
+ * detected itself, before or without an engine error to classify (SHR-015):
+ * the covered read path uses it for its sidecar-gap and capture-exhaustion
+ * states, which no thrown signature represents.
+ */
+export function contentionRefusal(surface: ContentionSurface, kind: ContentionKind, cause: string): AppError {
   const refusal = appError("STORAGE_INSPECTION_UNAVAILABLE", refusalMessage(surface, kind), {
     storageContention: true,
-    cause: String(error),
+    cause,
   });
   refusal.recovery = { suggestedCommand: RECOVERY[surface][kind] };
   return refusal;
