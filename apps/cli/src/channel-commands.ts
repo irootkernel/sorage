@@ -36,6 +36,7 @@ import {
   waitForChannelMessages,
 } from "@sorage/core";
 import { type Command, InvalidArgumentError, Option } from "commander";
+import { CHANNEL_WAIT_ONLY_OPTIONS, CHANNEL_WAIT_UNHANDLED_ONLY, CHANNEL_WAIT_WHOLE_SECONDS } from "./usage-sentences";
 
 /**
  * The rebuilt Channel command group of TASK-123 (CHN-001 to CHN-014, interface
@@ -220,14 +221,12 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
 
     if (operation === "messages") {
       if (waiting) {
-        if (options.all === true) return usage("channel messages --wait lists only unhandled messages; remove --all");
-        if (typeof options.interval === "number" && options.interval < 1)
-          return usage("channel messages --wait polls at whole-second intervals; pass --interval 1 or more");
+        if (options.all === true) return usage(CHANNEL_WAIT_UNHANDLED_ONLY);
+        if (typeof options.interval === "number" && options.interval < 1) return usage(CHANNEL_WAIT_WHOLE_SECONDS);
       } else {
         const intervalSource = command.getOptionValueSource("interval");
         const timeoutSource = command.getOptionValueSource("timeout");
-        if (intervalSource === "cli" || timeoutSource === "cli")
-          return usage("channel messages --interval and --timeout apply only with --wait");
+        if (intervalSource === "cli" || timeoutSource === "cli") return usage(CHANNEL_WAIT_ONLY_OPTIONS);
       }
     }
 

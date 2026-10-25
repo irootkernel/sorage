@@ -1,7 +1,7 @@
 _sorage() {
   local cur commands option_words
   cur="${COMP_WORDS[COMP_CWORD]}"
-  commands="accept archive backup channel completion config daemon decline delete doctor events fetch get inbox init memo outbox pin preflight project review revise send token unarchive uninstall unpin vault version web withdraw"
+  commands="accept archive backup channel completion config daemon decline delete doctor events fetch get inbox init mcp memo outbox pin preflight project review revise send token unarchive uninstall unpin vault version web withdraw"
   option_words="--as --as-user --confirm --cursor --expected-row-version --json --limit"
   case "${COMP_WORDS[1]}" in
     send) option_words="$option_words --to --title --file --body --supersedes --allow-external-source --allow-unregistered --idempotency-key --replay-only" ;;

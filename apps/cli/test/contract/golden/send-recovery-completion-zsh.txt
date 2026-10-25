@@ -86,6 +86,7 @@ _sorage() {
     'daemon status:read run/daemon.json and verify installationId through health'
     'daemon serve:internal entry point that runs the daemon in the foreground until stopped'
     'web:start the daemon when needed and open the Web control plane with a one-time session secret'
+    'mcp:serve the STDIO MCP adapter whose tools mirror the messaging CLI (interface section 39)'
     'token:manage the Installation API token'
     'token rotate:replace the Installation API token, invalidating every live browser session'
   )

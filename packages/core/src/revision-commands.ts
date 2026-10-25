@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceActor } from "./events";
-import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash } from "./handoff-commands";
+import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash, titleSlug } from "./handoff-commands";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
-import type { ArtifactBodyPrepareRequest, PreparedArtifactBody } from "./content";
+import { isUtf8ExactText, type ArtifactBodyPrepareRequest, type PreparedArtifactBody } from "./content";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
 import { workspaceKey } from "./workspace-identity";
@@ -104,6 +104,7 @@ export interface RevisionPorts extends HandoffReadPorts {
 
 export interface ReviseInput extends ReadActorInput {
   handoffId: string;
+  body?: string | undefined;
   file?: string | undefined;
   noChange?: boolean | undefined;
   reason?: string | undefined;
@@ -190,11 +191,14 @@ export function reviseHandoff(ports: RevisionPorts, input: ReviseInput): Result<
   const handoff = found.value.view;
   const role = roleOf(ports, input, handoff);
   if (!role.ok) return err(role.error);
-  if (input.noChange === true && input.file !== undefined) {
-    return err(appError("CONFIG_INVALID", "revise takes either --file or --no-change, not both"));
+  const suppliedSources = [input.body !== undefined, input.file !== undefined, input.noChange === true].filter(
+    Boolean,
+  ).length;
+  if (suppliedSources > 1) {
+    return err(appError("CONFIG_INVALID", "revise takes exactly one of --body, --file or --no-change"));
   }
-  if (input.noChange !== true && input.file === undefined) {
-    return err(appError("CONFIG_INVALID", "revise takes either --file or --no-change"));
+  if (suppliedSources === 0) {
+    return err(appError("CONFIG_INVALID", "revise takes exactly one of --body, --file or --no-change"));
   }
 
   const facts: HandoffFacts = {
@@ -359,16 +363,37 @@ function reviseContent(
   // answer before any mutation, and only a revision that will proceed routes
   // its body through the shared preparation — inline text or a staged Vault
   // copy — under the workspace import policy for path imports and the
-  // authenticated-spool rule for multipart uploads.
-  const file = input.file as string;
-  const sourcePath = input.resolvedSourcePath ?? file;
-  const digested = ports.digestSource(sourcePath);
-  if (!digested.ok) return err(digested.error);
+  // authenticated-spool rule for multipart uploads. An inline `--body` follows
+  // the HND-023 rule exactly as a `send --body` does: the exact text is the
+  // user's content, digested as given with no scratch-file roundtrip, its
+  // logical name derived from the title slug and the revision being created
+  // (CLI-012, section 38.2).
+  const asBody = input.body !== undefined;
+  let contentSha256: string;
+  let sourcePath: string | undefined;
+  let fileArgument: string | undefined;
+  if (input.body !== undefined) {
+    if (input.body.trim() === "") {
+      return err(appError("CONFIG_INVALID", "the --body text must not be empty"));
+    }
+    if (!isUtf8ExactText(input.body)) {
+      return err(
+        appError("CONFIG_INVALID", "the --body text cannot be stored byte-exactly; it contains an unpaired surrogate"),
+      );
+    }
+    contentSha256 = createHash("sha256").update(input.body, "utf8").digest("hex");
+  } else {
+    fileArgument = input.file as string;
+    sourcePath = input.resolvedSourcePath ?? fileArgument;
+    const digested = ports.digestSource(sourcePath);
+    if (!digested.ok) return err(digested.error);
+    contentSha256 = digested.value;
+  }
   const requestHash = sendRequestHash({
     to: [handoff.id],
     title: handoff.title,
-    contentSha256: digested.value,
-    kind: "file",
+    contentSha256,
+    kind: asBody ? "body" : "file",
   });
   if (input.idempotencyKey !== undefined) {
     const replayed = replay(ports, input.idempotencyKey, requestHash);
@@ -393,12 +418,12 @@ function reviseContent(
   // The same content refuses before anything mutates or stages (HND-015).
   if (
     handoff.currentArtifact !== null &&
-    digested.value.toLowerCase() === handoff.currentArtifact.sha256.toLowerCase()
+    contentSha256.toLowerCase() === handoff.currentArtifact.sha256.toLowerCase()
   ) {
     return err(
       appError(
         "NO_CONTENT_CHANGE",
-        "the supplied file carries the current Artifact's SHA-256; change the document or use revise --no-change --reason",
+        `the supplied ${asBody ? "body" : "file"} carries the current Artifact's SHA-256; change the document or use revise --no-change --reason`,
         { handoffId: handoff.id },
       ),
     );
@@ -408,29 +433,31 @@ function reviseContent(
   const verified = verifyCurrentBody();
   if (verified !== null && !verified.ok) return err(verified.error);
   const spoolUpload = input.fileSourceKind === "authenticated-spool";
-  const contained = checkVaultContainment({
-    resolvedVaultPath: ports.config.vaultPath,
-    resolvedBindingDirectories: ports.bindingDirectories,
-  });
-  if (!contained.ok) return err(contained.error);
-  if (!spoolUpload) {
-    const workspace = resolveWorkspaceActor(ports.projectPorts, {
-      path: input.path,
-      userHome: input.userHome,
-      as: input.as,
+  if (!asBody) {
+    const contained = checkVaultContainment({
+      resolvedVaultPath: ports.config.vaultPath,
+      resolvedBindingDirectories: ports.bindingDirectories,
     });
-    if (!workspace.ok) return err(workspace.error);
-    const workspaceRoot =
-      workspace.value.kind === "registered_project"
-        ? workspaceRootOf(workspace.value.binding)
-        : workspace.value.directory;
-    const external = checkExternalSource({
-      resolvedSourcePath: sourcePath,
-      workspaceRoot,
-      policy: "workspace_or_explicit",
-      allowExternalSource: input.allowExternalSource === true,
-    });
-    if (!external.ok) return err(external.error);
+    if (!contained.ok) return err(contained.error);
+    if (!spoolUpload) {
+      const workspace = resolveWorkspaceActor(ports.projectPorts, {
+        path: input.path,
+        userHome: input.userHome,
+        as: input.as,
+      });
+      if (!workspace.ok) return err(workspace.error);
+      const workspaceRoot =
+        workspace.value.kind === "registered_project"
+          ? workspaceRootOf(workspace.value.binding)
+          : workspace.value.directory;
+      const external = checkExternalSource({
+        resolvedSourcePath: sourcePath as string,
+        workspaceRoot,
+        policy: "workspace_or_explicit",
+        allowExternalSource: input.allowExternalSource === true,
+      });
+      if (!external.ok) return err(external.error);
+    }
   }
   // ADR-0031: every new Artifact, revisions included, takes its identity from
   // the existing UUID port, exactly as new sends already do. The legacy
@@ -438,16 +465,22 @@ function reviseContent(
   // valid and are never rewritten.
   const artifactId = ports.ids.next();
   const prepared = ports.content.prepareArtifactBody({
-    body: {
-      kind: "file",
-      physicalPath: sourcePath,
-      logicalOriginalName: input.originalName ?? "document",
-      sourceKind: spoolUpload ? "authenticated-spool" : "workspace-path",
-    },
+    body: asBody
+      ? {
+          kind: "text",
+          text: input.body as string,
+          logicalName: `${titleSlug(handoff.title)}-${handoff.revision + 1}.md`,
+        }
+      : {
+          kind: "file",
+          physicalPath: sourcePath as string,
+          logicalOriginalName: input.originalName ?? "document",
+          sourceKind: spoolUpload ? "authenticated-spool" : "workspace-path",
+        },
     classification: "mime-first",
     identities: { handoffId: handoff.id, artifactId },
     bounds: { maxBytes: ports.config.maxBytes },
-    provenance: { importedFromPath: spoolUpload ? null : file },
+    provenance: { importedFromPath: asBody || spoolUpload ? null : (fileArgument as string) },
   });
   if (!prepared.ok) return err(prepared.error);
 

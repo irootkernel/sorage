@@ -122,10 +122,23 @@ import {
 import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { buildCompletionScript } from "./completion";
+import { expandTilde } from "./expand-tilde";
 import { runPreflightCommand } from "./preflight-command";
 import { runSendRecoveryCommand } from "./send-recovery-command";
+import {
+  ACCEPT_REQUIRES_ROW_VERSION,
+  BODY_MUST_NOT_BE_EMPTY,
+  DECLINE_REQUIRES_ROW_VERSION,
+  INBOX_WAIT_NO_CURSOR,
+  INBOX_WAIT_WHOLE_SECONDS,
+  REVIEW_SET_ONE_SOURCE,
+  REVISE_ONE_SOURCE,
+  SEND_REPLAY_ONLY_KEY,
+  SEND_TAKES_ONE_SOURCE,
+} from "./usage-sentences";
 import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
 import { registerChannelCommands } from "./channel-commands";
+import { serveMcp } from "./mcp-server";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
 import * as webBindings from "./web";
@@ -908,9 +921,8 @@ export function buildProgram(
       if (options.replayOnly === true) {
         let usage: string | undefined;
         if (typeof options.idempotencyKey !== "string" || options.idempotencyKey.trim() === "")
-          usage = "send --replay-only requires the original nonempty --idempotency-key";
-        else if ((options.file === undefined) === (options.body === undefined))
-          usage = "send takes exactly one of --file or --body";
+          usage = SEND_REPLAY_ONLY_KEY;
+        else if ((options.file === undefined) === (options.body === undefined)) usage = SEND_TAKES_ONE_SOURCE;
         else if (options.body !== undefined && options.body.trim() === "") usage = "the --body text must not be empty";
         if (usage !== undefined) {
           ports.err(`sorage: ${usage}\nRun 'sorage --help' for usage.\n`);
@@ -942,13 +954,13 @@ export function buildProgram(
       }
       if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if ((options.file === undefined) === (options.body === undefined)) {
-        ports.err("sorage: send takes exactly one of --file or --body\n");
+        ports.err(`sorage: ${SEND_TAKES_ONE_SOURCE}\n`);
         ports.err("Run 'sorage --help' for usage.\n");
         reportExitCode(2);
         return;
       }
       if (options.body !== undefined && options.body.trim() === "") {
-        ports.err("sorage: the --body text must not be empty\n");
+        ports.err(`sorage: ${BODY_MUST_NOT_BE_EMPTY}\n`);
         ports.err("Run 'sorage --help' for usage.\n");
         reportExitCode(2);
         return;
@@ -1073,13 +1085,13 @@ export function buildProgram(
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
       if (options.wait === true && typeof options.interval === "number" && options.interval < 1) {
-        ports.err("sorage: inbox --wait polls at whole-second intervals; pass --interval 1 or more\n");
+        ports.err(`sorage: ${INBOX_WAIT_WHOLE_SECONDS}\n`);
         ports.err("Run 'sorage inbox --help' for usage.\n");
         reportExitCode(2);
         return;
       }
       if (options.wait === true && typeof globals.cursor === "string") {
-        ports.err("sorage: inbox --wait cannot combine with --cursor; a wait lists only new items\n");
+        ports.err(`sorage: ${INBOX_WAIT_NO_CURSOR}\n`);
         ports.err("Run 'sorage inbox --help' for usage.\n");
         reportExitCode(2);
         return;
@@ -1286,7 +1298,7 @@ export function buildProgram(
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if ((options.text === undefined) === (options.file === undefined)) {
-        ports.err("sorage: review set takes exactly one of --text or --file" + "\n");
+        ports.err(`sorage: ${REVIEW_SET_ONE_SOURCE}\n`);
         ports.err("Run 'sorage --help' for usage." + "\n");
         reportExitCode(2);
         return;
@@ -1385,6 +1397,7 @@ export function buildProgram(
   program
     .command("revise <handoff-id>")
     .description("replace the current Artifact or resolve the Review Note without changing content")
+    .option("--body <text>", "inline Markdown text materialized as the replacement document")
     .option("--file <path>", "the replacement document, with ~ expansion")
     .option("--no-change", "resolve the Review Note without changing content")
     .option("--reason <text>", "the reason a no-change resolution carries")
@@ -1394,6 +1407,7 @@ export function buildProgram(
       (
         id: string,
         options: {
+          body?: string;
           file?: string;
           noChange?: boolean;
           reason?: string;
@@ -1407,14 +1421,17 @@ export function buildProgram(
         if (!requireInitialized(ports, json, reportExitCode, true)) return;
         // Commander parses --no-change as the negation of a defaulted `change` flag.
         const noChange = (options as { change?: boolean }).change === false;
-        if (noChange && options.file !== undefined) {
-          ports.err("sorage: revise takes either --file or --no-change, not both\n");
+        const suppliedSources = [options.body !== undefined, options.file !== undefined, noChange].filter(
+          Boolean,
+        ).length;
+        if (suppliedSources !== 1) {
+          ports.err(`sorage: ${REVISE_ONE_SOURCE}\n`);
           ports.err("Run 'sorage --help' for usage.\n");
           reportExitCode(2);
           return;
         }
-        if (!noChange && options.file === undefined) {
-          ports.err("sorage: revise takes either --file or --no-change\n");
+        if (options.body !== undefined && options.body.trim() === "") {
+          ports.err(`sorage: ${BODY_MUST_NOT_BE_EMPTY}\n`);
           ports.err("Run 'sorage --help' for usage.\n");
           reportExitCode(2);
           return;
@@ -1459,6 +1476,7 @@ export function buildProgram(
         const result = reviseHandoff(revisionPorts, {
           ...actorInputOf(globals),
           handoffId: id,
+          body: options.body,
           file: options.file,
           noChange,
           reason: options.reason,
@@ -1528,7 +1546,7 @@ export function buildProgram(
       // --expected-row-version is a root-level global, so its requiredness is
       // enforced here rather than by a subcommand-local requiredOption (CLI-013).
       if (typeof globals.expectedRowVersion !== "number") {
-        ports.err("sorage: accept requires --expected-row-version <n>\n");
+        ports.err(`sorage: ${ACCEPT_REQUIRES_ROW_VERSION}\n`);
         ports.err("Run 'sorage accept --help' for usage.\n");
         reportExitCode(2);
         return;
@@ -1562,7 +1580,7 @@ export function buildProgram(
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (typeof globals.expectedRowVersion !== "number") {
-        ports.err("sorage: decline requires --expected-row-version <n>\n");
+        ports.err(`sorage: ${DECLINE_REQUIRES_ROW_VERSION}\n`);
         ports.err("Run 'sorage decline --help' for usage.\n");
         reportExitCode(2);
         return;
@@ -2262,6 +2280,18 @@ export function buildProgram(
       reportExitCode(code);
     });
 
+  program
+    .command("mcp")
+    .description("serve the STDIO MCP adapter whose tools mirror the messaging CLI (interface section 39)")
+    // Reached when a global option precedes the command (`sorage --json mcp`)
+    // or through help; excess operands are commander's own usage exit, and the
+    // plain form is intercepted in `main` before parsing.
+    .allowExcessArguments(false)
+    .action(() => {
+      serveMcp();
+      reportExitCode(-1);
+    });
+
   const token = program.command("token").description("manage the Installation API token");
   token
     .command("rotate")
@@ -2584,12 +2614,6 @@ function readNoteFile(path: string): string | null {
   } catch {
     return null;
   }
-}
-
-function expandTilde(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-  return path;
 }
 
 /**
@@ -3168,6 +3192,15 @@ export function main(argv: string[] = process.argv.slice(2)): number {
       .catch(() => {
         process.exit(1);
       });
+    return -1;
+  }
+  // `sorage mcp` runs the long-lived STDIO MCP server of interface section 39;
+  // like `daemon serve` it owns the event loop rather than fitting the
+  // synchronous command pipeline. Exactly `["mcp"]` is intercepted; `--help`
+  // and `-h` fall through to the registered command, and every other form
+  // reaches commander's own handling.
+  if (argv.length === 1 && argv[0] === "mcp") {
+    serveMcp();
     return -1;
   }
   // `daemon serve` runs the long-lived daemon process; it is spawned detached by

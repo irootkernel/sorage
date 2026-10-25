@@ -1,0 +1,1503 @@
+{
+  "initializeResult": {
+    "protocolVersion": "2025-06-18",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "sorage",
+      "version": "0.1.2"
+    }
+  },
+  "toolsResult": {
+    "tools": [
+      {
+        "name": "handoff_send",
+        "description": "hand one current document to one or more recipient Projects, one Handoff each",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "supersedes": {
+              "type": "string"
+            },
+            "allowUnregistered": {
+              "type": "boolean"
+            },
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "to",
+            "title"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "body"
+              ]
+            },
+            {
+              "required": [
+                "file"
+              ]
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "replayOnly"
+                ],
+                "properties": {
+                  "replayOnly": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "idempotencyKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_inbox",
+        "description": "list the Handoffs sent to the resolved recipient Project",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string"
+            },
+            "sender": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "updatedSince": {
+              "type": "string"
+            },
+            "updatedUntil": {
+              "type": "string"
+            },
+            "includeArchived": {
+              "type": "boolean"
+            },
+            "includeDeleted": {
+              "type": "boolean"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "wait": {
+              "type": "boolean",
+              "default": false
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 30
+            },
+            "interval": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 2
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "wait"
+                ],
+                "properties": {
+                  "wait": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "cursor"
+                  ]
+                }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_outbox",
+        "description": "list the Handoffs the resolved sender sent",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "currentWorkspace": {
+              "type": "boolean"
+            },
+            "state": {
+              "type": "string"
+            },
+            "sender": {
+              "type": "string"
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "updatedSince": {
+              "type": "string"
+            },
+            "updatedUntil": {
+              "type": "string"
+            },
+            "includeArchived": {
+              "type": "boolean"
+            },
+            "includeDeleted": {
+              "type": "boolean"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_get",
+        "description": "read one Handoff's metadata; records nothing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_events",
+        "description": "read the bounded recent metadata timeline; records nothing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_fetch",
+        "description": "read the current Artifact's metadata and local path; the recipient's first fetch is recorded",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_review_show",
+        "description": "read the current Review Note; records nothing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_review_set",
+        "description": "create or update this Handoff's Review Note as the recipient or the User",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "targetRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "text"
+              ]
+            },
+            {
+              "required": [
+                "file"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_review_withdraw",
+        "description": "withdraw this Handoff's current Review Note as the recipient, whichever actor authored it",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_revise",
+        "description": "replace the current Artifact or resolve the Review Note without changing content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "noChange": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "body"
+              ]
+            },
+            {
+              "required": [
+                "file"
+              ]
+            },
+            {
+              "required": [
+                "noChange"
+              ],
+              "properties": {
+                "noChange": {
+                  "const": true
+                }
+              }
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "noChange"
+                ],
+                "properties": {
+                  "noChange": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "reason"
+                ]
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "reason"
+                ]
+              },
+              "then": {
+                "required": [
+                  "noChange"
+                ],
+                "properties": {
+                  "noChange": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_accept",
+        "description": "accept the exact Revision as the recipient, closing the exchange",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId",
+            "expectedRevision",
+            "expectedRowVersion"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_decline",
+        "description": "decline the Handoff as the recipient with a recorded reason",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId",
+            "reason",
+            "expectedRowVersion"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_withdraw",
+        "description": "withdraw the Handoff as the sender before the recipient has engaged",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_list",
+        "description": "list Project Memos, open by default",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "allProjects": {
+              "type": "boolean"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "done",
+                "dismissed",
+                "all"
+              ],
+              "default": "open"
+            },
+            "query": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "project"
+                ],
+                "properties": {
+                  "allProjects": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "allProjects"
+                  ],
+                  "properties": {
+                    "allProjects": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_show",
+        "description": "show one complete Memo",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "memoId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "memoId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_add",
+        "description": "record an open Memo",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "bodyFile": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "allOf": [
+            {
+              "not": {
+                "allOf": [
+                  {
+                    "required": [
+                      "body"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "bodyFile"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "replayOnly"
+                ],
+                "properties": {
+                  "replayOnly": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "idempotencyKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_update",
+        "description": "edit an open Memo at its observed Row Version",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "title": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "bodyFile": {
+              "type": "string"
+            },
+            "memoId": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "memoId",
+            "expectedRowVersion"
+          ],
+          "allOf": [
+            {
+              "not": {
+                "allOf": [
+                  {
+                    "required": [
+                      "body"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "bodyFile"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "anyOf": [
+                {
+                  "required": [
+                    "title"
+                  ]
+                },
+                {
+                  "required": [
+                    "body"
+                  ]
+                },
+                {
+                  "required": [
+                    "bodyFile"
+                  ]
+                }
+              ]
+            },
+            {
+              "if": {
+                "required": [
+                  "replayOnly"
+                ],
+                "properties": {
+                  "replayOnly": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "idempotencyKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_done",
+        "description": "mark a Memo handled",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "memoId": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "memoId",
+            "expectedRowVersion"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "replayOnly"
+                ],
+                "properties": {
+                  "replayOnly": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "idempotencyKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_dismiss",
+        "description": "dismiss a Memo without claiming work was done",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "memoId": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "memoId",
+            "expectedRowVersion"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "replayOnly"
+                ],
+                "properties": {
+                  "replayOnly": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "idempotencyKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "memo_reopen",
+        "description": "reopen a closed Memo without executing its content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "idempotencyKey": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "memoId": {
+              "type": "string"
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "memoId",
+            "expectedRowVersion"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "replayOnly"
+                ],
+                "properties": {
+                  "replayOnly": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "idempotencyKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_create",
+        "description": "create an open Channel with its single main participant",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "main": {
+              "type": "string",
+              "default": "main"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_add",
+        "description": "register a worker or judge participant on an open Channel",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "handle": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "worker",
+                "judge"
+              ]
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "handle",
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_remove",
+        "description": "remove a participant idempotently; reversible by re-adding the handle",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "handle": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "handle"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_post",
+        "description": "post one attributed message upstream through the shared content interface",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "report",
+                "question",
+                "relay_request"
+              ]
+            },
+            "body": {
+              "type": "string"
+            },
+            "bodyFile": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "ref": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "from",
+            "kind"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "body"
+              ]
+            },
+            {
+              "required": [
+                "bodyFile"
+              ]
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "relay_request"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "to"
+                ]
+              }
+            },
+            {
+              "if": {
+                "not": {
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "relay_request"
+                    }
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "to"
+                  ]
+                }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_messages",
+        "description": "list messages with full inline bodies; unhandled oldest first by default",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "all": {
+              "type": "boolean",
+              "default": false
+            },
+            "after": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "from": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "report",
+                "question",
+                "relay_request"
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "wait": {
+              "type": "boolean",
+              "default": false
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 30
+            },
+            "interval": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 2
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_ack",
+        "description": "record the User handling decision for the named messages",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "seq": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "minItems": 1
+            },
+            "note": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "seq"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_close",
+        "description": "terminal idempotent close; freezes posting, keeps reads and acks",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": true,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_list",
+        "description": "list Channels with both identifiers",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "all"
+              ],
+              "default": "all"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "channel_show",
+        "description": "show one Channel with its complete participant roster and counts",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "project_list",
+        "description": "list every Project with its binding count, flagging unbound Projects",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "project_show",
+        "description": "show one Project with every binding, its counts, and its lifecycle state",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      }
+    ]
+  }
+}

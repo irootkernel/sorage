@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -380,6 +381,203 @@ describe("the round-2 remediation regressions", () => {
     const replayReport = JSON.parse(second.outText()) as { data: { revision: number; replayed: boolean } };
     expect(replayReport.data.replayed).toBe(true);
     expect(replayReport.data.revision).toBe(2);
+    process.chdir(original);
+  });
+});
+
+describe("sorage revise --body (CLI-012, HND-023)", () => {
+  it("creates a Revision from inline text with the inline authoritative body and the HND-023 name", () => {
+    const original = process.cwd();
+    const { home, workA, handoffId } = setup();
+
+    const body = "# Shared, revised inline\n";
+    process.chdir(workA);
+    const revised = capture();
+    const exit = runCli(["revise", handoffId, "--body", body, "--json"], revised.ports);
+    if (exit !== 0) throw new Error(`inline revise failed (${exit}): ${revised.errText()}`);
+    const report = JSON.parse(revised.outText()) as { data: { revision: number; reviewState: string } };
+    expect(report.data.revision).toBe(2);
+    expect(report.data.reviewState).toBe("awaiting_recipient");
+
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      const artifact = database
+        .prepare(
+          "SELECT a.original_name AS originalName, a.stored_name AS storedName, a.mime_type AS mimeType, a.imported_from_path AS importedFromPath, c.inline_text AS inlineText, c.storage_key AS storageKey, c.materialized AS materialized, c.size_bytes AS sizeBytes, c.sha256 AS sha256 FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE a.handoff_id = ? ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+        )
+        .get(handoffId) as {
+        originalName: string;
+        storedName: string;
+        mimeType: string;
+        importedFromPath: string | null;
+        inlineText: string;
+        storageKey: string | null;
+        materialized: number;
+        sizeBytes: number;
+        sha256: string;
+      };
+      // The staged-name contract of section 4: the title slug plus the revision
+      // being created, indistinguishable in metadata from a file-backed body.
+      expect(artifact.originalName).toBe("brief-2.md");
+      expect(artifact.storedName).toBe("brief-2.md");
+      expect(artifact.mimeType).toBe("text/markdown");
+      expect(artifact.importedFromPath).toBeNull();
+      expect(artifact.inlineText).toBe(body);
+      expect(artifact.storageKey).toBeNull();
+      expect(artifact.materialized).toBe(1);
+      expect(artifact.sizeBytes).toBe(Buffer.byteLength(body, "utf8"));
+      expect(artifact.sha256).toBe(createHash("sha256").update(body, "utf8").digest("hex"));
+      const intents = database.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get() as { c: number };
+      expect(intents.c).toBe(0);
+    } finally {
+      database.close();
+    }
+    process.chdir(original);
+  });
+
+  it("a second inline revise names the next revision, and identical content refuses with the body wording", () => {
+    const original = process.cwd();
+    const { workA, handoffId } = setup();
+
+    process.chdir(workA);
+    expect(runCli(["revise", handoffId, "--body", "# Second take\n", "--json"], capture().ports)).toBe(0);
+    const third = capture();
+    expect(runCli(["revise", handoffId, "--body", "# Third take\n", "--json"], third.ports)).toBe(0);
+    const thirdReport = JSON.parse(third.outText()) as { data: { revision: number } };
+    expect(thirdReport.data.revision).toBe(3);
+
+    // The identical retry is refused before anything mutates, with the
+    // parameterized first word of HND-015's message.
+    const same = capture();
+    expect(runCli(["revise", handoffId, "--body", "# Third take\n", "--json"], same.ports)).toBe(65);
+    const refused = JSON.parse(same.errText()) as { error: { code: string; message: string } };
+    expect(refused.error.code).toBe("NO_CONTENT_CHANGE");
+    expect(refused.error.message).toContain("the supplied body carries the current Artifact's SHA-256");
+    process.chdir(original);
+  });
+
+  it("refuses a lone-surrogate body with send's coded CONFIG_INVALID, staging nothing", () => {
+    const original = process.cwd();
+    const { home, workA, handoffId } = setup();
+
+    process.chdir(workA);
+    const refused = capture();
+    // The argv boundary cannot carry this text; through the in-process CLI the
+    // core guard answers with send's exact refusal (SHR-003).
+    expect(runCli(["revise", handoffId, "--body", "broken \uD800 surrogate", "--json"], refused.ports)).toBe(78);
+    const report = JSON.parse(refused.errText()) as { error: { code: string; message: string } };
+    expect(report.error.code).toBe("CONFIG_INVALID");
+    expect(report.error.message).toBe(
+      "the --body text cannot be stored byte-exactly; it contains an unpaired surrogate",
+    );
+    const staging = join(home, "vault", "staging");
+    expect(existsSync(staging) ? readdirSync(staging) : []).toHaveLength(0);
+    process.chdir(original);
+  });
+
+  it("stages an above-threshold body as a Vault copy with an activate intent and a storageKey", () => {
+    const original = process.cwd();
+    const { home, workA, handoffId } = setup();
+
+    const body = `${"x".repeat(69_999)}\n`;
+    process.chdir(workA);
+    const revised = capture();
+    const exit = runCli(["revise", handoffId, "--body", body, "--json"], revised.ports);
+    if (exit !== 0) throw new Error(`above-threshold revise failed (${exit}): ${revised.errText()}`);
+    const report = JSON.parse(revised.outText()) as { data: { revision: number; storageKey: string | null } };
+    expect(report.data.revision).toBe(2);
+    expect(report.data.storageKey).not.toBeNull();
+
+    const database = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      const record = database
+        .prepare(
+          "SELECT c.inline_text AS inlineText, c.storage_key AS storageKey, c.materialized AS materialized FROM artifacts a JOIN content_records c ON c.id = a.content_record_id WHERE a.handoff_id = ? ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+        )
+        .get(handoffId) as { inlineText: string | null; storageKey: string | null; materialized: number };
+      expect(record.inlineText).toBeNull();
+      expect(record.storageKey).not.toBeNull();
+      expect(existsSync(join(home, "vault", record.storageKey ?? ""))).toBe(true);
+      expect(record.materialized).toBe(1);
+      const intents = database.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get() as { c: number };
+      expect(intents.c).toBe(0);
+      const eventTypes = (
+        database.prepare("SELECT event_type FROM events ORDER BY rowid").all() as Array<{ event_type: string }>
+      ).map((row) => row.event_type);
+      expect(eventTypes).toContain("ARTIFACT_ACTIVATED");
+    } finally {
+      database.close();
+    }
+    process.chdir(original);
+  });
+
+  it("refuses every non-exactly-one source combination and a blank body with usage errors", () => {
+    const original = process.cwd();
+    const { home, workA, handoffId } = setup();
+    const bothFile = join(home, "brief-both.md");
+    writeFileSync(bothFile, "# Both\n");
+
+    process.chdir(workA);
+    for (const argv of [
+      ["revise", handoffId, "--body", "text", "--file", bothFile],
+      ["revise", handoffId, "--body", "text", "--no-change"],
+      ["revise", handoffId, "--file", bothFile, "--no-change"],
+      ["revise", handoffId],
+    ]) {
+      const usage = capture();
+      expect(runCli(argv, usage.ports)).toBe(2);
+      expect(usage.errText()).toBe(
+        "sorage: revise takes exactly one of --body, --file or --no-change\nRun 'sorage --help' for usage.\n",
+      );
+    }
+    const blank = capture();
+    expect(runCli(["revise", handoffId, "--body", "   "], blank.ports)).toBe(2);
+    expect(blank.errText()).toBe("sorage: the --body text must not be empty\nRun 'sorage --help' for usage.\n");
+    process.chdir(original);
+  });
+
+  it("replays an identical inline revise under an idempotency key", () => {
+    const original = process.cwd();
+    const { workA, handoffId } = setup();
+
+    process.chdir(workA);
+    const first = capture();
+    expect(
+      runCli(
+        ["revise", handoffId, "--body", "# Keyed inline\n", "--idempotency-key", "k-body-1", "--json"],
+        first.ports,
+      ),
+    ).toBe(0);
+    const firstReport = JSON.parse(first.outText()) as { data: { revision: number; replayed: boolean } };
+    expect(firstReport.data.revision).toBe(2);
+    expect(firstReport.data.replayed).toBe(false);
+
+    // The identical retry would otherwise be NO_CONTENT_CHANGE; the replay answers first.
+    const second = capture();
+    expect(
+      runCli(
+        ["revise", handoffId, "--body", "# Keyed inline\n", "--idempotency-key", "k-body-1", "--json"],
+        second.ports,
+      ),
+    ).toBe(0);
+    const replayReport = JSON.parse(second.outText()) as { data: { revision: number; replayed: boolean } };
+    expect(replayReport.data.replayed).toBe(true);
+    expect(replayReport.data.revision).toBe(2);
+    process.chdir(original);
+  });
+
+  it("answers a no-change resolution without --reason with the CLI's CONFIG_INVALID envelope", () => {
+    const original = process.cwd();
+    const { workA, workB, handoffId } = setup();
+
+    process.chdir(workB);
+    expect(runCli(["review", "set", handoffId, "--text", "please reconsider", "--json"], capture().ports)).toBe(0);
+    process.chdir(workA);
+    const refused = capture();
+    expect(runCli(["revise", handoffId, "--no-change", "--json"], refused.ports)).toBe(78);
+    const report = JSON.parse(refused.errText()) as { error: { code: string; message: string } };
+    expect(report.error.code).toBe("CONFIG_INVALID");
+    expect(report.error.message).toBe("the no-change resolution requires a --reason");
     process.chdir(original);
   });
 });

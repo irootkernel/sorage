@@ -86,6 +86,7 @@ const commandPaths = [
   ["vault", "verify"],
   ["vault", "move"],
   ["completion"],
+  ["mcp"],
 ];
 
 const errorSpecExit = (code: string): number => errorSpec(code as never).exitCode;

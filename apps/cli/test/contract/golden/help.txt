@@ -73,5 +73,7 @@ Commands:
   daemon                          run and control the local daemon
   web                             start the daemon when needed and open the Web
                                   control plane with a one-time session secret
+  mcp                             serve the STDIO MCP adapter whose tools mirror
+                                  the messaging CLI (interface section 39)
   token                           manage the Installation API token
   help [command]                  display help for command
