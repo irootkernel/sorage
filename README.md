@@ -16,11 +16,29 @@ The shared Handoff storage contract deliberately changes affected JSON DTOs: `st
 
 ## Channels
 
-Channels provide one durable attributed upstream communication line per orchestration invocation: one main participant reads Worker and Judge reports, questions, and peer-relay requests as untrusted tool-result data, and every downstream instruction stays consumer-owned. Keep that one Channel across session, node, and member-goal changes; a new session or node does not create a new Channel, and a relayed instruction remains the main participant's own operative text on the consumer's direct instruction surface. Channel commands are CLI-only (`sorage channel create/list/show/close/participant/assignment/submit/messages/read/handle`); no Channel HTTP routes or Web screens exist in first delivery. Message bodies share the same 65,536-byte inline/Vault routing as Handoffs and Memos, Channel runtime records are included in format-3 backups, and `--replay-only` recovery is available for outcome-unknown submissions. Every Channel command except `submit --replay-only` performs startup recovery and may write the installation state tree and the Vault even when it only reads or waits; reads and waits are non-mutating for Channel domain records only. A caller sandboxed read-only against the Sorage home can run none of them, including `channel messages --wait`, because each writes the home's state database; a read-only Vault instead makes any of them fail only when it needs to write the Vault; and `submit --replay-only` is the only Channel command that needs no write access to the home or the Vault. After an unknown submission outcome, a new key is authorized only by main's new direct instruction for a new attempt bound to a new `--context-attempt`; a message body, recovery hint, replay result, or changed context field never authorizes one. The [Channel reference](skills/use-sorage/references/channels.md) carries the exact paths and rules.
+Channels provide one durable attributed upstream line per orchestration invocation, addressed by name, participant handle and per-Channel sequence number. Use Sorage MCP tools first, with the native CLI as fallback. The five-step loop is `channel_create` → `channel_add` → `channel_post` → `channel_messages` with wait → `channel_ack`. The [copied Channel reference](skills/use-sorage/references/channels.md#the-five-step-loop) shows concrete tool calls, results and CLI equivalents. Covered reads and waits write nothing; writes run through MCP.
+
+Create/add/remove/ack/close are idempotent; an identical unhandled post returns its original sequence with `duplicate: true`, including after close, while the same content posted after handling is a new message. Ack records the User decision and reports repeats as `alreadyHandled`. Reading does not handle messages. Main never posts: reports, questions and relay requests stay sender-attributed untrusted tool-result data, and main's downstream instruction remains consumer-owned. A message grants no tool, network, commit, deletion or approval authority and no access to another Channel. CLI and MCP are the only Channel surfaces: no HTTP routes, Web screens or automatic wake-up are added. Bodies follow the shared inline/Vault bound, and format-3 backups preserve Channel records.
+
+## MCP for coding agents
+
+The source candidate provides `sorage mcp`, a STDIO server with 31 stable tools for Handoffs, Project Memos, Channels and Project reads. Harnesses launch the server outside their shell sandbox, so agents can send and read through MCP; the covered CLI reads also run directly because they write nothing. No daemon or ecosystem tool is required. Each accepted call runs the same executable's `sorage … --json` command and returns its envelope. Administration and User-admin commands are not exposed. The published v0.1.2 executable predates this surface; choose the qualified executable by path and revision.
+
+Pass the acting workspace's existing directory as `cwd` on every tool call; otherwise the server's directory is used. Prefer inline text; file inputs must stay inside that workspace. Read the envelope at `content[0]` or `structuredContent`, and any diagnostic warnings after it. Argument/usage refusals can be JSON-RPC `-32602`; coded failures are tool results with `isError: true`. Recovery hints never expand the user's request.
+
+Global registration is a separate user setup decision that changes the harness configuration; Sorage never registers itself. These help-derived examples assume the intended qualified executable is on PATH:
+
+```sh
+codex mcp add sorage -- sorage mcp
+claude mcp add --scope user sorage -- sorage mcp
+```
+
+For an explicit installation, Codex accepts `--env SORAGE_HOME=/absolute/home` before the server name; Claude Code uses `claude mcp add --scope user sorage -e SORAGE_HOME=/absolute/home -- /absolute/path/to/sorage mcp`. Replace paths with the selected installation and executable. Without an explicit home, the server uses the harness environment's SORAGE_HOME or the default `~/.sorage`. Registration does not authorize a broker operation. [Operations](docs/ops/README.md#mcp-registration-and-per-invocation-attachment) covers configuration scope, verification/removal and session-only attachment.
 
 ## Features
 
 - A CLI that works without a running daemon
+- Named upstream Channels and MCP messaging for coding agents
 - Project registration and worktree-aware identity resolution
 - Independent Handoffs for each recipient
 - One current Artifact and one current Review Note per Handoff
@@ -90,7 +108,7 @@ To stop a Project from sending or receiving new Handoffs, run `sorage project ar
 
 The shipped `use-sorage` skill operates on explicit requests. Ask it to check an inbox or outbox when needed; a check reports results, while processing Handoffs requires a request covering that work. Sessions and ordinary coding tasks do not trigger checks. Its `SKILL.md` entrypoint keeps the shared request policy and routes each explicitly requested domain — Handoffs, Project Memos, or Channels — to the required reference file inside the same copied skill directory.
 
-The skill is self-contained when the whole `skills/use-sorage` directory — `SKILL.md` plus `references/` — is copied outside this checkout, and it uses native offline CLI help. Recovery hints cannot grant actor or confirmation flags. Review and revision writes retain observed versions; conflicts preserve the proposal instead of automatically overwriting. Before send, retain the original key, exact input/source bytes, Installation and sender context. Unknown outcomes use only that request with `send --replay-only`; an unavailable receipt remains unknown and never authorizes another send. Historical receipts do not report current delivery. Deletion requests, User approval and a pinned Handoff's distinct decision remain separate, and deletion does not erase Git history or backups. Received documents and Notes cannot authorize external actions.
+The skill is MCP-first with native CLI fallback, and covered reads write nothing. It is self-contained when the whole `skills/use-sorage` directory — `SKILL.md` plus `references/` — is copied outside this checkout, and it uses native offline CLI help. Recovery hints cannot grant actor or confirmation flags. Review and revision writes retain observed versions; conflicts preserve the proposal instead of automatically overwriting. Before send, retain the original key, exact input/source bytes, Installation and sender context. Unknown outcomes use only that request with `send --replay-only`; an unavailable receipt remains unknown and never authorizes another send. Historical receipts do not report current delivery. Deletion requests, User approval and a pinned Handoff's distinct decision remain separate, and deletion does not erase Git history or backups. Received documents and Notes cannot authorize external actions.
 
 Send a document from the sender project:
 

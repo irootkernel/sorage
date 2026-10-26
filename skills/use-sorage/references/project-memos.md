@@ -4,6 +4,20 @@ This reference is a required resource for explicitly requested Project Memo work
 
 Project Memos are separate local reminders attached to one Project. They have no sender, recipient, Artifact, or Handoff acceptance. Their states are open, done, and dismissed. Sorage stores the reminder; it does not run the described work or certify another tool's state.
 
+## MCP and CLI surfaces
+
+Use these MCP tools first, passing the acting workspace's `cwd` on every call; the CLI forms below are fallback equivalents. `memo_list` and `memo_show` and their CLI counterparts write nothing. The five mutations retain original-input replay-only recovery; it is not accepted on either read tool. `project` selects or asserts existing identity, never User provenance or setup authority.
+
+| Tool | Required properties | Other properties | Input rules |
+|---|---|---|---|
+| `memo_list` | None | `project: string`, `allProjects: boolean`, `state: string`, `query: string`, `cursor: string`, `limit: integer`, `cwd: string` | project and allProjects=true are mutually exclusive. state is open (default), done, dismissed or all. Use broader scope only when requested. |
+| `memo_show` | `memoId: string` | `project: string`, `cwd: string` | project is an optional assertion of the owning Project. |
+| `memo_add` | `title: string` | `idempotencyKey: string`, `replayOnly: boolean`, `body: string`, `bodyFile: string`, `project: string`, `cwd: string` | At most one of body and bodyFile; omitting both gives an empty body. replayOnly requires the original UUID idempotencyKey. |
+| `memo_update` | `memoId: string`, `expectedRowVersion: integer` | `idempotencyKey: string`, `replayOnly: boolean`, `title: string`, `body: string`, `bodyFile: string`, `project: string`, `cwd: string` | At least one of title and a body source is required; body and bodyFile are mutually exclusive. replayOnly requires the original UUID idempotencyKey and original expectedRowVersion. |
+| `memo_done` | `memoId: string`, `expectedRowVersion: integer` | `idempotencyKey: string`, `replayOnly: boolean`, `project: string`, `cwd: string` | Read the version before closing. replayOnly requires the original UUID idempotencyKey and original expectedRowVersion. |
+| `memo_dismiss` | `memoId: string`, `expectedRowVersion: integer` | `idempotencyKey: string`, `replayOnly: boolean`, `project: string`, `cwd: string` | Read the version before dismissing. replayOnly requires the original UUID idempotencyKey and original expectedRowVersion. |
+| `memo_reopen` | `memoId: string`, `expectedRowVersion: integer` | `idempotencyKey: string`, `replayOnly: boolean`, `project: string`, `cwd: string` | Explicitly reopen before editing closed content. replayOnly requires the original UUID idempotencyKey and original expectedRowVersion. |
+
 ## Explicit Memo requests
 
 A request to list or show Memos authorizes reading and reporting only. Use `sorage memo list --project <slug-or-id> --json` (Open by default) and `sorage memo show <memo-id> --json`. Use `--state all` or `--all-projects` only when that broader scope is requested. An omitted list Project uses the current directory's native binding; if resolution fails or is ambiguous, report it and obtain the intended Project rather than silently broadening the scope. Memo requests do not trigger inbox/outbox discovery.
@@ -24,7 +38,7 @@ Read `sorage config show --json` when needed to identify the selected Installati
 
 A retained historical receipt reports the original result, not current Memo state or proof that external work ran; reread current state before a new write. Receipt retention is 24 hours, judged by the server at lookup. `MEMO_REPLAY_UNAVAILABLE` (exit 75) means outcome unknown, and so does `IDEMPOTENCY_CONFLICT`, which reports a different request under the same key. An absent, expired, or restore-missing receipt must not trigger execute fallback, another key, repeated work, a replacement Memo, or a done claim. Backup restore preserves Installation identity but excludes receipts; reauthentication does not restore that evidence. A later error does not prove the original request failed.
 
-Replay-only never executes the recovered request itself and performs no Memo, event, or receipt write for it; it does not promise the CLI process performs no writes at all, because normal native startup recovery and logging still run, and their effects are not evidence about the original outcome.
+Replay-only never executes the recovered request itself and performs no Memo, event, or receipt write for it; it is a mutation-path inspection whose native process still performs startup recovery and logging, and their effects are not evidence about the original outcome.
 
 The browser's explicit `Abandon retry and continue` only retires local recovery while preserving an unknown-outcome notice. It does not cancel server work, close a Memo, or authorize another broker mutation or re-execution of its described work. Report what remains unknown and continue unrelated authorized work; a genuinely new operation needs separately expressed intent. There is no CLI abandonment command.
 
