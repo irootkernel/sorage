@@ -90,12 +90,22 @@ describe("the symbolic error catalogue contract", () => {
   const docs15 = parseSection15();
   const docs16 = parseSection16();
   const codes = core.ERROR_CODES as readonly string[];
+  // TASK-129 stores reports without publishing TASK-130's error surface.
+  // TASK-130 removes this exact overlay when activating the two catalogue entries.
+  const pendingReportingCodes = ["HANDOFF_INVALID_INPUT", "PROCESSING_STATE_CONFLICT"];
+
+  it("pins the two accepted reporting codes awaiting TASK-130 activation", () => {
+    expect(docs15.get("HANDOFF_INVALID_INPUT")?.httpStatus).toBe(422);
+    expect(docs15.get("PROCESSING_STATE_CONFLICT")?.httpStatus).toBe(409);
+    expect(docs16.get("HANDOFF_INVALID_INPUT")).toBe(64);
+    expect(docs16.get("PROCESSING_STATE_CONFLICT")).toBe(75);
+  });
 
   it("keeps the catalogue and the section 15 table in two-way sync", () => {
     const inCodeNotDocs = codes.filter((code) => !docs15.has(code));
     const inDocsNotCode = [...docs15.keys()].filter((code) => !codes.includes(code));
     expect(inCodeNotDocs, "codes emitted but absent from the table").toEqual([]);
-    expect(inDocsNotCode, "table rows without a catalogue entry").toEqual([]);
+    expect(inDocsNotCode, "only the exact TASK-130 codes await activation").toEqual(pendingReportingCodes);
     expect(codes).toHaveLength(70);
   });
 
@@ -118,8 +128,8 @@ describe("the symbolic error catalogue contract", () => {
     }
     expect(
       [...docs16.keys()].filter((code) => !codes.includes(code)),
-      "no phantom rows",
-    ).toEqual([]);
+      "only the exact TASK-130 codes await activation",
+    ).toEqual(pendingReportingCodes);
   });
 
   it("pins both renderings of every code against the golden", () => {

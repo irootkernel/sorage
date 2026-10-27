@@ -3,21 +3,27 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
 import {
   type AppError,
+  type BackupVerifyReport,
   backupRestore,
   backupVerify,
-  type BackupVerifyReport,
   exportSnapshot,
   initializeInstallation,
   parseSendRecoveryOutcome,
   type Result,
   redactSnapshotData,
+  reportingSnapshotBase,
   snapshotFiles,
   snapshotFilesV2,
 } from "@sorage/core";
+import { describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts, nodeEnsureVaultGit } from "../../src/backup-command-ports";
+import { createSqliteEventLedger } from "../../src/events";
+import { createNodeInitPorts } from "../../src/init-ports";
+import { createSqliteIntentLog } from "../../src/intent-log";
+import { openSorageDatabase } from "../../src/sqlite/connection";
+import { FakeClock } from "../../src/testkit/fakes";
 import {
   LEGACY_BODY_V2,
   LEGACY_EVENT_BASE,
@@ -27,11 +33,6 @@ import {
   legacyRequestHash,
   legacyReviseInstallation,
 } from "../fixtures/legacy-revise-installation";
-import { createNodeInitPorts } from "../../src/init-ports";
-import { createSqliteEventLedger } from "../../src/events";
-import { createSqliteIntentLog } from "../../src/intent-log";
-import { openSorageDatabase } from "../../src/sqlite/connection";
-import { FakeClock } from "../../src/testkit/fakes";
 
 /**
  * ADR-0031's qualification slice (TASK-106, R2.4.3): the frozen schema-7
@@ -84,7 +85,8 @@ describe("the frozen legacy revision through migration 8", () => {
           if (bodyContent.kind !== "inline") throw new Error("Expected legacy inline Memo");
           return { ...meta, body: bodyContent.text };
         }),
-        handoffs: exported.handoffs.map((handoff) => {
+        handoffs: exported.handoffs.map((current) => {
+          const handoff = "comment" in current ? reportingSnapshotBase(current) : current;
           if (handoff.artifact === null) return { ...handoff, artifact: null };
           const { inlineBody, storageKey, ...artifact } = handoff.artifact;
           if (inlineBody !== null || typeof storageKey !== "string") throw new Error("Expected legacy file Artifact");
@@ -151,7 +153,14 @@ describe("the frozen legacy revision through migration 8", () => {
       // Every non-Artifact domain table is byte-identical, and the Artifact's
       // physical projection — key, bytes, digest, materialization, names,
       // provenance — survives the normalization onto its content record.
-      expect(fixture.domainSnapshot()).toBe(domainBefore);
+      // Appended unknown reporting columns do not alter any original domain value.
+      const domainAfter = fixture
+        .domainSnapshot()
+        .replace(
+          ',"read_status":"unrecorded","read_revision":null,"revision_read_at":null,"processing_status":"unrecorded","processing_started_at":null,"processing_completed_at":null',
+          "",
+        );
+      expect(domainAfter).toBe(domainBefore);
       expect(fixture.normalizedArtifactProjection()).toBe(artifactsBefore);
       // The legacy columns are unchanged and the new owner columns are null.
       const db = openSorageDatabase(fixture.database);
@@ -208,7 +217,7 @@ describe("the frozen legacy revision through migration 8", () => {
     }
   });
 
-  it("exports and verifies as format 3 through the direct ports while the source's operational rows stay untouched", () => {
+  it("exports and verifies as format 4 through the direct ports while the source's operational rows stay untouched", () => {
     const fixture = legacyReviseInstallation();
     try {
       fixture.upgradeToCurrent();
@@ -234,7 +243,7 @@ describe("the frozen legacy revision through migration 8", () => {
         counts: { artifacts: number; channels: number; memos: number };
         contentDigests: Record<string, string>;
       };
-      expect(manifest.formatVersion).toBe(3);
+      expect(manifest.formatVersion).toBe(4);
       expect(manifest.counts.artifacts).toBe(1);
       expect(manifest.counts.channels).toBe(0);
       expect(manifest.contentDigests).toEqual({});

@@ -4,26 +4,26 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalJson,
   canonicalJsonLine,
-  snapshotFiles,
-  parseSnapshotManifest,
-  parseVersionedSnapshotManifest,
-  memoIdFromSnapshotPath,
-  parseMemoSnapshot,
-  serializeMemoSnapshot,
-  parseMemoEventAssociation,
-  parseMemoReceipt,
-  parseMemoPage,
-  parseMemoCreate,
-  parseMemoUpdate,
-  parseMemoStateRequest,
+  changeMemo,
+  EVENT_TYPES,
+  isActorKind,
+  isEventType,
+  isMemoEventType,
+  MEMO_EVENT_TYPES,
   type Memo,
   type MemoSnapshotEvent,
-  MEMO_EVENT_TYPES,
-  EVENT_TYPES,
-  isEventType,
-  isActorKind,
-  isMemoEventType,
-  changeMemo,
+  memoIdFromSnapshotPath,
+  parseMemoCreate,
+  parseMemoEventAssociation,
+  parseMemoPage,
+  parseMemoReceipt,
+  parseMemoSnapshot,
+  parseMemoStateRequest,
+  parseMemoUpdate,
+  parseSnapshotManifest,
+  parseVersionedSnapshotManifest,
+  serializeMemoSnapshot,
+  snapshotFiles,
 } from "../../src/index";
 
 function fixture(name: string): Buffer {
@@ -171,7 +171,7 @@ describe("versioned manifest and Memo event association", () => {
       .toString()
       .replace(`"${identity.path}":`, `"${identity.path}": "${identity.sha256}", "${identity.path}":`);
     expect(parseVersionedSnapshotManifest(duplicate).ok).toBe(false);
-    expect(parseVersionedSnapshotManifest('{"formatVersion":4}')).toMatchObject({
+    expect(parseVersionedSnapshotManifest('{"formatVersion":5}')).toMatchObject({
       ok: false,
       error: { code: "VAULT_SCHEMA_UNSUPPORTED" },
     });

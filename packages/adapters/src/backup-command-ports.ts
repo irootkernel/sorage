@@ -1,4 +1,3 @@
-import { digestManagedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -23,57 +22,69 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type {
+  ChannelContentFileExport,
+  SnapshotChannelMessage,
+  SnapshotChannelParticipant,
+  SnapshotChannelShard,
+} from "@sorage/core";
 import {
   type AppError,
   appError,
-  canonicalJson,
-  canonicalJsonLine,
   type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
   type BackupRunRow,
   type BackupVerifyPorts,
+  buildContentStorageKey,
+  canonicalJson,
+  canonicalJsonLine,
+  channelContentFilePath,
+  channelIdFromSnapshotPath,
   type DrainReport,
   ensureVaultGitRepository,
   err,
   expandConfigurationPath,
-  isMemoUuid,
   exportSnapshot,
   type GitClient,
+  isManagedContentStorageKey,
+  isMemoUuid,
+  legacyReportingEvidence,
+  type Memo,
+  type MemoContentFileExport,
+  memoContentFilePath,
   nextDueAt,
   ok,
-  parseVersionedSnapshotManifest,
-  channelContentFilePath,
-  channelIdFromSnapshotPath,
   parseChannelSnapshotShard,
-  proveChannelContentBytes,
   parseMemoSnapshot,
   parseMemoSnapshotV3,
-  memoContentFilePath,
-  type MemoContentFileExport,
-  type SnapshotMemoV3,
   parseUniqueSnapshotJson,
-  validateSnapshot,
-  type Memo,
   parseVaultMarker,
+  parseVersionedSnapshotManifest,
+  proveChannelContentBytes,
   type Result,
   type SnapshotArtifact,
-  type SnapshotData,
   type SnapshotArtifactV3,
+  type SnapshotData,
   type SnapshotDataV3,
-  type SnapshotHandoffV3,
-  buildContentStorageKey,
-  isManagedContentStorageKey,
-  sha256OfText,
+  type SnapshotDataV4,
   type SnapshotDeletionRequest,
   type SnapshotEvent,
   type SnapshotFile,
   type SnapshotHandoff,
+  type SnapshotHandoffV3,
+  type SnapshotHandoffV4,
+  type SnapshotMemoV3,
+  type SnapshotProcessingEvidence,
   type SnapshotProject,
-  type SnapshotReviewNote,
+  type SnapshotReadEvidence,
+  type SnapshotRecipientComment,
+  sha256OfText,
   USER_ACTOR,
+  upgradeSnapshotHandoff,
   type VaultGitOutcome,
   type VaultMarker,
+  validateSnapshot,
   verifyVaultArtifacts,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
@@ -84,31 +95,27 @@ import {
   sqliteContentReferences,
   sweepFetchCache,
   validateArtifactContentLinks,
+  validateChannelContentLinks,
+  validateMemoContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
-import {
-  insertMemoWithFileRecordRows,
-  insertMemoWithInlineRecord,
-  placeMemoContentFile,
-  readMemoContentFileBytes,
-  readMemoExport,
-  type MemoContentReference,
-} from "./memos";
-import { validateChannelContentLinks, validateMemoContentLinks } from "./content-store";
-import type {
-  ChannelContentFileExport,
-  SnapshotChannelMessage,
-  SnapshotChannelParticipant,
-  SnapshotChannelShard,
-} from "@sorage/core";
-import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
+import { digestManagedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
+import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
+import {
+  insertMemoWithFileRecordRows,
+  insertMemoWithInlineRecord,
+  type MemoContentReference,
+  placeMemoContentFile,
+  readMemoContentFileBytes,
+  readMemoExport,
+} from "./memos";
+import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
-import type { SorageSqlite } from "./sqlite/connection";
 
 /**
  * Places one file-backed Channel message body's exact carried bytes at a fresh
@@ -521,7 +528,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /** Reads the complete snapshot set inside one consistent read transaction (BKP-007). */
-  function readSnapshotData(): Result<SnapshotDataV3, AppError> {
+  function readSnapshotData(): Result<SnapshotDataV4, AppError> {
     return withDatabase((db) => {
       try {
         db.exec("BEGIN");
@@ -544,7 +551,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         }
         return links;
       }
-      let data: Result<SnapshotDataV3, AppError>;
+      let data: Result<SnapshotDataV4, AppError>;
       let pendingContentFiles: MemoContentReference[] = [];
       let pendingChannelContentFiles: ChannelContentReference[] = [];
       try {
@@ -792,15 +799,16 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function readSourceSnapshot(sourcePath: string) {
-    return (): Result<SnapshotData | SnapshotDataV3, AppError> => {
+    return (): Result<SnapshotData | SnapshotDataV3 | SnapshotDataV4, AppError> => {
       const manifest = readSourceManifest(sourcePath)();
       if (!manifest.ok) return manifest;
       const channels = snapshotTreeFiles(join(sourcePath, "snapshots", "channels"));
       if (!channels.ok) return channels;
       const content = snapshotTreeFiles(join(sourcePath, "snapshots", "content"));
       if (!content.ok) return content;
-      const contentDigests = manifest.value.formatVersion === 3 ? manifest.value.contentDigests : {};
-      if (manifest.value.formatVersion !== 3 && content.value.length !== 0)
+      const contentDigests =
+        manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4 ? manifest.value.contentDigests : {};
+      if (manifest.value.formatVersion !== 3 && manifest.value.formatVersion !== 4 && content.value.length !== 0)
         return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected content files"));
       /** Read one carried content file's exact bytes; the map's digests were already shape-checked. */
       const readContentFile = (relative: string): Result<Uint8Array, AppError> => {
@@ -820,7 +828,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         }
         return ok(read.value);
       };
-      if (manifest.value.formatVersion === 3) {
+      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
         // The content-file inventory must agree with the map exactly: a file
         // the map omits, a map key with no regular file, or a non-Memo content
         // path this build cannot faithfully import is refused before adoption.
@@ -854,7 +862,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const memoExports: SnapshotMemoV3[] = [];
       const memoContentFiles: MemoContentFileExport[] = [];
       for (const file of memoFiles.value) {
-        if (manifest.value.formatVersion === 3) {
+        if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
           const parsed = parseMemoSnapshotV3(file.path, file.bytes, file.digest);
           if (!parsed.ok) return parsed;
           const imported = parsed.value;
@@ -908,13 +916,14 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
       if (!projectsRaw.ok) return err(projectsRaw.error);
       const projects =
-        manifest.value.formatVersion === 3
+        manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
           ? parseUniqueSnapshotJson(projectsRaw.value)
           : parseJsonArray(projectsRaw.value, "snapshots/projects.json");
       if (!projects.ok) return err(projects.error);
       if (
         !Array.isArray(projects.value) ||
-        (manifest.value.formatVersion === 3 && canonicalJson(projects.value) !== projectsRaw.value)
+        ((manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) &&
+          canonicalJson(projects.value) !== projectsRaw.value)
       )
         return err(appError("VAULT_INTEGRITY_ERROR", "The snapshot Project metadata is not a canonical array."));
 
@@ -924,7 +933,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       // frozen legacy shapes and readers.
       const legacyHandoffs: SnapshotHandoff[] = [];
       const v3Handoffs: SnapshotHandoffV3[] = [];
-      if (manifest.value.formatVersion === 3) {
+      const v4Handoffs: SnapshotHandoffV4[] = [];
+      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
         const files = snapshotTreeFiles(shardsRoot);
         if (!files.ok) return files;
         shardFiles.push(...files.value.map((file) => `handoffs/${file}`));
@@ -952,12 +962,15 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         // parser of the Memo contract, over the same safe bounded reader the
         // memo shards use; formats 1 and 2 keep their existing parser and rules.
         const parsed =
-          manifest.value.formatVersion === 3
+          manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
             ? parseUniqueSnapshotJson(raw.value)
             : parseJsonObject(raw.value, `snapshots/${shardFile}`);
         if (!parsed.ok) return parsed;
         const value = parsed.value;
-        if (manifest.value.formatVersion === 3 && canonicalJson(value) !== raw.value) {
+        if (
+          (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) &&
+          canonicalJson(value) !== raw.value
+        ) {
           return err(
             appError("VAULT_INTEGRITY_ERROR", `The handoff shard ${shardFile} does not carry canonical bytes.`),
           );
@@ -968,15 +981,15 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
         const handoff =
-          manifest.value.formatVersion === 3
+          manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
             ? (value as unknown as SnapshotHandoffV3)
             : (value as unknown as SnapshotHandoff);
-        if (manifest.value.formatVersion === 3 && !isMemoUuid(handoff.id)) {
+        if ((manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) && !isMemoUuid(handoff.id)) {
           return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
         }
         const expected = `${handoff.id}.json`;
         if (
-          manifest.value.formatVersion === 3
+          manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
             ? typeof handoff.id !== "string" || shardFile !== `handoffs/${handoff.id.slice(0, 2)}/${expected}`
             : !shardFile.endsWith(`/${expected}`)
         ) {
@@ -988,7 +1001,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             ),
           );
         }
-        if (manifest.value.formatVersion === 3) v3Handoffs.push(value as unknown as SnapshotHandoffV3);
+        if (manifest.value.formatVersion === 4) v4Handoffs.push(value as unknown as SnapshotHandoffV4);
+        else if (manifest.value.formatVersion === 3) v3Handoffs.push(value as unknown as SnapshotHandoffV3);
         else legacyHandoffs.push(value as unknown as SnapshotHandoff);
       }
 
@@ -1012,9 +1026,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       // path (section 38.8, CHN-009).
       const channelShards: SnapshotChannelShard[] = [];
       const channelContentFileExports: ChannelContentFileExport[] = [];
-      if (manifest.value.formatVersion !== 3 && channels.value.length !== 0)
+      if (manifest.value.formatVersion !== 3 && manifest.value.formatVersion !== 4 && channels.value.length !== 0)
         return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected Channel shards"));
-      if (manifest.value.formatVersion === 3) {
+      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
         for (const channelFile of channels.value) {
           const shardPath = `channels/${channelFile}`;
           if (!channelIdFromSnapshotPath(shardPath).ok) {
@@ -1051,21 +1065,23 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
       }
-      const data: SnapshotData | SnapshotDataV3 =
-        manifest.value.formatVersion === 3
-          ? {
-              projects: projects.value as unknown as SnapshotProject[],
-              handoffs: v3Handoffs,
-              events,
-              memos: memoExports,
-              memoContentFiles,
-              ...(channelShards.length > 0 ? { channels: channelShards } : {}),
-              ...(channelContentFileExports.length > 0 ? { channelContentFiles: channelContentFileExports } : {}),
-            }
-          : { projects: projects.value as unknown as SnapshotProject[], handoffs: legacyHandoffs, events, memos };
+      const common = {
+        projects: projects.value as unknown as SnapshotProject[],
+        events,
+        memos: memoExports,
+        memoContentFiles,
+        ...(channelShards.length > 0 ? { channels: channelShards } : {}),
+        ...(channelContentFileExports.length > 0 ? { channelContentFiles: channelContentFileExports } : {}),
+      };
+      const data: SnapshotData | SnapshotDataV3 | SnapshotDataV4 =
+        manifest.value.formatVersion === 4
+          ? { ...common, handoffs: v4Handoffs }
+          : manifest.value.formatVersion === 3
+            ? { ...common, handoffs: v3Handoffs }
+            : { projects: common.projects, handoffs: legacyHandoffs, events, memos };
       const valid = validateSnapshot(data, manifest.value);
       if (!valid.ok) return valid;
-      if (manifest.value.formatVersion === 3) {
+      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
         const canonicalLedger = [...events]
           .sort((a, b) =>
             a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
@@ -1192,11 +1208,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     });
   }
 
-  function materializedArtifacts(
-    data: SnapshotData | SnapshotDataV3,
-  ): Array<{ handoff: SnapshotHandoff | SnapshotHandoffV3; artifact: SnapshotArtifact | SnapshotArtifactV3 }> {
+  function materializedArtifacts(data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Array<{
+    handoff: SnapshotHandoff | SnapshotHandoffV3 | SnapshotHandoffV4;
+    artifact: SnapshotArtifact | SnapshotArtifactV3;
+  }> {
     const entries: Array<{
-      handoff: SnapshotHandoff | SnapshotHandoffV3;
+      handoff: SnapshotHandoff | SnapshotHandoffV3 | SnapshotHandoffV4;
       artifact: SnapshotArtifact | SnapshotArtifactV3;
     }> = [];
     for (const handoff of data.handoffs) {
@@ -1208,7 +1225,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /** The file-backed subset a backup tree actually carries; an inline body's bytes live in its shard. */
-  function fileBackedArtifacts(data: SnapshotData | SnapshotDataV3): Array<{ artifact: SnapshotArtifact }> {
+  function fileBackedArtifacts(
+    data: SnapshotData | SnapshotDataV3 | SnapshotDataV4,
+  ): Array<{ artifact: SnapshotArtifact }> {
     const entries: Array<{ artifact: SnapshotArtifact }> = [];
     for (const { artifact } of materializedArtifacts(data)) {
       if (typeof artifact.storageKey === "string") {
@@ -1219,7 +1238,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function verifyArtifacts(sourcePath: string) {
-    return (data: SnapshotData | SnapshotDataV3): Result<{ verified: number }, AppError> => {
+    return (data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Result<{ verified: number }, AppError> => {
       // An inline body's exact bytes live in its shard: the gate re-digests
       // the stored text, the same success gate the shape validator applied
       // (SHR-003, SHR-010).
@@ -1273,7 +1292,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function copyArtifacts(vaultPath: string, sourcePath: string) {
-    return (data: SnapshotData | SnapshotDataV3): Result<{ copied: number }, AppError> => {
+    return (data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Result<{ copied: number }, AppError> => {
       let copied = 0;
       // Only the file representation has bytes in the backup tree to copy; an
       // inline record restores through the database rebuild alone.
@@ -1356,7 +1375,10 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     return ok(undefined);
   }
 
-  function rebuildDatabase(data: SnapshotData | SnapshotDataV3, marker: VaultMarker): Result<void, AppError> {
+  function rebuildDatabase(
+    data: SnapshotData | SnapshotDataV3 | SnapshotDataV4,
+    marker: VaultMarker,
+  ): Result<void, AppError> {
     const resolvedInstallation = installation();
     if (!resolvedInstallation.ok) return err(resolvedInstallation.error);
     const vaultPath = resolvedInstallation.value.vaultPath;
@@ -1531,12 +1553,15 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         // `supersedes_handoff_id` is a plain foreign key, so the older Handoff
         // rows insert first; both artifact references defer to the commit.
         for (const handoff of [...data.handoffs].sort(byCreatedThenId)) {
+          const report = "comment" in handoff ? handoff : { ...legacyReportingEvidence(handoff.revision) };
           db.prepare(
             `INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id,
               sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version,
               review_state, accepted_revision, accepted_at, declined_at, decline_reason, withdrawn_at,
               consecutive_no_change_resolutions, first_fetched_at, review_engaged_at, pinned, archived_at, deleted_at,
-              created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              created_at, updated_at, read_status, read_revision, revision_read_at,
+              processing_status, processing_started_at, processing_completed_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             handoff.id,
             handoff.dispatchGroupId,
@@ -1564,6 +1589,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             handoff.deletedAt,
             handoff.createdAt,
             handoff.updatedAt,
+            report.read.status,
+            report.read.status === "read" ? handoff.revision : null,
+            report.read.readAt,
+            report.processing.status,
+            report.processing.startedAt,
+            report.processing.completedAt,
           );
         }
         for (const handoff of data.handoffs) {
@@ -1608,11 +1639,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               contentRecordId,
             );
           }
-          const note = handoff.reviewNote;
+          const note = ("comment" in handoff ? handoff : upgradeSnapshotHandoff(handoff as SnapshotHandoffV3)).comment;
           if (note !== null) {
             db.prepare(
-              `INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at)
-              VALUES (?, ?, ?, ?, CAST(? AS TEXT), ?, ?)`,
+              `INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at, purpose, active)
+              VALUES (?, ?, ?, ?, CAST(? AS TEXT), ?, ?, ?, ?)`,
             ).run(
               note.handoffId,
               note.authorKind,
@@ -1621,6 +1652,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
               Buffer.from(note.body, "utf8"),
               note.createdAt,
               note.updatedAt,
+              note.purpose,
+              note.active ? 1 : 0,
             );
           }
           for (const request of handoff.deletionRequests) {
@@ -2187,7 +2220,7 @@ function mapSnapshotData(rows: {
   reviewNotes: Row[];
   deletionRequests: Row[];
   events: Row[];
-}): SnapshotDataV3 {
+}): SnapshotDataV4 {
   const bindingsByProject = new Map<string, SnapshotProject["bindings"]>();
   for (const row of rows.bindings) {
     const list = bindingsByProject.get(str(row.project_id)) ?? [];
@@ -2220,9 +2253,11 @@ function mapSnapshotData(rows: {
       createdAt: str(row.created_at),
     });
   }
-  const noteByHandoff = new Map<string, SnapshotReviewNote>();
+  const noteByHandoff = new Map<string, SnapshotRecipientComment>();
   for (const row of rows.reviewNotes) {
     noteByHandoff.set(str(row.handoff_id), {
+      purpose: str(row.purpose) as SnapshotRecipientComment["purpose"],
+      active: num(row.active) === 1,
       handoffId: str(row.handoff_id),
       authorKind: str(row.author_kind),
       authorProjectId: nullableStr(row.author_project_id),
@@ -2288,7 +2323,18 @@ function mapSnapshotData(rows: {
       createdAt: str(row.created_at),
       updatedAt: str(row.updated_at),
       artifact: artifactByHandoff.get(str(row.id)) ?? null,
-      reviewNote: noteByHandoff.get(str(row.id)) ?? null,
+      comment: noteByHandoff.get(str(row.id)) ?? null,
+      read: {
+        revision: num(row.revision),
+        status: str(row.read_status) as SnapshotReadEvidence["status"],
+        readAt: nullableStr(row.revision_read_at),
+      },
+      processing: {
+        revision: num(row.revision),
+        status: str(row.processing_status) as SnapshotProcessingEvidence["status"],
+        startedAt: nullableStr(row.processing_started_at),
+        completedAt: nullableStr(row.processing_completed_at),
+      },
       deletionRequests: deletionByHandoff.get(str(row.id)) ?? [],
     })),
     events: rows.events.map((row) => ({

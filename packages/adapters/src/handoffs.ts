@@ -13,8 +13,8 @@ import {
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
-import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
+import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 
 export interface IdempotencyLookupOptions {
   now?: (() => Date) | undefined;
@@ -569,7 +569,7 @@ export function createSqliteRevisionStore(
           }
           const changed = db
             .prepare(
-              "UPDATE handoffs SET revision = revision + 1, review_state = ?, current_artifact_id = ?, consecutive_no_change_resolutions = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
+              "UPDATE handoffs SET revision = revision + 1, read_status = 'unrecorded', read_revision = NULL, revision_read_at = NULL, processing_status = 'unrecorded', processing_started_at = NULL, processing_completed_at = NULL, review_state = ?, current_artifact_id = ?, consecutive_no_change_resolutions = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
             )
             .run(
               "awaiting_recipient",
@@ -966,6 +966,9 @@ export function createSqliteTerminalStore(
           if (changed.changes !== 1) {
             return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
           }
+          if (input.assignments.review_state !== undefined && input.assignments.review_state !== "changes_requested") {
+            db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
+          }
           ledger.append(input.event);
           db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
@@ -1063,6 +1066,9 @@ export function createSqliteRetentionStore(
           // (SHR-004, SHR-008).
           if (input.unlinkIntent !== undefined || input.removeContent === true) {
             db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
+            db.prepare(
+              "UPDATE handoffs SET read_status = 'unrecorded', read_revision = NULL, revision_read_at = NULL, processing_status = 'unrecorded', processing_started_at = NULL, processing_completed_at = NULL WHERE id = ?",
+            ).run(input.handoffId);
             // The tombstoned Handoff's Artifact rows vanish in this same
             // transaction; their content records leave through the shared
             // reference-proof removal inside it, with the same refusal and

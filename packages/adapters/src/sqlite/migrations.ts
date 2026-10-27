@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Migration } from "./migrator";
 import type { SorageSqlite } from "./connection";
+import type { Migration } from "./migrator";
 
 /**
  * The TASK-108 Memo adoption rebuild (SHR-004, SHR-009, SHR-014, interface
@@ -836,28 +836,57 @@ CREATE TRIGGER events_memo_association
 `,
 };
 
-/**
- * The single production migration plan of TASK-107 through TASK-109 (SHR-009,
- * interface section 38.7): the raw `MIGRATIONS` list stays exactly versions 1
- * to 8 — the legacy fixture catalog every historical builder migrates with —
- * while the production accessor appends the additive TASK-109 Channel
- * migration at version 11 as an ordinary step and registers versions 9 and 10
- * exactly once each as the rebuild-marked steps. The combined runner orders
- * every pending step by version, so ordinary 11 executes after rebuilds 9 and
- * 10 inside the one guarded whole-batch path the non-empty rebuild set already
- * selects; no runner branch changes. Every production opener, the migrator's
- * admission catalog, and preflight's reference catalog consume this one
- * accessor so no surface can drift, never a second ordinary registration, and
- * never a silent bypass of the dedicated path.
- */
+/** Add current reporting evidence without rewriting the immutable schema-11 generation. */
+export const HANDOFF_REPORTING_MIGRATION: Migration = {
+  version: 12,
+  name: "handoff-reporting-v1",
+  sql: `
+ALTER TABLE handoffs ADD COLUMN read_status TEXT NOT NULL DEFAULT 'unrecorded'
+  CHECK (read_status IN ('unrecorded', 'unconfirmed', 'read'));
+ALTER TABLE handoffs ADD COLUMN read_revision INTEGER
+  CHECK (read_revision IS NULL OR (read_revision >= 1 AND read_revision <= revision));
+ALTER TABLE handoffs ADD COLUMN revision_read_at TEXT;
+ALTER TABLE handoffs ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'unrecorded'
+  CHECK (processing_status IN ('unrecorded', 'not_started', 'in_progress', 'completed'));
+ALTER TABLE handoffs ADD COLUMN processing_started_at TEXT;
+ALTER TABLE handoffs ADD COLUMN processing_completed_at TEXT
+  CHECK ((read_status = 'read' AND read_revision IS NOT NULL AND read_revision = revision AND revision_read_at IS NOT NULL)
+    OR (read_status != 'read' AND read_revision IS NULL AND revision_read_at IS NULL))
+  CHECK ((processing_status IN ('unrecorded', 'not_started') AND processing_started_at IS NULL AND processing_completed_at IS NULL)
+    OR (processing_status = 'in_progress' AND processing_started_at IS NOT NULL AND processing_completed_at IS NULL)
+    OR (processing_status = 'completed' AND processing_completed_at IS NOT NULL));
+ALTER TABLE review_notes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'change_request'
+  CHECK (purpose IN ('general', 'change_request'));
+ALTER TABLE review_notes ADD COLUMN active INTEGER NOT NULL DEFAULT 1
+  CHECK (active IN (0, 1) AND (active = 0 OR purpose = 'change_request'));
+UPDATE review_notes SET active = CASE WHEN EXISTS (
+  SELECT 1 FROM handoffs h WHERE h.id = review_notes.handoff_id AND h.review_state = 'changes_requested'
+) THEN 1 ELSE 0 END;
+`,
+};
+
 export interface ProductionMigrationPlan {
   migrations: Migration[];
   rebuilds: Migration[];
 }
 
+/**
+ * The single production migration plan of TASK-107 through TASK-129 (SHR-009,
+ * interface section 38.7): the raw `MIGRATIONS` list stays exactly versions 1
+ * to 8 — the legacy fixture catalog every historical builder migrates with —
+ * while the production accessor appends the Channel migration at version 11
+ * and Handoff reporting migration at version 12 as ordinary steps and registers versions 9 and 10
+ * exactly once each as the rebuild-marked steps. The combined runner orders
+ * every pending step by version, so ordinary 11 and 12 execute after rebuilds
+ * 9 and 10 inside the one guarded whole-batch path the non-empty rebuild set already
+ * selects; no runner branch changes. Every production opener, the migrator's
+ * admission catalog, and preflight's reference catalog consume this one
+ * accessor so no surface can drift, never a second ordinary registration, and
+ * never a silent bypass of the dedicated path.
+ */
 export function productionMigrationPlan(): ProductionMigrationPlan {
   return {
-    migrations: [...MIGRATIONS, CHANNEL_DOMAIN_MIGRATION],
+    migrations: [...MIGRATIONS, CHANNEL_DOMAIN_MIGRATION, HANDOFF_REPORTING_MIGRATION],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };
 }

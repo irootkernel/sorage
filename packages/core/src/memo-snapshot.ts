@@ -2,16 +2,16 @@ import { createHash } from "node:crypto";
 import {
   canonicalJson,
   canonicalJsonLine,
+  type SnapshotData,
+  type SnapshotEvent,
+  type SnapshotFile,
   snapshotFiles,
   snapshotManifest,
-  type SnapshotData,
-  type SnapshotFile,
-  type SnapshotEvent,
 } from "./backup-snapshot";
 import { appError, err, ok, type Result } from "./errors";
-import { isActorKind, isMemoEventType, snapshotEventTypeAllowed, type MemoEventType } from "./events";
+import { isActorKind, isMemoEventType, type MemoEventType, snapshotEventTypeAllowed } from "./events";
 import { memoObject, parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
-import { type Memo, isMemoUuid, isMemoRowVersion, isMemoTimestamp } from "./memos";
+import { isMemoRowVersion, isMemoTimestamp, isMemoUuid, type Memo } from "./memos";
 
 /** Format 2 extends the legacy snapshot families with independently validated Memo shards. */
 export interface MemoSnapshotManifest {
@@ -41,7 +41,14 @@ export interface ContentSnapshotManifest {
   memoDigests: Record<string, string>;
   contentDigests: Record<string, string>;
 }
-export type VersionedSnapshotManifest = LegacySnapshotManifest | MemoSnapshotManifest | ContentSnapshotManifest;
+export interface HandoffReportingSnapshotManifest extends Omit<ContentSnapshotManifest, "formatVersion"> {
+  formatVersion: 4;
+}
+export type VersionedSnapshotManifest =
+  | LegacySnapshotManifest
+  | MemoSnapshotManifest
+  | ContentSnapshotManifest
+  | HandoffReportingSnapshotManifest;
 export interface MemoSnapshotEvent extends SnapshotEvent {
   memoId: string | null;
 }
@@ -108,10 +115,10 @@ export function parseVersionedSnapshotManifest(text: string): Result<VersionedSn
   const value = parsed.value;
   if (!memoObject(value, ["formatVersion"], ["counts", "memoDigests", "contentDigests"]))
     return corrupt("Snapshot manifest is invalid");
-  if (value.formatVersion !== 1 && value.formatVersion !== 2 && value.formatVersion !== 3)
+  if (value.formatVersion !== 1 && value.formatVersion !== 2 && value.formatVersion !== 3 && value.formatVersion !== 4)
     return err(appError("VAULT_SCHEMA_UNSUPPORTED", "Snapshot format is not supported"));
   const version2 = value.formatVersion === 2;
-  const version3 = value.formatVersion === 3;
+  const version3 = value.formatVersion === 3 || value.formatVersion === 4;
   if (
     !memoObject(
       value,
@@ -205,7 +212,7 @@ export function parseMemoSnapshot(path: string, bytes: Uint8Array, digest: strin
 /** Legacy rows have no Memo association; formats 2 and 3 require an explicit nullable field. */
 export function parseMemoEventAssociation(
   value: unknown,
-  formatVersion: 1 | 2 | 3,
+  formatVersion: 1 | 2 | 3 | 4,
   memos: ReadonlyMap<string, Omit<Memo, "body">>,
 ): Result<MemoSnapshotEvent> {
   const fields = ["id", "handoffId", "eventType", "actorKind", "actorId", "rowVersion", "metadata", "createdAt"];
@@ -333,7 +340,7 @@ export function validateMemoInventory(
   const owners = new Map<string, Omit<Memo, "body">>();
   for (const memo of memos) {
     const { bodyContent: _representation, ...metadata } = memo as Omit<Memo, "body"> & { bodyContent?: unknown };
-    const valid = manifest.formatVersion === 3 ? parseMemoMetadata(metadata) : parseMemoDetail(memo);
+    const valid = manifest.formatVersion >= 3 ? parseMemoMetadata(metadata) : parseMemoDetail(memo);
     if (!valid.ok || owners.has(memo.id) || !projects.has(memo.projectId))
       return corrupt("Memo identity, fields or owning Project are invalid");
     owners.set(memo.id, memo);

@@ -1,11 +1,11 @@
 import { join } from "node:path";
-import { appError, err, type HandoffReadPort, type HandoffView, type ListingScope, ok } from "@sorage/core";
 import type { HandoffContentIntegrity, HandoffListCandidate, LoadedHandoff } from "@sorage/core";
+import { appError, err, type HandoffReadPort, type HandoffView, type ListingScope, ok } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./intent-log";
 import { vaultMoveLockHeld } from "./lockfile";
-import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
+import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 
 /**
  * The SQLite read store behind inbox, outbox, get, and fetch (TASK-030). Every query
@@ -144,7 +144,9 @@ export function createSqliteHandoffReadStore(
       integrity: "ok",
     };
   };
-  const noteStatement = db.prepare("SELECT 1 AS one FROM review_notes WHERE handoff_id = ?");
+  const noteStatement = db.prepare(
+    "SELECT 1 AS one FROM review_notes WHERE handoff_id = ? AND purpose = 'change_request' AND active = 1",
+  );
   const noteExists = (handoffId: string): boolean => {
     const row = noteStatement.get(handoffId) as { one: number } | null | undefined;
     return row !== null && row !== undefined;

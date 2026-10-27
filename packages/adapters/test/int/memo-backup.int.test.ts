@@ -1,31 +1,31 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { openSorageDatabase } from "../../src/sqlite/connection";
 import {
   backupRestore,
   backupVerify,
   canonicalJson,
   canonicalJsonLine,
-  mutateMemo,
-  showMemo,
   exportSnapshot,
-  snapshotFiles,
+  mutateMemo,
   type SnapshotData,
+  showMemo,
+  snapshotFiles,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { createNodeMemoPorts } from "../../src/memo-command-ports";
+import { openSorageDatabase } from "../../src/sqlite/connection";
 import {
-  memoInstallation,
-  restoredMemoInstallation,
-  seedMemoInstallation,
   MEMO_ID,
   MEMO_PROJECT,
-  unwrap,
+  memoInstallation,
   required,
+  restoredMemoInstallation,
+  seedMemoInstallation,
+  unwrap,
 } from "../fixtures/memo-installation";
 
 type Installation = ReturnType<typeof memoInstallation>;
@@ -120,7 +120,7 @@ describe("Memo snapshot export and recovery", () => {
     expect(JSON.parse(bytes.toString())).toEqual({ ...memoRecord, bodyContent: { inline: memo.body } });
     expect(bytes.toString()).toBe(canonicalJson({ ...memoRecord, bodyContent: { inline: memo.body } }));
     expect(manifest(source)).toEqual({
-      formatVersion: 3,
+      formatVersion: 4,
       counts: { projects: 1, handoffs: 0, artifacts: 0, events: 3, memos: 1, channels: 0 },
       memoDigests: { [memoPath]: createHash("sha256").update(bytes).digest("hex") },
       contentDigests: {},
@@ -172,11 +172,11 @@ describe("Memo snapshot export and recovery", () => {
     db.close();
   });
 
-  it("always exports an empty format-3 inventory and restores it without Memo shards", () => {
+  it("always exports an empty format-4 inventory and restores it without Memo shards", () => {
     const source = installation();
     unwrap(exportOnce(source));
     expect(manifest(source)).toEqual({
-      formatVersion: 3,
+      formatVersion: 4,
       counts: { projects: 0, handoffs: 0, artifacts: 0, events: 0, memos: 0, channels: 0 },
       memoDigests: {},
       contentDigests: {},
@@ -442,7 +442,7 @@ const corruptions: Array<[string, (source: Installation) => void]> = [
     "future format",
     (s) => {
       const m = manifest(s);
-      m.formatVersion = 4;
+      m.formatVersion = 5;
       writeManifest(s, m);
     },
   ],

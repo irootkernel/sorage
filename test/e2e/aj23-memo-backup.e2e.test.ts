@@ -102,7 +102,7 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
     const root = join(f.home, "vault", "snapshots");
     const first = files(root);
     const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
-    expect(manifest.formatVersion).toBe(3);
+    expect(manifest.formatVersion).toBe(4);
     expect(manifest.counts.channels).toBe(0);
     expect(manifest.contentDigests).toEqual({});
     expect(manifest.counts.memos).toBe(5);
@@ -150,7 +150,7 @@ describe("AJ-23: compiled Memo backup and restore qualification", () => {
     const source = emptyHome();
     const root = join(source, "vault", "snapshots");
     const projectId = "ab000000-0000-4000-8000-000000000001";
-    // Use the retained format-1 serializer, not the current format-3 writer.
+    // Use the retained format-1 serializer, not the current format-4 writer.
     const legacy = snapshotFiles({
       projects: [
         {

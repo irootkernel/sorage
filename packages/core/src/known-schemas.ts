@@ -17,6 +17,8 @@ import { type AppError, appError } from "./errors";
  * surface floor below stays at 11, so no earlier history is eligible. A
  * development home that applied the unreleased `channels-v1` form of version 11
  * is refused by the migration-name check rather than migrated (CHN-009).
+ * Version 12 appends the Handoff reporting fields and recipient comment
+ * purpose/activity without rewriting the version-11 tables or migration.
  */
 
 export interface KnownSchemaVersion {
@@ -36,6 +38,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 9, name: "handoff-shared-content-v1" },
   { version: 10, name: "memo-shared-content-v1" },
   { version: 11, name: "channels-v2" },
+  { version: 12, name: "handoff-reporting-v1" },
 ];
 
 /** The highest database schema version this build knows. */

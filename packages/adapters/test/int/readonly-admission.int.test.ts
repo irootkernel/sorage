@@ -6,14 +6,14 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInstallation, knownSchemaMaximum, parseConfigurationFile, runDoctor } from "@sorage/core";
-import { createNodeInitPorts } from "../../src/init-ports";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNodeDoctorPorts } from "../../src/doctor";
-import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
-import { openAndMigrate, asSchemaAdmission, readAppliedRows } from "../../src/sqlite/migrator";
+import { createNodeInitPorts } from "../../src/init-ports";
 import * as connections from "../../src/sqlite/connection";
 import * as inspection from "../../src/sqlite/history-inspection";
+import { MIGRATIONS, productionMigrationPlan } from "../../src/sqlite/migrations";
+import { asSchemaAdmission, openAndMigrate, readAppliedRows } from "../../src/sqlite/migrator";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -232,7 +232,7 @@ describe("readonly admission before operational SQLite settings", () => {
     // rebuild over the orphan-WAL database, not merely that it succeeded.
     const upgraded = nativeOutcome(database);
     expect(upgraded.alreadyUpToDate).toBe(false);
-    expect(upgraded.appliedVersions).toEqual([8, 9, 10, 11]);
+    expect(upgraded.appliedVersions).toEqual([8, 9, 10, 11, 12]);
     const plan = productionMigrationPlan();
     const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
@@ -267,7 +267,7 @@ describe("readonly admission before operational SQLite settings", () => {
     const plan = productionMigrationPlan();
     const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       expect(result.db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
     } finally {
       result.db.close();

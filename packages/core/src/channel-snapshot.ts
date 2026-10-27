@@ -1,11 +1,5 @@
 import { createHash } from "node:crypto";
 import { canonicalJson, type SnapshotEvent } from "./backup-snapshot";
-import { type AppError, appError, err, ok, type Result } from "./errors";
-import { isChannelDomainEventType } from "./events";
-import { memoObject } from "./memo-protocol";
-import { isMemoTimestamp } from "./memos";
-import { parseUniqueSnapshotJson, type ContentSnapshotManifest } from "./memo-snapshot";
-import { CONTENT_INLINE_MAX_UTF8_BYTES, isUtf8ExactText, utf8ByteLength } from "./content";
 import {
   compareHandles,
   isChannelUuid,
@@ -16,15 +10,21 @@ import {
   validateHandleNote,
   validateMessageRef,
 } from "./channels";
+import { CONTENT_INLINE_MAX_UTF8_BYTES, isUtf8ExactText, utf8ByteLength } from "./content";
 import {
+  type ChannelContentFileExport,
   memoContentFilePath,
   parseSnapshotBodyContent,
-  type ChannelContentFileExport,
   type SnapshotChannelMessage,
   type SnapshotChannelParticipant,
   type SnapshotChannelShard,
   type SnapshotDataV3,
 } from "./content-snapshot";
+import { type AppError, appError, err, ok, type Result } from "./errors";
+import { isChannelDomainEventType } from "./events";
+import { memoObject } from "./memo-protocol";
+import { type ContentSnapshotManifest, parseUniqueSnapshotJson } from "./memo-snapshot";
+import { isMemoTimestamp } from "./memos";
 
 /**
  * The format-3 Channel snapshot family rebuilt under ADR-0034 (CHN-009,
@@ -310,7 +310,7 @@ export function proveChannelContentBytes(bytes: Uint8Array): Result<void, AppErr
  */
 export function validateSnapshotChannelContent(
   data: SnapshotDataV3,
-  manifest: ContentSnapshotManifest,
+  manifest: Pick<ContentSnapshotManifest, "counts" | "contentDigests">,
 ): Result<void, AppError> {
   const channels = data.channels ?? [];
   if (channels.length !== manifest.counts.channels)

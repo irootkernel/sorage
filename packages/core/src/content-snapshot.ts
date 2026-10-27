@@ -1,18 +1,23 @@
 import { createHash } from "node:crypto";
+import { isValidStorageKeySegment } from "./artifacts";
 import {
   canonicalJson,
   canonicalJsonLine,
   compareSnapshotStrings,
   handoffShardPath,
   redactEventMetadata,
-  snapshotCounts,
-  snapshotFiles,
   type SnapshotData,
   type SnapshotFile,
   type SnapshotHandoff,
+  snapshotCounts,
+  snapshotFiles,
 } from "./backup-snapshot";
-import { type AppError, appError, err, ok, type Result } from "./errors";
-import { isCommonContentEventType, snapshotEventTypeAllowed } from "./events";
+import {
+  channelContentFilePath,
+  channelSnapshotPath,
+  proveChannelContentBytes,
+  validateSnapshotChannelShard,
+} from "./channel-snapshot";
 import {
   CONTENT_INLINE_MAX_UTF8_BYTES,
   isUtf8ExactText,
@@ -20,25 +25,20 @@ import {
   utf8ByteLength,
   validateCommonContentEventMetadata,
 } from "./content";
+import { type AppError, appError, err, ok, type Result } from "./errors";
+import { isCommonContentEventType, snapshotEventTypeAllowed } from "./events";
+import { REVIEW_STATES } from "./handoffs";
 import { memoObject, parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
 import {
+  type ContentSnapshotManifest,
   isCanonicalContentFilePath,
+  type MemoSnapshotShard,
   memoIdFromSnapshotPath,
   memoSnapshotPath,
   parseUniqueSnapshotJson,
-  type ContentSnapshotManifest,
-  type MemoSnapshotShard,
 } from "./memo-snapshot";
 import type { Memo } from "./memos";
 import { isMemoTimestamp, isMemoUuid } from "./memos";
-import { isValidStorageKeySegment } from "./artifacts";
-import { REVIEW_STATES } from "./handoffs";
-import {
-  channelContentFilePath,
-  channelSnapshotPath,
-  proveChannelContentBytes,
-  validateSnapshotChannelShard,
-} from "./channel-snapshot";
 
 /**
  * The format-3 snapshot generation of M9 (SHR-010, interface section 38.8): one
@@ -132,7 +132,7 @@ export type SnapshotEventClassification = "family" | "unknown";
  * pre-M9 allowlists, so a Channel domain name in those formats is an unknown
  * name and stays an integrity failure.
  */
-export function classifySnapshotEvent(eventType: string, formatVersion: 1 | 2 | 3): SnapshotEventClassification {
+export function classifySnapshotEvent(eventType: string, formatVersion: 1 | 2 | 3 | 4): SnapshotEventClassification {
   return snapshotEventTypeAllowed(formatVersion, eventType) ? "family" : "unknown";
 }
 

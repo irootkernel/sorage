@@ -41,7 +41,7 @@ describe("admitAppliedHistory maximum and integrity ordering", () => {
   });
 
   it("keeps forward-only refusal unchanged", () => {
-    const forward = [...rows([1, 2, 3, 4, 5, 6, 7, 8]), { version: 12, name: "far-future" }];
+    const forward = [...rows([1, 2, 3, 4, 5, 6, 7, 8]), { version: 13, name: "far-future" }];
     const verdict = admitAppliedHistory(forward, HISTORY);
     expect(verdict.kind).toBe("unsupported");
   });

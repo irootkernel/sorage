@@ -1,27 +1,27 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
 import {
   addMemo,
-  mutateMemo,
-  showMemo,
-  listMemos,
-  resolveMemoProject,
-  type Result,
-  type MemoExecution,
   backupRestore,
   exportSnapshot,
+  listMemos,
+  type MemoExecution,
+  mutateMemo,
+  type Result,
+  resolveMemoProject,
+  showMemo,
 } from "@sorage/core";
-import { createNodeMemoPorts } from "../../src/memo-command-ports";
-import { createTestMemoCommandPorts } from "../../src/testkit/memo-ports";
+import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
+import { createNodeMemoPorts } from "../../src/memo-command-ports";
 import { openSorageDatabase, type SorageSqlite } from "../../src/sqlite/connection";
-import { migrate } from "../../src/sqlite/migrator";
 import { productionMigrationPlan } from "../../src/sqlite/migrations";
-import { makeTempDatabase } from "../../src/testkit/temp-database";
+import { migrate } from "../../src/sqlite/migrator";
 import { FakeClock } from "../../src/testkit/fakes";
+import { createTestMemoCommandPorts } from "../../src/testkit/memo-ports";
+import { makeTempDatabase } from "../../src/testkit/temp-database";
 import {
   MEMO_PROJECT,
   MEMO_TIME,
@@ -193,7 +193,9 @@ describe("shared Memo application", () => {
     db.prepare(
       "INSERT INTO artifacts (id,handoff_id,content_record_id,original_name,stored_name,mime_type,imported_from_path,created_at) VALUES ('artifact','handoff','legacy-content','body.md','body.md','text/markdown',NULL,?)",
     ).run(MEMO_TIME);
-    db.prepare("INSERT INTO review_notes VALUES ('handoff','user',NULL,1,'Legacy note',?,?)").run(MEMO_TIME, MEMO_TIME);
+    db.prepare(
+      "INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at) VALUES ('handoff','user',NULL,1,'Legacy note',?,?)",
+    ).run(MEMO_TIME, MEMO_TIME);
     db.prepare(
       "INSERT INTO events (id,handoff_id,event_type,actor_kind,actor_id,row_version,metadata_json,created_at) VALUES ('event','handoff','HANDOFF_CREATED','user',NULL,1,'{}',?)",
     ).run(MEMO_TIME);

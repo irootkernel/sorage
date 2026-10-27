@@ -130,6 +130,7 @@ describe("the replaced version-11 slot (channels-v2)", () => {
     expect(plan.migrations.map((step) => ({ version: step.version, name: step.name }))).toEqual([
       ...MIGRATIONS.map((step) => ({ version: step.version, name: step.name })),
       { version: 11, name: "channels-v2" },
+      { version: 12, name: "handoff-reporting-v1" },
     ]);
     const catalog = [
       ...plan.migrations.map((migration) => ({ version: migration.version, name: migration.name })),

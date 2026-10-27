@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import { initializeInstallation } from "@sorage/core";
-import { sqliteContentReferences, createSqliteContentStore } from "../../src/content-store";
+import { afterEach, describe, expect, it } from "vitest";
+import { createSqliteContentStore, sqliteContentReferences } from "../../src/content-store";
 import { createNodeDoctorPorts } from "../../src/doctor";
 import { createHomePaths } from "../../src/home";
 import { createNodeInitPorts } from "../../src/init-ports";
@@ -148,7 +148,7 @@ describe("the doctor Artifact census across the adoption boundary", () => {
     // diagnostic; the doctor never upgrades the database to silence it.
     const migrations = doctor.probe("db.migrations");
     expect(migrations.severity).toBe("blocking");
-    expect(migrations.message).toContain("at 8, expected 11");
+    expect(migrations.message).toContain("at 8, expected 12");
   });
 
   it("blocks when the owned legacy Artifact file is missing on schema 8", () => {

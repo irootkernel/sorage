@@ -1,25 +1,25 @@
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { spawn, spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
 import {
   appError,
   changeMemo,
   createMemo,
   err,
   listMemos,
-  publicMemoOf,
-  sha256OfText,
   type Memo,
   type MemoCommandPorts,
   type MemoTransaction,
+  publicMemoOf,
+  sha256OfText,
 } from "@sorage/core";
-import { createTestMemoCommandPorts } from "../../src/testkit/memo-ports";
+import { afterEach, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
 import { MIGRATIONS, PROJECT_MEMOS_MIGRATION, productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
+import { createTestMemoCommandPorts } from "../../src/testkit/memo-ports";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
-import { MEMO_ID, MEMO_PROJECT, MEMO_TIME, unwrap, required } from "../fixtures/memo-installation";
+import { MEMO_ID, MEMO_PROJECT, MEMO_TIME, required, unwrap } from "../fixtures/memo-installation";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -119,7 +119,9 @@ describe("Memo migration and transactional repository", () => {
     db.prepare(
       "INSERT INTO artifacts VALUES ('artifact','handoff','artifacts/handoff/artifact/body.md','body.md','body.md','text/markdown',0,?,NULL,1,?)",
     ).run("0".repeat(64), MEMO_TIME);
-    db.prepare("INSERT INTO review_notes VALUES ('handoff','user',NULL,1,'Legacy note',?,?)").run(MEMO_TIME, MEMO_TIME);
+    db.prepare(
+      "INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at) VALUES ('handoff','user',NULL,1,'Legacy note',?,?)",
+    ).run(MEMO_TIME, MEMO_TIME);
     db.prepare(
       "INSERT INTO events (id,handoff_id,event_type,actor_kind,actor_id,row_version,metadata_json,created_at) VALUES ('event','handoff','HANDOFF_CREATED','user',NULL,1,'{}',?)",
     ).run(MEMO_TIME);

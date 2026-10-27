@@ -9,7 +9,9 @@ import {
   canonicalJson,
   canonicalJsonLine,
   exportSnapshot,
+  reportingSnapshotBase,
   SYSTEM_ACTOR,
+  snapshotFilesV3,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
@@ -61,6 +63,14 @@ function commonHistory(value: Installation) {
     db.close();
   }
 }
+/** These fixtures continue to exercise the immutable format-3 generation. */
+function exportFrozenV3(source: Installation) {
+  const exp = unwrap(ports(source).exportPorts());
+  const current = unwrap(exp.readSnapshotData());
+  const old = { ...current, handoffs: current.handoffs.map((h) => ("comment" in h ? reportingSnapshotBase(h) : h)) };
+  unwrap(exp.writeSnapshotTree(unwrap(snapshotFilesV3(old)).files));
+}
+
 function exportedHistory() {
   const source = installation();
   seedMemoInstallation(source);
@@ -98,7 +108,7 @@ function exportedHistory() {
   } finally {
     db.close();
   }
-  unwrap(exportSnapshot(unwrap(ports(source).exportPorts())));
+  exportFrozenV3(source);
   return source;
 }
 
@@ -154,7 +164,7 @@ function exportedHandoff() {
   } finally {
     db.close();
   }
-  unwrap(exportSnapshot(unwrap(ports(source).exportPorts())));
+  exportFrozenV3(source);
   expect(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date() }).ok).toBe(true);
   return { source, id, path: join(source.vault, "snapshots", "handoffs", id.slice(0, 2), `${id}.json`) };
 }

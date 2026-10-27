@@ -128,12 +128,21 @@ export const LEGACY_EVENT_TYPES = [
   "RESTORE_COMPLETED",
 ] as const;
 
+/** Reporting events enter only the new format-4 snapshot family. */
+export const HANDOFF_REPORTING_EVENT_TYPES = [
+  "HANDOFF_REVISION_READ",
+  "HANDOFF_COMMENT_SET",
+  "HANDOFF_PROCESSING_STARTED",
+  "HANDOFF_PROCESSING_COMPLETED",
+] as const;
+
 /** The normative event catalog of section 10 of security-reliability.md this build may append. */
 export const EVENT_TYPES = [
   ...LEGACY_EVENT_TYPES,
   ...MEMO_EVENT_TYPES,
   ...COMMON_CONTENT_EVENT_TYPES,
   ...CHANNEL_DOMAIN_EVENT_TYPES,
+  ...HANDOFF_REPORTING_EVENT_TYPES,
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -195,7 +204,7 @@ export function encodeEventMetadata(metadata: Record<string, unknown>): Result<s
  * adds the common physical-content family and the Channel domain family from the
  * TASK-109 family admission.
  */
-export function snapshotEventTypeAllowed(formatVersion: 1 | 2 | 3, eventType: string): boolean {
+export function snapshotEventTypeAllowed(formatVersion: 1 | 2 | 3 | 4, eventType: string): boolean {
   if (formatVersion === 1) return (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType);
   if (formatVersion === 2)
     return (
@@ -206,6 +215,7 @@ export function snapshotEventTypeAllowed(formatVersion: 1 | 2 | 3, eventType: st
     (LEGACY_EVENT_TYPES as readonly string[]).includes(eventType) ||
     (MEMO_EVENT_TYPES as readonly string[]).includes(eventType) ||
     (COMMON_CONTENT_EVENT_TYPES as readonly string[]).includes(eventType) ||
-    (CHANNEL_DOMAIN_EVENT_TYPES as readonly string[]).includes(eventType)
+    (CHANNEL_DOMAIN_EVENT_TYPES as readonly string[]).includes(eventType) ||
+    (formatVersion === 4 && (HANDOFF_REPORTING_EVENT_TYPES as readonly string[]).includes(eventType))
   );
 }

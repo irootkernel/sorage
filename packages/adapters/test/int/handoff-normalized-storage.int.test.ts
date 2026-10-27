@@ -1,11 +1,14 @@
-import { afterAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
-import { ok } from "@sorage/core";
+import { ok, SystemClock } from "@sorage/core";
+import { afterAll, describe, expect, it } from "vitest";
+import { createSqliteContentStore, sqliteContentReferences } from "../../src/content-store";
+import { createSqliteEventLedger } from "../../src/events";
+import { type ArtifactContentBindings, createSqliteRevisionStore } from "../../src/handoffs";
+import { openSorageDatabase, type SorageSqlite } from "../../src/sqlite/connection";
 import {
   HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION,
   MIGRATIONS,
@@ -13,20 +16,15 @@ import {
 } from "../../src/sqlite/migrations";
 import {
   asSchemaAdmission,
-  MigrationConnectionError,
   type Migration,
-  migrate,
+  MigrationConnectionError,
   MigrationFailedError,
+  migrate,
   openAndMigrate,
 } from "../../src/sqlite/migrator";
-import { openSorageDatabase, type SorageSqlite } from "../../src/sqlite/connection";
-import { createSqliteContentStore, sqliteContentReferences } from "../../src/content-store";
-import { createSqliteEventLedger } from "../../src/events";
-import { createSqliteRevisionStore, type ArtifactContentBindings } from "../../src/handoffs";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 import { makeTempVault } from "../../src/testkit/temp-vault";
 import { createVaultInitializer } from "../../src/vault";
-import { SystemClock } from "@sorage/core";
 
 const INSTALLATION = "11111111-2222-4333-8444-555555555555";
 
@@ -318,6 +316,13 @@ describe("schema 9: normalized mutation stores stay coherent and abort cleanly",
     const temp = makeTempDatabase();
     cleanups.push(temp.cleanup);
     migrateProduction(temp);
+    // Mutation stores target the current schema; the owning schema-9 fidelity
+    // fixtures above and below keep their frozen migration slice.
+    const current = productionMigrationPlan();
+    migrate(temp.db, current.migrations, () => "2026-01-01T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: current.rebuilds,
+    });
     const vault = makeTempVault();
     cleanups.push(vault.cleanup);
     createVaultInitializer(new SystemClock()).initialize(vault.vaultPath, INSTALLATION);

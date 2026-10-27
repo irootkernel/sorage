@@ -1,7 +1,7 @@
 import { appError, err, ok, type ReviewMutationPort, type ReviewNoteView } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
-import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
+import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 
 /**
  * The SQLite review store behind TASK-031: one transaction per mutation holds the Row
@@ -41,10 +41,9 @@ export function createSqliteReviewStore(
   return {
     findNote(handoffId) {
       try {
-        const row = db.prepare("SELECT * FROM review_notes WHERE handoff_id = ?").get(handoffId) as
-          | NoteRow
-          | null
-          | undefined;
+        const row = db
+          .prepare("SELECT * FROM review_notes WHERE handoff_id = ? AND purpose = 'change_request' AND active = 1")
+          .get(handoffId) as NoteRow | null | undefined;
         return ok(row ? toNote(row) : null);
       } catch (error) {
         return err(appError("INTERNAL_ERROR", `Reading the review note failed: ${messageOf(error)}`));
@@ -93,7 +92,7 @@ export function createSqliteReviewStore(
           }
           if (input.note.op === "upsert") {
             db.prepare(
-              "INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(handoff_id) DO UPDATE SET author_kind = excluded.author_kind, author_project_id = excluded.author_project_id, target_revision = excluded.target_revision, body = excluded.body, updated_at = excluded.updated_at",
+              "INSERT INTO review_notes (handoff_id, author_kind, author_project_id, target_revision, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(handoff_id) DO UPDATE SET author_kind = excluded.author_kind, author_project_id = excluded.author_project_id, target_revision = excluded.target_revision, body = excluded.body, updated_at = excluded.updated_at, purpose = 'change_request', active = 1",
             ).run(
               input.handoffId,
               input.note.authorKind,

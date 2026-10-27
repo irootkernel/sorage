@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer as createNetServer, type AddressInfo } from "node:net";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,8 +9,8 @@ import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import { FakeClock } from "@sorage/adapters/src/testkit/fakes";
 import { initializeInstallation } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDaemonServer } from "../../src/server";
 import { serveDaemon } from "../../src/runtime";
+import { createDaemonServer } from "../../src/server";
 
 /**
  * The TASK-056 daemon scheduler over a real installation (RUN-002, BKP-002,
@@ -61,26 +61,26 @@ function fixture(prefix: string, options: { catchUp?: boolean } = {}): string {
   db.exec("BEGIN");
   db.prepare(
     `INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at)
-    VALUES ('p-1', 'beta', 'Beta', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    VALUES ('11111111-1111-4111-8111-111111111111', 'beta', 'Beta', NULL, 'active', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
   ).run();
-  mkdirSync(join(vault, "artifacts", HANDOFF_ID, "a-1"), { recursive: true });
-  writeFileSync(join(vault, `artifacts/${HANDOFF_ID}/a-1/brief.md`), artifactBytes);
+  mkdirSync(join(vault, "artifacts", HANDOFF_ID, "a12345678"), { recursive: true });
+  writeFileSync(join(vault, `artifacts/${HANDOFF_ID}/a12345678/brief.md`), artifactBytes);
   db.prepare(
     `INSERT INTO handoffs (id, title, sender_kind, recipient_project_id, current_artifact_id, revision, row_version,
       review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at)
-    VALUES (?, 'Brief', 'user', 'p-1', 'a-1', 1, 1, 'awaiting_recipient', 0, 0,
+    VALUES (?, 'Brief', 'user', '11111111-1111-4111-8111-111111111111', 'a12345678', 1, 1, 'awaiting_recipient', 0, 0,
       '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z')`,
   ).run(HANDOFF_ID);
   db.prepare(
     "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES ('c-1', NULL, ?, ?, ?, 1, '2026-01-02T00:00:00.000Z')",
   ).run(
-    `artifacts/${HANDOFF_ID}/a-1/brief.md`,
+    `artifacts/${HANDOFF_ID}/a12345678/brief.md`,
     artifactBytes.length,
     createHash("sha256").update(artifactBytes).digest("hex"),
   );
   db.prepare(
     `INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id)
-    VALUES ('a-1', ?, 'brief.md', 'brief.md', 'text/markdown', NULL, '2026-01-02T00:00:00.000Z', 'c-1')`,
+    VALUES ('a12345678', ?, 'brief.md', 'brief.md', 'text/markdown', NULL, '2026-01-02T00:00:00.000Z', 'c-1')`,
   ).run(HANDOFF_ID);
   db.exec("COMMIT");
   db.close();

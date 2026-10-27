@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
 import { ERROR_CODES, errorSpec } from "@sorage/core";
+import { describe, expect, it } from "vitest";
 import { createDomainRoutes } from "../../src/domain-routes";
-import { configRoutes } from "../../src/server";
-import { daemonRoutes } from "../../src/server";
+import { configRoutes, daemonRoutes } from "../../src/server";
 
 /**
  * The TASK-046 contracts (API-011, API-012): the HTTP status mapping is verified
@@ -71,7 +70,14 @@ describe("the symbolic error to HTTP status matrix (API-011)", () => {
       expect(documented.has(code), `${code} has a section 15 row`).toBe(true);
       expect(spec.httpStatus, `${code} HTTP status`).toBe(documented.get(code));
     }
-    expect([...documented.keys()].length).toBe(ERROR_CODES.length);
+    // TASK-130 removes this exact pending-code overlay when publishing reports.
+    expect([...documented.keys()].filter((code) => !(ERROR_CODES as readonly string[]).includes(code))).toEqual([
+      "HANDOFF_INVALID_INPUT",
+      "PROCESSING_STATE_CONFLICT",
+    ]);
+    expect(documented.get("HANDOFF_INVALID_INPUT")).toBe(422);
+    expect(documented.get("PROCESSING_STATE_CONFLICT")).toBe(409);
+    expect([...documented.keys()].length).toBe(ERROR_CODES.length + 2);
   });
 });
 
