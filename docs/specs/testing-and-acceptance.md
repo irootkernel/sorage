@@ -97,9 +97,26 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, AJ-19 for M6, AJ-20 to AJ-23 for M7, AJ-24 to AJ-26 for shared M8, and AJ-27 to AJ-30 for M9. Registration of a journey is a required scenario, not evidence it has run.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, AJ-19 for M6, AJ-20 to AJ-23 for M7, AJ-24 to AJ-26 for shared M8, and AJ-27 to AJ-33 for M9. Registration of a journey is a required scenario, not evidence it has run.
 
 `Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
+
+### M9 execution overlay for earlier Handoff journeys
+
+When AJ-33 or the shared M9 gate executes an applicable earlier journey against the EPIC-019 candidate, apply this invocation overlay to its abbreviated Handoff commands. It does not rewrite earlier milestone outcomes, reopen their gates or claim that their historical runs used the new inputs. The controlling current contract is [interface section 40.3](interfaces-and-operations.md#403-caller-observation-replay-and-input-validation).
+
+For a newly intended fresh mutation, retain the document Revision and Row Version observed when forming that proposal, and pass the required values below. A successful preceding step's returned metadata may supply the next proposal's observation; otherwise use the permitted metadata read. Keep those observations with the proposal throughout its attempts. A conflict or uncertain outcome never authorizes automatically reloading expectations and retrying; a later observation can support a new proposal only after deliberate reconciliation.
+
+| Earlier-journey operation | Required invocation observation for the current candidate |
+|---|---|
+| `review set` | `--target-revision <observed-revision> --expected-row-version <observed-row-version>` |
+| `review withdraw`, `review remove`, every `revise` encoding including `--no-change`, and `delete approve` | `--expected-row-version <observed-row-version>` |
+| `accept` | Its existing `--expected-revision <observed-revision> --expected-row-version <observed-row-version>` |
+| `decline` | Its existing `--expected-row-version <observed-row-version>` |
+
+Apply the same field observations to equivalent HTTP/MCP operations where exposed, retaining existing actor, body-source, reason, confirmation and other required arguments. Operations outside this matrix keep their existing optional-observation behavior. In particular, supply valid current observations and parser-required flags in AJ-04's terminal `revise`/`review set` attempts, AJ-07's terminal, no-change-bound, no-Review-Note and administrative-role cases, and equivalent domain-error probes in other journeys, so they reach the intended `HANDOFF_TERMINAL`, `NO_CHANGE_LIMIT`, `NO_REVIEW_NOTE` or `USER_CONTEXT_REQUIRED` guard rather than failing early with a missing-flag usage error. A negative administrative-role case still deliberately omits `--as-user`; its unrelated required Row Version remains present.
+
+For AJ-08's keyed revise, include the observed Row Version in the first fresh mutation and repeat the identical original request, including that same now-stale observation, source and key, to test recorded-success replay before current-state guards. Keep original key/input/version material in every other replay or uncertain-outcome case as well; do not refresh observations to make a retry look fresh. Syntactically optional receipt-bearing flags still admit an existing matching historical successful receipt that omitted them, while a receipt miss without fresh observations must refuse. Deliberate stale-client cases retain their stale observations, and explicit missing/invalid-observation cases in AJ-32 retain their omissions or invalid values and assert the appropriate parser/application refusal; this overlay must not repair those negative proposals or convert them into successful mutations.
 
 ### AJ-01: Fresh non-interactive initialization and doctor
 
@@ -573,6 +590,46 @@ TASK-122 exercises the read path, TASK-124 the MCP client, and TASK-126 the asse
 4. `codex exec -s read-only` reproduces the read results through per-invocation MCP configuration with no global configuration change.
 
 
+### AJ-31: Current-Revision reading and recipient reporting
+
+- **Owner:** `EPIC-019` · **Milestone:** M9
+- **Requirements:** HPR-001 to HPR-010, HPR-013, HPR-014
+
+1. Create an isolated sender/recipient Handoff and confirm Revision 1 starts unconfirmed/not_started, with no comment. Compare zero-write metadata, event and comment/review reads with unchanged home/Vault inventories.
+2. Fetch/preview as sender, recipient and explicit User proxy. Only successful recipient/User delivery confirms its acquired Revision. Race an old fetch against revise and a newer receipt; verify no newer Revision is falsely marked read, no newer receipt is overwritten, firstFetchedAt remains historical and Row Version never changes for reading.
+3. Start processing with and without an optional general comment; complete both directly and after start, including one atomic replacement comment. Verify status/comment/events/engagement and one Row Version increment; failure of either change rolls back both. Neither action implies reading or document acceptance. Repeated transitions conflict unchanged.
+4. Set a general comment, then accept the exact Revision without treating the comment as a request or acceptance as completion. Continue accepted processing and update the general comment after completion and archive, retaining accepted bytes and acceptedRevision.
+5. Create an active change request. Confirm general replacement and completion refuse it; resolve by changed content and by the bounded no-change path, verifying retained text/purpose/author/target, changed-Revision reset versus no-change preservation, and active-only legacy review projection.
+6. Exercise equivalent CLI, authenticated HTTP, MCP and browser operations, strict new-source decoding, body-source exclusivity, participant privacy, workspace confinement and typed envelopes. Browser labels older feedback and safely renders untrusted text.
+
+Expected: every report dimension and retained comment matches interface section 40; all failure paths preserve state and proposed text, and get/list/comment metadata remains zero-write. New tool-schema, response and error goldens have their classified changes.
+
+### AJ-32: Legacy writer conflicts, Project protection and declined feedback
+
+- **Owner:** `EPIC-019` · **Milestone:** M9
+- **Requirements:** HPR-003 to HPR-011, HPR-013 to HPR-015, PRJ-022
+
+1. Capture an R1 proposal, revise to R2 and submit it through each supported legacy/new writer. Cover absent observations, stale Revision, competing same-Revision comments, stale withdraw/remove/revise/no-change/delete approval, and unchanged requested domain state/events on refusal. Remove or resolve an older-target comment legitimately with current Row Version.
+2. Replay an original successful receipt after later changes, including an eligible legacy receipt lacking newly required observations. Confirm recorded outcome replay is effect-free; a missing/expired receipt without fresh observations refuses rather than executes, stages content, refreshes expectations or changes its key.
+3. Exercise Project unbind for open review, accepted not_started/in_progress/completed and accepted legacy-unrecorded evidence; include archive, approved deletion and the last binding. Each Handoff contributes at most once, known unfinished work requires confirmation, and legacy unknown adds no invented work.
+4. Decline an active request. Verify request activity ends atomically while purpose/body/target remain. Replace the inactive request with a general explanation through current observations. The Handoff stays declined; processing cannot restart and no completion evidence is invented. Repeat on supported HTTP/MCP/browser paths and check stopped list presentation independently of reviewNextActor.
+5. Verify User-proxy versus recipient authority, sender refusal, terminal general reporting, immutable accepted content, administrative comment removal and tombstone write rejection. Browser conflict handling preserves the complete typed proposal without silent retry.
+
+Expected: legacy entrypoints cannot bypass the common observation or engagement guards, and no accepted-but-unfinished or unrecorded item is falsely presented as completed. Existing User-only administration and unknown-outcome boundaries stay intact.
+
+### AJ-33: Reporting upgrade, restore, skill and assembled candidate
+
+- **Owner:** `EPIC-019` · **Milestone:** M9
+- **Requirements:** HPR-001, HPR-007, HPR-012 to HPR-016
+
+1. Using isolated homes and retained matching binaries, back up/verify published schema-7 and current schema-11 fixtures, then upgrade each to schema 12. Preserve Notes and historical firstFetchedAt, derive request activity only from recorded review state and expose legacy current reading/processing as unrecorded. Do not reconstruct removed feedback.
+2. Export deterministic format 4, including every comment purpose/activity and known/unrecorded report combination, optional processing start time and tombstones. Round-trip exact current state, Memo/Channel content and events. Reject malformed enums/timestamps/revisions/authors, duplicate keys, invalid active requests, duplicated comment fields and tombstone content before import.
+3. Restore immutable format-1/2/3 fixtures with their own generation readers and the new reader's conversion. Verify a schema-11 reader refuses schema 12 and unsupported format 4; do not assume older published readers safely reject upgraded data. Roll back only from the retained pre-upgrade backup with its matching old binary into a fresh empty home.
+4. Independently observe sender and recipient assistants using the frozen copied skill and clean copied-resource layout: inspect, read, start, comment, complete and discover the result through MCP and CLI fallback. Cover legacy/new required observations, new Revision reset, retained old feedback and declined inactive requests. Record actual harness limits and explicit-operation/untrusted-content boundaries; fixture success is not an assistant observation.
+5. Bind applicable AJ-01 to AJ-30 regressions and AJ-31/32 evidence to the assembled CLI/MCP/HTTP/Web/skill candidate, run the complete make test gate, classify snapshots and migration impact, and promote only lasting qualification/operations guidance.
+
+Expected: exact-candidate upgrade/restore/rollback, behavioral and independent-observation evidence satisfies the expanded shared M9/v0.1.3 gate. No real installation, consumer edit, publication or Epic acceptance is implied by qualification alone. F1 to F3 use existing test infrastructure and applicable evidence reuse, without another harness or mandatory extra full-suite cycle.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -760,18 +817,19 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 - [ ] AJ-25 covers retained, conflicting, expired, restore-lost and late-original send receipts, correct source/sender ownership and non-execution with unchanged receipts/storage.
 - [ ] AJ-26 is actually observed by a separate assistant against the frozen final skill and clean installed layout, with native conflicts, pinned decisions, uncertainty and forbidden-effect checks; old walkthroughs are not substituted.
 - [ ] Applicable prior Handoff, Memo, HTTP/Web and backup regressions pass. Public snapshots are classified additive/non-breaking, no persistent migration is claimed, and remaining manual/physical-platform checks are identified explicitly.
-- [ ] The intended v0.1.3 release is shared by M8, M9, and EPIC-017 under ADR-0033; publication of the shared release requires EPIC-017 completion and keeps its separate commit, installation, consumer activation and publication authorization. Consumer private inspection remains until the released replacement is verified.
+- [ ] The intended v0.1.3 release is shared by M8, M9, EPIC-017, EPIC-018 and EPIC-019 under ADR-0033 to ADR-0035; publication of the shared release requires every constituent Epic's completion and keeps its separate commit, installation, consumer activation and publication authorization. Consumer private inspection remains until the released replacement is verified.
 
-### 9.10 Gate M9, agent communication channels and shared content storage, end of EPIC-016, EPIC-017 and EPIC-018
+### 9.10 Gate M9, agent communication channels and shared content storage, end of EPIC-016, EPIC-017, EPIC-018 and EPIC-019
 
-- [ ] EPIC-016, EPIC-017 and EPIC-018 meet every declared Task and independent review gate in [the roadmap](../roadmap/README.md); contract adoption by TASK-105 or TASK-121 alone closes nothing.
+- [ ] EPIC-016, EPIC-017, EPIC-018 and EPIC-019 meet every declared Task and independent review gate in [the roadmap](../roadmap/README.md); contract adoption by TASK-105 or TASK-121 alone closes nothing.
 - [ ] AJ-27 covers the shared content store and both domain adoptions through real SQLite and filesystem fixtures, including threshold boundaries, exact Unicode bytes, concurrent writers, interrupted activation, reference-aware cleanup, retained-response references, snapshot format 3, and supported legacy restores.
 - [ ] AJ-28 covers the rebuilt Channel lifecycle end to end: the five-step loop, idempotent create/add/remove/close, the duplicate-by-content rule including retry-after-close and new-message-after-ack, all-or-nothing ack with `alreadyHandled`, sandboxed reads and waits, concurrent posters with one waiter, format-3 round-trip preserving names, handles, sequence numbers and handled state, and the old-schema-11 refusal.
 - [ ] AJ-29 is actually observed by separate assistants against the frozen final skill and clean installed layout in an isolated Installation, with two separate Codex workers, each under `codex exec -s read-only` and per-invocation MCP, and a main participant completing the loop in one continuous run; installed-consumer observations are separately attributed and never simulated by fixtures.
 - [ ] AJ-30 verifies the sandboxed messaging journey: deny-write CLI reads identical to unsandboxed runs with unchanged inventories, the `STORAGE_MIGRATION_REQUIRED` and missing-database `STORAGE_INTEGRITY_ERROR` refusals, reads during `BEGIN IMMEDIATE`, a write-and-network-denied MCP client running the Handoff, Memo and Channel loop through a host-spawned `sorage mcp`, and codex read-only reproduction without global configuration change.
+- [ ] AJ-31 to AJ-33 verify per-Revision reading and processing, single-comment retention and terminal flow, complete legacy/new writer observations and successful replay, known unfinished-work Project protection, schema-12/format-4 upgrade/restore/rollback and independent sender/recipient skill observations.
 - [ ] Applicable Handoff, Memo, HTTP/Web, preflight, send-recovery and backup regressions pass; the compiled binary refuses a newer-than-build database schema with STORAGE_SCHEMA_UNSUPPORTED while offline version and help still work.
-- [ ] Public contract diffs are classified per interface sections 38.8 and 38.11 with reviewed snapshots; the catalogue transition (73 → 74 at TASK-122, → 70 at TASK-123) matches the builds that emit it; the migration impact record covers every owning migration, the resolved NFR-009 serialization, the disclosed upgrade-window read changes with the `sorage backup run` migration step, and the backup-plus-matched-executable rollback procedure demonstrated on a real fixture.
-- [ ] The intended v0.1.3 release is shared by M8, M9, EPIC-017 and EPIC-018 under ADR-0033 and ADR-0034; publication of the shared release requires every constituent Epic's completion and keeps its separate commit, installation, consumer activation and publication authorization. No product release, installation, consumer activation, global MCP registration, or publication is implied by this gate; each keeps its separate authorization.
+- [ ] Public contract diffs are classified per interface sections 38.8, 38.11 and 40.6 with reviewed snapshots; the catalogue transition (73 → 74 at TASK-122, → 70 at TASK-123) matches the builds that emit it, and the EPIC-019 candidate adds two codes to reach 72 and four tools to reach 35; the migration impact record covers every owning migration, the resolved NFR-009 serialization, the disclosed upgrade-window read changes with the `sorage backup run` migration step, and the backup-plus-matched-executable rollback procedure demonstrated on a real fixture.
+- [ ] The intended v0.1.3 release is shared by M8, M9, EPIC-017, EPIC-018 and EPIC-019 under ADR-0033, ADR-0034 and ADR-0035; publication of the shared release requires every constituent Epic's completion and keeps its separate commit, installation, consumer activation and publication authorization. No product release, installation, consumer activation, global MCP registration, or publication is implied by this gate; each keeps its separate authorization.
 
 ## 10. Defect severity
 

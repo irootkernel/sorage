@@ -6,6 +6,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
+- Add per-Revision Handoff reading and processing reports with one retained recipient comment, separating general explanations and change requests from document acceptance.
+
 - Add `sorage preflight` to report Installation compatibility without migration or managed-storage writes.
 - Add `sorage send --replay-only` to inspect the original request's receipt without sending again, preserving uncertainty when its original material or receipt is unavailable.
 - Store newly accepted Handoff text up to 65,536 UTF-8 bytes inline in SQLite, retaining larger text and binary bodies in the Vault and existing file-backed Artifacts on their original paths.

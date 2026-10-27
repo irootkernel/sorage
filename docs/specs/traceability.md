@@ -38,17 +38,18 @@ Milestone values come from the specification and name the release gate at whose 
 | CHN-001 to CHN-014 | M9 | `TASK-105`, `TASK-109`, `TASK-110`, `TASK-111`, `TASK-121`, `TASK-123`, `TASK-125`, `TASK-126`, `TASK-113` to `TASK-119` | Required AJ-28 and AJ-29; design-only adoption in TASK-105, domain/CLI/backup delivery in TASK-109, assembled qualification and consumer walkthrough in TASK-110; EPIC-017 design adoption of CHN-012 and the CHN-006, CHN-007, and CHN-010 amendments in TASK-111, result-semantics implementation in TASK-113, concurrency qualification in TASK-114, the Channel create and database-schema recovery corrections in TASK-117, the shared Vault-open guidance correction in TASK-118, the write-protected replay-only correction in TASK-119, skill and guidance in TASK-115, and shared-release qualification in TASK-116 EPIC-018's TASK-121 adopts the rebuilt CHN-001 to CHN-014 contract under ADR-0034, TASK-123 rebuilds the domain on it, TASK-125 teaches the five-step loop, and TASK-126 requalifies.|
 | RDR-001 to RDR-005 | M9 | `TASK-121`, `TASK-122`, `TASK-126` | Required AJ-30; design-only adoption in TASK-121, the shared read primitive, persistent WAL, the storage-state refusals and the sidecars-absent rule implemented by TASK-122, and the sandboxed journey requalified by TASK-126 |
 | MCP-001 to MCP-006 | M9 | `TASK-121`, `TASK-124`, `TASK-125`, `TASK-126` | Required AJ-29 and AJ-30; design-only adoption in TASK-121, the STDIO server and 31-tool catalogue implemented by TASK-124, the MCP-first skill observed by TASK-125 (MCP-001, MCP-005), and the assembled journey requalified by TASK-126 |
+| HPR-001 to HPR-016 | M9 | `TASK-128` to `TASK-134` | Required AJ-31 to AJ-33; design adoption in TASK-128, storage/backup in TASK-129, core/CLI and legacy writers in TASK-130, HTTP/MCP in TASK-131, Web in TASK-132, independent skill observations in TASK-133 and exact-candidate integrated qualification in TASK-134 |
 | GEN-016 to GEN-020 | M8 | `TASK-103` to `TASK-104` | Required AJ-26; independent frozen-skill decisions and clean installed-resource access |
 
 `WEB-016` is the only `Deferred` requirement and therefore the only identifier with no implementing Task; within the MVP, Vault relocation is `sorage vault move --to <path>`, delivered by `TASK-026`.
 
-Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, AJ-18 closes the M5 Web body-compose gate, AJ-19 closes the M6 Project lifecycle gate, AJ-20 to AJ-23 close the M7 Project Memo gate, required AJ-24 to AJ-26 close the shared M8 gate only after both new Epics, and required AJ-27 to AJ-30 close the M9 gate after EPIC-016, EPIC-017 and EPIC-018, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
+Acceptance journeys are numbered per milestone: AJ-01 to AJ-10 close the M1 CLI gate, AJ-11 to AJ-13 close the M2 daemon and Web gate, AJ-14 to AJ-16 close the M3 MVP gate, AJ-17 closes the M4 CLI detail-read gate, AJ-18 closes the M5 Web body-compose gate, AJ-19 closes the M6 Project lifecycle gate, AJ-20 to AJ-23 close the M7 Project Memo gate, required AJ-24 to AJ-26 close the shared M8 gate only after both new Epics, and required AJ-27 to AJ-33 close the M9 gate after EPIC-016, EPIC-017, EPIC-018 and EPIC-019, as recorded in section 6 of [../roadmap/README.md](../roadmap/README.md).
 
 TASK-096 additionally cites NFR-015 for the M8 checker extension. M8 entries above are requirement-to-test obligations, not executed evidence. The checker recognizes milestones through M9 with dynamic requirement parsing. TASK-105 adopted the M9 SHR and CHN requirements under [the governance adoption boundary](../governance/README.md#14-m9-registration-and-adoption-boundary) and populated every EPIC-016 Requirements cell and reverse-index row; this adoption is normative design, not delivery evidence, and no AJ-27 or later product task is claimed to have run. TASK-111 adopted SHR-015 and CHN-012 and the CHN-006, CHN-007, CHN-010, and CLI-020 amendments under [the EPIC-017 boundary](../governance/README.md#15-m9-adoption-hardening-registration-boundary) on 2026-10-21 and populated every TASK-111 to TASK-116 citation and the matching reverse index above; this too is design adoption, not delivery evidence, and the EPIC-017 implementation Tasks own their own verification. TASK-121 executed the EPIC-018 adoption on 2026-10-24 under [the registration boundary](../governance/README.md#16-m9-mcp-and-channel-rebuild-registration-boundary): it accepted ADR-0034 after recording both feasibility probes, added the dated ADR-0007, ADR-0030 and ADR-0033 amendments, adopted RDR-001 to RDR-005, MCP-001 to MCP-006 and the rewritten CHN-001 to CHN-014 with the amended RUN-002, RUN-009, NFR-009, CLI-012, SHR-005, SHR-009, SHR-012 and SHR-015 rows, and populated every TASK-121 to TASK-126 citation and the matching reverse index; this too is design adoption, not delivery evidence, and the EPIC-018 implementation Tasks own their own verification.
 
 ### Handoff processing registration
 
-[EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment) registers versioned Handoff reading/processing and a single recipient comment under [proposed ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment) and [governance section 17](../governance/README.md#17-handoff-processing-registration-boundary). Registration adds no normative requirement and changes no existing requirement-to-Task mapping, reverse-index row, acceptance journey or release gate. TASK-128 must adopt the contracts and populate every TASK-128 through TASK-134 Requirements cell and matching traceability before implementation; until then their temporary None cells are planning placeholders, not missing delivery evidence for existing requirements. The [dossier](../todo/handoff-processing-and-recipient-comment.md) records intended verification obligations without claiming execution.
+[EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment) adopts HPR-001 to HPR-016 and the affected earlier-rule amendments under [ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment). Every member Task has its requirements below. AJ-31 to AJ-33 and the expanded shared M9/v0.1.3 gate are verification obligations; design adoption supplies no runtime evidence. The [dossier](../todo/handoff-processing-and-recipient-comment.md) maps execution ownership until closeout.
 
 ## 3. Reverse index
 
@@ -58,7 +59,7 @@ A requirement cited by several Tasks is normal: one Task usually establishes the
 
 An entry reading `None` for a requirement that is not `Deferred` is a coverage gap and blocks the milestone whose gate the requirement belongs to, and so is a requirement whose citing Tasks all sit in a later milestone than the requirement itself.
 
-| Requirement | Milestone | Citing tasks |
+| Requirement | Milestone | Tasks |
 |---|---|---|
 | `GEN-001` | M1 | `TASK-001`, `TASK-005`, `TASK-040`, `TASK-075`, `TASK-077` |
 | `GEN-002` | M1 | `TASK-041`, `TASK-064`, `TASK-077`, `TASK-078` |
@@ -73,13 +74,13 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `GEN-011` | M1 | `TASK-039`, `TASK-082` |
 | `GEN-012` | M1 | `TASK-008`, `TASK-065` |
 | `GEN-013` | M1 | `TASK-041`, `TASK-051`, `TASK-065` |
-| `GEN-014` | M1 | `TASK-039`, `TASK-082`, `TASK-103`, `TASK-125` |
+| `GEN-014` | M1 | `TASK-039`, `TASK-082`, `TASK-103`, `TASK-125`, `TASK-133` |
 | `GEN-015` | M4 | `TASK-080`, `TASK-082`, `TASK-103` |
 | `GEN-016` | M8 | `TASK-103`, `TASK-104` |
 | `GEN-017` | M8 | `TASK-103`, `TASK-104` |
 | `GEN-018` | M8 | `TASK-103`, `TASK-104` |
 | `GEN-019` | M8 | `TASK-103`, `TASK-104` |
-| `GEN-020` | M8 | `TASK-103`, `TASK-104`, `TASK-125` |
+| `GEN-020` | M8 | `TASK-103`, `TASK-104`, `TASK-125`, `TASK-133` |
 | `INIT-001` | M1 | `TASK-009` |
 | `INIT-002` | M1 | `TASK-009` |
 | `INIT-003` | M1 | `TASK-012`, `TASK-043`, `TASK-118` |
@@ -152,7 +153,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `PRJ-019` | M1 | `TASK-019`, `TASK-029`, `TASK-095` |
 | `PRJ-020` | M1 | `TASK-019` |
 | `PRJ-021` | M1 | `TASK-017` |
-| `PRJ-022` | M1 | `TASK-016`, `TASK-017`, `TASK-020`, `TASK-050` |
+| `PRJ-022` | M1 | `TASK-016`, `TASK-017`, `TASK-020`, `TASK-050`, `TASK-128`, `TASK-130`, `TASK-134` |
 | `PRJ-023` | M6 | `TASK-086` |
 | `PRJ-024` | M6 | `TASK-086` |
 | `VLT-001` | M1 | `TASK-012` |
@@ -190,55 +191,55 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `HND-009` | M1 | `TASK-029` |
 | `HND-010` | M1 | `TASK-030` |
 | `HND-011` | M1 | `TASK-030` |
-| `HND-012` | M1 | `TASK-030` |
+| `HND-012` | M1 | `TASK-030`, `TASK-128`, `TASK-130` |
 | `HND-013` | M1 | `TASK-028` |
-| `HND-014` | M1 | `TASK-028`, `TASK-033`, `TASK-095` |
+| `HND-014` | M1 | `TASK-028`, `TASK-033`, `TASK-095`, `TASK-128`, `TASK-130` |
 | `HND-015` | M1 | `TASK-032`, `TASK-095` |
 | `HND-016` | M1 | `TASK-028` |
 | `HND-017` | M1 | `TASK-028`, `TASK-080`, `TASK-081` |
 | `HND-018` | M1 | `TASK-029` |
 | `HND-019` | M1 | `TASK-028` |
 | `HND-020` | M1 | `TASK-030`, `TASK-080`, `TASK-081` |
-| `HND-021` | M1 | `TASK-033` |
+| `HND-021` | M1 | `TASK-033`, `TASK-128`, `TASK-130` |
 | `HND-022` | M1 | `TASK-033` |
 | `HND-023` | M1 | `TASK-029`, `TASK-084` |
 | `HND-024` | M1 | `TASK-030` |
-| `HND-025` | M1 | `TASK-028`, `TASK-081` |
+| `HND-025` | M1 | `TASK-028`, `TASK-081`, `TASK-130` |
 | `HND-026` | M1 | `TASK-038`, `TASK-039`, `TASK-082`, `TASK-086`, `TASK-103` |
-| `REV-001` | M1 | `TASK-027` |
-| `REV-002` | M1 | `TASK-031` |
-| `REV-003` | M1 | `TASK-031` |
-| `REV-004` | M1 | `TASK-031` |
-| `REV-005` | M1 | `TASK-031` |
-| `REV-006` | M1 | `TASK-031` |
-| `REV-007` | M1 | `TASK-031` |
-| `REV-008` | M1 | `TASK-032`, `TASK-095` |
-| `REV-009` | M1 | `TASK-032`, `TASK-095` |
-| `REV-010` | M1 | `TASK-032`, `TASK-095` |
-| `REV-011` | M1 | `TASK-032` |
-| `REV-012` | M1 | `TASK-032` |
-| `REV-013` | M1 | `TASK-032`, `TASK-095` |
-| `REV-014` | M1 | `TASK-031` |
-| `REV-015` | M1 | `TASK-031`, `TASK-049` |
-| `REV-016` | M1 | `TASK-031` |
-| `REV-017` | M1 | `TASK-032` |
+| `REV-001` | M1 | `TASK-027`, `TASK-128`, `TASK-130` |
+| `REV-002` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-003` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-004` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-005` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-006` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-007` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-008` | M1 | `TASK-032`, `TASK-095`, `TASK-128`, `TASK-130` |
+| `REV-009` | M1 | `TASK-032`, `TASK-095`, `TASK-128`, `TASK-130` |
+| `REV-010` | M1 | `TASK-032`, `TASK-095`, `TASK-128`, `TASK-130` |
+| `REV-011` | M1 | `TASK-032`, `TASK-128`, `TASK-130` |
+| `REV-012` | M1 | `TASK-032`, `TASK-128`, `TASK-130` |
+| `REV-013` | M1 | `TASK-032`, `TASK-095`, `TASK-128`, `TASK-130` |
+| `REV-014` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-015` | M1 | `TASK-031`, `TASK-049`, `TASK-128`, `TASK-130` |
+| `REV-016` | M1 | `TASK-031`, `TASK-128`, `TASK-130` |
+| `REV-017` | M1 | `TASK-032`, `TASK-128`, `TASK-130` |
 | `LIFE-001` | M1 | `TASK-033` |
 | `LIFE-002` | M1 | `TASK-033` |
-| `LIFE-003` | M1 | `TASK-033` |
+| `LIFE-003` | M1 | `TASK-033`, `TASK-128`, `TASK-130` |
 | `LIFE-004` | M1 | `TASK-033` |
-| `LIFE-005` | M1 | `TASK-033` |
-| `LIFE-006` | M1 | `TASK-033` |
+| `LIFE-005` | M1 | `TASK-033`, `TASK-128`, `TASK-130` |
+| `LIFE-006` | M1 | `TASK-033`, `TASK-128`, `TASK-130` |
 | `LIFE-007` | M1 | `TASK-034` |
 | `LIFE-008` | M1 | `TASK-034` |
 | `LIFE-009` | M1 | `TASK-034` |
 | `LIFE-010` | M1 | `TASK-034` |
 | `LIFE-011` | M1 | `TASK-034`, `TASK-049` |
 | `LIFE-012` | M1 | `TASK-034`, `TASK-049` |
-| `LIFE-013` | M1 | `TASK-034` |
+| `LIFE-013` | M1 | `TASK-034`, `TASK-128`, `TASK-130` |
 | `LIFE-014` | M1 | `TASK-034` |
 | `LIFE-015` | M1 | `TASK-034` |
 | `LIFE-016` | M1 | `TASK-034` |
-| `LIFE-017` | M1 | `TASK-028`, `TASK-033` |
+| `LIFE-017` | M1 | `TASK-028`, `TASK-033`, `TASK-128`, `TASK-130` |
 | `LIFE-018` | M1 | `TASK-028`, `TASK-034`, `TASK-081` |
 | `CLI-001` | M1 | `TASK-005`, `TASK-036`, `TASK-081` |
 | `CLI-002` | M1 | `TASK-005`, `TASK-036`, `TASK-075`, `TASK-077`, `TASK-081` |
@@ -270,18 +271,18 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `API-003` | M2 | `TASK-047`, `TASK-084` |
 | `API-004` | M2 | `TASK-046` |
 | `API-005` | M2 | `TASK-045`, `TASK-046`, `TASK-070`, `TASK-084` |
-| `API-006` | M2 | `TASK-042` |
+| `API-006` | M2 | `TASK-042`, `TASK-131` |
 | `API-007` | M2 | `TASK-046`, `TASK-048` |
 | `API-008` | M2 | `TASK-046`, `TASK-067` |
 | `API-009` | M2 | `TASK-046`, `TASK-060` |
 | `API-010` | M2 | `TASK-048`, `TASK-060` |
-| `API-011` | M2 | `TASK-046` |
-| `API-012` | M2 | `TASK-046` |
+| `API-011` | M2 | `TASK-046`, `TASK-131` |
+| `API-012` | M2 | `TASK-046`, `TASK-131` |
 | `API-013` | M5 | `TASK-084` |
 | `WEB-001` | M2 | `TASK-048` |
 | `WEB-002` | M2 | `TASK-048`, `TASK-058`, `TASK-079` |
 | `WEB-003` | M2 | `TASK-048`, `TASK-067`, `TASK-079` |
-| `WEB-004` | M2 | `TASK-048`, `TASK-079` |
+| `WEB-004` | M2 | `TASK-048`, `TASK-079`, `TASK-132` |
 | `WEB-005` | M2 | `TASK-048` |
 | `WEB-006` | M2 | `TASK-048`, `TASK-060` |
 | `WEB-007` | M2 | `TASK-047`, `TASK-084` |
@@ -319,7 +320,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `BKP-020` | M3 | `TASK-058`, `TASK-065` |
 | `BKP-021` | M3 | `TASK-052` |
 | `BKP-022` | M3 | `TASK-053`, `TASK-120` |
-| `BKP-023` | M3 | `TASK-052`, `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110`, `TASK-123` |
+| `BKP-023` | M3 | `TASK-052`, `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110`, `TASK-123`, `TASK-129` |
 | `BKP-024` | M3 | `TASK-052`, `TASK-054` |
 | `BKP-025` | M3 | `TASK-057` |
 | `BKP-026` | M3 | `TASK-056` |
@@ -428,17 +429,33 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `CHN-012` | M9 | `TASK-111`, `TASK-113`, `TASK-114`, `TASK-115`, `TASK-116`, `TASK-117`, `TASK-118`, `TASK-121`, `TASK-123`, `TASK-126` |
 | `CHN-013` | M9 | `TASK-121`, `TASK-123`, `TASK-126` |
 | `CHN-014` | M9 | `TASK-121`, `TASK-123`, `TASK-126` |
-| `RDR-001` | M9 | `TASK-121`, `TASK-122`, `TASK-126` |
-| `RDR-002` | M9 | `TASK-121`, `TASK-122`, `TASK-126` |
-| `RDR-003` | M9 | `TASK-121`, `TASK-122`, `TASK-126` |
-| `RDR-004` | M9 | `TASK-121`, `TASK-122`, `TASK-126` |
-| `RDR-005` | M9 | `TASK-121`, `TASK-122`, `TASK-126` |
-| `MCP-001` | M9 | `TASK-121`, `TASK-124`, `TASK-125`, `TASK-126` |
-| `MCP-002` | M9 | `TASK-121`, `TASK-124`, `TASK-126` |
-| `MCP-003` | M9 | `TASK-121`, `TASK-124`, `TASK-126` |
-| `MCP-004` | M9 | `TASK-121`, `TASK-124`, `TASK-126` |
-| `MCP-005` | M9 | `TASK-121`, `TASK-124`, `TASK-125`, `TASK-126` |
-| `MCP-006` | M9 | `TASK-121`, `TASK-124`, `TASK-126` |
+| `RDR-001` | M9 | `TASK-121`, `TASK-122`, `TASK-126`, `TASK-128`, `TASK-131`, `TASK-134` |
+| `RDR-002` | M9 | `TASK-121`, `TASK-122`, `TASK-126`, `TASK-134` |
+| `RDR-003` | M9 | `TASK-121`, `TASK-122`, `TASK-126`, `TASK-134` |
+| `RDR-004` | M9 | `TASK-121`, `TASK-122`, `TASK-126`, `TASK-134` |
+| `RDR-005` | M9 | `TASK-121`, `TASK-122`, `TASK-126`, `TASK-128`, `TASK-134` |
+| `MCP-001` | M9 | `TASK-121`, `TASK-124`, `TASK-125`, `TASK-126`, `TASK-133`, `TASK-134` |
+| `MCP-002` | M9 | `TASK-121`, `TASK-124`, `TASK-126`, `TASK-131`, `TASK-134` |
+| `MCP-003` | M9 | `TASK-121`, `TASK-124`, `TASK-126`, `TASK-131`, `TASK-134` |
+| `MCP-004` | M9 | `TASK-121`, `TASK-124`, `TASK-126`, `TASK-131`, `TASK-134` |
+| `MCP-005` | M9 | `TASK-121`, `TASK-124`, `TASK-125`, `TASK-126`, `TASK-131`, `TASK-133`, `TASK-134` |
+| `MCP-006` | M9 | `TASK-121`, `TASK-124`, `TASK-126`, `TASK-131`, `TASK-134` |
+| `HPR-001` | M9 | `TASK-128`, `TASK-129`, `TASK-130`, `TASK-132`, `TASK-134` |
+| `HPR-002` | M9 | `TASK-128`, `TASK-130`, `TASK-131`, `TASK-134` |
+| `HPR-003` | M9 | `TASK-128`, `TASK-129`, `TASK-130`, `TASK-132`, `TASK-134` |
+| `HPR-004` | M9 | `TASK-128`, `TASK-130`, `TASK-132`, `TASK-134` |
+| `HPR-005` | M9 | `TASK-128`, `TASK-130`, `TASK-131`, `TASK-132`, `TASK-134` |
+| `HPR-006` | M9 | `TASK-128`, `TASK-130`, `TASK-132`, `TASK-134` |
+| `HPR-007` | M9 | `TASK-128`, `TASK-129`, `TASK-130`, `TASK-132`, `TASK-133`, `TASK-134` |
+| `HPR-008` | M9 | `TASK-128`, `TASK-130`, `TASK-131`, `TASK-133`, `TASK-134` |
+| `HPR-009` | M9 | `TASK-128`, `TASK-130`, `TASK-131`, `TASK-133`, `TASK-134` |
+| `HPR-010` | M9 | `TASK-128`, `TASK-130`, `TASK-134` |
+| `HPR-011` | M9 | `TASK-128`, `TASK-130`, `TASK-132`, `TASK-133`, `TASK-134` |
+| `HPR-012` | M9 | `TASK-128`, `TASK-129`, `TASK-134` |
+| `HPR-013` | M9 | `TASK-128`, `TASK-130`, `TASK-131`, `TASK-134` |
+| `HPR-014` | M9 | `TASK-128`, `TASK-132`, `TASK-134` |
+| `HPR-015` | M9 | `TASK-128`, `TASK-133`, `TASK-134` |
+| `HPR-016` | M9 | `TASK-128`, `TASK-134` |
 
 ## 4. Task review requirement
 

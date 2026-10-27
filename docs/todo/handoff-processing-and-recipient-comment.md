@@ -2,9 +2,15 @@
 
 ## Purpose and authority
 
-This execution dossier preserves Master's approved direction of 2026-10-27 for [EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment). The roadmap alone owns delivery status, dependencies and eligibility. [Proposed ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment) records the material change; neither this dossier nor the proposal overrides the current specifications or accepted decisions.
+This execution dossier preserves Master's approved direction of 2026-10-27 for [EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment). The roadmap alone owns delivery status, dependencies and eligibility. [Accepted ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment) records the adopted material change; canonical specifications and accepted decisions remain authoritative over this execution map.
 
-Master requested documentation and Epic/Task registration first, with product development in a later session through `$aquarium:epic-handler`. Registration changes no product code, tests, shipped skill, database, backup, executable version, CHANGELOG or release gate. It starts no Task or managed execution session and grants no staging, commit, installation or publication authority.
+Master requested documentation and Epic/Task registration first, then approved the Epic execution plan through `$aquarium:epic-handler` with M9/shared v0.1.3 and Subagent Review on 2026-10-27. The original registration boundary below describes that earlier document-only operation. Registration changes no product code, tests, shipped skill, database, backup, executable version, CHANGELOG or release gate. It starts no Task or managed execution session and grants no staging, commit, installation or publication authority.
+
+## Canonical adoption map
+
+TASK-128 adopts HPR-001 to HPR-016 and the amended earlier rows in required-specification section 23, the exact interface section 40 contract, architecture section 28, security-reliability section 18 and AJ-31 to AJ-33. Schema 12 and global format 4 append to immutable prior generations. The current comment replaces the old snapshot reviewNote field rather than duplicating its body. Legacy review show/hasReviewNote project active requests only; comment show includes retained feedback. Mandatory fresh-writer observations preserve original successful-receipt replay. The common use cases own these rules across transports.
+
+TASK-129 supplies storage/backup and compatibility adapters so existing commands stay coherent before report surfaces exist; TASK-130 supplies new-state initialization, public reporting projections, transition semantics and required updates to existing callers. Later Task interfaces and Web/skill behavior remain with their declared owners. Each intermediate candidate passes its own gate; it does not await a later Task to repair it. Detailed field, error, body-validation, replay and transition decisions belong to the canonical interface rather than this dossier.
 
 ## Agreed behavior
 
@@ -35,7 +41,7 @@ Accepted document bytes and `acceptedRevision` remain immutable. The proposed ex
 
 ## Plan review response (2026-10-27)
 
-F1, F2 and F3 are accepted as planning revisions within the existing Epic and Task sequence. The rules below remain subject to TASK-128's canonical adoption; this response claims no product implementation or runtime verification.
+F1, F2 and F3 were accepted as planning revisions within the existing sequence and are adopted by TASK-128 in the canonical owners above. This response and its adoption claim no product implementation or runtime verification.
 
 ### F1: Observation policy for all comment writers
 
@@ -84,7 +90,7 @@ TASK-128 owns the following completions under [governance section 17](../governa
 - Classify every changed CLI/HTTP/MCP DTO, command, error, annotation, golden and skill behavior as breaking or non-breaking. Retaining resolved comment text and allowing terminal comment writes are intentional contract changes, not merely new optional fields.
 - Settle the database upgrade and new snapshot generation, including supported legacy restore and rollback. Do not rewrite schema 11 or the existing format-3 representation in place. Recheck the then-current version inventory before assigning new numbers.
 - Preserve legacy evidence honestly. Convert existing Notes to change-request comments with activity derived from their recorded review state. Do not infer completed work from `accepted`, infer current-version reading from `firstFetchedAt`, or reconstruct Note text already removed. Show unavailable legacy read/processing evidence as unrecorded.
-- Settle the intended delivery milestone and release allocation before adopting new requirements. M9 is the initial registration grouping, not an amendment to the existing M9 gate or permission to add this feature to v0.1.3. Any reassignment or release-gate change needs the same material-change record and consistent checker support.
+- Settle the intended delivery milestone and release allocation before adopting new requirements. Master selected M9/shared v0.1.3; TASK-128 adopts that release-gate expansion under ADR-0035, retaining separate publication authority.
 - Replace every EPIC-019 `Requirements: None` placeholder with accepted requirement citations and matching traceability. Product implementation starts only after this design candidate passes its independent contract review and acceptance gate.
 
 ## Delivery ownership

@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.10.0`
+- **Source of Truth version:** `0.11.0`
 
 ## Role ownership
 
@@ -52,9 +52,9 @@ Its canonical outcomes belong to the specification and qualification owners belo
 
 ## Handoff processing design entrypoints
 
-[EPIC-019](roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment) registers Master's 2026-10-27 direction for per-Revision reading and actual processing status, with one sender document and at most one recipient comment. General explanation and explicit change requests share that comment slot; the latest text remains after resolution and completion, and document acceptance remains separate from work completion. [Proposed ADR-0035](architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment) records the material change and alternatives, and the [execution dossier](todo/handoff-processing-and-recipient-comment.md) preserves the agreed behavior, Task ownership, verification obligations and next-session entry.
+[EPIC-019](roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment) registers Master's 2026-10-27 direction for per-Revision reading and actual processing status, with one sender document and at most one recipient comment. General explanation and explicit change requests share that comment slot; the latest text remains after resolution and completion, and document acceptance remains separate from work completion. [Accepted ADR-0035](architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment) records the material change and alternatives, and the [execution dossier](todo/handoff-processing-and-recipient-comment.md) preserves the agreed behavior, Task ownership, verification obligations and next-session entry.
 
-This is documentation-only registration under [governance section 17](governance/README.md#17-handoff-processing-registration-boundary), not adopted product behavior or release allocation. TASK-128 owns specification adoption, accepted-decision amendments, milestone/release settlement, contract classification and requirement/traceability population before implementation. Product code, tests, checker, shipped skill, Source of Truth version, CHANGELOG and existing release gates are unchanged. The roadmap alone records lifecycle and eligibility; development is reserved for a later explicitly invoked Epic-handler session.
+TASK-128 adopts HPR-001 to HPR-016 and the earlier-rule amendments under [governance section 17](governance/README.md#17-handoff-processing-registration-boundary), with exact contracts in [interface section 40](specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9), architecture section 28, security-reliability section 18 and AJ-31 to AJ-33. Master selected M9/shared v0.1.3, extending the existing gate through EPIC-019. The accepted contract appends schema 12/format 4, preserves legacy unknown evidence and successful receipt replay, and classifies mandatory fresh-writer observations as breaking inputs. Adoption changes no product implementation, installed skill or runtime data; the roadmap alone records lifecycle and readiness.
 
 ## Source of Truth precedence
 

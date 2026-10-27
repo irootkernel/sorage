@@ -91,7 +91,7 @@ An Unbound Project is an `active` Project with zero Project Bindings. It is deri
 
 A slug collision under case-insensitive comparison returns `PROJECT_SLUG_CONFLICT`.
 
-An **open Handoff** is a Handoff in `awaiting_recipient` or `changes_requested` that is not deleted. A `project unbind` that would leave a Project with open Handoffs unbound requires `--confirm`, and without it returns `CONFIRMATION_REQUIRED` (PRJ-022).
+An **open Handoff** is a non-deleted Handoff in `awaiting_recipient` or `changes_requested`. Project unbind confirmation protects this set and, from M9, accepted Handoffs with recorded `not_started` or `in_progress` work, including archive, once per Handoff (PRJ-022, HPR-011). It applies to every binding removal, including the last. Accepted unrecorded legacy evidence contributes no inferred pending work; deletion removes the live contribution.
 
 ### 3.2 Project Binding
 
@@ -143,6 +143,12 @@ Handoff
 - consecutiveNoChangeResolutions: integer >= 0
 - firstFetchedAt: nullable timestamp
 - reviewEngagedAt: nullable timestamp
+- readStatus: unrecorded | unconfirmed | read
+- readRevision: nullable integer
+- revisionReadAt: nullable timestamp
+- processingStatus: unrecorded | not_started | in_progress | completed
+- processingStartedAt: nullable timestamp
+- processingCompletedAt: nullable timestamp
 - pinned: boolean
 - archivedAt: nullable timestamp
 - deletedAt: nullable timestamp
@@ -154,7 +160,7 @@ Handoff
 
 `consecutiveNoChangeResolutions` counts no-change resolutions since the last content revision and resets to 0 whenever the Artifact content changes.
 
-`reviewEngagedAt` is set by the first `review set` on the Handoff and is never cleared, not by a Note withdrawal and not by an administrative Note removal. Together with `firstFetchedAt` it records that the recipient has engaged, which is what makes `withdraw` unavailable.
+`reviewEngagedAt` is set by the first recipient comment or processing transition, including legacy `review set`, and is never cleared by request withdrawal, resolution or administrative removal. Together with `firstFetchedAt` it records that the recipient has engaged, which is what makes `withdraw` unavailable.
 
 `supersedesHandoffId` is validated at creation (HND-018): the target MUST exist, otherwise `HANDOFF_NOT_FOUND`, and MUST be in a terminal state, otherwise `HANDOFF_NOT_TERMINAL`. The target need not share the recipient, a tombstone may be superseded, and every Handoff of one fan-out may reference the same predecessor.
 
@@ -182,11 +188,13 @@ An inline record is materialized in the accepting transaction, even before a fet
 
 Only `currentArtifactId` is live. A superseded Artifact row leaves in the revision transaction; the retired content record is removed only after the same-transaction reference proof permits it. File-backed retirement additionally commits its real `unlink` Intent; inline retirement creates no file intent or physical event. Garbage collection preserves live, pending and retained-response references under [interface section 38.1](../specs/interfaces-and-operations.md#381-shared-content-store).
 
-### 3.5 Review Note
+### 3.5 Recipient comment and legacy Review Note
 
 ```text
-ReviewNote
+RecipientComment
 - handoffId: UUID, unique
+- purpose: general | change_request
+- active: boolean
 - authorKind: registered_project | user
 - authorProjectId: nullable UUID
 - targetRevision: integer
@@ -195,7 +203,7 @@ ReviewNote
 - updatedAt: timestamp
 ```
 
-`authorProjectId` is null when `authorKind = user`, so a User-authored proxy Note is representable without inventing a Project identity.
+`authorProjectId` is null when `authorKind = user`, so a User-authored proxy comment remains representable without inventing a Project identity. The same unique `review_notes` persistence slot carries the comment; a legacy Review Note is only the active change-request projection. General or inactive retained comments remain available through the comment resource, not through `hasReviewNote` or `review show`. Section 28 and interface section 40 own the M9 transition and serialization rules.
 
 ### 3.6 Deletion Request
 
@@ -274,7 +282,7 @@ stateDiagram-v2
     awaiting_recipient --> withdrawn: sender withdraws, firstFetchedAt is null
     changes_requested --> changes_requested: recipient updates its Review Note
     changes_requested --> awaiting_recipient: recipient withdraws its Review Note
-    changes_requested --> awaiting_recipient: sender revises with changed content, Note removed, Revision +1
+    changes_requested --> awaiting_recipient: sender revises with changed content, request resolved, Revision +1
     changes_requested --> awaiting_recipient: sender no-change resolution with a reason
     changes_requested --> awaiting_recipient: User removes the Review Note, audited
     changes_requested --> declined: recipient declines with a reason
@@ -290,21 +298,21 @@ There are five review states and three terminal states. `accepted`, `declined`, 
 | From | Operation | Actor | Guard | To | Revision effect | Row Version effect | Events emitted |
 |---|---|---|---|---|---|---|---|
 | none | `send` | Sender Project, Workspace, or User | Recipient active and bound; source staged and verified; any `--supersedes` target exists and is terminal | `awaiting_recipient` | set to 1 | set to 1 | `HANDOFF_CREATED`, then `ARTIFACT_ACTIVATED` on completion |
-| `awaiting_recipient` | `review set` | Recipient or User | Target Revision is current; the sender may never author a Note | `changes_requested` | unchanged | +1 | `REVIEW_NOTE_CREATED` |
-| `changes_requested` | `review set` | Recipient or User | Target Revision is current | `changes_requested` | unchanged | +1 | `REVIEW_NOTE_UPDATED` |
+| `awaiting_recipient` | `review set` | Recipient or User | Explicit target Revision and Row Version match; sender may never author a Note | `changes_requested` | unchanged | +1 | `REVIEW_NOTE_CREATED` |
+| `changes_requested` | `review set` | Recipient or User | Explicit target Revision and Row Version match | `changes_requested` | unchanged | +1 | `REVIEW_NOTE_UPDATED` |
 | `changes_requested` | `review withdraw` | Recipient | A Review Note exists on the recipient's inbox Handoff, whichever actor authored it | `awaiting_recipient` | unchanged | +1 | `REVIEW_NOTE_WITHDRAWN` |
-| Any non-terminal | `review remove --as-user --confirm` | User | A Review Note exists; action is audited | `awaiting_recipient` | unchanged | +1 | `REVIEW_NOTE_REMOVED` |
+| Any non-terminal | `review remove --as-user --confirm` | User | A current comment exists; observed Row Version matches; action is audited | `awaiting_recipient` for an active request, otherwise unchanged | unchanged | +1 | `REVIEW_NOTE_REMOVED` |
 | `awaiting_recipient` | `revise --file` | Sender or User | New SHA-256 differs, else `NO_CONTENT_CHANGE` | `awaiting_recipient` | +1 | +1 | `HANDOFF_REVISED`, `ARTIFACT_ACTIVATED`, `ARTIFACT_UNLINKED` |
-| `changes_requested` | `revise --file` | Sender or User | New SHA-256 differs; the Note is removed in the same transaction; counter resets to 0 | `awaiting_recipient` | +1 | +1 | `HANDOFF_REVISED`, `REVIEW_NOTE_RESOLVED`, `ARTIFACT_ACTIVATED`, `ARTIFACT_UNLINKED` |
+| `changes_requested` | `revise --file` | Sender or User | New SHA-256 differs; request activity ends in the same transaction, comment text/target retained; counter resets to 0 | `awaiting_recipient` | +1 | +1 | `HANDOFF_REVISED`, `REVIEW_NOTE_RESOLVED`, `ARTIFACT_ACTIVATED`, `ARTIFACT_UNLINKED` |
 | `changes_requested` | `revise --no-change --reason` | Sender or User | `consecutiveNoChangeResolutions` is 0, else `NO_CHANGE_LIMIT`; reason non-empty | `awaiting_recipient` | unchanged | +1 | `HANDOFF_NO_CHANGE_RESOLVED`, `REVIEW_NOTE_RESOLVED` |
 | `awaiting_recipient` | `revise --no-change --reason` | Sender or User | Rejected with `NO_REVIEW_NOTE`; there is no Note to resolve | unchanged | unchanged | unchanged | none |
-| `awaiting_recipient` | `accept --expected-revision --expected-row-version` | Recipient or User | No Review Note, else `REVIEW_NOTE_PRESENT`; the current Artifact has `materialized = 1`, else `ARTIFACT_MATERIALIZING`; both expected values match | `accepted` | unchanged | +1 | `HANDOFF_ACCEPTED` |
+| `awaiting_recipient` | `accept --expected-revision --expected-row-version` | Recipient or User | No active change request, else `REVIEW_NOTE_PRESENT`; the current Artifact has `materialized = 1`, else `ARTIFACT_MATERIALIZING`; both expected values match | `accepted` | unchanged | +1 | `HANDOFF_ACCEPTED` |
 | `awaiting_recipient` | `decline --reason --expected-row-version` | Recipient or User | Reason non-empty; expected Row Version matches | `declined` | unchanged | +1 | `HANDOFF_DECLINED` |
 | `changes_requested` | `decline --reason --expected-row-version` | Recipient or User | Reason non-empty; expected Row Version matches | `declined` | unchanged | +1 | `HANDOFF_DECLINED` |
 | `awaiting_recipient` | `withdraw` | Sender or User | `firstFetchedAt` is null and `reviewEngagedAt` is null, else `HANDOFF_ALREADY_FETCHED` | `withdrawn` | unchanged | +1 | `HANDOFF_WITHDRAWN` |
 | `changes_requested` | `withdraw` | Sender or User | Rejected with `REVIEW_NOTE_PRESENT` | unchanged | unchanged | unchanged | none |
 | Any except a tombstone | `get`, `inbox`, `outbox` | Sender, Recipient, or User | Participant only; a non-participant read returns `HANDOFF_NOT_FOUND` | unchanged | unchanged | unchanged | none; `firstFetchedAt` is never set by a read of metadata |
-| Any except a tombstone | `fetch`, `GET /api/v1/handoffs/{id}/artifact/content` | Sender, Recipient, or User | Participant only; the current Artifact has `materialized = 1`, else `ARTIFACT_MATERIALIZING` | unchanged | unchanged | unchanged | `ARTIFACT_FETCHED_FIRST_TIME` on the first fetch by the Recipient or the User only, which also sets `firstFetchedAt`; a Sender fetch of its own Handoff sets nothing and emits nothing |
+| Any except a tombstone | `fetch`, `GET /api/v1/handoffs/{id}/artifact/content` | Sender, Recipient, or User | Participant only; the current Artifact has `materialized = 1`, else `ARTIFACT_MATERIALIZING` | unchanged | unchanged | unchanged | historical `ARTIFACT_FETCHED_FIRST_TIME` once plus M9 `HANDOFF_REVISION_READ` when delivered current-Revision evidence first settles; Row Version unchanged; sender fetch records neither |
 | Any, terminal included | `pin`, `unpin` | User | `--as-user` | unchanged | unchanged | +1 | `HANDOFF_PINNED`, `HANDOFF_UNPINNED` |
 | Terminal only | `archive` | User | `--as-user`; a non-terminal Handoff returns `HANDOFF_ARCHIVE_INVALID` | unchanged | unchanged | +1 | `HANDOFF_ARCHIVED` |
 | Terminal and archived | `unarchive` | User | `--as-user`; `archivedAt` is set, else `HANDOFF_NOT_ARCHIVED` | unchanged | unchanged | +1 | `HANDOFF_UNARCHIVED` |
@@ -326,7 +334,7 @@ The table has 25 rows. Every review-state transition of the state machine appear
 | `deletedAt` | Handoff | Tombstone marker; content was deleted and only minimal metadata remains |
 | Pending Deletion Request | DeletionRequest | Pending User decision, independent of review state |
 | `firstFetchedAt` | Handoff | Timestamp of the first `fetch` or artifact-content read by the recipient Project or the User; a sender read never sets it, so null means the recipient has never pulled the bytes |
-| `reviewEngagedAt` | Handoff | Timestamp of the first `review set`; never cleared, so a withdrawn Note still counts as engagement |
+| `reviewEngagedAt` | Handoff | Timestamp of the first recipient comment or processing action, including review set; never cleared, so withdrawn or removed feedback still counts as engagement |
 | `materialized` | Artifact content record, projected in its summary | Inline content is complete at commit; a file becomes available after activation, and false prevents body acquisition with `ARTIFACT_MATERIALIZING` |
 
 These fields are not folded into one large state enum. `firstFetchedAt` and `reviewEngagedAt` are exposed in public Handoff representations (HND-024) because together they are the guard for `withdraw`, and neither increments Row Version when it is set.
@@ -335,7 +343,7 @@ Operations that remain allowed in a terminal state, each incrementing Row Versio
 
 Operations rejected in a terminal state with `HANDOFF_TERMINAL`: `revise`, `review set`, `review withdraw`, `review remove`, `accept`, `decline`, `withdraw`.
 
-Immutability in a terminal state covers Artifact content, Revision, and Review Note. It does not freeze retention fields, and it does not block approved deletion (LIFE-005).
+Terminal review immutability covers Artifact content and Revision. M9 permits general recipient reporting under section 28 without reopening review; retention and approved deletion remain available (LIFE-005).
 
 Deletion approval requires a terminal review state, so **every tombstone is terminal** (LIFE-018). A tombstone is therefore a strictly narrower condition than a terminal state, and it carries its own rejection list.
 
@@ -400,7 +408,7 @@ Installation-scoped operations are not Handoff mutations, so the Sender and Reci
 | Daemon lifecycle, `daemon start`, `stop`, `restart`, `status`, and `web` | Any actor | Process control only; no Handoff is mutated |
 | Token rotation, `token rotate` | User, `--as-user` | Invalidates browser sessions (SEC-020) |
 | Uninstall, `uninstall` | User, `--as-user --confirm` | Never deletes the Vault (INIT-016) |
-| Project add, bind, unbind, rename, list, show, and resolve | Any actor | Unbinding a Project that leaves open Handoffs requires `--confirm` (PRJ-022) |
+| Project add, bind, unbind, rename, list, show, and resolve | Any actor | Unbinding a Project with open review or accepted known unfinished work requires `--confirm` (PRJ-022, HPR-011) |
 | Project rebind | User, implicit | Atomically replaces one binding; historical paths remain unchanged (PRJ-024) |
 | Project archive and unarchive | User, implicit | Existing Handoffs remain operable; new Project sends and receipts fail (PRJ-023) |
 
@@ -450,7 +458,7 @@ All-or-nothing creation is a database property. Every Handoff, Artifact and cont
 - Reads, `fetch`, the Web artifact-content endpoint, and the events they emit never increment Row Version (HND-025). Recording `firstFetchedAt` is part of that read path and is likewise not a Row Version bump.
 - Only `fetch` and the Web artifact-content endpoint set `firstFetchedAt` and emit `ARTIFACT_FETCHED_FIRST_TIME`, only on the first such read, and only when the actor is the recipient Project or the User; the sender reading its own Handoff sets nothing, because the field exists to record recipient engagement (HND-012). There is no later sampling. `get`, the Web detail screen, and listings are metadata reads that set nothing and emit nothing (HND-012).
 - `--expected-row-version` is the value the client currently holds, not the value it expects afterwards (HND-025). A client that sent a Handoff and observed Row Version 1 passes `1` to its next mutation.
-- `--expected-row-version` is optional everywhere except `accept` and `decline`, and it is enforced whenever it is supplied (HND-014).
+- `--expected-row-version` is mandatory for `accept` and `decline` and, from M9, for every fresh legacy/new writer named in [interface section 40.3](../specs/interfaces-and-operations.md#403-caller-observation-replay-and-input-validation). Operations outside that matrix retain their existing optional guards, enforced whenever supplied. Receipt-bearing `revise` and deletion approval keep syntactically optional observations to admit a matching historical successful receipt, but a receipt miss cannot perform a fresh mutation without the caller's required observations (HND-014, HPR-008, HPR-009).
 - A stale Row Version produces `ROW_VERSION_CONFLICT`; a stale target Revision produces `REVISION_CONFLICT`.
 - Same-content revise produces `NO_CONTENT_CHANGE` unless the sender explicitly uses `revise --no-change --reason`, which is valid only in `changes_requested` and returns `NO_REVIEW_NOTE` anywhere else.
 - Sorage never continues a Revision series across Handoffs. Work that continues after a terminal state starts a new Handoff carrying `--supersedes <id>`, whose target MUST exist (`HANDOFF_NOT_FOUND`) and MUST be terminal (`HANDOFF_NOT_TERMINAL`); the target may be a tombstone, need not share the recipient, and may be referenced by every Handoff of one fan-out (HND-018).
@@ -461,15 +469,15 @@ All-or-nothing creation is a database property. Every Handoff, Artifact and cont
 - It belongs to one exact target Revision, and creation or update against a stale target Revision fails.
 - `authorKind` records whether the recipient Project or the User wrote it; `authorProjectId` is null for a User-authored Note.
 - The sender MUST NOT author a Review Note on its own Handoff.
-- `sorage get` exposes `hasReviewNote` and never the Note body. From milestone M4 the current Note is read through `sorage review show`, which calls the same use case as `GET /api/v1/handoffs/{id}/review-note` and records nothing (CLI-022, ADR-0024).
+- `sorage get` exposes `hasReviewNote` and never the Note body. From milestone M4 the active Note is read through `sorage review show`, which calls the same use case as `GET /api/v1/handoffs/{id}/review-note` and records nothing (CLI-022, ADR-0024).
 - From milestone M4 the bounded metadata timeline is read through `sorage events`, which calls the same use case as `GET /api/v1/handoffs/{id}/events`, includes tombstones, and never carries Artifact bytes (CLI-023, HND-017).
 - The recipient may update the body while the state remains `changes_requested`.
 - The recipient may withdraw the current Note whichever actor authored it, which returns the Handoff to `awaiting_recipient` with the Revision unchanged and emits `REVIEW_NOTE_WITHDRAWN` (REV-016); the User removes a Note only through `review remove --as-user` (REV-015).
-- The sender cannot clear a Note directly. The sender resolves it either by revising with changed content, which removes the Note in the same transaction, or by one bounded no-change resolution.
-- Whenever a sender operation removes a Note, `REVIEW_NOTE_RESOLVED` is appended in the same transaction as `HANDOFF_REVISED` or `HANDOFF_NO_CHANGE_RESOLVED`. The three removal events are distinct by actor: `REVIEW_NOTE_RESOLVED` is the sender, `REVIEW_NOTE_WITHDRAWN` is the recipient, and `REVIEW_NOTE_REMOVED` is the User.
+- The sender cannot remove comment text. Changed-content revision or one bounded no-change resolution ends an active request in the same transaction; M9 retains the comment body, original purpose and target Revision.
+- Whenever a sender operation resolves an active request, `REVIEW_NOTE_RESOLVED` is appended in the same transaction as `HANDOFF_REVISED` or `HANDOFF_NO_CHANGE_RESOLVED`. The three request-resolution/removal events are distinct by actor: `REVIEW_NOTE_RESOLVED` is the sender, `REVIEW_NOTE_WITHDRAWN` is the recipient, and `REVIEW_NOTE_REMOVED` is the User.
 - A no-change resolution requires a reason, removes the Note, keeps the Revision, and emits `HANDOFF_NO_CHANGE_RESOLVED` (REV-017). It is valid only in `changes_requested`; elsewhere it returns `NO_REVIEW_NOTE`.
 - No-change resolution is bounded: it is allowed only while `consecutiveNoChangeResolutions` is 0, so two consecutive no-change resolutions are impossible and the second attempt returns `NO_CHANGE_LIMIT`. The next resolution after one no-change resolution MUST change content.
-- The User may remove any Review Note through `review remove --as-user --confirm`; the removal is audited as `REVIEW_NOTE_REMOVED` and returns the Handoff to `awaiting_recipient` (REV-015).
+- The User may remove any current comment from a non-terminal Handoff through `review remove --as-user --confirm` with current Row Version; it is audited as `REVIEW_NOTE_REMOVED`, returns an active request to `awaiting_recipient` and otherwise preserves review state (REV-015).
 - Sorage does not provide native historical Review Note versions.
 
 ## 11. Accept semantics
@@ -846,7 +854,7 @@ Shared routing is defined in [interface section 38.2](../specs/interfaces-and-op
 ### 20.4 Revise
 
 1. Apply the actor, state, Note and observed-version guards, verify the current body's ownership and checksum, and prepare the replacement through shared routing. Stage only a file-backed replacement. The no-change resolution also verifies the existing body before claiming success.
-2. One transaction: insert a new immutable content record and a new Artifact, switch `currentArtifactId`, increment Revision, apply the Row Version compare-and-set, remove the Review Note when present and the retired Artifact, and remove the retired record only through the reference proof. Insert an `activate` Intent for a new file and an `unlink` Intent for a retired file, append `HANDOFF_REVISED` and, when a Note was removed, `REVIEW_NOTE_RESOLVED`; commit.
+2. One transaction: insert a new immutable content record and a new Artifact, switch `currentArtifactId`, increment Revision, apply the Row Version compare-and-set, end any active request while retaining its comment and remove the retired Artifact, and remove the retired record only through the reference proof. Insert an `activate` Intent for a new file and an `unlink` Intent for a retired file, append `HANDOFF_REVISED` and, when an active request was resolved, `REVIEW_NOTE_RESOLVED`; commit.
 3. Execute the applicable file intents, then settle them with their physical events. An inline side has no corresponding file intent or physical event; all four inline/file transitions retain the same atomic domain semantics.
 
 Because the new Artifact has its own `artifact-id` segment, the old file is never overwritten in place, and a crash cannot destroy the previous Revision before the new one is durable (VLT-012).
@@ -1028,3 +1036,15 @@ The Channel domain is rebuilt under ADR-0034 to Handoff- and Memo-level simplici
 The persistence rules of sections 17 to 20 extend unchanged: synchronous UnitOfWork transactions with no filesystem I/O or `await` inside, post-commit intent execution and drain for file-backed bodies, WAL writer serialization, the vault-move fences, and the existing crash-point discipline. The migration model is additive-first: version 8 delivers the shared infrastructure without rebuilding any domain table, TASK-107 then rebuilds the `artifacts`/`handoffs` cycle with its incoming dependents, TASK-108 rebuilds `project_memos` with `events`, and every rebuild follows the official SQLite generalized `ALTER TABLE` procedure of SHR-009 on a dedicated non-operational connection, ending with an empty `PRAGMA foreign_key_check` before commit. Backup moves to one coherent global snapshot format 3 covering all domains and carried content, with formats 1 and 2 as restorable legacy inputs; operational receipts stay outside restore. Rollback is the documented backup-plus-matched-executable procedure; old executables are never assumed to read an upgraded home, and a database newer than the build fails closed with `STORAGE_SCHEMA_UNSUPPORTED` before operational work.
 
 M9 retains the shared event row and records Channel associations in the closed typed metadata of [the event catalog](../specs/security-reliability.md#101-m9-event-metadata), following existing Project-event practice. TASK-106 implements common physical-content events and historical-owner intent metadata without Channel tables; TASK-109 implements Channel domain events and stronger retained-association validation. Completion state, intent removal, and success events commit together, while failed assessments retain the intent and their event atomically. Historical physical-event IDs neither pin bodies nor require live owners at restore; no new Channel association column or separate audit service is introduced.
+
+## 28. M9 Handoff reporting extension
+
+ADR-0035 adopts HPR-001 to HPR-016. The existing terminal review machine remains terminal for document content; accepted bytes and acceptedRevision cannot change. The recipient or explicit User proxy can still leave a general comment after any terminal outcome or archive, and can start/complete accepted work without reopening review. Declined/withdrawn work is displayed as stopped from its review state; stored historical processing evidence is retained and never interpreted as ongoing work. Tombstones admit no report writes.
+
+[Interface section 40](../specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9) owns exact public records, full transition/observation tables, events and errors. Core owns comment purpose/activity, processing transitions, actor and expected-version guards; adapters extend the existing unique Note slot and Handoff row in migration `12 / handoff-reporting-v1`, settle reading against delivered Artifact+Revision without a Row Version bump and commit report/comment/events together. CLI, HTTP, MCP and the daemon-served Web call those same use cases. The `apps/web` scaffold is not another Web surface.
+
+`readStatus` distinguishes unknown legacy evidence from a known unconfirmed current document. A read record has readRevision equal to current Revision and a non-null revisionReadAt; other statuses have null readRevision and revisionReadAt. Public evidence still names current Revision in every case. Processing timestamp combinations follow section 40.1. New sends initialize unconfirmed/not_started; changed content resets the two current evidence dimensions, while bounded no-change resolution preserves them. The unique comment retains its original target, author, purpose and body when request activity ends. Stored activity is updated atomically with review transitions; validation enforces equivalence to the change_request/changes_requested predicate. General comment replacement cannot bypass an active request.
+
+All fresh legacy/new writers use observed versions in the common application layer. Matching retained receipt replay precedes fresh-domain admission and never defaults missing observations. A conflict leaves requested comment/status/events unchanged and preserves caller proposals. Existing mutation lock, intent-log and post-commit success rules apply; no filesystem I/O or await enters UnitOfWork. Reading records are recipient delivery evidence, not a metadata-read side effect or a processing authority grant.
+
+One coherent global format 4 carries these fields in each Handoff shard and only one full comment body, replacing the old reviewNote field. Formats 1 to 3 are immutable legacy inputs; their Note conversion derives activity from recorded review state and leaves reading/processing unrecorded. Other domain serialization, canonical bytes, redaction and content digests keep their existing contracts. The build-level known inventory advances through schema 12, while older binaries and matched-backup rollback retain their own supported ranges. TASK-129 delivers storage/export/restore with legacy-command compatibility; TASK-130 then introduces new state initialization, public projection and writer semantics, including minimum existing-caller updates. No earlier Task depends on a later UI or transport capability to pass its gate.
