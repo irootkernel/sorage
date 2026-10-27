@@ -1,5 +1,7 @@
 # M9 Channel qualification (TASK-109)
 
+For the rebuilt EPIC-018 Channel surface and current qualification, use [the assembled MCP and rebuilt Channel map](mcp-and-channel-qualification.md). Channel observations below retain their identified pre-rebuild candidates and are historical; they do not impose the retired command surface or former campaign counts on the rebuilt implementation.
+
 This note explains TASK-109's Channel domain, storage, CLI, snapshot, and public-consumer boundaries. It records the accepted implementation seams of the reviewed P3 operative addendum; the normative contracts remain [required-specification section 21](../specs/required-specification.md#21-agent-communication-channels-and-shared-content-storage-milestone-m9), [interface section 38](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9), [security section 10.1](../specs/security-reliability.md#101-m9-event-metadata), and the dated ADR-0030 and ADR-0032 amendments. Delivery status belongs only to [the roadmap](../roadmap/README.md).
 
 ## Domain and storage seams

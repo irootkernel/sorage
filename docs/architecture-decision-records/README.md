@@ -1256,13 +1256,13 @@ The M9 Channel surface is also hard for agents to use:
 - a write path that rolls back and retries on every concurrent commit;
 - guidance dominated by exceptions.
 
-Its acceptance observers ran outside sandboxes. The [execution dossier](../todo/mcp-and-channel-rebuild.md) records the confirmed findings.
+Its acceptance observers ran outside sandboxes. These confirmed findings motivate this decision; [the assembled qualification map](../implementation-tips/mcp-and-channel-qualification.md) records the rebuilt surface's observations and limits.
 
 On 2026-10-23 Master directed that agents send and read Handoffs, Project Memos and Channel messages from any environment, including a sandbox that cannot write anything, and that the Channel surface be rebuilt in full before the shared v0.1.3 release.
 
 ### Decision
 
-Proposed:
+Adopted:
 
 - **Add `sorage mcp`.** It is a STDIO MCP server for the messaging domains, registered globally like Mulgae and Gaori. Agent harnesses launch MCP servers outside the shell sandbox, so MCP tool calls send and read from a fully read-only sandbox.
   - The server executes each tool call as a `sorage … --json` child process of the same executable and returns the CLI envelope.
@@ -1322,7 +1322,7 @@ Handoff, Memo and Project read commands keep their outputs and exits but lose th
 Executed at registration:
 
 - EPIC-018 and TASK-121 through TASK-126 in the roadmap, with Requirements cells set to None;
-- the [execution dossier](../todo/mcp-and-channel-rebuild.md) and its TODO index entry;
+- the execution dossier and its TODO index entry, retired at closeout after promotion to [lasting qualification guidance](../implementation-tips/mcp-and-channel-qualification.md);
 - the documentation index;
 - [the governance registration boundary](../governance/README.md#16-m9-mcp-and-channel-rebuild-registration-boundary);
 - a traceability note;

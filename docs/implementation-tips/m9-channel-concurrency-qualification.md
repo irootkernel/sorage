@@ -1,5 +1,7 @@
 # M9 Channel concurrency qualification (TASK-114)
 
+For the rebuilt EPIC-018 Channel surface and current qualification, use [the assembled MCP and rebuilt Channel map](mcp-and-channel-qualification.md). Channel observations below retain their identified pre-rebuild candidates and are historical; they do not impose the retired command surface or former campaign counts on the rebuilt implementation.
+
 This note explains TASK-114's multi-process Channel concurrency qualification and the bounded external-commit retry backoff it triggered. It records the accepted harness and evidence at aggregate level; the normative contracts remain [required-specification section 21](../specs/required-specification.md#21-agent-communication-channels-and-shared-content-storage-milestone-m9), [interface section 38](../specs/interfaces-and-operations.md#38-shared-content-and-agent-communication-channels-milestone-m9), [security section 7](../specs/security-reliability.md#7-concurrency-and-locks), [testing-and-acceptance AJ-28](../specs/testing-and-acceptance.md#aj-28-channel-lifecycle-and-main-side-processing), and the accepted [ADR-0033](../architecture-decision-records/README.md#adr-0033-channel-adoption-hardening-and-the-shared-v013-release). Delivery status belongs only to [the roadmap](../roadmap/README.md).
 
 ## Scope and owners

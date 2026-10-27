@@ -1,5 +1,7 @@
 # M9 shared content and migration qualification map
 
+For the rebuilt EPIC-018 Channel surface and current qualification, use [the assembled MCP and rebuilt Channel map](mcp-and-channel-qualification.md). Channel observations below retain their identified pre-rebuild candidates and are historical; they do not impose the retired command surface or former campaign counts on the rebuilt implementation.
+
 This document is guidance. Normative requirements and accepted decisions take precedence. Delivery status belongs only to the [canonical roadmap](../roadmap/README.md); sections 1–8 record the TASK-106 foundation at its schema-8 boundary, section 9 records TASK-107 Handoff adoption at schema 9, section 10 describes TASK-108 Memo adoption at schema 10, and section 11 records the assembled schema-11 qualification scope and the unified migration impact of the complete M9 chain. Historical statements about later adoption in sections 1–8 describe that foundation boundary. This map grants no acceptance, installation, or publication.
 
 ## 1. Scope and owners
