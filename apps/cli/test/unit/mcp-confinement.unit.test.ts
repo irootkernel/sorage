@@ -165,6 +165,17 @@ async function observe(
 }
 
 const escapeCases: Array<[string, string, Record<string, unknown>]> = [
+  ["handoff_comment_set", "file", { handoffId: "h1", file: "", expectedRevision: 1, expectedRowVersion: 1 }],
+  [
+    "handoff_processing_start",
+    "commentFile",
+    { handoffId: "h1", commentFile: "", expectedRevision: 1, expectedRowVersion: 1 },
+  ],
+  [
+    "handoff_processing_complete",
+    "commentFile",
+    { handoffId: "h1", commentFile: "", expectedRevision: 1, expectedRowVersion: 1 },
+  ],
   ["handoff_send", "file", { to: ["alpha"], title: "T", file: "" }],
   ["handoff_review_set", "file", { handoffId: "h1", file: "", targetRevision: 1, expectedRowVersion: 1 }],
   ["handoff_revise", "file", { handoffId: "h1", file: "", expectedRowVersion: 1 }],
@@ -173,7 +184,7 @@ const escapeCases: Array<[string, string, Record<string, unknown>]> = [
   ["channel_post", "bodyFile", { channel: "c", from: "h", kind: "report", bodyFile: "" }],
 ];
 
-describe("the six file-like properties through the real call handler (MCP-004)", () => {
+describe("the nine file-like properties through the real call handler (MCP-004)", () => {
   for (const [toolName, property, base] of escapeCases) {
     it(`refuses an absolute escape on ${toolName}'s ${property} before any child, with the fixed envelope`, async () => {
       const root = tempDir("sorage-mcp-confine-");
@@ -266,6 +277,9 @@ describe("the accepted path and what each child receives", () => {
 
     for (const [toolName, base, property] of [
       ["handoff_review_set", { handoffId: "h1", targetRevision: 1, expectedRowVersion: 1 }, "file"],
+      ["handoff_comment_set", { handoffId: "h1", expectedRevision: 1, expectedRowVersion: 1 }, "file"],
+      ["handoff_processing_start", { handoffId: "h1", expectedRevision: 1, expectedRowVersion: 1 }, "commentFile"],
+      ["handoff_processing_complete", { handoffId: "h1", expectedRevision: 1, expectedRowVersion: 1 }, "commentFile"],
       ["memo_add", { title: "t" }, "bodyFile"],
       ["memo_update", { memoId: "m1", expectedRowVersion: 2 }, "bodyFile"],
       ["channel_post", { channel: "c", from: "h", kind: "report" }, "bodyFile"],

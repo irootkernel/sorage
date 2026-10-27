@@ -222,8 +222,15 @@ export function isInsideWorkspace(workspaceRoot: string, resolvedPath: string): 
 
 /** The file-like property of each tool that carries a workspace-confined argument. */
 export function fileLikePropertyOf(toolName: string): string | undefined {
-  if (toolName === "handoff_send" || toolName === "handoff_review_set" || toolName === "handoff_revise") return "file";
+  if (
+    toolName === "handoff_send" ||
+    toolName === "handoff_review_set" ||
+    toolName === "handoff_revise" ||
+    toolName === "handoff_comment_set"
+  )
+    return "file";
   if (toolName === "memo_add" || toolName === "memo_update" || toolName === "channel_post") return "bodyFile";
+  if (toolName === "handoff_processing_start" || toolName === "handoff_processing_complete") return "commentFile";
   return undefined;
 }
 
@@ -288,7 +295,7 @@ export interface CallAnswer {
  * and one child process whose outcome builds the envelope-first result. The
  * `handoff_send` and `handoff_revise` children receive the tilde-expanded user
  * path — their own `checkExternalSource` re-checks the real path, keeping the
- * CLI's recorded naming; the four server-only-guarded properties receive the
+ * CLI's recorded naming; the server-only-guarded properties receive the
  * checked real path, because nothing downstream re-validates them.
  */
 export async function handleToolCall(
@@ -308,6 +315,8 @@ export async function handleToolCall(
   if (!cwdResolution.ok) return refuse(-32602, "cwd must be an existing directory");
   const cwd = cwdResolution.cwd;
   const fileProperty = fileLikePropertyOf(name);
+  const fileFlag =
+    fileProperty === "file" ? "--file" : fileProperty === "commentFile" ? "--comment-file" : "--body-file";
   let argv = selfInvocationArgv(admitted.argv);
   if (fileProperty !== undefined && typeof arguments_[fileProperty] === "string") {
     const confinement = confineFileArgument(cwd, arguments_[fileProperty] as string);
@@ -319,17 +328,9 @@ export async function handleToolCall(
       };
     }
     if (name === "handoff_send" || name === "handoff_revise") {
-      argv = selfInvocationArgv(
-        replaceArgvValue(
-          admitted.argv,
-          `--${fileProperty === "file" ? "file" : "body-file"}`,
-          confinement.tildeExpanded,
-        ),
-      );
+      argv = selfInvocationArgv(replaceArgvValue(admitted.argv, fileFlag, confinement.tildeExpanded));
     } else {
-      argv = selfInvocationArgv(
-        replaceArgvValue(admitted.argv, `--${fileProperty === "file" ? "file" : "body-file"}`, confinement.realPath),
-      );
+      argv = selfInvocationArgv(replaceArgvValue(admitted.argv, fileFlag, confinement.realPath));
     }
   }
   return await new Promise<CallAnswer>((settle) => {

@@ -15,7 +15,7 @@ import {
 } from "./usage-sentences";
 
 /**
- * The 31-tool catalogue of interface section 39, pinned as a contract artifact
+ * The 35-tool catalogue of interface section 39, pinned as a contract artifact
  * beside the CLI goldens (MCP-005). Property names are the CLI options in
  * camelCase and carry the CLI's own semantics, bounds and validation by
  * reference; the published `inputSchema` states the section's full contract,
@@ -367,6 +367,7 @@ const HANDOFF_TOOLS: McpTool[] = [
     argv: optionsArgv(["review", "show"], [], (a) => [String(a.handoffId)]),
     guard: () => undefined,
   },
+  ...handoffReportingTools(),
   {
     name: "handoff_review_set",
     description: "create or update this Handoff's Review Note as the recipient or the User",
@@ -584,6 +585,78 @@ function pair(a: Record<string, unknown>, property: string, flag: string): strin
 
 function flag(a: Record<string, unknown>, property: string, option: string): string[] {
   return a[property] === true ? [option] : [];
+}
+
+/** New reporting tools encode only the public CLI and preserve its parser/application refusal split. */
+function handoffReportingTools(): McpTool[] {
+  return (["comment_show", "comment_set", "processing_start", "processing_complete"] as const).map((operation) => {
+    const show = operation === "comment_show";
+    const set = operation === "comment_set";
+    const properties: Record<string, PropertySpec> = { handoffId: { type: "string" } };
+    const schemaProperties: Record<string, unknown> = { handoffId: { type: "string" } };
+    const mappings: OptionMapping[] = [];
+    if (!show) {
+      for (const [property, flag] of [
+        ["expectedRevision", "--expected-revision"],
+        ["expectedRowVersion", "--expected-row-version"],
+      ] as const) {
+        properties[property] = { type: "integer" };
+        schemaProperties[property] = { type: "integer", minimum: 1, maximum: 9007199254740991 };
+        mappings.push({ property, flag, form: "pair" });
+      }
+      const sources: Array<[string, string]> = set
+        ? [
+            ["text", "--text"],
+            ["file", "--file"],
+            ["purpose", "--purpose"],
+          ]
+        : [
+            ["commentText", "--comment-text"],
+            ["commentFile", "--comment-file"],
+          ];
+      for (const [property, flag] of sources) {
+        properties[property] = { type: "string" };
+        schemaProperties[property] =
+          property === "purpose"
+            ? { type: "string", enum: ["general", "change_request"], default: "general" }
+            : { type: "string" };
+        mappings.push({ property, flag, form: "pair" });
+      }
+    }
+    return {
+      name: `handoff_${operation}`,
+      description: show
+        ? "read the retained recipient comment; records nothing"
+        : set
+          ? "replace the recipient comment using the observed document and Row Version"
+          : `${operation === "processing_start" ? "start" : "complete"} processing with an optional general comment`,
+      annotations: show ? READ : WRITE,
+      mirrorsIntegerBounds: true,
+      properties,
+      inputSchema: {
+        type: "object",
+        properties: schemaProperties,
+        required: show ? ["handoffId"] : ["handoffId", "expectedRevision", "expectedRowVersion"],
+        ...(set
+          ? { oneOf: [{ required: ["text"] }, { required: ["file"] }] }
+          : show
+            ? {}
+            : { not: { required: ["commentText", "commentFile"] } }),
+      },
+      argv: optionsArgv(operation.split("_"), mappings, (a) => [String(a.handoffId)]),
+      guard: (a) => {
+        if (show) return undefined;
+        if (a.expectedRevision === undefined) return requiredOptionSentence("--expected-revision <n>");
+        if (set)
+          return a.expectedRowVersion === undefined || (a.text !== undefined) === (a.file !== undefined)
+            ? "comment set requires one --text/--file source and --expected-row-version"
+            : undefined;
+        return a.expectedRowVersion === undefined || (a.commentText !== undefined && a.commentFile !== undefined)
+          ? "processing requires --expected-row-version and at most one comment source"
+          : undefined;
+      },
+    };
+  });
 }
 
 const MEMO_TOOLS: McpTool[] = [
@@ -991,7 +1064,7 @@ const PROJECT_TOOLS: McpTool[] = [
   },
 ];
 
-/** The catalogue in section 39's order: 13 Handoff, 7 Memo, 9 Channel, 2 Project. */
+/** The catalogue in section 39's order: 17 Handoff, 7 Memo, 9 Channel, 2 Project. */
 export const MCP_TOOLS: readonly McpTool[] = [...HANDOFF_TOOLS, ...MEMO_TOOLS, ...CHANNEL_TOOLS, ...PROJECT_TOOLS];
 
 export function mcpToolByName(name: string): McpTool | undefined {
@@ -1013,6 +1086,10 @@ const REQUIRED_POSITIONALS: Record<string, ReadonlyArray<{ property: string; arg
   handoff_events: HANDOFF_ID,
   handoff_fetch: HANDOFF_ID,
   handoff_review_show: HANDOFF_ID,
+  handoff_comment_show: HANDOFF_ID,
+  handoff_comment_set: HANDOFF_ID,
+  handoff_processing_start: HANDOFF_ID,
+  handoff_processing_complete: HANDOFF_ID,
   handoff_review_set: HANDOFF_ID,
   handoff_review_withdraw: HANDOFF_ID,
   handoff_revise: HANDOFF_ID,

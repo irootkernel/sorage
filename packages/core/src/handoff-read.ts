@@ -129,12 +129,14 @@ export interface HandoffReadPort {
    * Records the first fetch in its own short transaction; never a Row Version
    * bump, and a RUN-014 domain mutation: the adapter fences the write entry on
    * the live vault-move lock and the database move fence before any timestamp
-   * or event lands (RUN-014, SHR-011).
+   * or event lands (RUN-014, SHR-011). An omitted delivered identity records
+   * only historical admission; a supplied identity settles successful current
+   * delivery in the same transaction, independently of the historical marker.
    */
   recordFirstFetch(
     handoffId: string,
     event: NewDomainEvent,
-    delivered: { artifactId: string; revision: number; readEvent: NewDomainEvent },
+    delivered?: { artifactId: string; revision: number; readEvent: NewDomainEvent },
   ): Result<void, AppError>;
 }
 
@@ -634,6 +636,9 @@ export type PreparedHandoffFetch =
       artifact: HandoffArtifactSummary;
       /** The open safe bounded handle the caller streams and closes. */
       body: ArtifactReadHandle;
+      /** Historical first-fetch protection and fail-fast fences before any response bytes. */
+      admitFirstFetch(): Result<void, AppError>;
+      /** Record current reading only after the body surface confirms successful delivery. */
       settleFirstFetch(): Result<void, AppError>;
       close(): void;
     };
@@ -704,7 +709,7 @@ export function prepareHandoffFetch(
     );
   }
   const acquiredArtifact = handoff.currentArtifact;
-  const settleFirstFetch = (): Result<void, AppError> => {
+  const settleFetch = (recordReading: boolean): Result<void, AppError> => {
     // Only the recipient Project and the User record a first fetch; a sender
     // fetch of its own Handoff sets nothing and emits nothing (HND-012). The
     // store's first_fetched_at compare-and-set keeps the recording exactly
@@ -725,21 +730,27 @@ export function prepareHandoffFetch(
         metadata: { artifactId: handoff.currentArtifact?.id, sha256: handoff.currentArtifact?.sha256 },
         createdAt: ports.clock.now().toISOString(),
       },
-      {
-        artifactId: acquiredArtifact.id,
-        revision: handoff.revision,
-        readEvent: {
-          id: ports.ids.next(),
-          handoffId: handoff.id,
-          eventType: "HANDOFF_REVISION_READ",
-          actor,
-          rowVersion: handoff.rowVersion,
-          metadata: { revision: handoff.revision, artifactId: acquiredArtifact.id },
-          createdAt: ports.clock.now().toISOString(),
-        },
-      },
+      recordReading
+        ? {
+            artifactId: acquiredArtifact.id,
+            revision: handoff.revision,
+            readEvent: {
+              id: ports.ids.next(),
+              handoffId: handoff.id,
+              eventType: "HANDOFF_REVISION_READ",
+              actor,
+              rowVersion: handoff.rowVersion,
+              metadata: { revision: handoff.revision, artifactId: acquiredArtifact.id },
+              createdAt: ports.clock.now().toISOString(),
+            },
+          }
+        : undefined,
     );
   };
+  const settleFirstFetch = () => settleFetch(true);
+  // HTTP preserves historical withdrawal protection/fail-fast fences before streaming,
+  // while its current-Revision receipt waits for the completed response.
+  const admitFirstFetch = () => settleFetch(false);
   // The hot checksum policy keeps its existing placement and default-false
   // setting (VLT-023): the acquisition below resolves the Artifact's immutable
   // content record by id and never touches a storage key an inline row lacks.
@@ -756,6 +767,7 @@ export function prepareHandoffFetch(
       handoff,
       artifact: handoff.currentArtifact,
       body,
+      admitFirstFetch,
       settleFirstFetch,
       close: () => body.close(),
     });

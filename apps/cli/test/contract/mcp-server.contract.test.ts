@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import {
@@ -276,7 +277,10 @@ function storageInventory(root: string): string[] {
         rows.push(`d ${path}`);
         walk(path);
       } else {
-        rows.push(`f ${path} ${String(stat.statSync(path).size)}`);
+        const metadata = stat.statSync(path);
+        rows.push(
+          `f ${path} ${String(metadata.size)} ${String(metadata.mtimeMs)} ${String(metadata.ctimeMs)} ${createHash("sha256").update(readFileSync(path)).digest("hex")}`,
+        );
       }
     }
   };
@@ -354,7 +358,7 @@ describe("the catalogue golden (MCP-005)", () => {
       result: { tools: Array<Record<string, unknown>> };
     };
     await session.close();
-    expect(listing.result.tools).toHaveLength(31);
+    expect(listing.result.tools).toHaveLength(35);
     expect(listing.result.tools.map((tool) => tool.name as string)).not.toContain("init");
     const rendered = `${JSON.stringify({ initializeResult: initialize.result, toolsResult: listing.result }, null, 2)}\n`;
     if (process.env.SORAGE_TEST_REGEN_MCP_GOLDEN === "1") {
@@ -1475,4 +1479,195 @@ describe("the SIGKILL escalation is discriminated by a waiter that cannot end on
       expect(existsSync(setup.trapMarker), "the trap ran and ignored SIGTERM").toBe(true);
     },
   );
+});
+
+describe("reporting through real MCP CLI children (interface section 40)", () => {
+  it("preserves exact CLI envelopes, observations, declined feedback and independent processing", async () => {
+    const { home, workA, workB } = installation("sorage-mcp-reporting-");
+    const session = startServer(home, workB);
+    const cli = (args: string[], cwd = workB) => runCli([...args, "--json"], home, cwd);
+    const data = (args: string[], cwd = workB) => {
+      const result = cli(args, cwd);
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout).data;
+    };
+    const id = data(["send", "--to", "beta", "--title", "Reports", "--body", "Document"], workA).handoffs[0].handoffId;
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const answer = await toolCall(session, name, { handoffId: id, cwd: workB, ...args });
+      expect(answer.error).toBeUndefined();
+      expect(answer.result).toBeDefined();
+      expect(answer.result?.content[0]?.text).toBeDefined();
+      expect(answer.result?.structuredContent).toEqual(JSON.parse(answer.result?.content[0]?.text ?? "null"));
+      return answer.result;
+    };
+    const before = data(["events", id]);
+    for (const name of ["handoff_comment_set", "handoff_processing_start", "handoff_processing_complete"]) {
+      const answer = await toolCall(session, name, { handoffId: id, cwd: workB, text: "Proposal" });
+      expect(answer.error?.code).toBe(-32602);
+    }
+    expect(data(["events", id])).toEqual(before);
+    const fields = { expectedRevision: 1, expectedRowVersion: 1 };
+    const sender = await call("handoff_comment_set", { ...fields, text: "Sender", cwd: workA });
+    const senderCli = cli(
+      ["comment", "set", id, "--text", "Sender", "--expected-revision", "1", "--expected-row-version", "1"],
+      workA,
+    );
+    expect(normalizedRequestId(sender?.content[0]?.text ?? "")).toBe(normalizedRequestId(senderCli.stderr));
+    expect(sender?.structuredContent).toMatchObject({ error: { code: "FORBIDDEN_ACTOR" } });
+    writeFileSync(join(workB, "request.md"), "  Please change\n");
+    const requested = await call("handoff_comment_set", { ...fields, file: "request.md", purpose: "change_request" });
+    expect(requested?.structuredContent).toMatchObject({
+      data: { comment: { body: "  Please change\n", active: true } },
+    });
+    const stored = data(["get", id]);
+    const events = data(["events", id]);
+    for (const [name, args, cliArgs] of [
+      [
+        "handoff_comment_set",
+        { ...fields, text: "Proposal", purpose: "change_request" },
+        [
+          "comment",
+          "set",
+          id,
+          "--text",
+          "Proposal",
+          "--purpose",
+          "change_request",
+          "--expected-revision",
+          "1",
+          "--expected-row-version",
+          "1",
+        ],
+      ],
+      [
+        "handoff_processing_start",
+        fields,
+        ["processing", "start", id, "--expected-revision", "1", "--expected-row-version", "1"],
+      ],
+      ["handoff_review_withdraw", { expectedRowVersion: 1 }, ["review", "withdraw", id, "--expected-row-version", "1"]],
+      [
+        "handoff_revise",
+        { noChange: true, reason: "Keep", expectedRowVersion: 1 },
+        ["revise", id, "--no-change", "--reason", "Keep", "--expected-row-version", "1"],
+      ],
+    ] as Array<[string, Record<string, unknown>, string[]]>) {
+      const refused = await call(name, { ...args, ...(name === "handoff_revise" ? { cwd: workA } : {}) });
+      expect(refused?.structuredContent).toMatchObject({ error: { code: "ROW_VERSION_CONFLICT" } });
+      expect(normalizedRequestId(refused?.content[0]?.text ?? "")).toBe(
+        normalizedRequestId(cli(cliArgs, name === "handoff_revise" ? workA : workB).stderr),
+      );
+    }
+    expect(data(["get", id])).toEqual(stored);
+    expect(data(["events", id])).toEqual(events);
+    const declined = await call("handoff_decline", { reason: "Stopped", expectedRowVersion: 2 });
+    expect(declined?.structuredContent).toMatchObject({ data: { reviewState: "declined" } });
+    const inventory = storageInventory(home);
+    const read = await call("handoff_comment_show", {});
+    expect(read?.structuredContent).toMatchObject({
+      data: { body: "  Please change\n", purpose: "change_request", active: false, targetRevision: 1 },
+    });
+    expect(normalizedRequestId(read?.content[0]?.text ?? "")).toBe(
+      normalizedRequestId(cli(["comment", "show", id]).stdout),
+    );
+    expect((await call("handoff_review_show", {}))?.structuredContent).toMatchObject({ data: null });
+    expect(storageInventory(home)).toEqual(inventory);
+    const replaced = await call("handoff_comment_set", {
+      text: "Why stopped",
+      expectedRevision: 1,
+      expectedRowVersion: 3,
+    });
+    expect(replaced?.structuredContent).toMatchObject({
+      data: {
+        handoff: { reviewState: "declined", processing: { status: "not_started", completedAt: null } },
+        comment: { purpose: "general", active: false },
+      },
+    });
+    expect(
+      (await call("handoff_processing_start", { expectedRevision: 1, expectedRowVersion: 4 }))?.structuredContent,
+    ).toMatchObject({ error: { code: "HANDOFF_TERMINAL" } });
+
+    const second = data(["send", "--to", "beta", "--title", "Accepted work", "--body", "Document"], workA).handoffs[0]
+      .handoffId;
+    const started = await call("handoff_processing_start", { handoffId: second, ...fields, commentText: "Started" });
+    expect(started?.structuredContent).toMatchObject({
+      data: { handoff: { rowVersion: 2, read: { status: "unconfirmed" }, processing: { status: "in_progress" } } },
+    });
+    await call("handoff_accept", { handoffId: second, expectedRevision: 1, expectedRowVersion: 2 });
+    writeFileSync(join(workB, "done.md"), "Completed\n");
+    const done = await call("handoff_processing_complete", {
+      handoffId: second,
+      expectedRevision: 1,
+      expectedRowVersion: 3,
+      commentFile: "done.md",
+    });
+    expect(done?.structuredContent).toMatchObject({
+      data: {
+        handoff: { reviewState: "accepted", rowVersion: 4, processing: { status: "completed" } },
+        comment: { body: "Completed\n" },
+      },
+    });
+    expect(
+      (
+        await call("handoff_processing_complete", {
+          handoffId: second,
+          expectedRevision: 1,
+          expectedRowVersion: 4,
+          commentText: "Retry proposal",
+        })
+      )?.structuredContent,
+    ).toMatchObject({ error: { code: "PROCESSING_STATE_CONFLICT" } });
+    await session.close();
+  }, 30_000);
+
+  it("retains conditional successful revise replay before fresh-observation admission", async () => {
+    const { home, workA, workB } = installation("sorage-mcp-report-replay-");
+    const session = startServer(home, workA);
+    const run = (args: string[], cwd = workA) => {
+      const result = runCli([...args, "--json"], home, cwd);
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout).data;
+    };
+    const id = run(["send", "--to", "beta", "--title", "Replay", "--body", "Document"]).handoffs[0].handoffId;
+    run(["review", "set", id, "--text", "Request", "--target-revision", "1", "--expected-row-version", "1"], workB);
+    const original = await toolCall(session, "handoff_revise", {
+      handoffId: id,
+      cwd: workA,
+      noChange: true,
+      reason: "No change",
+      expectedRowVersion: 2,
+      idempotencyKey: "report-replay",
+    });
+    expect(original.result?.isError).toBe(false);
+    run(["comment", "set", id, "--text", "Later", "--expected-revision", "1", "--expected-row-version", "3"], workB);
+    const before = run(["get", id]);
+    const events = run(["events", id]);
+    const replay = await toolCall(session, "handoff_revise", {
+      handoffId: id,
+      cwd: workA,
+      noChange: true,
+      reason: "No change",
+      idempotencyKey: "report-replay",
+    });
+    expect(replay.result?.structuredContent).toMatchObject({
+      data: { ...(original.result?.structuredContent as { data: Record<string, unknown> }).data, replayed: true },
+    });
+    const replayCli = runCli(
+      ["revise", id, "--no-change", "--reason", "No change", "--idempotency-key", "report-replay", "--json"],
+      home,
+      workA,
+    );
+    expect(normalizedRequestId(envelopeText(replay.result as never))).toBe(normalizedRequestId(replayCli.stdout));
+    const miss = await toolCall(session, "handoff_revise", {
+      handoffId: id,
+      cwd: workA,
+      noChange: true,
+      reason: "No change",
+      idempotencyKey: "missing-report-replay",
+    });
+    expect(miss.error).toBeUndefined();
+    expect(miss.result?.structuredContent).toMatchObject({ error: { code: "HANDOFF_INVALID_INPUT" } });
+    expect(run(["get", id])).toEqual(before);
+    expect(run(["events", id])).toEqual(events);
+    await session.close();
+  }, 15_000);
 });

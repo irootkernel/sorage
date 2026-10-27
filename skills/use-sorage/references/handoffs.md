@@ -4,7 +4,7 @@ This reference is a required resource for explicitly requested Handoff work, ins
 
 ## MCP and CLI surfaces
 
-Use the MCP tools below first, with the acting workspace's `cwd` on every call. The CLI forms in the workflow are fallback equivalents: for example, `handoff_review_show` precedes `handoff_revise` when processing a Note. Source groups and conditional rules apply in addition to required properties. Handoff reads `inbox`, `outbox`, `get`, `events` and `review show` (including inbox waiting) write nothing; `fetch` is a mutation. Native offline help supplies CLI syntax.
+Use the MCP tools below first, with the acting workspace's `cwd` on every call. The CLI forms in the workflow are fallback equivalents: for example, `handoff_review_show` precedes `handoff_revise` when processing a Note. Source groups and conditional rules apply in addition to required properties. Handoff reads `inbox`, `outbox`, `get`, `events`, `review show` and `comment show` (including inbox waiting) write nothing; `fetch` is a mutation. Native offline help supplies CLI syntax.
 
 | Tool | Required properties | Other properties | Input rules |
 |---|---|---|---|
@@ -15,6 +15,10 @@ Use the MCP tools below first, with the acting workspace's `cwd` on every call. 
 | `handoff_events` | `handoffId: string` | `cwd: string` | Recent metadata, not document content; not required on every revision. |
 | `handoff_fetch` | `handoffId: string` | `cwd: string` | Returns localPath; a recipient first fetch can set firstFetchedAt. This is not a covered read. |
 | `handoff_review_show` | `handoffId: string` | `cwd: string` | Returns the current Note or null without recording engagement. |
+| `handoff_comment_show` | `handoffId: string` | `cwd: string` | Returns the retained recipient comment, including inactive feedback, or null; writes nothing. |
+| `handoff_comment_set` | `handoffId: string`, `expectedRevision: integer`, `expectedRowVersion: integer` | `text: string`, `file: string`, `purpose: string`, `cwd: string` | Exactly one text/file source; purpose is general (default) or change_request. Only the recipient authors reports; an active request blocks general replacement. Files remain inside cwd. |
+| `handoff_processing_start` | `handoffId: string`, `expectedRevision: integer`, `expectedRowVersion: integer` | `commentText: string`, `commentFile: string`, `cwd: string` | At most one optional general replacement, with files inside cwd. Reports work without implying reading or acceptance. |
+| `handoff_processing_complete` | `handoffId: string`, `expectedRevision: integer`, `expectedRowVersion: integer` | `commentText: string`, `commentFile: string`, `cwd: string` | Same sources as start; direct completion is allowed, an active request blocks completion, repeated completion conflicts. |
 | `handoff_review_set` | `handoffId: string`, `targetRevision: integer`, `expectedRowVersion: integer` | `text: string`, `file: string`, `cwd: string` | Exactly one of text and file is required. Supply the actually reviewed targetRevision and expectedRowVersion. |
 | `handoff_review_withdraw` | `handoffId: string`, `expectedRowVersion: integer` | `cwd: string` | Withdraw the current recipient Note within the requested scope using the observed Row Version. |
 | `handoff_revise` | `handoffId: string` | `body: string`, `file: string`, `noChange: boolean`, `reason: string`, `expectedRowVersion: integer`, `idempotencyKey: string`, `cwd: string` | Exactly one of body, file and noChange=true is required; reason is present exactly with noChange=true. Body is nonblank. Fresh mutation requires the reviewed expectedRowVersion, including no-change; it is syntactically optional only to replay an identical retained successful receipt. |

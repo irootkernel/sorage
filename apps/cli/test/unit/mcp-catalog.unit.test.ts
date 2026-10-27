@@ -18,7 +18,7 @@ import {
 } from "../../src/usage-sentences";
 
 /**
- * The 31-tool catalogue of interface section 39 against the CLI it mirrors:
+ * The 35-tool catalogue of interface section 39 against the CLI it mirrors:
  * the pinned shape (names, annotations, wait defaults), each tool's argv
  * mapping with the options-first `--` layout, and the two admission layers of
  * section 39's clarification — one case per inventory row, plus the positive
@@ -32,6 +32,10 @@ const COMMAND_PATHS: Record<string, string[]> = {
   handoff_events: ["events"],
   handoff_fetch: ["fetch"],
   handoff_review_show: ["review", "show"],
+  handoff_comment_show: ["comment", "show"],
+  handoff_comment_set: ["comment", "set"],
+  handoff_processing_start: ["processing", "start"],
+  handoff_processing_complete: ["processing", "complete"],
   handoff_review_set: ["review", "set"],
   handoff_review_withdraw: ["review", "withdraw"],
   handoff_revise: ["revise"],
@@ -111,7 +115,7 @@ function refusalOf(name: string, arguments_: Record<string, unknown>): string {
 const silent = { out: () => {}, err: () => {} };
 
 describe("the MCP catalogue shape (MCP-005)", () => {
-  it("holds exactly the 31 pinned tools in section 39's order", () => {
+  it("holds exactly the 35 pinned tools in section 39's order", () => {
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
       ...[
         "send",
@@ -121,6 +125,10 @@ describe("the MCP catalogue shape (MCP-005)", () => {
         "events",
         "fetch",
         "review_show",
+        "comment_show",
+        "comment_set",
+        "processing_start",
+        "processing_complete",
         "review_set",
         "review_withdraw",
         "revise",
@@ -141,7 +149,7 @@ describe("the MCP catalogue shape (MCP-005)", () => {
       "project_list",
       "project_show",
     ]);
-    expect(MCP_TOOLS).toHaveLength(31);
+    expect(MCP_TOOLS).toHaveLength(35);
   });
 
   it("sets the exact annotation memberships of section 39", () => {
@@ -152,6 +160,7 @@ describe("the MCP catalogue shape (MCP-005)", () => {
       "handoff_get",
       "handoff_events",
       "handoff_review_show",
+      "handoff_comment_show",
       "memo_list",
       "memo_show",
       "channel_messages",
@@ -393,6 +402,10 @@ function sampleArguments(name: string): Record<string, unknown> {
     handoff_events: { handoffId: "h1" },
     handoff_fetch: { handoffId: "h1" },
     handoff_review_show: { handoffId: "h1" },
+    handoff_comment_show: { handoffId: "h1" },
+    handoff_comment_set: { handoffId: "h1", text: "n", expectedRevision: 1, expectedRowVersion: 1 },
+    handoff_processing_start: { handoffId: "h1", expectedRevision: 1, expectedRowVersion: 1 },
+    handoff_processing_complete: { handoffId: "h1", expectedRevision: 1, expectedRowVersion: 1 },
     handoff_review_set: { handoffId: "h1", text: "n", targetRevision: 1, expectedRowVersion: 1 },
     handoff_review_withdraw: { handoffId: "h1", expectedRowVersion: 1 },
     handoff_revise: { handoffId: "h1", body: "b" },
@@ -909,5 +922,31 @@ describe("integer typing and bounds split across the layers (C2 item 10)", () =>
       "c",
       "9007199254740992",
     ]);
+  });
+});
+
+describe("reporting parser admission mirrors the CLI", () => {
+  it("keeps missing flags/source conflicts in -32602 and coded refusals in child argv", () => {
+    const input = { handoffId: "h", expectedRevision: 1, expectedRowVersion: 2 };
+    expect(refusalOf("handoff_comment_set", { handoffId: "h", text: "Report" })).toBe(
+      "required option '--expected-revision <n>' not specified",
+    );
+    expect(refusalOf("handoff_comment_set", input)).toBe(
+      "comment set requires one --text/--file source and --expected-row-version",
+    );
+    for (const name of ["handoff_processing_start", "handoff_processing_complete"]) {
+      expect(refusalOf(name, { ...input, commentText: "Report", commentFile: "r.md" })).toBe(
+        "processing requires --expected-row-version and at most one comment source",
+      );
+      expect(refusalOf(name, { handoffId: "h", expectedRevision: 1 })).toBe(
+        "processing requires --expected-row-version and at most one comment source",
+      );
+      expect(argvOf(name, { ...input, expectedRowVersion: 0, commentText: "" })).toContain("0");
+      expect(refusalOf(name, { ...input, asUser: true })).toBe("unknown property 'asUser'");
+    }
+    expect(argvOf("handoff_comment_set", { ...input, text: "", purpose: "reply" })).toContain("reply");
+    expect(
+      argvOf("handoff_revise", { handoffId: "h", noChange: true, reason: "Original", idempotencyKey: "original" }),
+    ).not.toContain("--expected-row-version");
   });
 });

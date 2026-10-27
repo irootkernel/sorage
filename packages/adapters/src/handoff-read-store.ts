@@ -381,7 +381,11 @@ export function createSqliteHandoffReadStore(
               db.exec("ROLLBACK");
               return ok(undefined);
             }
-            if (current.current_artifact_id === delivered.artifactId && current.revision === delivered.revision) {
+            if (
+              delivered !== undefined &&
+              current.current_artifact_id === delivered.artifactId &&
+              current.revision === delivered.revision
+            ) {
               const read = db
                 .prepare(
                   "UPDATE handoffs SET read_status = 'read', read_revision = revision, revision_read_at = ? WHERE id = ? AND read_status != 'read'",

@@ -54,6 +54,7 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
     "src/init-ports",
     "src/logging",
     "src/handoff-command-ports",
+    "src/read-storage",
     "src/project-command-ports",
     "src/vault-command-ports",
     "src/import-source",

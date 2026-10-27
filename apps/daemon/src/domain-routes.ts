@@ -14,6 +14,7 @@ import {
   createNodeSendPorts as createSendPorts,
   createNodeTerminalPorts as createTerminalPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
+import { openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
 import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
 import { createNodeProjectPorts as createProjectPorts } from "@sorage/adapters/src/project-command-ports";
@@ -44,8 +45,14 @@ import {
   prepareHandoffFetch,
   projectActor,
   type ReadActorInput,
+  type HandoffDetailReadPorts,
   readHandoffTimeline,
   readReviewNote,
+  readRecipientComment,
+  setRecipientComment,
+  startProcessing,
+  completeProcessing,
+  parseUniqueSnapshotJson,
   refreshProjectInboxMarker,
   rejectDeletion,
   removeReviewNote,
@@ -116,6 +123,17 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
   const createNodeProjectPorts = () => createProjectPorts({ ...databaseOptions, contentionSurface: "project" });
   const createNodeSendPorts = () => createSendPorts({ ...databaseOptions, completionWarning: daemonCompletionWarning });
   const createNodeHandoffReadPorts = () => createHandoffReadPorts(databaseOptions);
+  const withHandoffRead = <T>(
+    read: (ports: HandoffDetailReadPorts) => CoreResult<T, AppError>,
+  ): CoreResult<T, AppError> => {
+    const storage = openCoveredReadStorage({ surface: "handoff" });
+    if (!storage.ok) return storage;
+    try {
+      return read(createHandoffReadPorts({ database: storage.value.db }));
+    } finally {
+      storage.value.close();
+    }
+  };
   const createNodeReviewPorts = () => createReviewPorts(databaseOptions);
   const createNodeRevisionPorts = () =>
     createRevisionPorts({ ...databaseOptions, completionWarning: daemonCompletionWarning });
@@ -306,7 +324,6 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const actor = actorInputOf(url.searchParams, {});
       if (!actor.ok) return void respond(response, context, actor);
-      const readPorts = createNodeHandoffReadPorts();
       const query = {
         limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 50,
         ...(url.searchParams.has("cursor") ? { cursor: url.searchParams.get("cursor") ?? undefined } : {}),
@@ -324,10 +341,11 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           includeDeleted: url.searchParams.get("includeDeleted") === "true",
         },
       };
-      const result =
+      const result = withHandoffRead((ports) =>
         url.searchParams.get("box") === "outbox"
-          ? listOutbox(readPorts, actor.value, query, false)
-          : listInbox(readPorts, actor.value, query);
+          ? listOutbox(ports, actor.value, query, false)
+          : listInbox(ports, actor.value, query),
+      );
       return void respond(response, context, result);
     },
   });
@@ -337,7 +355,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     handler: async (_request, response, context) => {
       const actor = contextActor(context);
       if (!actor.ok) return void respond(response, context, actor);
-      const result = getHandoff(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
+      const result = withHandoffRead((ports) => getHandoff(ports, actor.value, context.params?.id ?? ""));
       return void respond(response, context, result);
     },
   });
@@ -348,7 +366,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const actor = contextActor(context);
       if (!actor.ok) return void respond(response, context, actor);
       // Participant-gated like the detail itself; null means no current Note.
-      const result = readReviewNote(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
+      const result = withHandoffRead((ports) => readReviewNote(ports, actor.value, context.params?.id ?? ""));
       return void respond(response, context, result);
     },
   });
@@ -360,11 +378,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       if (!actor.ok) return void respond(response, context, actor);
       // The bounded metadata timeline, never Artifact bytes; a tombstone keeps its
       // timeline, because the events of a deleted Handoff remain readable (LIFE-018).
-      const result = readHandoffTimeline(
-        createNodeHandoffReadPorts(),
-        actor.value,
-        (context.params?.id ?? "") as string,
-      );
+      const result = withHandoffRead((ports) => readHandoffTimeline(ports, actor.value, context.params?.id ?? ""));
       return void respond(response, context, result);
     },
   });
@@ -374,7 +388,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     handler: async (_request, response, context) => {
       const actor = contextActor(context);
       if (!actor.ok) return void respond(response, context, actor);
-      const result = getHandoff(createNodeHandoffReadPorts(), actor.value, (context.params?.id ?? "") as string);
+      const result = withHandoffRead((ports) => getHandoff(ports, actor.value, context.params?.id ?? ""));
       if (!result.ok) return void respondError(response, context, result.error);
       return void respond(response, context, { ok: true, value: { artifact: result.value.currentArtifact ?? null } });
     },
@@ -467,9 +481,9 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           handle.close();
           return;
         }
-        // Only an admitted response settles the eligible first fetch; a
-        // settlement failure closes the descriptor and streams nothing.
-        const settled = prepared.value.settleFirstFetch();
+        // Preserve the historical first-fetch protection and fail-fast write
+        // fences before streaming, independently of successful current reading.
+        const settled = prepared.value.admitFirstFetch();
         if (!settled.ok) {
           handle.close();
           return void respondError(response, context, settled.error);
@@ -478,7 +492,17 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         response.statusCode = admitted ? 206 : 200;
         if (admitted) response.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
         response.setHeader("Content-Length", String(end - start + 1));
-        await streamArtifactBody(handle, response, start, end);
+        const streamed = await streamArtifactBody(handle, response, start, end);
+        if (streamed.closeFailure !== null) {
+          daemonCompletionWarning(`Artifact serving cleanup failed: ${String(streamed.closeFailure.error)}`);
+        }
+        if (streamed.delivered) {
+          const read = prepared.value.settleFirstFetch();
+          if (!read.ok)
+            daemonCompletionWarning(
+              `Artifact delivered; current-Revision reading settlement failed (${read.error.code}): ${read.error.message}`,
+            );
+        }
       } catch (error) {
         // Contain every close or streaming failure and terminate the exchange
         // visibly: while the response can still carry an error it answers with
@@ -487,6 +511,8 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           respondError(response, context, appError("INTERNAL_ERROR", `serving the Artifact failed: ${String(error)}`));
         } else if (!response.writableEnded) {
           response.destroy();
+        } else {
+          daemonCompletionWarning(`Artifact response completed; serving or read settlement failed: ${String(error)}`);
         }
       } finally {
         // Every exit disposes the acquired descriptor: the streaming helper
@@ -638,6 +664,51 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     },
   });
 
+  // ---- Recipient reporting (interface section 40) ---------------------------
+  add({
+    method: "GET",
+    pattern: "/api/v1/handoffs/{id}/comment",
+    handler: async (_request, response, context) => {
+      const actor = contextActor(context);
+      if (!actor.ok) return void respond(response, context, actor);
+      return void respond(
+        response,
+        context,
+        withHandoffRead((ports) => readRecipientComment(ports, actor.value, context.params?.id ?? "")),
+      );
+    },
+  });
+  for (const operation of ["comment", "start", "complete"] as const) {
+    add({
+      method: operation === "comment" ? "PUT" : "POST",
+      pattern: `/api/v1/handoffs/{id}/${operation === "comment" ? "comment" : `processing/${operation}`}`,
+      handler: async (request, response, context) => {
+        const body = await readReportJsonBody(request, operation === "comment");
+        const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
+        if (!actor.ok) return void respond(response, context, actor);
+        const input = {
+          ...actor.value,
+          handoffId: context.params?.id ?? "",
+          expectedRevision: body.expectedRevision as number,
+          expectedRowVersion: body.expectedRowVersion as number,
+        };
+        const ports = createNodeReviewPorts();
+        const result =
+          operation === "comment"
+            ? setRecipientComment(ports, {
+                ...input,
+                text: body.text as string,
+                ...(body.purpose !== undefined ? { purpose: body.purpose as "general" | "change_request" } : {}),
+              })
+            : (operation === "start" ? startProcessing : completeProcessing)(ports, {
+                ...input,
+                ...(body.comment !== undefined ? { comment: body.comment as string } : {}),
+              });
+        return void respond(response, context, result);
+      },
+    });
+  }
+
   // ---- Review, revision, terminal ------------------------------------------
   add({
     method: "PUT",
@@ -650,8 +721,8 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
         text: String(body.text ?? ""),
-        ...(typeof body.targetRevision === "number" ? { targetRevision: body.targetRevision } : {}),
-        ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
+        ...(body.targetRevision !== undefined ? { targetRevision: body.targetRevision as number } : {}),
+        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
       });
       return void respond(response, context, result);
     },
@@ -668,7 +739,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
         confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
-        ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
+        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
       });
       return void respond(response, context, result);
     },
@@ -683,7 +754,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const result = withdrawReviewNote(createNodeReviewPorts(), {
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
-        ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
+        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
       });
       return void respond(response, context, result);
     },
@@ -728,7 +799,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           upload.value.cleanup();
           return void respondError(response, context, actor.error);
         }
-        const rowVersionField = Number(fields.expectedRowVersion?.[0] ?? NaN);
+        const rowVersionField = fields.expectedRowVersion?.[0];
         const result = reviseHandoff(createNodeRevisionPorts(), {
           ...actor.value,
           handoffId: (context.params?.id ?? "") as string,
@@ -741,7 +812,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
           ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
           ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
-          ...(Number.isFinite(rowVersionField) ? { expectedRowVersion: rowVersionField } : {}),
+          ...(rowVersionField !== undefined ? { expectedRowVersion: Number(rowVersionField) } : {}),
         });
         upload.value.cleanup();
         return void respond(response, context, result);
@@ -761,7 +832,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
             ? { idempotencyKey: context.idempotencyKey }
             : {}),
         ...(body.allowExternalSource === true ? { allowExternalSource: true } : {}),
-        ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
+        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
       });
       return void respond(response, context, result);
     },
@@ -845,7 +916,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           : context.idempotencyKey !== undefined
             ? { idempotencyKey: context.idempotencyKey }
             : {}),
-        ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
+        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
       });
       return void respond(response, context, result);
     },
@@ -1109,16 +1180,17 @@ const ARTIFACT_SERVING_CHUNK_BYTES = 1024 * 1024;
  * end, or a response that stops early, terminates visibly — the truncated
  * connection is the failure — instead of spinning or silently claiming the
  * promised Content-Length. No whole body is buffered and no pathname is
- * reopened after the guard. A descriptor close failure is contained until the
- * response is terminated and then reported to the awaiting caller, never as
- * an unhandled rejection.
+ * reopened after the guard. A descriptor close failure is returned separately
+ * after the response terminates, preserving the independently observed delivery
+ * result. Delivery requires the response's finish event, not merely queued
+ * writes or an end call; premature close/error does not establish delivery.
  */
 export async function streamArtifactBody(
   handle: ArtifactReadHandle,
   response: ServerResponse,
   start: number,
   end: number,
-): Promise<void> {
+): Promise<{ delivered: boolean; closeFailure: { error: unknown } | null }> {
   let position = start;
   let complete = false;
   const closeHandle = (): void => {
@@ -1126,7 +1198,10 @@ export async function streamArtifactBody(
   };
   // A response that fails or closes mid-stream must not crash the daemon on a
   // late write error; the loop notices the stopped response and terminates.
-  response.on("error", () => undefined);
+  let responseFailed = false;
+  response.on("error", () => {
+    responseFailed = true;
+  });
   const waitDrain = (): Promise<"drain" | "stopped"> => {
     // A response that already stopped may never emit another close or drain,
     // so the wait answers immediately instead of retaining the handle on a
@@ -1157,6 +1232,7 @@ export async function streamArtifactBody(
   };
   let closeFailure: unknown;
   let closeFailureRecorded = false;
+  let delivered = false;
   try {
     while (position <= end) {
       if (response.destroyed || response.writableEnded) break;
@@ -1181,19 +1257,39 @@ export async function streamArtifactBody(
       closeFailure = error;
       closeFailureRecorded = true;
     }
-    if (complete && !response.destroyed && !response.writableEnded) {
-      response.end();
+    if (complete && !response.destroyed && !response.writableEnded && !responseFailed) {
+      delivered = await new Promise<boolean>((resolve) => {
+        const cleanup = () => {
+          response.removeListener("finish", onFinish);
+          response.removeListener("close", onClose);
+          response.removeListener("error", onError);
+        };
+        const finish = (success: boolean) => {
+          cleanup();
+          resolve(success);
+        };
+        const onFinish = () => finish(!responseFailed);
+        const onClose = () => finish(false);
+        const onError = () => finish(false);
+        response.once("finish", onFinish);
+        response.once("close", onClose);
+        response.once("error", onError);
+        try {
+          response.end();
+        } catch {
+          response.destroy();
+          finish(false);
+        }
+      });
     } else if (!response.writableEnded) {
       // The admitted bytes were not fully served; destroy the response so the
       // client sees the truncation instead of a silent short body.
       response.destroy();
     }
   }
-  if (closeFailureRecorded) {
-    // Reported only after cleanup, to the awaiting caller. Keep this outside
-    // finally so disposal never overrides an in-flight control flow statement.
-    throw closeFailure;
-  }
+  // Cleanup cannot erase a proven finish or manufacture one after failure.
+  // The caller reports the diagnostic without rewriting a completed response.
+  return { delivered, closeFailure: closeFailureRecorded ? { error: closeFailure } : null };
 }
 
 /** Rejects a missing or non-numeric expectation honestly instead of letting NaN silently fail every comparison. */
@@ -1246,6 +1342,57 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   } catch {
     return {};
   }
+}
+
+/** The new reporting JSON contract: fatal decoding, unique/closed fields and no server-local file input. */
+async function readReportJsonBody(request: IncomingMessage, commentSet: boolean): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).byteLength;
+    if (size > 1_048_576) throw appError("CONFIG_INVALID", "the request body is too large");
+    chunks.push(chunk as Buffer);
+  }
+  const invalid = () =>
+    appError(
+      "HANDOFF_INVALID_INPUT",
+      "report JSON must have unique known fields, valid types and observed positive safe integers",
+    );
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw invalid();
+  }
+  const parsed = parseUniqueSnapshotJson(text);
+  if (!parsed.ok || parsed.value === null || typeof parsed.value !== "object" || Array.isArray(parsed.value))
+    throw invalid();
+  const body = parsed.value as Record<string, unknown>;
+  const allowed = new Set([
+    "as",
+    "asUser",
+    "expectedRevision",
+    "expectedRowVersion",
+    ...(commentSet ? ["text", "purpose"] : ["comment"]),
+  ]);
+  for (const key of Object.keys(body)) if (!allowed.has(key)) throw invalid();
+  for (const key of ["expectedRevision", "expectedRowVersion"]) {
+    const value = body[key];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw invalid();
+  }
+  if (
+    (body.as !== undefined && typeof body.as !== "string") ||
+    (body.asUser !== undefined && typeof body.asUser !== "boolean")
+  )
+    throw invalid();
+  if (commentSet) {
+    if (
+      typeof body.text !== "string" ||
+      (body.purpose !== undefined && body.purpose !== "general" && body.purpose !== "change_request")
+    )
+      throw invalid();
+  } else if (body.comment !== undefined && typeof body.comment !== "string") throw invalid();
+  return body;
 }
 
 function respond(

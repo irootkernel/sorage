@@ -330,6 +330,192 @@
         }
       },
       {
+        "name": "handoff_comment_show",
+        "description": "read the retained recipient comment; records nothing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_comment_set",
+        "description": "replace the recipient comment using the observed document and Row Version",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "text": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string",
+              "enum": [
+                "general",
+                "change_request"
+              ],
+              "default": "general"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId",
+            "expectedRevision",
+            "expectedRowVersion"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "text"
+              ]
+            },
+            {
+              "required": [
+                "file"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_processing_start",
+        "description": "start processing with an optional general comment",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "commentText": {
+              "type": "string"
+            },
+            "commentFile": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId",
+            "expectedRevision",
+            "expectedRowVersion"
+          ],
+          "not": {
+            "required": [
+              "commentText",
+              "commentFile"
+            ]
+          },
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "handoff_processing_complete",
+        "description": "complete processing with an optional general comment",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "handoffId": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "expectedRowVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "commentText": {
+              "type": "string"
+            },
+            "commentFile": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoffId",
+            "expectedRevision",
+            "expectedRowVersion"
+          ],
+          "not": {
+            "required": [
+              "commentText",
+              "commentFile"
+            ]
+          },
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
         "name": "handoff_review_set",
         "description": "create or update this Handoff's Review Note as the recipient or the User",
         "inputSchema": {

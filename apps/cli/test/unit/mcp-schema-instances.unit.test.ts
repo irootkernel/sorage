@@ -180,6 +180,25 @@ describe("the published schemas judged by instances (C3 item 6)", () => {
     invalid("handoff_revise", { handoffId: "h" });
   });
 
+  it("reporting: mandatory observations, exact/optional source groups and enum", () => {
+    const observations = { handoffId: "h", expectedRevision: 1, expectedRowVersion: 2 };
+    valid("handoff_comment_show", { handoffId: "h" });
+    valid("handoff_comment_set", { ...observations, text: "Report" });
+    valid("handoff_comment_set", { ...observations, file: "r.md", purpose: "change_request" });
+    invalid("handoff_comment_set", observations);
+    invalid("handoff_comment_set", { ...observations, text: "Report", file: "r.md" });
+    invalid("handoff_comment_set", { ...observations, text: "Report", purpose: "reply" });
+    invalid("handoff_comment_set", { handoffId: "h", text: "Report", expectedRevision: 1 });
+    for (const tool of ["handoff_processing_start", "handoff_processing_complete"]) {
+      valid(tool, observations);
+      valid(tool, { ...observations, commentText: "Report" });
+      valid(tool, { ...observations, commentFile: "r.md" });
+      invalid(tool, { ...observations, commentText: "Report", commentFile: "r.md" });
+      invalid(tool, { handoffId: "h", expectedRowVersion: 2 });
+      invalid(tool, { ...observations, asUser: true });
+    }
+  });
+
   it("handoff_inbox: wait true cannot combine with cursor; false can", () => {
     valid("handoff_inbox", { wait: true });
     valid("handoff_inbox", { wait: false, cursor: "c" });
@@ -315,7 +334,12 @@ function sampleWith(toolName: string, property: string, value: number): Record<s
   if (toolName === "handoff_revise" && property !== "body" && property !== "file" && property !== "noChange") {
     instance.body = "b";
   }
-  if (toolName === "handoff_review_set" && property !== "text" && property !== "file") instance.text = "n";
+  if (
+    (toolName === "handoff_review_set" || toolName === "handoff_comment_set") &&
+    property !== "text" &&
+    property !== "file"
+  )
+    instance.text = "n";
   if (toolName === "channel_post" && property !== "body" && property !== "bodyFile") instance.body = "b";
   if (
     toolName === "memo_update" &&

@@ -102,8 +102,8 @@ async function journey(): Promise<void> {
   send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
   const listing = (await request("tools/list", {})) as { result: { tools: Array<{ name: string }> } };
-  if (listing.result.tools.length !== 31) fail(`tools/list held ${String(listing.result.tools.length)} tools`);
-  note("tools/list ok (31 tools)");
+  if (listing.result.tools.length !== 35) fail(`tools/list held ${String(listing.result.tools.length)} tools`);
+  note("tools/list ok (35 tools)");
 
   const sent = await call("handoff_send", { cwd: WORK_B, to: ["alpha"], title: JOURNEY_TITLE, body: JOURNEY_BODY });
   if (!sent.ok || !envelopeOf(sent.result).ok) fail("handoff_send");

@@ -64,7 +64,7 @@ describe("the Web backup page and the Backup Health card", () => {
     await page.waitForSelector(".counts");
 
     // WEB-002: the dashboard Backup Health card is populated from backup_runs.
-    await page.waitForSelector(".backup-health");
+    await page.waitForFunction(() => document.querySelector(".backup-health")?.textContent?.includes("Backup:"));
     const health = await page.textContent(".backup-health");
     expect(health).toContain("Backup:");
     expect(health).toContain("local");

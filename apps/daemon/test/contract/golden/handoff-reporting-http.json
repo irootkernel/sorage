@@ -1,0 +1,324 @@
+{
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/handoffs/{id}/comment",
+      "legacyReplay": false
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/handoffs/{id}/comment",
+      "legacyReplay": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/handoffs/{id}/processing/start",
+      "legacyReplay": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/handoffs/{id}/processing/complete",
+      "legacyReplay": false
+    }
+  ],
+  "comment": {
+    "status": 200,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handoff": {
+          "id": "<uuid>",
+          "dispatchGroupId": null,
+          "supersedesHandoffId": null,
+          "title": "Report",
+          "senderKind": "registered_project",
+          "senderProjectId": "<uuid>",
+          "senderProjectSlug": "sender",
+          "senderWorkspaceKey": null,
+          "senderPathSnapshot": null,
+          "recipientProjectId": "<uuid>",
+          "recipientProjectSlug": "recipient",
+          "revision": 1,
+          "rowVersion": 2,
+          "reviewState": "awaiting_recipient",
+          "nextActors": {
+            "reviewNextActor": "recipient",
+            "administrativeNextActor": null
+          },
+          "read": {
+            "revision": 1,
+            "status": "unconfirmed",
+            "readAt": null
+          },
+          "processing": {
+            "revision": 1,
+            "status": "not_started",
+            "startedAt": null,
+            "completedAt": null
+          },
+          "comment": {
+            "handoffId": "<uuid>",
+            "purpose": "general",
+            "active": false,
+            "authorKind": "registered_project",
+            "authorProjectId": "<uuid>",
+            "targetRevision": 1,
+            "createdAt": "<ts>",
+            "updatedAt": "<ts>"
+          },
+          "firstFetchedAt": null,
+          "reviewEngagedAt": "<ts>",
+          "pinned": false,
+          "archivedAt": null,
+          "deletedAt": null,
+          "currentArtifact": {
+            "id": "<uuid>",
+            "storageKey": null,
+            "originalName": "report-1.md",
+            "mimeType": "text/markdown",
+            "sizeBytes": 8,
+            "sha256": "d6bd8c0aeee80fedb2dbf05c973100c3db04be90c072a88572533f2684131a36",
+            "materialized": true
+          },
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "pendingDeletionRequest": false,
+          "hasReviewNote": false,
+          "consecutiveNoChangeResolutions": 0
+        },
+        "comment": {
+          "handoffId": "<uuid>",
+          "purpose": "general",
+          "active": false,
+          "authorKind": "registered_project",
+          "authorProjectId": "<uuid>",
+          "targetRevision": 1,
+          "body": "Report",
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "start": {
+    "status": 200,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handoff": {
+          "id": "<uuid>",
+          "dispatchGroupId": null,
+          "supersedesHandoffId": null,
+          "title": "Report",
+          "senderKind": "registered_project",
+          "senderProjectId": "<uuid>",
+          "senderProjectSlug": "sender",
+          "senderWorkspaceKey": null,
+          "senderPathSnapshot": null,
+          "recipientProjectId": "<uuid>",
+          "recipientProjectSlug": "recipient",
+          "revision": 1,
+          "rowVersion": 3,
+          "reviewState": "awaiting_recipient",
+          "nextActors": {
+            "reviewNextActor": "recipient",
+            "administrativeNextActor": null
+          },
+          "read": {
+            "revision": 1,
+            "status": "unconfirmed",
+            "readAt": null
+          },
+          "processing": {
+            "revision": 1,
+            "status": "in_progress",
+            "startedAt": "<ts>",
+            "completedAt": null
+          },
+          "comment": {
+            "handoffId": "<uuid>",
+            "purpose": "general",
+            "active": false,
+            "authorKind": "registered_project",
+            "authorProjectId": "<uuid>",
+            "targetRevision": 1,
+            "createdAt": "<ts>",
+            "updatedAt": "<ts>"
+          },
+          "firstFetchedAt": null,
+          "reviewEngagedAt": "<ts>",
+          "pinned": false,
+          "archivedAt": null,
+          "deletedAt": null,
+          "currentArtifact": {
+            "id": "<uuid>",
+            "storageKey": null,
+            "originalName": "report-1.md",
+            "mimeType": "text/markdown",
+            "sizeBytes": 8,
+            "sha256": "d6bd8c0aeee80fedb2dbf05c973100c3db04be90c072a88572533f2684131a36",
+            "materialized": true
+          },
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "pendingDeletionRequest": false,
+          "hasReviewNote": false,
+          "consecutiveNoChangeResolutions": 0
+        },
+        "comment": {
+          "handoffId": "<uuid>",
+          "purpose": "general",
+          "active": false,
+          "authorKind": "registered_project",
+          "authorProjectId": "<uuid>",
+          "targetRevision": 1,
+          "body": "Started",
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "complete": {
+    "status": 200,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handoff": {
+          "id": "<uuid>",
+          "dispatchGroupId": null,
+          "supersedesHandoffId": null,
+          "title": "Report",
+          "senderKind": "registered_project",
+          "senderProjectId": "<uuid>",
+          "senderProjectSlug": "sender",
+          "senderWorkspaceKey": null,
+          "senderPathSnapshot": null,
+          "recipientProjectId": "<uuid>",
+          "recipientProjectSlug": "recipient",
+          "revision": 1,
+          "rowVersion": 4,
+          "reviewState": "awaiting_recipient",
+          "nextActors": {
+            "reviewNextActor": "recipient",
+            "administrativeNextActor": null
+          },
+          "read": {
+            "revision": 1,
+            "status": "unconfirmed",
+            "readAt": null
+          },
+          "processing": {
+            "revision": 1,
+            "status": "completed",
+            "startedAt": "<ts>",
+            "completedAt": "<ts>"
+          },
+          "comment": {
+            "handoffId": "<uuid>",
+            "purpose": "general",
+            "active": false,
+            "authorKind": "registered_project",
+            "authorProjectId": "<uuid>",
+            "targetRevision": 1,
+            "createdAt": "<ts>",
+            "updatedAt": "<ts>"
+          },
+          "firstFetchedAt": null,
+          "reviewEngagedAt": "<ts>",
+          "pinned": false,
+          "archivedAt": null,
+          "deletedAt": null,
+          "currentArtifact": {
+            "id": "<uuid>",
+            "storageKey": null,
+            "originalName": "report-1.md",
+            "mimeType": "text/markdown",
+            "sizeBytes": 8,
+            "sha256": "d6bd8c0aeee80fedb2dbf05c973100c3db04be90c072a88572533f2684131a36",
+            "materialized": true
+          },
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>",
+          "pendingDeletionRequest": false,
+          "hasReviewNote": false,
+          "consecutiveNoChangeResolutions": 0
+        },
+        "comment": {
+          "handoffId": "<uuid>",
+          "purpose": "general",
+          "active": false,
+          "authorKind": "registered_project",
+          "authorProjectId": "<uuid>",
+          "targetRevision": 1,
+          "body": "Completed",
+          "createdAt": "<ts>",
+          "updatedAt": "<ts>"
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "repeated": {
+    "status": 409,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "PROCESSING_STATE_CONFLICT",
+        "message": "the processing transition has already occurred or cannot be reversed",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Inspect current processing evidence; do not restart or repeat a completed transition."
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "missing-observation": {
+    "status": 422,
+    "envelope": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_INVALID_INPUT",
+        "message": "report JSON must have unique known fields, valid types and observed positive safe integers",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retain the proposal and supply positive observed Revision/Row Version values and valid comment text."
+        }
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  },
+  "show": {
+    "status": 200,
+    "envelope": {
+      "ok": true,
+      "data": {
+        "handoffId": "<uuid>",
+        "authorKind": "registered_project",
+        "authorProjectId": "<uuid>",
+        "targetRevision": 1,
+        "body": "Completed",
+        "createdAt": "<ts>",
+        "updatedAt": "<ts>",
+        "purpose": "general",
+        "active": false
+      },
+      "meta": {
+        "requestId": "<uuid>"
+      }
+    }
+  }
+}

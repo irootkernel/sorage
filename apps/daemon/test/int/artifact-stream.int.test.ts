@@ -10,8 +10,8 @@ import { streamArtifactBody } from "../../src/domain-routes";
  * body, terminates visibly on zero progress before the admitted end or on a
  * client that stops mid-backpressure, answers immediately for an
  * already-stopped response instead of retaining the handle on a pending
- * drain wait, and reports a descriptor close failure only after the response
- * is terminated — never as an unhandled rejection. Every case runs over a
+ * drain wait, and reports a descriptor close failure separately after the
+ * response terminates, retaining its successful-delivery fact. Every case runs over a
  * real socket with bounded timeouts.
  */
 
@@ -54,7 +54,7 @@ function scriptedHandle(sizeBytes: number, options: { closeFails?: boolean; zero
   };
 }
 
-function listen(handler: (response: ServerResponse) => Promise<void> | void): Promise<number> {
+function listen(handler: (response: ServerResponse) => unknown): Promise<number> {
   const server = createServer((_request, response) => {
     void handler(response);
   });
@@ -138,20 +138,19 @@ describe("streamArtifactBody over a real socket", () => {
     expect(scripted.closeCount()).toBe(1);
   });
 
-  it("reports a close failure only after the response is terminated", async () => {
+  it("retains successful finish while reporting descriptor cleanup failure separately", async () => {
     const scripted = scriptedHandle(64 * 1024, { closeFails: true });
-    let observed: unknown;
-    const port = await listen((response) =>
-      streamArtifactBody(scripted.handle, response, 0, scripted.handle.sizeBytes - 1).catch((error) => {
-        observed = error;
-      }),
-    );
+    let observed: Awaited<ReturnType<typeof streamArtifactBody>> | undefined;
+    const port = await listen(async (response) => {
+      observed = await streamArtifactBody(scripted.handle, response, 0, scripted.handle.sizeBytes - 1);
+    });
     const received = await getBody(port);
     expect(received.aborted).toBe(false);
     expect(received.body.byteLength).toBe(64 * 1024);
     await withTimeout(new Promise<void>((resolve) => setImmediate(resolve)));
-    expect(observed).toBeInstanceOf(Error);
-    expect((observed as Error).message).toBe("injected close failure");
+    expect(observed?.delivered).toBe(true);
+    expect(observed?.closeFailure?.error).toBeInstanceOf(Error);
+    expect((observed?.closeFailure?.error as Error).message).toBe("injected close failure");
   });
 
   it("stops reading and closes the descriptor when the client aborts mid-backpressure", async () => {

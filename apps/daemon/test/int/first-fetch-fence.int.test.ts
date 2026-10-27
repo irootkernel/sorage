@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
+import { request, type ServerResponse } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,17 @@ import {
   createNodeTokenEntropy,
   createNodeWebSecretStore,
 } from "@sorage/adapters/src/token-store";
-import { type ArtifactReadHandle, fetchHandoff, initializeInstallation, prepareHandoffFetch } from "@sorage/core";
+import {
+  type ArtifactReadHandle,
+  appError,
+  err,
+  ok,
+  fetchHandoff,
+  reviseHandoff,
+  withdrawHandoff,
+  initializeInstallation,
+  prepareHandoffFetch,
+} from "@sorage/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSessionService } from "../../src/auth";
 import { createDomainRoutes } from "../../src/domain-routes";
@@ -30,6 +40,7 @@ let server: ReturnType<typeof createDaemonServer>;
 let port = 0;
 let token = "";
 let ordinal = 0;
+let nextContentResponse: ((response: ServerResponse) => void) | undefined;
 
 function call(path: string, init: { method?: string; body?: unknown; range?: string } = {}) {
   return new Promise<{ status: number; body: string }>((resolve, reject) => {
@@ -62,7 +73,14 @@ function call(path: string, init: { method?: string; body?: unknown; range?: str
 
 function state(id: string) {
   return {
-    row: database.prepare("SELECT first_fetched_at, row_version FROM handoffs WHERE id = ?").get(id),
+    row: database
+      .prepare(
+        "SELECT first_fetched_at, row_version, revision, current_artifact_id, read_status, read_revision, revision_read_at FROM handoffs WHERE id = ?",
+      )
+      .get(id),
+    readEvents: database
+      .prepare("SELECT * FROM events WHERE handoff_id = ? AND event_type = 'HANDOFF_REVISION_READ' ORDER BY rowid")
+      .all(id),
     events: database
       .prepare("SELECT * FROM events WHERE handoff_id = ? AND event_type = 'ARTIFACT_FETCHED_FIRST_TIME'")
       .all(id),
@@ -83,9 +101,9 @@ function fence(kind: Fence): () => void {
   };
 }
 
-async function fresh(backend: Backend): Promise<string> {
+async function fresh(backend: Backend, content: Buffer = bytes): Promise<string> {
   const path = join(home, "sender", `body-${++ordinal}${backend === "inline" ? ".md" : ".bin"}`);
-  writeFileSync(path, bytes);
+  writeFileSync(path, content);
   const created = await call("/api/v1/handoffs/import-path?as=sender", {
     method: "POST",
     body: {
@@ -192,6 +210,12 @@ beforeAll(async () => {
     tokenRotate: () => tokens.rotate(),
     config: createDaemonConfigService({ host: "127.0.0.1", port, startedAt: new Date().toISOString() }),
     domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined, database }),
+  });
+  server.prependListener("request", (incoming, response) => {
+    if (!incoming.url?.includes("/artifact/content") || nextContentResponse === undefined) return;
+    const configure = nextContentResponse;
+    nextContentResponse = undefined;
+    configure(response);
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   for (const name of ["sender", "recipient", "outsider"]) {
@@ -368,4 +392,438 @@ describe("first-fetch writes on a warm shared operational DB", () => {
       release();
     }
   });
+});
+
+/** Script only the safely acquired handle; route admission, stream, SQLite and event settlement remain real. */
+function deliveryPorts(
+  failure?: "error" | "zero" | "truncated",
+  options: { beforeRead?: () => void; throwReceipt?: boolean; closeFails?: boolean } = {},
+) {
+  const real = handoffPorts.createNodeHandoffReadPorts({ database, env: { SORAGE_HOME: home } });
+  let closes = 0;
+  let reads = 0;
+  let releaseClosed: () => void = () => {};
+  const closed = new Promise<void>((resolve) => {
+    releaseClosed = resolve;
+  });
+  const spy = vi.spyOn(handoffPorts, "createNodeHandoffReadPorts").mockReturnValue({
+    ...real,
+    handoffs: {
+      ...real.handoffs,
+      recordFirstFetch: (...args: Parameters<typeof real.handoffs.recordFirstFetch>) => {
+        if (args[2] !== undefined && options.throwReceipt) throw new Error("injected post-delivery receipt failure");
+        return real.handoffs.recordFirstFetch(...args);
+      },
+    },
+    artifact: {
+      ...real.artifact,
+      openArtifactBody: (...args: Parameters<typeof real.artifact.openArtifactBody>) => {
+        const opened = real.artifact.openArtifactBody(...args);
+        if (!opened.ok) return opened;
+        const handle = opened.value;
+        let consumed = false;
+        let readHookRan = false;
+        return ok({
+          ...handle,
+          read(position: number, maxLength: number) {
+            reads += 1;
+            if (!readHookRan) {
+              readHookRan = true;
+              options.beforeRead?.();
+            }
+            if (failure === "error") return err(appError("ARTIFACT_CORRUPTED", "injected delivery read failure"));
+            if (failure === "zero" || (failure === "truncated" && position > 0)) return ok(new Uint8Array(0));
+            return handle.read(position, failure === "truncated" ? Math.ceil(handle.sizeBytes / 2) : maxLength);
+          },
+          close() {
+            if (consumed) return;
+            consumed = true;
+            closes += 1;
+            handle.close();
+            releaseClosed();
+            if (options.closeFails) throw new Error("injected delivery close failure");
+          },
+        });
+      },
+    },
+  });
+  return {
+    real,
+    closed,
+    get closes() {
+      return closes;
+    },
+    get reads() {
+      return reads;
+    },
+    restore: () => spy.mockRestore(),
+  };
+}
+
+function delivery(id: string, actor: string, abort = false, range?: string) {
+  return new Promise<{ status: number; body: Buffer; aborted: boolean }>((resolve, reject) => {
+    const outgoing = request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: `/api/v1/handoffs/${id}/artifact/content?${actor}`,
+        agent: false,
+        headers: { authorization: `Bearer ${token}`, ...(range === undefined ? {} : { range }) },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          if (abort) outgoing.destroy();
+        });
+        response.on("end", () =>
+          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks), aborted: false }),
+        );
+        response.on("aborted", () =>
+          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks), aborted: true }),
+        );
+        response.on("error", (error) => {
+          if ((error as NodeJS.ErrnoException).code === "ECONNRESET")
+            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks), aborted: true });
+          else reject(error);
+        });
+      },
+    );
+    outgoing.on("error", (error) => {
+      if ((error as NodeJS.ErrnoException).code === "ECONNRESET")
+        resolve({ status: 0, body: Buffer.alloc(0), aborted: true });
+      else reject(error);
+    });
+    outgoing.setTimeout(5_000, () => outgoing.destroy(new Error("delivery fixture timed out")));
+    outgoing.end();
+  });
+}
+
+const failedDeliveries = (["as=recipient", "asUser=true"] as const).flatMap((actor) =>
+  (["inline", "file"] as const).flatMap((backend) =>
+    (["error", "zero", "truncated"] as const).map((failure) => ({ actor, backend, failure })),
+  ),
+);
+
+describe("HTTP current reading requires completed delivery (T131-R1-001)", () => {
+  it.each(failedDeliveries)(
+    "keeps $actor/$backend current reading absent after $failure",
+    async ({ actor, backend, failure }) => {
+      const id = await fresh(backend);
+      const before = state(id);
+      const observed = deliveryPorts(failure);
+      try {
+        const result = await delivery(id, actor);
+        expect(result.aborted).toBe(true);
+        await observed.closed;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(observed.closes).toBe(1);
+        const after = state(id);
+        expect(after.row).toMatchObject({
+          row_version: 1,
+          read_status: "unconfirmed",
+          read_revision: null,
+          revision_read_at: null,
+        });
+        expect(after.readEvents).toEqual(before.readEvents);
+        // The admitted fetch's independent historical protection must survive a later transport failure.
+        expect(after.row).toMatchObject({ first_fetched_at: expect.any(String) });
+        expect(after.events).toHaveLength(1);
+        expect(
+          withdrawHandoff(handoffPorts.createNodeTerminalPorts({ database, env: { SORAGE_HOME: home } }), {
+            path: join(home, "sender"),
+            userHome: home,
+            as: "sender",
+            asUser: false,
+            handoffId: id,
+            expectedRowVersion: 1,
+          }),
+        ).toMatchObject({ ok: false, error: { code: "HANDOFF_ALREADY_FETCHED" } });
+      } finally {
+        observed.restore();
+      }
+    },
+  );
+
+  it.each(["as=recipient", "asUser=true"])(
+    "does not mark reading when %s aborts during real file backpressure",
+    async (actor) => {
+      const id = await fresh("file", Buffer.alloc(8 * 1024 * 1024, 0x61));
+      const observed = deliveryPorts();
+      try {
+        expect((await delivery(id, actor, true)).aborted).toBe(true);
+        await observed.closed;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(observed.closes).toBe(1);
+        expect(state(id).row).toMatchObject({
+          first_fetched_at: expect.any(String),
+          row_version: 1,
+          read_status: "unconfirmed",
+          revision_read_at: null,
+        });
+        expect(state(id).readEvents).toHaveLength(0);
+        expect(state(id).events).toHaveLength(1);
+      } finally {
+        observed.restore();
+      }
+    },
+  );
+});
+
+describe("HTTP successful delivery, identity and late failures (T131-R1-001)", () => {
+  const successes = (["as=recipient", "asUser=true"] as const).flatMap((actor) =>
+    (["inline", "file"] as const).flatMap((backend) =>
+      [undefined, "bytes=1-3"].map((range) => ({ actor, backend, range })),
+    ),
+  );
+  it.each(successes)(
+    "settles $actor/$backend/$range exactly once after delivery",
+    async ({ actor, backend, range }) => {
+      const id = await fresh(backend);
+      const before = state(id).row as { current_artifact_id: string };
+      const result = await delivery(id, actor, false, range);
+      expect(result).toMatchObject({ status: range === undefined ? 200 : 206, aborted: false });
+      expect(result.body).toEqual(range === undefined ? bytes : bytes.subarray(1, 4));
+      const settled = state(id);
+      expect(settled.row).toMatchObject({
+        first_fetched_at: expect.any(String),
+        row_version: 1,
+        read_status: "read",
+        read_revision: 1,
+        revision_read_at: expect.any(String),
+      });
+      expect(settled.events).toHaveLength(1);
+      expect(settled.readEvents).toHaveLength(1);
+      expect(JSON.parse((settled.readEvents[0] as { metadata_json: string }).metadata_json)).toEqual({
+        revision: 1,
+        artifactId: before.current_artifact_id,
+      });
+      expect((await delivery(id, actor)).aborted).toBe(false);
+      expect(state(id)).toEqual(settled);
+    },
+  );
+
+  it.each(["inline", "file"] as const)("keeps sender %s delivery free of recipient evidence", async (backend) => {
+    const id = await fresh(backend);
+    const before = state(id);
+    const result = await delivery(id, "as=sender");
+    expect(result).toMatchObject({ status: 200, aborted: false });
+    expect(result.body).toEqual(bytes);
+    expect(state(id)).toEqual(before);
+  });
+
+  it.each(["as=recipient", "asUser=true"])("waits for response finish before settling %s reading", async (actor) => {
+    const id = await fresh("inline");
+    let entered: () => void = () => {};
+    const endQueued = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let resume = () => {};
+    nextContentResponse = (response) => {
+      const original = response.end.bind(response);
+      resume = () => {
+        response.end = original;
+        response.end();
+      };
+      response.end = (() => {
+        entered();
+        return response;
+      }) as typeof response.end;
+    };
+    const result = delivery(id, actor);
+    try {
+      await endQueued;
+      expect(state(id).row).toMatchObject({
+        first_fetched_at: expect.any(String),
+        read_status: "unconfirmed",
+        revision_read_at: null,
+      });
+      expect(state(id).readEvents).toHaveLength(0);
+    } finally {
+      resume();
+      nextContentResponse = undefined;
+    }
+    expect((await result).aborted).toBe(false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(state(id).row).toMatchObject({ read_status: "read", read_revision: 1 });
+    expect(state(id).readEvents).toHaveLength(1);
+  });
+
+  it.each(
+    (["as=recipient", "asUser=true"] as const).flatMap((actor) =>
+      ["before-admission", "before-finish"].map((phase) => ({ actor, phase })),
+    ),
+  )("keeps current reading absent when $actor response closes $phase", async ({ actor, phase }) => {
+    const id = await fresh("file");
+    const observed = deliveryPorts();
+    nextContentResponse = (response) => {
+      if (phase === "before-admission") response.destroy();
+      else
+        response.end = (() => {
+          response.destroy();
+          return response;
+        }) as typeof response.end;
+    };
+    try {
+      await delivery(id, actor);
+      await observed.closed;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(observed.closes).toBe(1);
+      expect(state(id).row).toMatchObject({
+        first_fetched_at: phase === "before-admission" ? null : expect.any(String),
+        read_status: "unconfirmed",
+        revision_read_at: null,
+      });
+      expect(state(id).readEvents).toHaveLength(0);
+      expect(state(id).events).toHaveLength(phase === "before-admission" ? 0 : 1);
+      expect(observed.reads === 0).toBe(phase === "before-admission");
+    } finally {
+      nextContentResponse = undefined;
+      observed.restore();
+    }
+  });
+
+  it.each(
+    (["as=recipient", "asUser=true"] as const).flatMap((actor) =>
+      ["late-fence", "thrown-receipt", "close-failure"].map((failure) => ({ actor, failure })),
+    ),
+  )(
+    "preserves delivered $actor bytes and independent read/cleanup outcomes on $failure",
+    async ({ actor, failure }) => {
+      const id = await fresh("file");
+      let release = () => {};
+      const warnings = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      const observed = deliveryPorts(undefined, {
+        beforeRead: () => {
+          if (failure === "late-fence") release = fence("database");
+        },
+        throwReceipt: failure === "thrown-receipt",
+        closeFails: failure === "close-failure",
+      });
+      try {
+        const result = await delivery(id, actor);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(result).toMatchObject({ status: 200, aborted: false });
+        expect(result.body).toEqual(bytes);
+        expect(observed.closes).toBe(1);
+        expect(state(id).row).toMatchObject({
+          first_fetched_at: expect.any(String),
+          row_version: 1,
+          read_status: failure === "close-failure" ? "read" : "unconfirmed",
+          read_revision: failure === "close-failure" ? 1 : null,
+          revision_read_at: failure === "close-failure" ? expect.any(String) : null,
+        });
+        expect(state(id).readEvents).toHaveLength(failure === "close-failure" ? 1 : 0);
+        expect(state(id).events).toHaveLength(1);
+        if (failure === "close-failure") {
+          const row = state(id).row as { current_artifact_id: string; revision: number };
+          expect(JSON.parse((state(id).readEvents[0] as { metadata_json: string }).metadata_json)).toEqual({
+            artifactId: row.current_artifact_id,
+            revision: row.revision,
+          });
+        }
+        expect(
+          warnings.mock.calls.some((call) =>
+            String(call[0]).includes(failure === "late-fence" ? "SERVICE_PAUSED" : "failed"),
+          ),
+        ).toBe(true);
+        expect(warnings.mock.calls.every((call) => String(call[1]) === "SORAGE_COMPLETION")).toBe(true);
+      } finally {
+        release();
+        observed.restore();
+        warnings.mockRestore();
+      }
+    },
+  );
+
+  it.each(["as=recipient", "asUser=true"])(
+    "does not turn truncated %s delivery into reading when cleanup also fails",
+    async (actor) => {
+      const id = await fresh("file");
+      const warnings = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+      const observed = deliveryPorts("truncated", { closeFails: true });
+      try {
+        expect((await delivery(id, actor)).aborted).toBe(true);
+        await observed.closed;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(state(id).row).toMatchObject({
+          first_fetched_at: expect.any(String),
+          row_version: 1,
+          read_status: "unconfirmed",
+          revision_read_at: null,
+        });
+        expect(state(id).readEvents).toHaveLength(0);
+        expect(state(id).events).toHaveLength(1);
+        expect(observed.closes).toBe(1);
+        expect(warnings.mock.calls.some((call) => String(call[0]).includes("cleanup failed"))).toBe(true);
+      } finally {
+        observed.restore();
+        warnings.mockRestore();
+      }
+    },
+  );
+
+  const stale = (["as=recipient", "asUser=true"] as const).flatMap((actor) =>
+    (["inline", "file"] as const).flatMap((backend) =>
+      [false, true].map((newerRead) => ({ actor, backend, newerRead })),
+    ),
+  );
+  it.each(stale)(
+    "keeps $actor acquired old $backend identity separate from newerRead=$newerRead",
+    async ({ actor, backend, newerRead }) => {
+      const id = await fresh(backend);
+      const observed = deliveryPorts(undefined, {
+        beforeRead: () => {
+          const revised = reviseHandoff(
+            handoffPorts.createNodeRevisionPorts({ database, env: { SORAGE_HOME: home } }),
+            {
+              path: join(home, "sender"),
+              userHome: home,
+              as: "sender",
+              asUser: false,
+              handoffId: id,
+              body: "New Revision",
+              expectedRowVersion: 1,
+            },
+          );
+          expect(revised.ok).toBe(true);
+          if (newerRead)
+            expect(
+              fetchHandoff(
+                observed.real,
+                {
+                  path: join(home, "recipient"),
+                  userHome: home,
+                  as: actor === "as=recipient" ? "recipient" : undefined,
+                  asUser: actor === "asUser=true",
+                },
+                id,
+              ).ok,
+            ).toBe(true);
+        },
+      });
+      try {
+        const result = await delivery(id, actor);
+        expect(result.body).toEqual(bytes);
+        expect(result.aborted).toBe(false);
+        const current = state(id);
+        expect(current.row).toMatchObject({
+          revision: 2,
+          row_version: 2,
+          first_fetched_at: expect.any(String),
+          read_status: newerRead ? "read" : "unconfirmed",
+          read_revision: newerRead ? 2 : null,
+        });
+        expect(current.events).toHaveLength(1);
+        expect(current.readEvents).toHaveLength(newerRead ? 1 : 0);
+        if (newerRead)
+          expect(JSON.parse((current.readEvents[0] as { metadata_json: string }).metadata_json)).toEqual({
+            revision: 2,
+            artifactId: (current.row as { current_artifact_id: string }).current_artifact_id,
+          });
+      } finally {
+        observed.restore();
+      }
+    },
+  );
 });
