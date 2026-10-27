@@ -1389,3 +1389,67 @@ Compatibility impact: no product CLI, MCP schema, runtime security boundary or d
 ### Amendment (2026-10-27): Sandbox refusal diagnostics
 
 The [dated ADR-0032 amendment](#amendment-2026-10-27-memo-cli-startup-refusals-and-sandbox-recovery-guidance) owns TASK-127's narrow Memo CLI startup/open classification and mode-preserving recovery. Send recovery distinguishes installation write freedom from required private scratch and an already permitted MCP alternative. Common `INTERNAL_ERROR` recovery text changes on CLI, MCP and HTTP while their code mappings and shapes remain. This adds no zero-write guarantee to operational Memo modes and changes no Channel wait behavior, schema or success contract. Alternatives, compatibility, migration and canonical edits are recorded by that amendment; TASK-127 is appended within EPIC-018.
+
+## ADR-0035: Handoff processing status and recipient comment
+
+- **Status:** Proposed
+- **Date:** 2026-10-27
+- **Design owner:** TASK-128 under [EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment).
+
+### Problem
+
+Handoff records whether its document was first fetched and whether an exact Revision was accepted, but not whether the recipient is processing or has completed the requested work. `accept` explicitly does not mean downstream execution completed. The single Review Note is exclusively a change request: writing it enters `changes_requested`, resolution removes it, and its presence blocks acceptance. A recipient therefore cannot leave a general progress explanation or a completion comment that remains available after acceptance. The historical `firstFetchedAt` also cannot confirm that the recipient read a later Revision.
+
+Master approved retaining the current one-sender-document, at-most-one-recipient-comment structure, distinguishing general comments from change requests, tracking actual processing separately from acceptance, and resetting read/processing status for each changed Revision. Master requested Epic/Task registration and documentation now, with implementation in a later Epic-handler session.
+
+### Proposed decision
+
+Add per-Revision reading and processing records without redefining `accept`. Successful recipient or explicit User-proxy fetch/preview records the delivered Revision as read; metadata reads continue to write nothing. Processing supports start and completion, including direct completion and an optional comment saved atomically with the status. A changed Revision resets current reading/processing; a no-change resolution does not.
+
+Use one current recipient comment, with a purpose that distinguishes general explanation from an explicit change request. General comments do not change review state or block acceptance. Resolving or withdrawing a request retains its text and target Revision but ends its active-request meaning. Replacing the comment retains only the latest text. Do not add sender replies, a thread or native comment history.
+
+Permit general comment updates after processing completion and terminal review outcomes, including archive, while accepted Artifact content and the accepted Revision remain immutable. No report update reopens document review or reverses completion on the same Revision. Decline and withdrawal stop processing without claiming success. Approved deletion removes current content under the existing User decision and tombstone rules.
+
+New report mutations require the observed Revision and Row Version, commit status/comment/events together, preserve stale proposals on conflict and count recipient activity for withdrawal protection. An active change request must be resolved or withdrawn before a general comment can replace it or processing can complete. The [execution dossier](../todo/handoff-processing-and-recipient-comment.md) preserves the agreed behavior and adoption obligations; TASK-128 fixes exact types, transitions, projections, errors and command/tool/route contracts before implementation.
+
+### Plan review response (2026-10-27)
+
+F1 extends the observation contract to every existing and new shared-comment writer in the common application layer. `comment set` and `review set` require the current target Revision and Row Version; processing start/complete require the current Revision and Row Version; review withdrawal/removal, revision including no-change and deletion approval require the current Row Version. Decline and acceptance retain their existing required observations. Missing observations refuse fresh mutation rather than adopting freshly loaded values, and stale observations change no stored comment, review/processing state or domain mutation event. A retained comment's original target Revision remains attribution; the current observed Row Version authorizes withdrawal, removal or resolution even when that target is older. Preserve recorded-success replay separately from fresh mutation, with a receipt miss never bypassing required observations. The dossier's observation table pins this planning policy for TASK-128 adoption.
+
+F2 extends Project unbind confirmation protection to non-deleted accepted Handoffs with known not-started or in-progress processing, preserving existing open-review protection and confirmation scope, including the last binding. Count each Handoff once. Recorded completion adds no processing contribution, while legacy accepted Handoffs with unrecorded processing add no inferred unfinished-work contribution. Archive does not erase known unfinished work; approved deletion removes the live item. Keep User authority unchanged and `reviewNextActor` review-specific; lists, details and agent guidance must not interpret acceptance or a null review next actor as proof of completion. TASK-128 must adopt the lifecycle change in PRJ-022 and its related authorities without introducing a general routing subsystem.
+
+F3 makes decline end the active-request meaning while retaining the comment's body, original purpose and target Revision. Any stored activity change commits with decline. A later general comment can replace the inactive request using current observations without reopening review, restarting processing or inventing successful completion. No terminal withdrawal/removal prerequisite blocks that permitted replacement, and tombstone writes remain forbidden.
+
+### Alternatives considered
+
+- Treat `accept` as work completion: rejected because it would reinterpret existing exact-document acceptance records as execution evidence they never carried.
+- Use the existing Review Note unchanged for general reports: rejected because each report would request document changes, disappear on resolution and prevent acceptance.
+- Add a separate general comment alongside the Review Note: rejected because Master chose at most one recipient comment, with its purpose distinguishing explanation from a change request.
+- Add a message thread with sender replies and retained comment versions: rejected because Master kept document authorship with the sender and a single replaceable comment with the recipient.
+- Keep the first-fetch marker as reading evidence across Revisions: rejected because Master chose current-version confirmation and reset after document changes.
+- Mark metadata reads as reading: rejected because they do not deliver the document and would violate the adopted zero-write read contract.
+- Protect only new writers while retaining implicit-current legacy writes: rejected because stale review or resolution proposals could still replace or resolve a newer comment through another entrypoint.
+- Treat accepted work as finished for Project unbind decisions: rejected because known pending processing survives document acceptance. Treating every legacy accepted item as pending instead would invent execution evidence, so unrecorded evidence remains distinct.
+- Preserve an active request after decline or relabel it as a general comment: rejected because the first blocks the promised terminal comment replacement and the second destroys original-purpose attribution. End activity while retaining the original text and purpose.
+
+### Compatibility impact
+
+The new reporting commands, tools and endpoints are additions, but existing Handoff behavior changes: resolved comment text survives, general comments do not block acceptance, terminal comments can change, and reading is confirmed per Revision. TASK-128 must classify the exact CLI/HTTP/MCP DTOs, review-command projections, errors, annotations, goldens and skill changes. ADR-0008 and the higher-authority terminal/Note rules must be amended explicitly before implementation; a new command cannot silently bypass them.
+
+F1 additionally makes formerly optional review, revision and deletion-approval observations mandatory for fresh mutations, a breaking public input-contract change across their exposed surfaces. TASK-128 must pin admission and replay compatibility explicitly; no implicit-current fallback may preserve the unsafe legacy behavior. F2 changes when unbind requires confirmation for known unfinished accepted work without fabricating legacy evidence or changing administrative authority. F3 clarifies terminal comment behavior while preserving original-purpose attribution. These remain proposed contract changes until canonical adoption, and the existing Epic/Task sequence and review layers remain intact.
+
+M9 is the initial roadmap registration grouping only. This proposal allocates no product release and does not alter the existing M9 gate or shared v0.1.3 scope. TASK-128 must settle the delivery milestone and release boundary before normative adoption, with any required reassignment or checker support recorded through material change control.
+
+### Migration impact
+
+Use a new database migration and snapshot generation rather than rewriting schema 11 or format 3 in place; TASK-128 assigns exact versions against the then-current inventory and pins restore/rollback compatibility. Preserve existing Notes as change-request comments with activity derived from the recorded review state. Keep historical first-fetch evidence, but do not manufacture current-version read receipts, completed work from acceptance, or text already removed. Unavailable legacy evidence is unrecorded, not proof of an unread or unprocessed request. Registration itself changes no stored data.
+
+### Required Source of Truth edits and roadmap impact
+
+This registration adds EPIC-019 and TASK-128 through TASK-134, the execution dossier and TODO entry, documentation entrypoint, governance registration boundary and traceability note. Task Requirements cells temporarily use None under that boundary; the roadmap alone records lifecycle and next eligibility. No Task starts and no accepted contract changes at registration.
+
+TASK-128 must accept or revise this record; amend affected accepted decisions; adopt the required behavior, entities/transitions, interfaces, security/reliability, acceptance journeys and traceability in their canonical owners; classify contract changes and migration impact; settle delivery allocation; and populate every member Task's Requirements cell and matching reverse-index entries. Its adoption explicitly includes F1's complete legacy/new writer matrix and breaking inputs, F2's Project lifecycle and presentation rules, and F3's decline transition. Later Tasks own product implementation, the shipped skill, public and operations guidance, tests and assembled qualification under the existing sequence; the roadmap and dossier assign the targeted F1 to F3 checks without a new harness or review layer. At closeout, promote durable dossier content to canonical owners and remove the temporary dossier and its index entry.
+
+### Consequences
+
+The sender can distinguish current-version reading, processing and completion and read the recipient's latest explanation in each state, while Sorage retains one document and one recipient comment rather than adding a conversation system. This expands Handoff beyond document review into explicit work reporting, so its contract and migration need independent review. Product development begins only through the later explicitly invoked Epic handler; registration grants no broker operation, staging, commit, installation or publication authority.
