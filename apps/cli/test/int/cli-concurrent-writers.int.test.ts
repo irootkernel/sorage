@@ -11,7 +11,7 @@ import { runCli } from "../../src/main";
  * The two concurrent-writer rows of the section 4 failure matrix (TASK-061):
  * two real CLI processes race on one Handoff with the same expected Row Version
  * - a recipient review set against a sender revise, and two sender revises - and
- * exactly one wins while the loser meets ROW_VERSION_CONFLICT with the Handoff
+ * exactly one wins while the loser names its precise Revision/Row Version conflict with the Handoff
  * left internally consistent (CFG-015, SEC-008, SEC-016).
  */
 const exec = promisify(execFile);
@@ -87,6 +87,15 @@ function outcomes(codes: number[]): { winners: number; conflicts: number } {
   };
 }
 
+function expectMixedConflict(review: { code: number; stderr: string }, revise: { code: number; stderr: string }): void {
+  expect(outcomes([review.code, revise.code]), JSON.stringify({ review, revise })).toEqual({
+    winners: 1,
+    conflicts: 1,
+  });
+  const loser = review.code === 75 ? review : revise;
+  expect(JSON.parse(loser.stderr).error.code).toBe(review.code === 75 ? "REVISION_CONFLICT" : "ROW_VERSION_CONFLICT");
+}
+
 describe("two concurrent writers on one Handoff", () => {
   it("lets exactly one of a recipient review set and a sender revise win", async () => {
     const { home, handoffId } = setup();
@@ -99,6 +108,8 @@ describe("two concurrent writers on one Handoff", () => {
           "review",
           "set",
           handoffId,
+          "--target-revision",
+          "1",
           "--text",
           "from the recipient",
           "--json",
@@ -118,8 +129,7 @@ describe("two concurrent writers on one Handoff", () => {
     expect(winners, JSON.stringify({ review, revise })).toBe(1);
     expect(conflicts, JSON.stringify({ review, revise })).toBe(1);
     // The loser names the compare-and-set conflict; exit 75 alone is ambiguous.
-    const loser = review.code === 75 ? review : revise;
-    expect(loser.stderr).toContain("ROW_VERSION_CONFLICT");
+    expectMixedConflict(review, revise);
     // The Handoff is internally consistent for whichever writer won: the review
     // state matches the winner, no Note rides a Revision that no longer exists,
     // and the Row Version moved exactly once.
@@ -137,6 +147,40 @@ describe("two concurrent writers on one Handoff", () => {
       expect(detail.data.revision).toBe(2);
       expect(detail.data.currentArtifact).not.toBeNull();
     }
+  });
+
+  it("T130-R1-004 classifies a review reading after the winning R2 using its unchanged original proposal", async () => {
+    const { home, handoffId } = setup();
+    const revision = join(home, "deterministic.md");
+    writeFileSync(revision, "R2 winner");
+    const originalReview = [
+      "review",
+      "set",
+      handoffId,
+      "--as",
+      "alpha",
+      "--text",
+      "R1 proposal",
+      "--target-revision",
+      "1",
+      "--expected-row-version",
+      "1",
+      "--json",
+    ];
+    const revise = await runProcess(
+      ["revise", handoffId, "--file", revision, "--allow-external-source", "--expected-row-version", "1", "--json"],
+      home,
+    );
+    const review = await runProcess(originalReview, home);
+    expectMixedConflict(review, revise);
+    const get = capture();
+    expect(runCli(["get", handoffId, "--json", "--as", "alpha"], get.ports)).toBe(0);
+    expect(JSON.parse(get.outText()).data).toMatchObject({
+      revision: 2,
+      rowVersion: 2,
+      reviewState: "awaiting_recipient",
+      hasReviewNote: false,
+    });
   });
 
   it("lets exactly one of two concurrent sender revises win", async () => {

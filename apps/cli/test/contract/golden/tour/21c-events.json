@@ -3,6 +3,14 @@
   "data": [
     {
       "id": "<uuid>",
+      "eventType": "HANDOFF_COMMENT_SET",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 4,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
       "eventType": "REVIEW_NOTE_CREATED",
       "actorKind": "registered_project",
       "actorId": "<uuid>",
@@ -19,6 +27,14 @@
     },
     {
       "id": "<uuid>",
+      "eventType": "HANDOFF_COMMENT_SET",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 2,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
       "eventType": "REVIEW_NOTE_CREATED",
       "actorKind": "registered_project",
       "actorId": "<uuid>",
@@ -31,6 +47,14 @@
       "actorKind": "registered_project",
       "actorId": "<uuid>",
       "rowVersion": null,
+      "createdAt": "<ts>"
+    },
+    {
+      "id": "<uuid>",
+      "eventType": "HANDOFF_REVISION_READ",
+      "actorKind": "registered_project",
+      "actorId": "<uuid>",
+      "rowVersion": 1,
       "createdAt": "<ts>"
     },
     {

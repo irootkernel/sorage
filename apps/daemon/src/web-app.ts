@@ -601,7 +601,7 @@ export const WEB_APP_JS = `(function () {
       }
       renderReviewNote(id);
       view().appendChild(actionsCard(handoff));
-      view().appendChild(reviseCard(id));
+      view().appendChild(reviseCard(id, handoff.rowVersion));
     });
   }
 
@@ -646,7 +646,7 @@ export const WEB_APP_JS = `(function () {
     });
   }
 
-  function reviseCard(id) {
+  function reviseCard(id, expectedRowVersion) {
     var card = el("div", { class: "card" });
     card.appendChild(el("h3", { text: "Revise" }));
     var status = el("p", { class: "muted", text: "" });
@@ -656,6 +656,7 @@ export const WEB_APP_JS = `(function () {
       if (!file.files || file.files.length === 0) { status.textContent = "Choose a replacement file first."; return; }
       var form = new FormData();
       form.append("file", file.files[0]);
+      form.append("expectedRowVersion", String(expectedRowVersion));
       api("/api/v1/handoffs/" + id + "/revise?asUser=true", { method: "POST", body: form }).then(function (outcome) {
         status.textContent = outcome.body.ok ? "Revised to revision " + outcome.body.data.revision : outcome.body.error.code;
         if (outcome.body.ok) detail(id);
@@ -830,7 +831,6 @@ export const WEB_APP_JS = `(function () {
           .then(function (outcome) {
             if (!outcome.body.ok) {
               status.textContent = outcome.body.error.code + ": " + outcome.body.error.message;
-              if (outcome.body.error.code === "ROW_VERSION_CONFLICT") detail(handoff.id);
               return;
             }
             detail(handoff.id);
@@ -843,8 +843,8 @@ export const WEB_APP_JS = `(function () {
     var note = el("textarea", { rows: "2", cols: "40", placeholder: "User proxy review note", "aria-label": "Review note" });
     var noteRow = el("div", { class: "actions-row" });
     noteRow.appendChild(note);
-    noteRow.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, asUser: true }; }, "PUT"));
-    noteRow.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { asUser: true }, "DELETE", "danger"));
+    noteRow.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, targetRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }; }, "PUT"));
+    noteRow.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { expectedRowVersion: handoff.rowVersion, asUser: true }, "DELETE", "danger"));
     noteGroup.appendChild(noteRow);
     card.appendChild(noteGroup);
 
@@ -871,7 +871,7 @@ export const WEB_APP_JS = `(function () {
     deletionRow.appendChild(act("Reject deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-reject?asUser=true", { asUser: true }));
     var pinnedConfirm = el("input", { placeholder: "type the Handoff id to confirm pinned deletion", size: "36", "aria-label": "Pinned deletion confirmation" });
     deletionRow.appendChild(pinnedConfirm);
-    deletionRow.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, confirmPinned: pinnedConfirm.value }; }, "POST", "danger"));
+    deletionRow.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, expectedRowVersion: handoff.rowVersion, confirmPinned: pinnedConfirm.value }; }, "POST", "danger"));
     deletionGroup.appendChild(deletionRow);
     deletionGroup.appendChild(el("p", { class: "muted", text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
     card.appendChild(deletionGroup);

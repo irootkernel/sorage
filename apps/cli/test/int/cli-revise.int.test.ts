@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,14 +82,35 @@ describe("sorage revise", () => {
     const { home, workA, workB, handoffId } = setup(true);
 
     process.chdir(workB);
-    expect(runCli(["review", "set", handoffId, "--text", "tighten the intro", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "tighten the intro",
+          "--json",
+          ...observedHandoffFlags(handoffId, "both"),
+        ],
+        capture().ports,
+      ),
+    ).toBe(0);
 
     const replacement = join(home, "brief-v2.bin");
     writeFileSync(replacement, "# Shared, revised\n");
     process.chdir(workA);
     const revised = capture();
     const reviseExit = runCli(
-      ["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"],
+      [
+        "revise",
+        handoffId,
+        "--file",
+        replacement,
+        "--allow-external-source",
+        "--json",
+        ...observedHandoffFlags(handoffId, "row"),
+      ],
       revised.ports,
     );
     if (reviseExit !== 0) throw new Error(`revise failed (${reviseExit}): ${revised.errText()}`);
@@ -123,7 +145,10 @@ describe("sorage revise", () => {
       const notes = database.prepare("SELECT COUNT(*) AS c FROM review_notes WHERE handoff_id = ?").get(handoffId) as {
         c: number;
       };
-      expect(notes.c).toBe(0);
+      expect(notes.c).toBe(1);
+      expect(database.prepare("SELECT active FROM review_notes WHERE handoff_id = ?").get(handoffId)).toEqual({
+        active: 0,
+      });
       const intents = database.prepare("SELECT COUNT(*) AS c FROM pending_fs_ops").get() as { c: number };
       expect(intents.c).toBe(0);
       const eventTypes = (
@@ -139,9 +164,20 @@ describe("sorage revise", () => {
 
     // The same content refuses and changes nothing.
     const same = capture();
-    expect(runCli(["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"], same.ports)).toBe(
-      65,
-    );
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        same.ports,
+      ),
+    ).toBe(65);
     const refused = JSON.parse(same.errText()) as { error: { code: string } };
     expect(refused.error.code).toBe("NO_CONTENT_CHANGE");
 
@@ -150,7 +186,18 @@ describe("sorage revise", () => {
     writeFileSync(replacement2, "# Shared, proactively fixed\n");
     const proactive = capture();
     expect(
-      runCli(["revise", handoffId, "--file", replacement2, "--allow-external-source", "--json"], proactive.ports),
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement2,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        proactive.ports,
+      ),
     ).toBe(0);
     const proactiveReport = JSON.parse(proactive.outText()) as { data: { revision: number; reviewState: string } };
     expect(proactiveReport.data.revision).toBe(3);
@@ -165,7 +212,15 @@ describe("sorage revise", () => {
     process.chdir(workA);
     const withoutNote = capture();
     const noNoteExit = runCli(
-      ["revise", handoffId, "--no-change", "--reason", "nothing to change", "--json"],
+      [
+        "revise",
+        handoffId,
+        "--no-change",
+        "--reason",
+        "nothing to change",
+        "--json",
+        ...observedHandoffFlags(handoffId, "row"),
+      ],
       withoutNote.ports,
     );
     if (noNoteExit !== 65) throw new Error(`no-note revise: ${noNoteExit}: ${withoutNote.errText()}`);
@@ -173,11 +228,35 @@ describe("sorage revise", () => {
     expect((JSON.parse(withoutNote.errText()) as { error: { code: string } }).error.code).toBe("NO_REVIEW_NOTE");
 
     process.chdir(workB);
-    expect(runCli(["review", "set", handoffId, "--text", "please reconsider", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "please reconsider",
+          "--json",
+          ...observedHandoffFlags(handoffId, "both"),
+        ],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workA);
     const first = capture();
     expect(
-      runCli(["revise", handoffId, "--no-change", "--reason", "content already correct", "--json"], first.ports),
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--no-change",
+          "--reason",
+          "content already correct",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        first.ports,
+      ),
     ).toBe(0);
     const firstReport = JSON.parse(first.outText()) as { data: { reviewState: string; revision: number } };
     expect(firstReport.data.reviewState).toBe("awaiting_recipient");
@@ -185,25 +264,62 @@ describe("sorage revise", () => {
 
     // A second consecutive no-change resolution is impossible.
     process.chdir(workB);
-    expect(runCli(["review", "set", handoffId, "--text", "still wrong", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "still wrong", "--json", ...observedHandoffFlags(handoffId, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workA);
     const second = capture();
-    expect(runCli(["revise", handoffId, "--no-change", "--reason", "again", "--json"], second.ports)).toBe(65);
+    expect(
+      runCli(
+        ["revise", handoffId, "--no-change", "--reason", "again", "--json", ...observedHandoffFlags(handoffId, "row")],
+        second.ports,
+      ),
+    ).toBe(65);
     expect((JSON.parse(second.errText()) as { error: { code: string } }).error.code).toBe("NO_CHANGE_LIMIT");
 
     // A content revision after a no-change resolution resets the bound.
     const replacement = join(home, "brief-final.md");
     writeFileSync(replacement, "# Final content\n");
     expect(
-      runCli(["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"], capture().ports),
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        capture().ports,
+      ),
     ).toBe(0);
     process.chdir(workB);
-    expect(runCli(["review", "set", handoffId, "--text", "one more look", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "one more look", "--json", ...observedHandoffFlags(handoffId, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workA);
     const reset = capture();
-    expect(runCli(["revise", handoffId, "--no-change", "--reason", "correct after all", "--json"], reset.ports)).toBe(
-      0,
-    );
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--no-change",
+          "--reason",
+          "correct after all",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        reset.ports,
+      ),
+    ).toBe(0);
     process.chdir(original);
   });
 });
@@ -250,12 +366,28 @@ describe("the round-2 remediation regressions", () => {
     writeFileSync(replacement, "# From outside the workspace\n");
     process.chdir(work);
     const refused = capture();
-    expect(runCli(["revise", handoffId, "--file", replacement, "--json"], refused.ports)).toBe(77);
+    expect(
+      runCli(
+        ["revise", handoffId, "--file", replacement, "--json", ...observedHandoffFlags(handoffId, "row")],
+        refused.ports,
+      ),
+    ).toBe(77);
     const report = JSON.parse(refused.errText()) as { error: { code: string } };
     expect(report.error.code).toBe("SOURCE_OUTSIDE_WORKSPACE");
     const allowed = capture();
     expect(
-      runCli(["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"], allowed.ports),
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        allowed.ports,
+      ),
     ).toBe(0);
     process.chdir(original);
   });
@@ -293,7 +425,20 @@ describe("the round-2 remediation regressions", () => {
     // before any copy ran (the section 19 coordination order).
     process.chdir(work);
     const same = capture();
-    expect(runCli(["revise", handoffId, "--file", document, "--allow-external-source", "--json"], same.ports)).toBe(65);
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          document,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        same.ports,
+      ),
+    ).toBe(65);
     const staging = join(home, "vault", "staging");
     expect(existsSync(staging) ? readdirSync(staging) : []).toHaveLength(0);
 
@@ -301,7 +446,17 @@ describe("the round-2 remediation regressions", () => {
     const stale = capture();
     expect(
       runCli(
-        ["revise", handoffId, "--file", document, "--allow-external-source", "--idempotency-key", "k-x", "--json"],
+        [
+          "revise",
+          handoffId,
+          "--file",
+          document,
+          "--allow-external-source",
+          "--idempotency-key",
+          "k-x",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
         stale.ports,
       ),
     ).toBe(65);
@@ -342,42 +497,25 @@ describe("the round-2 remediation regressions", () => {
     const replacement = join(home, "brief-v2.md");
     writeFileSync(replacement, "# Shared, revised\n");
     const first = capture();
-    expect(
-      runCli(
-        [
-          "revise",
-          handoffId,
-          "--file",
-          replacement,
-          "--allow-external-source",
-          "--idempotency-key",
-          "k-rev-1",
-          "--json",
-        ],
-        first.ports,
-      ),
-    ).toBe(0);
+    const originalRequest = [
+      "revise",
+      handoffId,
+      "--file",
+      replacement,
+      "--allow-external-source",
+      "--idempotency-key",
+      "k-rev-1",
+      "--json",
+      ...observedHandoffFlags(handoffId, "row"),
+    ];
+    expect(runCli(originalRequest, first.ports)).toBe(0);
     const firstReport = JSON.parse(first.outText()) as { data: { revision: number; replayed: boolean } };
     expect(firstReport.data.revision).toBe(2);
     expect(firstReport.data.replayed).toBe(false);
 
     // The identical retry would otherwise fail on NO_CONTENT_CHANGE; replay answers first.
     const second = capture();
-    expect(
-      runCli(
-        [
-          "revise",
-          handoffId,
-          "--file",
-          replacement,
-          "--allow-external-source",
-          "--idempotency-key",
-          "k-rev-1",
-          "--json",
-        ],
-        second.ports,
-      ),
-    ).toBe(0);
+    expect(runCli(originalRequest, second.ports)).toBe(0);
     const replayReport = JSON.parse(second.outText()) as { data: { revision: number; replayed: boolean } };
     expect(replayReport.data.replayed).toBe(true);
     expect(replayReport.data.revision).toBe(2);
@@ -393,7 +531,10 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
     const body = "# Shared, revised inline\n";
     process.chdir(workA);
     const revised = capture();
-    const exit = runCli(["revise", handoffId, "--body", body, "--json"], revised.ports);
+    const exit = runCli(
+      ["revise", handoffId, "--body", body, "--json", ...observedHandoffFlags(handoffId, "row")],
+      revised.ports,
+    );
     if (exit !== 0) throw new Error(`inline revise failed (${exit}): ${revised.errText()}`);
     const report = JSON.parse(revised.outText()) as { data: { revision: number; reviewState: string } };
     expect(report.data.revision).toBe(2);
@@ -440,16 +581,31 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
     const { workA, handoffId } = setup();
 
     process.chdir(workA);
-    expect(runCli(["revise", handoffId, "--body", "# Second take\n", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["revise", handoffId, "--body", "# Second take\n", "--json", ...observedHandoffFlags(handoffId, "row")],
+        capture().ports,
+      ),
+    ).toBe(0);
     const third = capture();
-    expect(runCli(["revise", handoffId, "--body", "# Third take\n", "--json"], third.ports)).toBe(0);
+    expect(
+      runCli(
+        ["revise", handoffId, "--body", "# Third take\n", "--json", ...observedHandoffFlags(handoffId, "row")],
+        third.ports,
+      ),
+    ).toBe(0);
     const thirdReport = JSON.parse(third.outText()) as { data: { revision: number } };
     expect(thirdReport.data.revision).toBe(3);
 
     // The identical retry is refused before anything mutates, with the
     // parameterized first word of HND-015's message.
     const same = capture();
-    expect(runCli(["revise", handoffId, "--body", "# Third take\n", "--json"], same.ports)).toBe(65);
+    expect(
+      runCli(
+        ["revise", handoffId, "--body", "# Third take\n", "--json", ...observedHandoffFlags(handoffId, "row")],
+        same.ports,
+      ),
+    ).toBe(65);
     const refused = JSON.parse(same.errText()) as { error: { code: string; message: string } };
     expect(refused.error.code).toBe("NO_CONTENT_CHANGE");
     expect(refused.error.message).toContain("the supplied body carries the current Artifact's SHA-256");
@@ -464,7 +620,12 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
     const refused = capture();
     // The argv boundary cannot carry this text; through the in-process CLI the
     // core guard answers with send's exact refusal (SHR-003).
-    expect(runCli(["revise", handoffId, "--body", "broken \uD800 surrogate", "--json"], refused.ports)).toBe(78);
+    expect(
+      runCli(
+        ["revise", handoffId, "--body", "broken \uD800 surrogate", "--json", ...observedHandoffFlags(handoffId, "row")],
+        refused.ports,
+      ),
+    ).toBe(78);
     const report = JSON.parse(refused.errText()) as { error: { code: string; message: string } };
     expect(report.error.code).toBe("CONFIG_INVALID");
     expect(report.error.message).toBe(
@@ -482,7 +643,10 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
     const body = `${"x".repeat(69_999)}\n`;
     process.chdir(workA);
     const revised = capture();
-    const exit = runCli(["revise", handoffId, "--body", body, "--json"], revised.ports);
+    const exit = runCli(
+      ["revise", handoffId, "--body", body, "--json", ...observedHandoffFlags(handoffId, "row")],
+      revised.ports,
+    );
     if (exit !== 0) throw new Error(`above-threshold revise failed (${exit}): ${revised.errText()}`);
     const report = JSON.parse(revised.outText()) as { data: { revision: number; storageKey: string | null } };
     expect(report.data.revision).toBe(2);
@@ -531,7 +695,9 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
       );
     }
     const blank = capture();
-    expect(runCli(["revise", handoffId, "--body", "   "], blank.ports)).toBe(2);
+    expect(runCli(["revise", handoffId, "--body", "   ", ...observedHandoffFlags(handoffId, "row")], blank.ports)).toBe(
+      2,
+    );
     expect(blank.errText()).toBe("sorage: the --body text must not be empty\nRun 'sorage --help' for usage.\n");
     process.chdir(original);
   });
@@ -542,24 +708,24 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
 
     process.chdir(workA);
     const first = capture();
-    expect(
-      runCli(
-        ["revise", handoffId, "--body", "# Keyed inline\n", "--idempotency-key", "k-body-1", "--json"],
-        first.ports,
-      ),
-    ).toBe(0);
+    const originalRequest = [
+      "revise",
+      handoffId,
+      "--body",
+      "# Keyed inline\n",
+      "--idempotency-key",
+      "k-body-1",
+      "--json",
+      ...observedHandoffFlags(handoffId, "row"),
+    ];
+    expect(runCli(originalRequest, first.ports)).toBe(0);
     const firstReport = JSON.parse(first.outText()) as { data: { revision: number; replayed: boolean } };
     expect(firstReport.data.revision).toBe(2);
     expect(firstReport.data.replayed).toBe(false);
 
     // The identical retry would otherwise be NO_CONTENT_CHANGE; the replay answers first.
     const second = capture();
-    expect(
-      runCli(
-        ["revise", handoffId, "--body", "# Keyed inline\n", "--idempotency-key", "k-body-1", "--json"],
-        second.ports,
-      ),
-    ).toBe(0);
+    expect(runCli(originalRequest, second.ports)).toBe(0);
     const replayReport = JSON.parse(second.outText()) as { data: { revision: number; replayed: boolean } };
     expect(replayReport.data.replayed).toBe(true);
     expect(replayReport.data.revision).toBe(2);
@@ -571,10 +737,25 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
     const { workA, workB, handoffId } = setup();
 
     process.chdir(workB);
-    expect(runCli(["review", "set", handoffId, "--text", "please reconsider", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "please reconsider",
+          "--json",
+          ...observedHandoffFlags(handoffId, "both"),
+        ],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workA);
     const refused = capture();
-    expect(runCli(["revise", handoffId, "--no-change", "--json"], refused.ports)).toBe(78);
+    expect(
+      runCli(["revise", handoffId, "--no-change", "--json", ...observedHandoffFlags(handoffId, "row")], refused.ports),
+    ).toBe(78);
     const report = JSON.parse(refused.errText()) as { error: { code: string; message: string } };
     expect(report.error.code).toBe("CONFIG_INVALID");
     expect(report.error.message).toBe("the no-change resolution requires a --reason");

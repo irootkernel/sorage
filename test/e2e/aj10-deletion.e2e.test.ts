@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../../apps/cli/test/fixtures/handoff-observations";
 import { afterAll, describe, expect, it } from "vitest";
 import { envelopeOf, errorEnvelopeOf, runCleanups, sorage, twoProjectFixture } from "./helpers";
 
@@ -15,7 +16,10 @@ describe("AJ-10 deletion", () => {
     expect(again.status).toBe(75);
     expect(errorEnvelopeOf(again).error.code).toBe("DELETION_ALREADY_REQUESTED");
 
-    const nonTerminal = sorage(["delete", "approve", id, "--as-user", "--confirm", "--json"], { home: fixture.home });
+    const nonTerminal = sorage(
+      ["delete", "approve", id, "--as-user", "--confirm", "--json", ...observedHandoffFlags(id, "row", fixture.home)],
+      { home: fixture.home },
+    );
     expect(nonTerminal.status).toBe(65);
     expect(errorEnvelopeOf(nonTerminal).error.code).toBe("HANDOFF_NOT_TERMINAL");
 
@@ -25,7 +29,10 @@ describe("AJ-10 deletion", () => {
         cwd: fixture.workB,
       }).status,
     ).toBe(0);
-    const gate = sorage(["delete", "approve", id, "--confirm", "--json"], { home: fixture.home });
+    const gate = sorage(
+      ["delete", "approve", id, "--confirm", "--json", ...observedHandoffFlags(id, "row", fixture.home)],
+      { home: fixture.home },
+    );
     expect(gate.status).toBe(77);
     expect(errorEnvelopeOf(gate).error.code).toBe("USER_CONTEXT_REQUIRED");
 
@@ -46,13 +53,16 @@ describe("AJ-10 deletion", () => {
     ).toBe(0);
     expect(sorage(["delete", "request", id, "--json"], { home: fixture.home, cwd: fixture.workB }).status).toBe(0);
 
-    const approve = sorage(["delete", "approve", id, "--as-user", "--confirm", "--json"], { home: fixture.home });
+    const approve = sorage(
+      ["delete", "approve", id, "--as-user", "--confirm", "--json", ...observedHandoffFlags(id, "row", fixture.home)],
+      { home: fixture.home },
+    );
     expect(approve.status).toBe(0);
 
     for (const args of [
       ["fetch", id],
-      ["revise", id, "--no-change", "--reason", "gone"],
-      ["review", "set", id, "--text", "gone"],
+      ["revise", id, "--no-change", "--reason", "gone", ...observedHandoffFlags(id, "row", fixture.home)],
+      ["review", "set", id, "--text", "gone", ...observedHandoffFlags(id, "both", fixture.home)],
       ["accept", id, "--expected-revision", "1", "--expected-row-version", "1"],
       ["delete", "request", id],
     ]) {
@@ -81,13 +91,29 @@ describe("AJ-10 deletion", () => {
     expect(sorage(["pin", id, "--as-user", "--json"], { home: fixture.home }).status).toBe(0);
     expect(sorage(["delete", "request", id, "--json"], { home: fixture.home, cwd: fixture.workB }).status).toBe(0);
 
-    const blanket = sorage(["delete", "approve", id, "--as-user", "--confirm", "--json"], { home: fixture.home });
+    const blanket = sorage(
+      ["delete", "approve", id, "--as-user", "--confirm", "--json", ...observedHandoffFlags(id, "row", fixture.home)],
+      { home: fixture.home },
+    );
     expect(blanket.status).toBe(64);
     expect(errorEnvelopeOf(blanket).error.code).toBe("PINNED_DELETE_CONFIRMATION");
 
-    const distinct = sorage(["delete", "approve", id, "--as-user", "--confirm", "--confirm-pinned", id, "--json"], {
-      home: fixture.home,
-    });
+    const distinct = sorage(
+      [
+        "delete",
+        "approve",
+        id,
+        "--as-user",
+        "--confirm",
+        "--confirm-pinned",
+        id,
+        "--json",
+        ...observedHandoffFlags(id, "row", fixture.home),
+      ],
+      {
+        home: fixture.home,
+      },
+    );
     expect(distinct.status).toBe(0);
     const gone = sorage(["get", id, "--json"], { home: fixture.home, cwd: fixture.workB });
     expect((envelopeOf(gone) as { data: { deletedAt: string | null } }).data.deletedAt).not.toBeNull();

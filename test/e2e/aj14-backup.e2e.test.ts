@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../../apps/cli/test/fixtures/handoff-observations";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -100,10 +101,22 @@ describe("AJ-14 the daily Git backup", () => {
     writeFileSync(revised, "# The AJ-14 brief, revised\n");
     const handoffId = (JSON.parse(send.stdout) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
       ?.handoffId;
-    const reviseOutcome = sorage(["revise", handoffId as string, "--as", "alpha", "--file", revised, "--json"], {
-      home,
-      cwd: work,
-    });
+    const reviseOutcome = sorage(
+      [
+        "revise",
+        handoffId as string,
+        "--as",
+        "alpha",
+        "--file",
+        revised,
+        "--json",
+        ...observedHandoffFlags(handoffId as string, "row", home),
+      ],
+      {
+        home,
+        cwd: work,
+      },
+    );
     // ADR-0031: a new revision succeeds and its Artifact identity is a UUID
     // from the generator port, no longer the retired a-plus-eight-hex form.
     expect(reviseOutcome.status, reviseOutcome.stderr).toBe(0);

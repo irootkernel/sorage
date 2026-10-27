@@ -1,6 +1,7 @@
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { request as httpRequest } from "node:http";
 import { chromium } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -198,4 +199,192 @@ describe("AJ-12 web session and the local network boundary", () => {
     expect(invalidated.status).toBe(401);
     expect(JSON.parse(invalidated.body)).toMatchObject({ error: { code: "TOKEN_INVALID" } });
   }, 60000);
+});
+
+describe("T130-R1-001 existing Web proposal retention", () => {
+  it.each([
+    { name: "desktop", width: 1280, height: 900 },
+    { name: "mobile", width: 390, height: 844 },
+  ])("retains the rejected note and original observations on $name until explicit inspection", async (viewport) => {
+    const evidenceDir = process.env.SORAGE_UI_EVIDENCE_DIR ?? makeTempDir("sorage-aj12-conflict-evidence-");
+    mkdirSync(evidenceDir, { recursive: true });
+    const browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
+    const consoleMessages: Array<{ type: string; text: string }> = [];
+    const pageErrors: string[] = [];
+    page.on("console", (message) => {
+      if (["error", "warning"].includes(message.type()))
+        consoleMessages.push({ type: message.type(), text: message.text() });
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    const proof: Record<string, unknown> = {
+      browser: "Playwright Chromium",
+      browserAvailability: "Browser plugin not available",
+      viewport,
+      consoleMessages,
+      pageErrors,
+    };
+    try {
+      const sent = sorage(
+        [
+          "send",
+          "--as-user",
+          "--to",
+          "web-app",
+          "--title",
+          `Conflict ${viewport.name}`,
+          "--body",
+          "Conflict document",
+          "--json",
+        ],
+        { home },
+      );
+      expect(sent.status, sent.stderr).toBe(0);
+      const id = JSON.parse(sent.stdout).data.handoffs[0].handoffId as string;
+      const entry = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
+      expect(entry.status, entry.stderr).toBe(0);
+      await page.goto(JSON.parse(entry.stdout).url as string);
+      await page.waitForSelector(".counts");
+      const detailUrl = `http://127.0.0.1:${port}/#/handoff/${id}`;
+      await page.goto(detailUrl);
+      await page.waitForSelector("dl.meta");
+      await page.waitForLoadState("networkidle");
+      expect(page.url()).toBe(detailUrl);
+      expect(await page.title()).toBe("Sorage");
+      expect((await page.locator("main").innerText()).length).toBeGreaterThan(100);
+      expect(await page.locator("nextjs-portal, vite-error-overlay, webpack-dev-server-client-overlay").count()).toBe(
+        0,
+      );
+      await page.screenshot({ path: join(evidenceDir, `${viewport.name}-initial.png`), fullPage: false });
+      const proposal = " Keep this exact proposal: <script>untrusted</script>\nSecond line 가 with trailing space ";
+      const note = page.getByRole("textbox", { name: "Review note", exact: true });
+      await note.fill(proposal);
+      const originalNode = await note.elementHandle();
+      if (originalNode === null) throw new Error("the note textarea is absent");
+      const filePath = join(home, `retained-${viewport.name}.md`);
+      writeFileSync(filePath, "Retain selected file");
+      await page.getByLabel("Replacement document").setInputFiles(filePath);
+      const confirmation = `retained confirmation ${viewport.name}`;
+      await page.getByLabel("Pinned deletion confirmation").fill(confirmation);
+      let detailGets = 0;
+      const writes: unknown[] = [];
+      page.on("request", (request) => {
+        const path = new URL(request.url()).pathname;
+        if (request.method() === "GET" && path === `/api/v1/handoffs/${id}`) detailGets++;
+        if (request.method() === "PUT" && path === `/api/v1/handoffs/${id}/review-note`)
+          writes.push(request.postDataJSON());
+      });
+      const winner = sorage(
+        [
+          "review",
+          "set",
+          id,
+          "--as-user",
+          "--text",
+          "Competing same-Revision writer",
+          "--target-revision",
+          "1",
+          "--expected-row-version",
+          "1",
+          "--json",
+        ],
+        { home },
+      );
+      expect(winner.status, winner.stderr).toBe(0);
+      const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"), { readOnly: true });
+      const state = () =>
+        Object.fromEntries(
+          ["handoffs", "review_notes", "events"].map((table) => [
+            table,
+            db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+          ]),
+        );
+      const before = state();
+      try {
+        const responsePromise = page.waitForResponse(
+          (response) =>
+            response.request().method() === "PUT" &&
+            new URL(response.url()).pathname === `/api/v1/handoffs/${id}/review-note`,
+        );
+        await page.getByRole("button", { name: "Set note", exact: true }).click();
+        const response = await responsePromise;
+        expect(response.status()).toBe(409);
+        expect(await response.json()).toMatchObject({ ok: false, error: { code: "ROW_VERSION_CONFLICT" } });
+        await page.waitForFunction(
+          () =>
+            document.querySelector("main")?.textContent?.includes("ROW_VERSION_CONFLICT") ||
+            (document.querySelector('textarea[aria-label="Review note"]') as HTMLTextAreaElement | null)?.value === "",
+        );
+        proof.url = page.url();
+        proof.title = await page.title();
+        proof.originalNodeConnected = await originalNode.evaluate((node) => node.isConnected);
+        proof.draft = await note.inputValue();
+        proof.detailGetsAfterConflict = detailGets;
+        proof.writesAfterConflict = [...writes];
+        await page.screenshot({ path: join(evidenceDir, `${viewport.name}-conflict.png`), fullPage: true });
+        expect(proof.originalNodeConnected).toBe(true);
+        expect(await note.inputValue()).toBe(proposal);
+        expect(await page.locator("main").innerText()).toContain("ROW_VERSION_CONFLICT");
+        expect(detailGets).toBe(0);
+        expect(writes).toEqual([{ text: proposal, targetRevision: 1, expectedRowVersion: 1, asUser: true }]);
+        expect(
+          await page.getByLabel("Replacement document").evaluate((node) => (node as HTMLInputElement).files?.[0]?.name),
+        ).toBe(`retained-${viewport.name}.md`);
+        expect(await page.getByLabel("Pinned deletion confirmation").inputValue()).toBe(confirmation);
+        expect(state()).toEqual(before);
+        const retry = page.waitForResponse(
+          (response) =>
+            response.request().method() === "PUT" &&
+            new URL(response.url()).pathname === `/api/v1/handoffs/${id}/review-note`,
+        );
+        await page.getByRole("button", { name: "Set note", exact: true }).click();
+        expect((await retry).status()).toBe(409);
+        expect(writes).toHaveLength(2);
+        expect(writes[1]).toEqual(writes[0]);
+        expect(detailGets).toBe(0);
+        expect(state()).toEqual(before);
+        // Browser reload is an explicit inspection. Only this deliberate step
+        // acquires V2; the successful write still performs its normal reload.
+        await page.reload();
+        await page.waitForSelector("dl.meta");
+        await page.waitForLoadState("networkidle");
+        const afterInspectionGets = detailGets;
+        const reconciled = "Explicitly reconciled report";
+        await page.getByRole("textbox", { name: "Review note", exact: true }).fill(reconciled);
+        const success = page.waitForResponse(
+          (response) =>
+            response.request().method() === "PUT" &&
+            new URL(response.url()).pathname === `/api/v1/handoffs/${id}/review-note`,
+        );
+        await page.getByRole("button", { name: "Set note", exact: true }).click();
+        expect((await success).status()).toBe(200);
+        await page.waitForSelector("dl.meta");
+        await page.waitForLoadState("networkidle");
+        expect(detailGets).toBe(afterInspectionGets + 1);
+        expect(writes[2]).toEqual({ text: reconciled, targetRevision: 1, expectedRowVersion: 2, asUser: true });
+        expect(db.prepare("SELECT body FROM review_notes WHERE handoff_id=?").get(id)).toEqual({ body: reconciled });
+        expect(await page.getByRole("textbox", { name: "Review note", exact: true }).inputValue()).toBe("");
+        expect(pageErrors).toEqual([]);
+        expect(consoleMessages.filter((message) => !/status of 409/.test(message.text))).toEqual([]);
+        await page.screenshot({ path: join(evidenceDir, `${viewport.name}-success.png`), fullPage: false });
+        Object.assign(proof, {
+          pass: true,
+          noAutomaticReloadOrRetry: true,
+          originalObservationsRetained: true,
+          rejectedStateUnchanged: true,
+          successReload: true,
+          writes,
+          finalDetailGets: detailGets,
+          pageIdentity: true,
+          nonblank: true,
+          noFrameworkOverlay: true,
+        });
+      } finally {
+        db.close();
+      }
+    } finally {
+      writeFileSync(join(evidenceDir, `${viewport.name}-proof.json`), `${JSON.stringify(proof, null, 2)}\n`);
+      await browser.close();
+    }
+  });
 });

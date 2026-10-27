@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "data": {
+    "handoffId": "<uuid>",
+    "authorKind": "registered_project",
+    "authorProjectId": "<uuid>",
+    "targetRevision": 1,
+    "body": "General explanation",
+    "createdAt": "<ts>",
+    "updatedAt": "<ts>",
+    "purpose": "general",
+    "active": false
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

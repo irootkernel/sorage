@@ -1,0 +1,66 @@
+{
+  "ok": true,
+  "data": {
+    "id": "<uuid>",
+    "dispatchGroupId": null,
+    "supersedesHandoffId": null,
+    "title": "Report case",
+    "senderKind": "user",
+    "senderProjectId": null,
+    "senderProjectSlug": null,
+    "senderWorkspaceKey": null,
+    "senderPathSnapshot": null,
+    "recipientProjectId": "<uuid>",
+    "recipientProjectSlug": "beta",
+    "revision": 1,
+    "rowVersion": 4,
+    "reviewState": "awaiting_recipient",
+    "nextActors": {
+      "reviewNextActor": "recipient",
+      "administrativeNextActor": null
+    },
+    "read": {
+      "revision": 1,
+      "status": "unconfirmed",
+      "readAt": null
+    },
+    "processing": {
+      "revision": 1,
+      "status": "completed",
+      "startedAt": "<ts>",
+      "completedAt": "<ts>"
+    },
+    "comment": {
+      "handoffId": "<uuid>",
+      "purpose": "general",
+      "active": false,
+      "authorKind": "registered_project",
+      "authorProjectId": "<uuid>",
+      "targetRevision": 1,
+      "createdAt": "<ts>",
+      "updatedAt": "<ts>"
+    },
+    "firstFetchedAt": null,
+    "reviewEngagedAt": "<ts>",
+    "pinned": false,
+    "archivedAt": null,
+    "deletedAt": null,
+    "currentArtifact": {
+      "id": "<uuid>",
+      "storageKey": null,
+      "originalName": "report-case-1.md",
+      "mimeType": "text/markdown",
+      "sizeBytes": 15,
+      "sha256": "<digest>",
+      "materialized": true
+    },
+    "createdAt": "<ts>",
+    "updatedAt": "<ts>",
+    "pendingDeletionRequest": false,
+    "hasReviewNote": false,
+    "consecutiveNoChangeResolutions": 0
+  },
+  "meta": {
+    "requestId": "<uuid>"
+  }
+}

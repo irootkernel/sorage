@@ -382,7 +382,7 @@ describe("the handoff lifecycle", () => {
     const noted = await call(`/api/v1/handoffs/${handoffId}/review-note`, {
       method: "PUT",
       bearer: apiToken,
-      body: { text: "Tighten the intro", as: "web-app" },
+      body: { text: "Tighten the intro", as: "web-app", targetRevision: revision, expectedRowVersion: rowVersion },
     });
     expect(noted.status).toBe(200);
     rowVersion = json(noted).data.handoff.rowVersion;
@@ -390,7 +390,7 @@ describe("the handoff lifecycle", () => {
     const withdrawn = await call(`/api/v1/handoffs/${handoffId}/review-note/withdraw`, {
       method: "POST",
       bearer: apiToken,
-      body: { as: "web-app" },
+      body: { as: "web-app", expectedRowVersion: rowVersion },
     });
     expect(withdrawn.status).toBe(200);
     rowVersion = json(withdrawn).data.handoff.rowVersion;
@@ -470,7 +470,7 @@ describe("the handoff lifecycle", () => {
     const noted = await call(`/api/v1/handoffs/${id}/review-note`, {
       method: "PUT",
       bearer: apiToken,
-      body: { text: "Tighten", as: "web-app" },
+      body: { text: "Tighten", as: "web-app", targetRevision: 1, expectedRowVersion: 1 },
     });
     expect(noted.status).toBe(200);
 
@@ -492,6 +492,7 @@ describe("the handoff lifecycle", () => {
 
     const boundary = "revise-boundary-1a";
     const multipartBody = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="expectedRowVersion"\r\n\r\n2\r\n`),
       Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="revision.md"\r\nContent-Type: text/markdown\r\n\r\n`,
       ),
@@ -856,9 +857,9 @@ describe("the serving boundary over authenticated HTTP", () => {
         config: { ...ports.config, verifyChecksumOnFetch: true },
         handoffs: {
           ...ports.handoffs,
-          recordFirstFetch: (id, event) => {
+          recordFirstFetch: (id, event, delivered) => {
             calls.settle += 1;
-            return ports.handoffs.recordFirstFetch(id, event);
+            return ports.handoffs.recordFirstFetch(id, event, delivered);
           },
         },
         artifact: {

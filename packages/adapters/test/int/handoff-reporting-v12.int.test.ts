@@ -153,28 +153,34 @@ describe("schema12 reporting persistence and snapshot4", () => {
     const store = createSqliteReviewStore(restored, createSqliteEventLedger(restored));
     expect(unwrap(store.findNote(HANDOFF))).toBeNull();
     unwrap(
-      store.applyReviewMutation({
+      store.applyReportMutation({
         handoffId: HANDOFF,
         expectedRowVersion: 1,
         reviewState: "changes_requested",
-        setReviewEngagedAt: true,
-        note: {
-          op: "upsert",
+        engage: true,
+        now: TIME,
+        comment: {
+          handoffId: HANDOFF,
+          purpose: "change_request",
+          active: true,
           authorKind: "registered_project",
           authorProjectId: PROJECT,
           targetRevision: 1,
           body: "Replaced",
-          now: TIME,
-        },
-        event: {
-          id: randomUUID(),
-          handoffId: HANDOFF,
-          eventType: "REVIEW_NOTE_UPDATED",
-          actor: { kind: "registered_project", id: PROJECT },
-          rowVersion: 2,
-          metadata: { targetRevision: 1, authorKind: "registered_project" },
           createdAt: TIME,
+          updatedAt: TIME,
         },
+        events: [
+          {
+            id: randomUUID(),
+            handoffId: HANDOFF,
+            eventType: "REVIEW_NOTE_UPDATED",
+            actor: { kind: "registered_project", id: PROJECT },
+            rowVersion: 2,
+            metadata: { targetRevision: 1, authorKind: "registered_project" },
+            createdAt: TIME,
+          },
+        ],
       }),
     );
     expect(restored.prepare("SELECT purpose,active,body FROM review_notes").get()).toEqual({

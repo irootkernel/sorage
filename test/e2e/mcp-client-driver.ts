@@ -122,6 +122,7 @@ async function journey(): Promise<void> {
     title: string;
     reviewState: string;
     revision: number;
+    rowVersion: number;
     currentArtifact: { sha256: string };
   };
   if (detail.title !== JOURNEY_TITLE) fail("handoff_get title");
@@ -131,7 +132,12 @@ async function journey(): Promise<void> {
   if (detail.currentArtifact.sha256 !== expectedDigest) fail("handoff_get sha256");
   note("handoff_get ok (title, state, revision, sha256)");
 
-  const revised = await call("handoff_revise", { cwd: WORK_B, handoffId, body: REVISED_BODY });
+  const revised = await call("handoff_revise", {
+    cwd: WORK_B,
+    handoffId,
+    body: REVISED_BODY,
+    expectedRowVersion: detail.rowVersion,
+  });
   if (!revised.ok || !envelopeOf(revised.result).ok) fail("handoff_revise");
   note("handoff_revise ok");
 

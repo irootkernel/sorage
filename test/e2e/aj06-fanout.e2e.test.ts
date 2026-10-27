@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../../apps/cli/test/fixtures/handoff-observations";
 import { writeFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 import { envelopeOf, makeTempDir, runCleanups, sorage } from "./helpers";
@@ -73,8 +74,10 @@ describe("AJ-06 fan-out", () => {
     const [h0, h1, h2] = [ids[0], ids[1], ids[2]] as [string, string, string];
     // Recipient 0 requests changes; recipient 1 accepts; recipient 2 declines.
     expect(
-      sorage(["review", "set", h0, "--text", "Rework", "--json"], { home: fixture.home, cwd: fixture.recipientDirs[0] })
-        .status,
+      sorage(["review", "set", h0, "--text", "Rework", "--json", ...observedHandoffFlags(h0, "both", fixture.home)], {
+        home: fixture.home,
+        cwd: fixture.recipientDirs[0],
+      }).status,
     ).toBe(0);
     expect(
       sorage(["accept", h1, "--expected-revision", "1", "--expected-row-version", "1", "--json"], {
@@ -92,10 +95,21 @@ describe("AJ-06 fan-out", () => {
     // The sender revises only recipient 0's loop; siblings never see each other.
     writeFileSync(`${fixture.home}/reworked.md`, "# Reworked\n", "utf8");
     expect(
-      sorage(["revise", h0, "--file", `${fixture.home}/reworked.md`, "--allow-external-source", "--json"], {
-        home: fixture.home,
-        cwd: fixture.sender,
-      }).status,
+      sorage(
+        [
+          "revise",
+          h0,
+          "--file",
+          `${fixture.home}/reworked.md`,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(h0, "row", fixture.home),
+        ],
+        {
+          home: fixture.home,
+          cwd: fixture.sender,
+        },
+      ).status,
     ).toBe(0);
     expect(
       sorage(["accept", h0, "--expected-revision", "2", "--expected-row-version", "3", "--json"], {

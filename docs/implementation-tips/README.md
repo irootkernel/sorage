@@ -16,6 +16,8 @@ The [M9 Channel qualification map](m9-channels-qualification.md) connects the TA
 
 The [M9 Channel concurrency qualification map](m9-channel-concurrency-qualification.md) connects TASK-114's multi-process load, overlap and contention evidence, independent reconciliation, permanent compiled regression and conditional retry-policy decision to their production paths and owning commands.
 
+The [Handoff reporting qualification map](handoff-reporting-qualification.md) connects the common comment/processing use cases, per-Revision delivery settlement, Project protection, explicit legacy-writer observations and CLI contract classification to their owning checks.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:

@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -108,9 +109,22 @@ describe("the derived inbox marker behind handoff.inboxMarker", () => {
       const marker = readFileSync(markerOf(dir), "utf8");
       expect(marker).toContain(`${id} awaiting_recipient "Marker case" revision 1`);
     }
-    expect(run(["review", "set", id, "--as", "beta", "--text", "Rework"]).exit).toBe(0);
+    expect(
+      run(["review", "set", id, "--as", "beta", "--text", "Rework", ...observedHandoffFlags(id, "both")]).exit,
+    ).toBe(0);
     expect(readFileSync(markerOf(workB1), "utf8")).toContain(`${id} changes_requested "Marker case" revision 1`);
-    expect(run(["revise", id, "--as", "alpha", "--no-change", "--reason", "Done elsewhere"]).exit).toBe(0);
+    expect(
+      run([
+        "revise",
+        id,
+        "--as",
+        "alpha",
+        "--no-change",
+        "--reason",
+        "Done elsewhere",
+        ...observedHandoffFlags(id, "row"),
+      ]).exit,
+    ).toBe(0);
     // A no-change resolution resolves the Note without moving the Revision (REV-017).
     expect(readFileSync(markerOf(workB1), "utf8")).toContain(`${id} awaiting_recipient "Marker case" revision 1`);
     expect(run(["accept", id, "--as", "beta", "--expected-revision", "1", "--expected-row-version", "3"]).exit).toBe(0);
@@ -243,8 +257,10 @@ describe("the derived inbox marker behind handoff.inboxMarker", () => {
     chmodSync(workB2, 0o500);
     const id = send("Read-only case");
     expect(existsSync(markerOf(workB2))).toBe(false);
-    expect(run(["review", "set", id, "--as", "beta", "--text", "Note"]).exit).toBe(0);
-    expect(run(["review", "withdraw", id, "--as", "beta"]).exit).toBe(0);
+    expect(run(["review", "set", id, "--as", "beta", "--text", "Note", ...observedHandoffFlags(id, "both")]).exit).toBe(
+      0,
+    );
+    expect(run(["review", "withdraw", id, "--as", "beta", ...observedHandoffFlags(id, "row")]).exit).toBe(0);
     const accept = run(["accept", id, "--as", "beta", "--expected-revision", "1", "--expected-row-version", "3"]);
     expect(accept.exit).toBe(0);
     expect(accept.err).toContain("warning:");

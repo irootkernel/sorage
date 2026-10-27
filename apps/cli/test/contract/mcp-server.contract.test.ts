@@ -599,6 +599,7 @@ describe("real-server symlink escapes with in-domain postconditions (MCP-004)", 
     const handoffControl = (await toolCall(session, "handoff_revise", {
       handoffId,
       file: "inside.md",
+      expectedRowVersion: 1,
       cwd: workB,
     })) as unknown as {
       result: { structuredContent: { ok: boolean; data: { revision: number } }; isError: boolean };

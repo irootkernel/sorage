@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -474,7 +475,15 @@ describe("contained post-commit warnings (category (i))", () => {
     });
     const revised = capture();
     const reviseCode = runCli(
-      ["revise", handoffId as string, "--file", join(work, "r.txt"), "--allow-external-source", "--json"],
+      [
+        "revise",
+        handoffId as string,
+        "--file",
+        join(work, "r.txt"),
+        "--allow-external-source",
+        "--json",
+        ...observedHandoffFlags(handoffId as string, "row"),
+      ],
       revised.ports,
     );
     expect(reviseCode, revised.err.join("")).toBe(0);
@@ -517,7 +526,15 @@ describe("contained post-commit warnings (category (i))", () => {
       });
     const approved = capture();
     const approveCode = runCli(
-      ["delete", "approve", handoffId as string, "--as-user", "--confirm", "--json"],
+      [
+        "delete",
+        "approve",
+        handoffId as string,
+        "--as-user",
+        "--confirm",
+        "--json",
+        ...observedHandoffFlags(handoffId as string, "row"),
+      ],
       approved.ports,
     );
     expect(approveCode, approved.err.join("")).toBe(0);
@@ -549,7 +566,15 @@ describe("contained post-commit warnings (category (i))", () => {
       try {
         const revised = capture();
         const code = runCli(
-          ["revise", handoffId, "--file", join(work, `r${reviseRun}.txt`), "--allow-external-source", "--json"],
+          [
+            "revise",
+            handoffId,
+            "--file",
+            join(work, `r${reviseRun}.txt`),
+            "--allow-external-source",
+            "--json",
+            ...observedHandoffFlags(handoffId, "row"),
+          ],
           revised.ports,
         );
         return { code, stderr: revised.err.join(""), stdout: revised.out.join("") };
@@ -599,13 +624,35 @@ describe("contained post-commit warnings (category (i))", () => {
       .handoffs[0]?.handoffId as string;
     const reviewed = capture();
     expect(
-      runCli(["review", "set", handoffId, "--text", "needs work", "--as", "alpha", "--json"], reviewed.ports),
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "needs work",
+          "--as",
+          "alpha",
+          "--json",
+          ...observedHandoffFlags(handoffId, "both"),
+        ],
+        reviewed.ports,
+      ),
     ).toBe(0);
     // The --no-change form prepares no body, so it owns no activation or unlink
     // intent and has no physical post-commit step to fail.
     const resolved = capture();
     const code = runCli(
-      ["revise", handoffId, "--no-change", "--reason", "standoff", "--as-user", "--json"],
+      [
+        "revise",
+        handoffId,
+        "--no-change",
+        "--reason",
+        "standoff",
+        "--as-user",
+        "--json",
+        ...observedHandoffFlags(handoffId, "row"),
+      ],
       resolved.ports,
     );
     expect(code, resolved.err.join("")).toBe(0);
@@ -635,7 +682,10 @@ describe("contained post-commit warnings (category (i))", () => {
         return ports;
       });
     const approved = capture();
-    const code = runCli(["delete", "approve", handoffId, "--as-user", "--confirm", "--json"], approved.ports);
+    const code = runCli(
+      ["delete", "approve", handoffId, "--as-user", "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+      approved.ports,
+    );
     expect(code, approved.err.join("")).toBe(0);
     expect(approved.err.join("")).toContain(
       "warning: The deletion approval committed, but recording its unlink completion failed",

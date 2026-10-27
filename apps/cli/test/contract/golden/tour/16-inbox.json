@@ -21,6 +21,18 @@
           "reviewNextActor": "recipient",
           "administrativeNextActor": null
         },
+        "read": {
+          "revision": 1,
+          "status": "unconfirmed",
+          "readAt": null
+        },
+        "processing": {
+          "revision": 1,
+          "status": "not_started",
+          "startedAt": null,
+          "completedAt": null
+        },
+        "comment": null,
         "firstFetchedAt": null,
         "reviewEngagedAt": null,
         "pinned": false,

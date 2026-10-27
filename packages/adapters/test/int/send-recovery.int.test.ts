@@ -365,7 +365,7 @@ describe("native send receipt inspection", () => {
     f.run(["withdraw", id]);
     f.run(["archive", id, "--as-user"]);
     f.run(["delete", "request", id], f.recipient);
-    f.run(["delete", "approve", id, "--as-user", "--confirm"]);
+    f.run(["delete", "approve", id, "--as-user", "--confirm", "--expected-row-version", "5"]);
     f.run(["project", "archive", "recipient"]);
     f.run(["project", "unbind", "recipient", "--dir", f.recipient]);
     expect(f.recover()).toEqual({ ok: true, value: { ...f.outcome, replayed: true } });

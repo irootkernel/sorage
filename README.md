@@ -126,17 +126,18 @@ sorage get <handoff-id>
 sorage fetch <handoff-id>
 ```
 
-The recipient requests a revision with a Review Note:
+The recipient requests a revision with a Review Note, using the `revision` and `rowVersion` observed above:
 
 ```sh
-sorage review set <handoff-id> --text "Clarify the rollback procedure."
+sorage review set <handoff-id> --text "Clarify the rollback procedure." --target-revision <revision> --expected-row-version <row-version>
 ```
 
 The sender updates the document and revises the same Handoff:
 
 ```sh
 cd /path/to/sender
-sorage revise <handoff-id> --file ./proposal.md
+sorage get <handoff-id>
+sorage revise <handoff-id> --file ./proposal.md --expected-row-version <row-version>
 ```
 
 Back in the recipient project, inspect and fetch the new Revision before accepting it. Use the `revision` and `rowVersion` reported by `sorage get`:

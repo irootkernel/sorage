@@ -551,6 +551,7 @@ describe("the ordinary physical wrapper over the shared executor (section 3)", (
     };
     const revised = reviseHandoff(ports, {
       handoffId: HANDOFF,
+      expectedRowVersion: 1,
       file: replacement,
       as: undefined,
       asUser: true,
@@ -716,6 +717,7 @@ describe("the ordinary unlink association preservation (R3.2-M3-P2.1)", () => {
     writeFileSync(replacement, NEW_BODY);
     const revised = reviseHandoff(createNodeRevisionPorts({ env: { SORAGE_HOME: f.home }, userHome: f.home }), {
       handoffId: HANDOFF,
+      expectedRowVersion: 1,
       file: replacement,
       as: undefined,
       asUser: true,
@@ -763,6 +765,7 @@ describe("the ordinary unlink association preservation (R3.2-M3-P2.1)", () => {
     const f = seededHome("sorage-assoc-delete-", { withDeletionRequest: true });
     const approved = approveDeletion(createNodeRetentionPorts({ env: { SORAGE_HOME: f.home }, userHome: f.home }), {
       handoffId: HANDOFF,
+      expectedRowVersion: 1,
       confirm: true,
       asUser: true,
       as: undefined,

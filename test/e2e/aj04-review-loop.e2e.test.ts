@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../../apps/cli/test/fixtures/handoff-observations";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,10 +64,13 @@ describe("AJ-04 the review loop", () => {
     expect(readFileSync(fetchedData.data.localPath)).toEqual(readFileSync(fixture.document));
     expect(rowVersionOf(fixture.home, fixture.workB, id)).toBe(1);
 
-    const note = sorage(["review", "set", id, "--text", "Tighten the intro", "--json"], {
-      home: fixture.home,
-      cwd: fixture.workB,
-    });
+    const note = sorage(
+      ["review", "set", id, "--text", "Tighten the intro", "--json", ...observedHandoffFlags(id, "both", fixture.home)],
+      {
+        home: fixture.home,
+        cwd: fixture.workB,
+      },
+    );
     expect(note.status).toBe(0);
     expect((envelopeOf(note) as { data: { handoff: { reviewState: string } } }).data.handoff.reviewState).toBe(
       "changes_requested",
@@ -75,10 +79,21 @@ describe("AJ-04 the review loop", () => {
 
     const replacement = join(fixture.home, "revised.md");
     writeFileSync(replacement, "# The loop, revised\n", "utf8");
-    const revise = sorage(["revise", id, "--file", replacement, "--allow-external-source", "--json"], {
-      home: fixture.home,
-      cwd: fixture.workA,
-    });
+    const revise = sorage(
+      [
+        "revise",
+        id,
+        "--file",
+        replacement,
+        "--allow-external-source",
+        "--json",
+        ...observedHandoffFlags(id, "row", fixture.home),
+      ],
+      {
+        home: fixture.home,
+        cwd: fixture.workA,
+      },
+    );
     expect(revise.status).toBe(0);
     expect(rowVersionOf(fixture.home, fixture.workB, id)).toBe(3);
 
@@ -103,10 +118,13 @@ describe("AJ-04 the review loop", () => {
       cwd: fixture.workB,
     });
     expect(accept.status).toBe(0);
-    const revise = sorage(["revise", id, "--no-change", "--reason", "too late", "--json"], {
-      home: fixture.home,
-      cwd: fixture.workA,
-    });
+    const revise = sorage(
+      ["revise", id, "--no-change", "--reason", "too late", "--json", ...observedHandoffFlags(id, "row", fixture.home)],
+      {
+        home: fixture.home,
+        cwd: fixture.workA,
+      },
+    );
     expect(revise.status).toBe(65);
     expect(errorEnvelopeOf(revise).error.code).toBe("HANDOFF_TERMINAL");
   });
@@ -189,6 +207,8 @@ describe("AJ-04 registered workspace import roots", () => {
         "--expected-row-version",
         String(beforeNote.rowVersion),
         "--json",
+        "--target-revision",
+        "1",
       ],
       { home: f.home, cwd: f.recipient },
     );
@@ -265,6 +285,8 @@ describe("AJ-04 registered workspace import roots", () => {
             "--expected-row-version",
             String(initial.rowVersion),
             "--json",
+            "--target-revision",
+            "1",
           ],
           { home: f.home, cwd: f.recipient },
         ).status,

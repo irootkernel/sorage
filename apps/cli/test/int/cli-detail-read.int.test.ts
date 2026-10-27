@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,7 +105,20 @@ describe("sorage review show and events", () => {
     expect(runCli(["review", "show", handoffId, "--json"], missing.ports)).toBe(0);
     expect((JSON.parse(missing.outText()) as { data: unknown }).data).toBeNull();
 
-    expect(runCli(["review", "set", handoffId, "--text", "Tighten the intro", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "Tighten the intro",
+          "--json",
+          ...observedHandoffFlags(handoffId, "both"),
+        ],
+        capture().ports,
+      ),
+    ).toBe(0);
     const before = rowOf(home, handoffId);
     const eventsBefore = eventCount(home);
 
@@ -141,7 +155,12 @@ describe("sorage review show and events", () => {
     const { home, workA, workB, handoffId } = setup();
 
     process.chdir(workB);
-    expect(runCli(["review", "set", handoffId, "--text", "note", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "note", "--json", ...observedHandoffFlags(handoffId, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workA);
     const before = rowOf(home, handoffId);
     const eventsBefore = eventCount(home);
@@ -168,7 +187,20 @@ describe("sorage review show and events", () => {
     expect(eventCount(home)).toBe(eventsBefore);
 
     process.chdir(workA);
-    expect(runCli(["revise", handoffId, "--no-change", "--reason", "keep wording", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--no-change",
+          "--reason",
+          "keep wording",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workB);
     expect(
       runCli(
@@ -177,7 +209,12 @@ describe("sorage review show and events", () => {
       ),
     ).toBe(0);
     expect(runCli(["delete", "request", handoffId, "--json"], capture().ports)).toBe(0);
-    expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["delete", "approve", handoffId, "--as-user", "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+        capture().ports,
+      ),
+    ).toBe(0);
 
     const tombstoneEvents = capture();
     expect(runCli(["events", handoffId, "--json"], tombstoneEvents.ports)).toBe(0);

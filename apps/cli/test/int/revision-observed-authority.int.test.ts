@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
@@ -28,7 +29,19 @@ describe("revision verification against superseded authority", () => {
       assert(handoff);
       const id = handoff.handoffId;
       if (phase === "no-change")
-        cliData(f.run(["review", "set", id, "--as", "other", "--text", "Revise this", "--json"]));
+        cliData(
+          f.run([
+            "review",
+            "set",
+            id,
+            "--as",
+            "other",
+            "--text",
+            "Revise this",
+            "--json",
+            ...observedHandoffFlags(id, "both", f.home),
+          ]),
+        );
       const beforeVersion = phase === "no-change" ? 2 : 1;
       const winnerFile = join(f.work, "winner.md");
       const loserFile = join(f.work, "loser.md");

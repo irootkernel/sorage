@@ -166,8 +166,8 @@ async function observe(
 
 const escapeCases: Array<[string, string, Record<string, unknown>]> = [
   ["handoff_send", "file", { to: ["alpha"], title: "T", file: "" }],
-  ["handoff_review_set", "file", { handoffId: "h1", file: "" }],
-  ["handoff_revise", "file", { handoffId: "h1", file: "" }],
+  ["handoff_review_set", "file", { handoffId: "h1", file: "", targetRevision: 1, expectedRowVersion: 1 }],
+  ["handoff_revise", "file", { handoffId: "h1", file: "", expectedRowVersion: 1 }],
   ["memo_add", "bodyFile", { title: "t", bodyFile: "" }],
   ["memo_update", "bodyFile", { memoId: "m1", expectedRowVersion: 2, bodyFile: "" }],
   ["channel_post", "bodyFile", { channel: "c", from: "h", kind: "report", bodyFile: "" }],
@@ -265,7 +265,7 @@ describe("the accepted path and what each child receives", () => {
     expect(revise.calls[0]?.argv).toContain(linked);
 
     for (const [toolName, base, property] of [
-      ["handoff_review_set", { handoffId: "h1" }, "file"],
+      ["handoff_review_set", { handoffId: "h1", targetRevision: 1, expectedRowVersion: 1 }, "file"],
       ["memo_add", { title: "t" }, "bodyFile"],
       ["memo_update", { memoId: "m1", expectedRowVersion: 2 }, "bodyFile"],
       ["channel_post", { channel: "c", from: "h", kind: "report" }, "bodyFile"],

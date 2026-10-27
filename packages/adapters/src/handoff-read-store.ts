@@ -56,6 +56,11 @@ interface HandoffRow {
   consecutive_no_change_resolutions: number;
   row_version: number;
   review_state: string;
+  read_status: HandoffView["read"]["status"];
+  revision_read_at: string | null;
+  processing_status: HandoffView["processing"]["status"];
+  processing_started_at: string | null;
+  processing_completed_at: string | null;
   first_fetched_at: string | null;
   review_engaged_at: string | null;
   pinned: number;
@@ -151,6 +156,36 @@ export function createSqliteHandoffReadStore(
     const row = noteStatement.get(handoffId) as { one: number } | null | undefined;
     return row !== null && row !== undefined;
   };
+  const commentStatement = db.prepare(
+    "SELECT handoff_id, purpose, active, author_kind, author_project_id, target_revision, created_at, updated_at FROM review_notes WHERE handoff_id = ?",
+  );
+  const commentOf = (id: string): HandoffView["comment"] => {
+    const row = commentStatement.get(id) as
+      | {
+          handoff_id: string;
+          purpose: "general" | "change_request";
+          active: number;
+          author_kind: "user" | "registered_project";
+          author_project_id: string | null;
+          target_revision: number;
+          created_at: string;
+          updated_at: string;
+        }
+      | null
+      | undefined;
+    return row
+      ? {
+          handoffId: row.handoff_id,
+          purpose: row.purpose,
+          active: row.active === 1,
+          authorKind: row.author_kind,
+          authorProjectId: row.author_project_id,
+          targetRevision: row.target_revision,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }
+      : null;
+  };
   const pendingStatement = db.prepare(
     "SELECT 1 AS one FROM deletion_requests WHERE handoff_id = ? AND status = 'pending'",
   );
@@ -194,6 +229,18 @@ export function createSqliteHandoffReadStore(
         rowVersion: row.row_version,
         reviewState: row.review_state as HandoffView["reviewState"],
         nextActors,
+        read: {
+          revision: row.revision,
+          status: tombstone ? "unrecorded" : row.read_status,
+          readAt: tombstone ? null : row.revision_read_at,
+        },
+        processing: {
+          revision: row.revision,
+          status: tombstone ? "unrecorded" : row.processing_status,
+          startedAt: tombstone ? null : row.processing_started_at,
+          completedAt: tombstone ? null : row.processing_completed_at,
+        },
+        comment: tombstone ? null : commentOf(row.id),
         firstFetchedAt: row.first_fetched_at,
         reviewEngagedAt: row.review_engaged_at,
         pinned: row.pinned === 1,
@@ -291,7 +338,7 @@ export function createSqliteHandoffReadStore(
       return ok(loaded.value === null ? null : loaded.value.view);
     },
 
-    recordFirstFetch(handoffId, event) {
+    recordFirstFetch(handoffId, event, delivered) {
       // The write entry observes the live vault-move lock before any SQL runs;
       // filesystem lock inspection stays outside transactions (NFR-014).
       if (runDir !== null && vaultMoveLockHeld(runDir)) {
@@ -321,14 +368,35 @@ export function createSqliteHandoffReadStore(
               ),
             );
           }
+          {
+            const current = db
+              .prepare(
+                "SELECT current_artifact_id, revision, row_version FROM handoffs WHERE id = ? AND deleted_at IS NULL",
+              )
+              .get(handoffId) as
+              | { current_artifact_id: string | null; revision: number; row_version: number }
+              | null
+              | undefined;
+            if (!current) {
+              db.exec("ROLLBACK");
+              return ok(undefined);
+            }
+            if (current.current_artifact_id === delivered.artifactId && current.revision === delivered.revision) {
+              const read = db
+                .prepare(
+                  "UPDATE handoffs SET read_status = 'read', read_revision = revision, revision_read_at = ? WHERE id = ? AND read_status != 'read'",
+                )
+                .run(delivered.readEvent.createdAt, handoffId) as { changes: number };
+              if (read.changes === 1) ledger.append({ ...delivered.readEvent, rowVersion: current.row_version });
+            }
+            // Successful delivery of an older acquired body still owes the
+            // independent historical first-fetch marker below (HND-012/021).
+            // Only the current-Revision receipt is fenced by Artifact identity.
+          }
           const changed = db
             .prepare("UPDATE handoffs SET first_fetched_at = ? WHERE id = ? AND first_fetched_at IS NULL")
             .run(event.createdAt, handoffId) as { changes: number };
-          if (changed.changes !== 1) {
-            db.exec("ROLLBACK");
-            return ok(undefined);
-          }
-          ledger.append(event);
+          if (changed.changes === 1) ledger.append(event);
           db.exec("COMMIT");
           return ok(undefined);
         } catch (transactionError) {

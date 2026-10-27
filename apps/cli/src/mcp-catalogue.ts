@@ -385,10 +385,10 @@ const HANDOFF_TOOLS: McpTool[] = [
         handoffId: { type: "string" },
         text: { type: "string" },
         file: { type: "string" },
-        targetRevision: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        expectedRowVersion: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+        targetRevision: { type: "integer", minimum: 1, maximum: 9007199254740991 },
+        expectedRowVersion: { type: "integer", minimum: 1, maximum: 9007199254740991 },
       },
-      required: ["handoffId"],
+      required: ["handoffId", "targetRevision", "expectedRowVersion"],
       oneOf: [{ required: ["text"] }, { required: ["file"] }],
     },
     argv: optionsArgv(
@@ -401,7 +401,11 @@ const HANDOFF_TOOLS: McpTool[] = [
       ],
       (a) => [String(a.handoffId)],
     ),
-    guard: (a) => ((a.text !== undefined) === (a.file !== undefined) ? REVIEW_SET_ONE_SOURCE : undefined),
+    guard: (a) => {
+      if (a.targetRevision === undefined) return requiredOptionSentence("--target-revision <n>");
+      if (a.expectedRowVersion === undefined) return "this command requires --expected-row-version";
+      return (a.text !== undefined) === (a.file !== undefined) ? REVIEW_SET_ONE_SOURCE : undefined;
+    },
   },
   {
     name: "handoff_review_withdraw",
@@ -413,20 +417,21 @@ const HANDOFF_TOOLS: McpTool[] = [
       type: "object",
       properties: {
         handoffId: { type: "string" },
-        expectedRowVersion: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+        expectedRowVersion: { type: "integer", minimum: 1, maximum: 9007199254740991 },
       },
-      required: ["handoffId"],
+      required: ["handoffId", "expectedRowVersion"],
     },
     argv: optionsArgv(
       ["review", "withdraw"],
       [{ property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" }],
       (a) => [String(a.handoffId)],
     ),
-    guard: () => undefined,
+    guard: (a) => (a.expectedRowVersion === undefined ? "this command requires --expected-row-version" : undefined),
   },
   {
     name: "handoff_revise",
-    description: "replace the current Artifact or resolve the Review Note without changing content",
+    description:
+      "replace the current Artifact or resolve the Review Note; expectedRowVersion is required for fresh mutation and optional only for successful recorded replay",
     annotations: WRITE,
     mirrorsIntegerBounds: true,
     properties: {

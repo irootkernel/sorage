@@ -166,7 +166,20 @@ describe("compiled Handoff producers and readable paths", () => {
     const count = (type: string) => f.events(initial.handoffId).filter((event) => event.eventType === type).length;
     expect(count("ARTIFACT_ACTIVATED")).toBe(Number(from === "file") + Number(to === "file"));
     expect(count("ARTIFACT_UNLINKED")).toBe(Number(from === "file"));
-    f.run(["review", "set", initial.handoffId, "--text", "Retained until deletion"], "recipient");
+    f.run(
+      [
+        "review",
+        "set",
+        initial.handoffId,
+        "--text",
+        "Retained until deletion",
+        "--target-revision",
+        "2",
+        "--expected-row-version",
+        "2",
+      ],
+      "recipient",
+    );
     f.run(["decline", initial.handoffId, "--reason", "Finished", "--expected-row-version", "3"], "recipient");
     f.run(["delete", "request", initial.handoffId, "--expected-row-version", "4"]);
     f.run(["delete", "approve", initial.handoffId, "--as-user", "--confirm", "--expected-row-version", "5"]);
@@ -207,16 +220,35 @@ describe("compiled Handoff producers and readable paths", () => {
       expect(f.snapshot()).toEqual(before);
       const replacement = join(f.dirs.sender, "replacement.md");
       writeFileSync(replacement, "new body");
-      expect(f.refuse(["revise", item.handoffId, "--file", replacement])).toBe("ARTIFACT_CORRUPTED");
+      expect(f.refuse(["revise", item.handoffId, "--file", replacement, "--expected-row-version", "1"])).toBe(
+        "ARTIFACT_CORRUPTED",
+      );
       expect(f.snapshot()).toEqual(before);
-      f.run(["review", "set", item.handoffId, "--text", "Needs review"], "recipient");
+      f.run(
+        [
+          "review",
+          "set",
+          item.handoffId,
+          "--text",
+          "Needs review",
+          "--target-revision",
+          "1",
+          "--expected-row-version",
+          "1",
+        ],
+        "recipient",
+      );
       before = f.snapshot();
-      expect(f.refuse(["revise", item.handoffId, "--no-change", "--reason", "Keep it"])).toBe("ARTIFACT_CORRUPTED");
+      expect(
+        f.refuse(["revise", item.handoffId, "--no-change", "--reason", "Keep it", "--expected-row-version", "2"]),
+      ).toBe("ARTIFACT_CORRUPTED");
       expect(f.snapshot()).toEqual(before);
       f.run(["decline", item.handoffId, "--reason", "Finished", "--expected-row-version", "2"], "recipient");
       f.run(["delete", "request", item.handoffId, "--expected-row-version", "3"]);
       before = f.snapshot();
-      expect(f.refuse(["delete", "approve", item.handoffId, "--as-user", "--confirm"])).toBe("ARTIFACT_CORRUPTED");
+      expect(
+        f.refuse(["delete", "approve", item.handoffId, "--as-user", "--confirm", "--expected-row-version", "4"]),
+      ).toBe("ARTIFACT_CORRUPTED");
       expect(f.snapshot()).toEqual(before);
       if (leaf !== null) expect(readFileSync(leaf, "utf8")).toBe(damaged);
       else {

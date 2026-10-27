@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -120,7 +121,12 @@ describe("the AJ-04 loop and the terminal guards", () => {
     expect(runCli(["fetch", handoffId, "--json"], capture().ports)).toBe(0);
 
     // Step 6: review set moves to changes_requested at rowVersion 2.
-    expect(runCli(["review", "set", handoffId, "--text", "tighten", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "tighten", "--json", ...observedHandoffFlags(handoffId, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
 
     // Step 7: revise from A; the uniform --expected-row-version enforcement lands with TASK-036.
     const replacement = join(home, "brief-v2.md");
@@ -128,7 +134,15 @@ describe("the AJ-04 loop and the terminal guards", () => {
     process.chdir(workA);
     const revise = capture();
     const reviseExit = runCli(
-      ["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"],
+      [
+        "revise",
+        handoffId,
+        "--file",
+        replacement,
+        "--allow-external-source",
+        "--json",
+        ...observedHandoffFlags(handoffId, "row"),
+      ],
       revise.ports,
     );
     if (reviseExit !== 0) throw new Error(`loop revise failed (${reviseExit}): ${revise.errText()}`);
@@ -168,11 +182,27 @@ describe("the AJ-04 loop and the terminal guards", () => {
     process.chdir(workA);
     const reviseRefused = capture();
     expect(
-      runCli(["revise", handoffId, "--file", replacement, "--allow-external-source", "--json"], reviseRefused.ports),
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          replacement,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        reviseRefused.ports,
+      ),
     ).toBe(65);
     expect((JSON.parse(reviseRefused.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_TERMINAL");
     const noteRefused = capture();
-    expect(runCli(["review", "set", handoffId, "--text", "late", "--json"], noteRefused.ports)).toBe(65);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "late", "--json", ...observedHandoffFlags(handoffId, "both")],
+        noteRefused.ports,
+      ),
+    ).toBe(65);
     process.chdir(original);
   });
 
@@ -232,9 +262,19 @@ describe("the AJ-04 loop and the terminal guards", () => {
 
     // Steps 2-3: B and C request different changes while D accepts at Revision 1.
     process.chdir(workB);
-    expect(runCli(["review", "set", forBeta, "--text", "tighten the intro", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", forBeta, "--text", "tighten the intro", "--json", ...observedHandoffFlags(forBeta, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workC);
-    expect(runCli(["review", "set", forGamma, "--text", "add a section", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", forGamma, "--text", "add a section", "--json", ...observedHandoffFlags(forGamma, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workD);
     expect(
       runCli(
@@ -258,11 +298,33 @@ describe("the AJ-04 loop and the terminal guards", () => {
     writeFileSync(gammaReplacement, "# Shared, revised for Gamma\n");
     process.chdir(workA);
     expect(
-      runCli(["revise", forBeta, "--file", betaReplacement, "--allow-external-source", "--json"], capture().ports),
+      runCli(
+        [
+          "revise",
+          forBeta,
+          "--file",
+          betaReplacement,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(forBeta, "row"),
+        ],
+        capture().ports,
+      ),
     ).toBe(0);
     const gammaRevised = capture();
     expect(
-      runCli(["revise", forGamma, "--file", gammaReplacement, "--allow-external-source", "--json"], gammaRevised.ports),
+      runCli(
+        [
+          "revise",
+          forGamma,
+          "--file",
+          gammaReplacement,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(forGamma, "row"),
+        ],
+        gammaRevised.ports,
+      ),
     ).toBe(0);
     const gammaReport = JSON.parse(gammaRevised.outText()) as { data: { revision: number; reviewState: string } };
     expect(gammaReport.data.revision).toBe(2);
@@ -282,7 +344,18 @@ describe("the AJ-04 loop and the terminal guards", () => {
     process.chdir(workA);
     const deltaTerminal = capture();
     expect(
-      runCli(["revise", forDelta, "--file", document, "--allow-external-source", "--json"], deltaTerminal.ports),
+      runCli(
+        [
+          "revise",
+          forDelta,
+          "--file",
+          document,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(forDelta, "row"),
+        ],
+        deltaTerminal.ports,
+      ),
     ).toBe(65);
     expect((JSON.parse(deltaTerminal.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_TERMINAL");
     process.chdir(workB);
@@ -330,7 +403,12 @@ describe("the AJ-04 loop and the terminal guards", () => {
 
     process.chdir(workB);
     const withNote = capture();
-    expect(runCli(["review", "set", handoffId, "--text", "blocked", "--json"], withNote.ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "blocked", "--json", ...observedHandoffFlags(handoffId, "both")],
+        withNote.ports,
+      ),
+    ).toBe(0);
     const noteBlocked = capture();
     expect(
       runCli(
@@ -354,7 +432,9 @@ describe("the AJ-04 loop and the terminal guards", () => {
     setMaterialized(1);
 
     // Withdraw the note, then prove the stale guards.
-    expect(runCli(["review", "withdraw", handoffId, "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(["review", "withdraw", handoffId, "--json", ...observedHandoffFlags(handoffId, "row")], capture().ports),
+    ).toBe(0);
     const staleRevision = capture();
     expect(
       runCli(
@@ -478,7 +558,12 @@ describe("the AJ-04 loop and the terminal guards", () => {
 
     // A Note present blocks withdraw and decline closes the exchange with a reason.
     process.chdir(workB);
-    expect(runCli(["review", "set", second, "--text", "no", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", second, "--text", "no", "--json", ...observedHandoffFlags(second, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     process.chdir(workA);
     const blocked = capture();
     expect(runCli(["withdraw", second, "--json"], blocked.ports)).toBe(75);

@@ -303,6 +303,7 @@ describe("the mandatory missing-authority gates across mutations", () => {
       // revise --file: replay and state guards pass, then the gate refuses.
       const revised = reviseHandoff(revisionPortsOf(fixture), {
         handoffId: reviseId,
+        expectedRowVersion: 1,
         file: replacement,
         originalName: "replacement.md",
         allowExternalSource: true,
@@ -315,6 +316,7 @@ describe("the mandatory missing-authority gates across mutations", () => {
       // refuses before the resolution transaction.
       const noChange = reviseHandoff(revisionPortsOf(fixture), {
         handoffId: noChangeId,
+        expectedRowVersion: 1,
         noChange: true,
         reason: "unchanged",
         ...USER,
@@ -357,7 +359,7 @@ describe("the mandatory missing-authority gates across mutations", () => {
             },
           },
         } as never,
-        { handoffId: deleteId, confirm: true, ...USER },
+        { handoffId: deleteId, confirm: true, expectedRowVersion: 1, ...USER },
       );
       expect(approved.ok).toBe(false);
       if (!approved.ok) expect(approved.error.code).toBe("ARTIFACT_CORRUPTED");
@@ -445,6 +447,7 @@ describe("the mandatory body-corruption gates across mutations (SHR-003, VLT-023
 
       const revised = reviseHandoff(revisionPortsOf(fixture), {
         handoffId: reviseId,
+        expectedRowVersion: 1,
         file: fixture.replacement,
         originalName: "replacement.md",
         allowExternalSource: true,
@@ -455,6 +458,7 @@ describe("the mandatory body-corruption gates across mutations (SHR-003, VLT-023
 
       const noChange = reviseHandoff(revisionPortsOf(fixture), {
         handoffId: noChangeId,
+        expectedRowVersion: 1,
         noChange: true,
         reason: "corruption probe",
         ...USER,
@@ -485,7 +489,7 @@ describe("the mandatory body-corruption gates across mutations (SHR-003, VLT-023
             },
           },
         } as never,
-        { handoffId: deleteId, confirm: true, ...USER },
+        { handoffId: deleteId, confirm: true, expectedRowVersion: 1, ...USER },
       );
       expect(approved.ok).toBe(false);
       if (!approved.ok) expect(approved.error.code).toBe("ARTIFACT_CORRUPTED");

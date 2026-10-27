@@ -389,8 +389,21 @@ describe("the MCP-006 oracle: every compared call against an equivalent snapshot
         },
         {
           tool: "handoff_revise",
-          args: ({ workB, handoffId }) => ({ cwd: workB, handoffId, body: "oracle revision body" }),
-          cli: () => ["revise", prepared.handoffId, "--body", "oracle revision body", "--json"],
+          args: ({ workB, handoffId }) => ({
+            cwd: workB,
+            handoffId,
+            body: "oracle revision body",
+            expectedRowVersion: 1,
+          }),
+          cli: () => [
+            "revise",
+            prepared.handoffId,
+            "--body",
+            "oracle revision body",
+            "--expected-row-version",
+            "1",
+            "--json",
+          ],
           twinCwd: "workB",
           createdKeys: ["artifactId"],
         },

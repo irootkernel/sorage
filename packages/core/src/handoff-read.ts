@@ -5,6 +5,12 @@ import { type AppError, appError, err, isRetryableWaitListingFailure, ok, type R
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
 import type { ReviewState } from "./handoffs";
 import { type ProjectCommandPorts, resolveWorkspaceActor } from "./project-commands";
+import type {
+  HandoffProcessingEvidence,
+  HandoffReadEvidence,
+  RecipientComment,
+  RecipientCommentMetadata,
+} from "./reporting-commands";
 import type { ReviewNoteView } from "./review-commands";
 import { workspaceKey as deriveWorkspaceKey } from "./workspace-identity";
 
@@ -43,6 +49,9 @@ export interface HandoffView {
   rowVersion: number;
   reviewState: ReviewState;
   nextActors: { reviewNextActor: "recipient" | "sender" | null; administrativeNextActor: "user" | null };
+  read: HandoffReadEvidence;
+  processing: HandoffProcessingEvidence;
+  comment: RecipientCommentMetadata | null;
   firstFetchedAt: string | null;
   reviewEngagedAt: string | null;
   pinned: boolean;
@@ -122,7 +131,11 @@ export interface HandoffReadPort {
    * the live vault-move lock and the database move fence before any timestamp
    * or event lands (RUN-014, SHR-011).
    */
-  recordFirstFetch(handoffId: string, event: NewDomainEvent): Result<void, AppError>;
+  recordFirstFetch(
+    handoffId: string,
+    event: NewDomainEvent,
+    delivered: { artifactId: string; revision: number; readEvent: NewDomainEvent },
+  ): Result<void, AppError>;
 }
 
 export interface HandoffReadPorts {
@@ -541,11 +554,14 @@ export interface HandoffEventView {
 export const HANDOFF_TIMELINE_LIMIT = 50;
 
 export interface HandoffDetailReadPorts extends HandoffReadPorts {
-  reviews: { findNote(handoffId: string): Result<ReviewNoteView | null, AppError> };
+  reviews: {
+    findNote(handoffId: string): Result<ReviewNoteView | null, AppError>;
+    findComment(handoffId: string): Result<RecipientComment | null, AppError>;
+  };
   events: { listRecent(handoffId: string, limit: number): Result<HandoffEventView[], AppError> };
 }
 
-function gatedHandoffView(
+export function gatedHandoffView(
   ports: HandoffReadPorts,
   actorInput: ReadActorInput,
   id: string,
@@ -687,6 +703,7 @@ export function prepareHandoffFetch(
       ),
     );
   }
+  const acquiredArtifact = handoff.currentArtifact;
   const settleFirstFetch = (): Result<void, AppError> => {
     // Only the recipient Project and the User record a first fetch; a sender
     // fetch of its own Handoff sets nothing and emits nothing (HND-012). The
@@ -694,17 +711,34 @@ export function prepareHandoffFetch(
     // once under concurrency, from this snapshot alone, and its write entry
     // carries the vault-move fences (RUN-014, SHR-011).
     const firstFetchEligible = role === "recipient" || role === "user";
-    if (!firstFetchEligible || handoff.firstFetchedAt !== null) return ok(undefined);
+    if (!firstFetchEligible || (handoff.firstFetchedAt !== null && handoff.read.status === "read"))
+      return ok(undefined);
     const actor = role === "user" ? USER_ACTOR : projectActor(handoff.recipientProjectId);
-    return ports.handoffs.recordFirstFetch(handoff.id, {
-      id: ports.ids.next(),
-      handoffId: handoff.id,
-      eventType: "ARTIFACT_FETCHED_FIRST_TIME",
-      actor,
-      rowVersion: null,
-      metadata: { artifactId: handoff.currentArtifact?.id, sha256: handoff.currentArtifact?.sha256 },
-      createdAt: ports.clock.now().toISOString(),
-    });
+    return ports.handoffs.recordFirstFetch(
+      handoff.id,
+      {
+        id: ports.ids.next(),
+        handoffId: handoff.id,
+        eventType: "ARTIFACT_FETCHED_FIRST_TIME",
+        actor,
+        rowVersion: null,
+        metadata: { artifactId: handoff.currentArtifact?.id, sha256: handoff.currentArtifact?.sha256 },
+        createdAt: ports.clock.now().toISOString(),
+      },
+      {
+        artifactId: acquiredArtifact.id,
+        revision: handoff.revision,
+        readEvent: {
+          id: ports.ids.next(),
+          handoffId: handoff.id,
+          eventType: "HANDOFF_REVISION_READ",
+          actor,
+          rowVersion: handoff.rowVersion,
+          metadata: { revision: handoff.revision, artifactId: acquiredArtifact.id },
+          createdAt: ports.clock.now().toISOString(),
+        },
+      },
+    );
   };
   // The hot checksum policy keeps its existing placement and default-false
   // setting (VLT-023): the acquisition below resolves the Artifact's immutable

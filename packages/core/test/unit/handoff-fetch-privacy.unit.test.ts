@@ -58,6 +58,9 @@ function viewOf(overrides: Partial<HandoffView> = {}): HandoffView {
     rowVersion: 1,
     reviewState: "awaiting_recipient",
     nextActors: { reviewNextActor: "recipient", administrativeNextActor: null },
+    read: { revision: 1, status: "unrecorded", readAt: null },
+    processing: { revision: 1, status: "unrecorded", startedAt: null, completedAt: null },
+    comment: null,
     firstFetchedAt: null,
     reviewEngagedAt: null,
     pinned: false,
@@ -272,19 +275,19 @@ describe("prepareHandoffFetch participant privacy and acquisition order", () => 
     expect(prepared.value.localPath).toBe(`/vault/${KEY}`);
   });
 
-  it("settles an eligible fetch and leaves an already-fetched Handoff unchanged", () => {
+  it("settles current reading even when a historical first fetch already exists", () => {
     const spies: Spies = { checksumCalls: 0, openCalls: 0, probeCloses: 0, recordCalls: 0 };
     const fetched = fetchHandoff(portsOf(viewOf(), spies), userActor, "h-1");
     expect(fetched.ok).toBe(true);
     expect(spies.recordCalls).toBe(1);
-    // An already-fetched Handoff settles nothing on the next fetch.
+    // Historical first fetch never substitutes for current-Revision evidence.
     const again = fetchHandoff(
       portsOf(viewOf({ firstFetchedAt: "2026-01-02T00:00:00.000Z" }), spies),
       userActor,
       "h-1",
     );
     expect(again.ok).toBe(true);
-    expect(spies.recordCalls).toBe(0);
+    expect(spies.recordCalls).toBe(1);
   });
 
   it("propagates a settlement failure through the facade after the probe closed", () => {

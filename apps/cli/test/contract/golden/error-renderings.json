@@ -336,6 +336,54 @@
     "human": "HANDOFF_NOT_FOUND: rendering probe\nRecovery: Verify the UUID with sorage inbox or sorage outbox\n"
   },
   {
+    "code": "HANDOFF_INVALID_INPUT",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Retain the proposal and supply positive observed Revision/Row Version values and valid comment text."
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "HANDOFF_INVALID_INPUT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Retain the proposal and supply positive observed Revision/Row Version values and valid comment text."
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "HANDOFF_INVALID_INPUT: rendering probe\nRecovery: Retain the proposal and supply positive observed Revision/Row Version values and valid comment text.\n"
+  },
+  {
+    "code": "PROCESSING_STATE_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Inspect current processing evidence; do not restart or repeat a completed transition."
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "PROCESSING_STATE_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Inspect current processing evidence; do not restart or repeat a completed transition."
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "PROCESSING_STATE_CONFLICT: rendering probe\nRecovery: Inspect current processing evidence; do not restart or repeat a completed transition.\n"
+  },
+  {
     "code": "FORBIDDEN_ACTOR",
     "exitCode": 77,
     "httpStatus": 403,

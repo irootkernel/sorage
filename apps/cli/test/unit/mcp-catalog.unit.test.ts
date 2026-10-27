@@ -393,8 +393,8 @@ function sampleArguments(name: string): Record<string, unknown> {
     handoff_events: { handoffId: "h1" },
     handoff_fetch: { handoffId: "h1" },
     handoff_review_show: { handoffId: "h1" },
-    handoff_review_set: { handoffId: "h1", text: "n" },
-    handoff_review_withdraw: { handoffId: "h1" },
+    handoff_review_set: { handoffId: "h1", text: "n", targetRevision: 1, expectedRowVersion: 1 },
+    handoff_review_withdraw: { handoffId: "h1", expectedRowVersion: 1 },
     handoff_revise: { handoffId: "h1", body: "b" },
     handoff_accept: { handoffId: "h1", expectedRevision: 1, expectedRowVersion: 2 },
     handoff_decline: { handoffId: "h1", reason: "r", expectedRowVersion: 2 },
@@ -686,8 +686,18 @@ describe("admission layer 2 — the CLI parser's exit-2 class mirrored exactly",
     expect(
       refusalOf("handoff_send", { to: ["alpha"], title: "T", body: "b", replayOnly: true, idempotencyKey: "  " }),
     ).toBe(SEND_REPLAY_ONLY_KEY);
-    expect(refusalOf("handoff_review_set", { handoffId: "h1" })).toBe(REVIEW_SET_ONE_SOURCE);
-    expect(refusalOf("handoff_review_set", { handoffId: "h1", text: "n", file: "f.md" })).toBe(REVIEW_SET_ONE_SOURCE);
+    expect(refusalOf("handoff_review_set", { handoffId: "h1", targetRevision: 1, expectedRowVersion: 1 })).toBe(
+      REVIEW_SET_ONE_SOURCE,
+    );
+    expect(
+      refusalOf("handoff_review_set", {
+        handoffId: "h1",
+        text: "n",
+        file: "f.md",
+        targetRevision: 1,
+        expectedRowVersion: 1,
+      }),
+    ).toBe(REVIEW_SET_ONE_SOURCE);
     expect(refusalOf("handoff_revise", { handoffId: "h1" })).toBe(REVISE_ONE_SOURCE);
     expect(refusalOf("handoff_revise", { handoffId: "h1", body: "b", file: "f.md" })).toBe(REVISE_ONE_SOURCE);
     expect(refusalOf("handoff_revise", { handoffId: "h1", body: "  " })).toBe(BODY_MUST_NOT_BE_EMPTY);

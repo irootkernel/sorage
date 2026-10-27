@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../../apps/cli/test/fixtures/handoff-observations";
 import { spawn } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
 import { envelopeOf, errorEnvelopeOf, runCleanups, sorage, twoProjectFixture, BINARY } from "./helpers";
@@ -17,11 +18,19 @@ describe("AJ-08 conflicts, replay, and crash recovery", () => {
     const fixture = twoProjectFixture("aj08-stale");
     const id = fixture.sendTo("a", "b", "Stale");
     expect(
-      sorage(["review", "set", id, "--text", "Bump", "--json"], { home: fixture.home, cwd: fixture.workB }).status,
+      sorage(["review", "set", id, "--text", "Bump", "--json", ...observedHandoffFlags(id, "both", fixture.home)], {
+        home: fixture.home,
+        cwd: fixture.workB,
+      }).status,
     ).toBe(0);
     // The Note must be resolved first, or the accept answers REVIEW_NOTE_PRESENT;
     // with no Note left, only the stale Row Version can refuse the accept.
-    expect(sorage(["review", "withdraw", id, "--json"], { home: fixture.home, cwd: fixture.workB }).status).toBe(0);
+    expect(
+      sorage(["review", "withdraw", id, "--json", ...observedHandoffFlags(id, "row", fixture.home)], {
+        home: fixture.home,
+        cwd: fixture.workB,
+      }).status,
+    ).toBe(0);
     const stale = sorage(["accept", id, "--expected-revision", "1", "--expected-row-version", "1", "--json"], {
       home: fixture.home,
       cwd: fixture.workB,

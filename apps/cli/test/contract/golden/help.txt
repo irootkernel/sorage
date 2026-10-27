@@ -11,7 +11,8 @@ Options:
                                   the CLI as this operating-system user can
                                   assert User context
   --confirm                       confirm a state-conditional operation
-  --expected-row-version <n>      compare-and-set against this Row Version
+  --expected-row-version <n>      observed Row Version; mandatory for fresh
+                                  revise and delete approve
   --limit <n>                     page size for list commands
   --cursor <cursor>               resume a listing from an opaque cursor
   --json                          emit the versioned JSON envelope on standard
@@ -46,10 +47,16 @@ Commands:
                                   path; the recipient's first fetch is recorded
   events <handoff-id>             read the bounded recent metadata timeline;
                                   records nothing
+  comment                         read and replace the retained recipient
+                                  comment
+  processing                      report work independently of document
+                                  acceptance
   review                          read, create, withdraw, and remove Review
                                   Notes
   revise [options] <handoff-id>   replace the current Artifact or resolve the
-                                  Review Note without changing content
+                                  Review Note; expectedRowVersion is required
+                                  for fresh mutation and optional only for
+                                  successful recorded replay
   accept [options] <handoff-id>   accept the exact Revision as the recipient,
                                   closing the exchange
   decline [options] <handoff-id>  decline the Handoff as the recipient with a

@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../../apps/cli/test/fixtures/handoff-observations";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -17,10 +18,13 @@ describe("AJ-17 sender reads the Review Note through the CLI before revising", (
     const id = (envelopeOf(send) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
       ?.handoffId as string;
 
-    const note = sorage(["review", "set", id, "--text", "Tighten the intro", "--json"], {
-      home: fixture.home,
-      cwd: fixture.workB,
-    });
+    const note = sorage(
+      ["review", "set", id, "--text", "Tighten the intro", "--json", ...observedHandoffFlags(id, "both", fixture.home)],
+      {
+        home: fixture.home,
+        cwd: fixture.workB,
+      },
+    );
     expect(note.status).toBe(0);
 
     const outbox = sorage(["outbox", "--json"], { home: fixture.home, cwd: fixture.workA });
@@ -64,10 +68,13 @@ describe("AJ-17 sender reads the Review Note through the CLI before revising", (
     expect(readFileSync(fetchedData.data.localPath)).toEqual(readFileSync(fixture.document));
     const workspaceCopy = join(fixture.workA, "brief-copy.md");
     writeFileSync(workspaceCopy, `${readFileSync(fixture.document, "utf8")}\nRevised intro.\n`, "utf8");
-    const revise = sorage(["revise", id, "--file", workspaceCopy, "--json"], {
-      home: fixture.home,
-      cwd: fixture.workA,
-    });
+    const revise = sorage(
+      ["revise", id, "--file", workspaceCopy, "--json", ...observedHandoffFlags(id, "row", fixture.home)],
+      {
+        home: fixture.home,
+        cwd: fixture.workA,
+      },
+    );
     expect(revise.status).toBe(0);
 
     const recipientGet = sorage(["get", id, "--json"], { home: fixture.home, cwd: fixture.workB });
@@ -96,10 +103,21 @@ describe("AJ-17 sender reads the Review Note through the CLI before revising", (
     const boxOnly = twoProjectFixture("aj17-box");
     const boxId = boxOnly.sendTo("a", "b", "Box only");
     expect(
-      sorage(["review", "set", boxId, "--text", "hidden from a box check", "--json"], {
-        home: boxOnly.home,
-        cwd: boxOnly.workB,
-      }).status,
+      sorage(
+        [
+          "review",
+          "set",
+          boxId,
+          "--text",
+          "hidden from a box check",
+          "--json",
+          ...observedHandoffFlags(boxId, "both", boxOnly.home),
+        ],
+        {
+          home: boxOnly.home,
+          cwd: boxOnly.workB,
+        },
+      ).status,
     ).toBe(0);
     const boxOutbox = sorage(["outbox", "--json"], { home: boxOnly.home, cwd: boxOnly.workA });
     expect(boxOutbox.status).toBe(0);

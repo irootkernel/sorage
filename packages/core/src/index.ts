@@ -36,6 +36,7 @@ export * from "./preflight";
 export * from "./project-commands";
 export * from "./projects";
 export * from "./protocol";
+export * from "./reporting-commands";
 export * from "./retention-commands";
 export * from "./review-commands";
 export * from "./revision-commands";

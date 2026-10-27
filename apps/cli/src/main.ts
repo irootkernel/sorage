@@ -1,4 +1,3 @@
-import { schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -9,6 +8,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import * as daemonCommandPorts from "@sorage/adapters/src/daemon-command-ports";
+import { appCommandErrorOf, schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
@@ -33,7 +33,6 @@ import {
 } from "@sorage/adapters/src/launchagent-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
-import { appCommandErrorOf } from "@sorage/adapters/src/daemon-command-ports";
 import { type CoveredReadStorage, openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeApiTokenStore } from "@sorage/adapters/src/token-store";
@@ -41,9 +40,6 @@ import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-
 import {
   type AddProjectOutcome,
   type AppError,
-  type HandoffDetailReadPorts,
-  type HandoffListFilters,
-  type Result,
   acceptHandoff,
   addProject,
   appError,
@@ -54,9 +50,11 @@ import {
   backupStatus,
   backupVerify,
   bindProject,
-  type Configuration,
   CONFIG_ACCESS_REPAIR,
   CONFIG_PATH_REPAIR,
+  type Configuration,
+  channelError,
+  completeProcessing,
   configurationPathState,
   configureBackup,
   type DoctorReport,
@@ -68,26 +66,30 @@ import {
   errorSpec,
   fetchHandoff,
   getHandoff,
+  type HandoffDetailReadPorts,
+  type HandoffListFilters,
+  type HandoffView,
   hasBlockingCheck,
   initializeInstallation,
   installLaunchAgent,
   type ListedProject,
+  largeContentDisclosureMessage,
   listInbox,
   listOutbox,
   listProjects,
-  largeContentDisclosureMessage,
-  channelError,
   memoError,
   moveVault,
   ok,
   pinHandoff,
   probeConfigurationPath,
+  type Result,
   readHandoffTimeline,
+  readRecipientComment,
   readReviewNote,
+  rebindProject,
+  reconcileReboundInboxMarker,
   refreshInboxMarker,
   refreshProjectInboxMarker,
-  reconcileReboundInboxMarker,
-  rebindProject,
   rejectDeletion,
   removeReviewNote,
   renameProject,
@@ -98,12 +100,14 @@ import {
   rotateApiToken,
   runBackupCommand,
   runDoctor,
+  SORAGE_VERSION,
   sendHandoffs,
   setConfigurationValue,
+  setRecipientComment,
   setReviewNote,
   showConfiguration,
   showProject,
-  SORAGE_VERSION,
+  startProcessing,
   successEnvelope,
   USER_ACTOR,
   unarchiveHandoff,
@@ -121,8 +125,13 @@ import {
 } from "@sorage/core";
 import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError, Option } from "commander";
+import { registerChannelCommands } from "./channel-commands";
 import { buildCompletionScript } from "./completion";
+import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { expandTilde } from "./expand-tilde";
+import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
+import { serveMcp } from "./mcp-server";
+import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
 import { runPreflightCommand } from "./preflight-command";
 import { runSendRecoveryCommand } from "./send-recovery-command";
 import {
@@ -136,11 +145,6 @@ import {
   SEND_REPLAY_ONLY_KEY,
   SEND_TAKES_ONE_SOURCE,
 } from "./usage-sentences";
-import { memoNumericErrorContext, registerMemoCommands } from "./memo-commands";
-import { registerChannelCommands } from "./channel-commands";
-import { serveMcp } from "./mcp-server";
-import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
-import { createStdinPrompt, type InitChoices, type PromptPorts, runInitWizard } from "./init-wizard";
 import * as webBindings from "./web";
 import { createWebRuntimePorts, runWebCommand } from "./web";
 
@@ -213,7 +217,11 @@ export function buildProgram(
       "assert the local User as the actor for a User-admin operation; User-admin rows express workflow intent, and any process able to run the CLI as this operating-system user can assert User context",
     )
     .option("--confirm", "confirm a state-conditional operation")
-    .option("--expected-row-version <n>", "compare-and-set against this Row Version", parseInteger)
+    .option(
+      "--expected-row-version <n>",
+      "observed Row Version; mandatory for fresh revise and delete approve",
+      parseInteger,
+    )
     .option("--limit <n>", "page size for list commands", parseInteger)
     .option("--cursor <cursor>", "resume a listing from an opaque cursor")
     .option("--json", "emit the versioned JSON envelope on standard output");
@@ -1197,7 +1205,7 @@ export function buildProgram(
         } else {
           ports.out(`${result.value.title} (${result.value.id})
 `);
-          ports.out(`  state ${result.value.reviewState}, revision ${result.value.revision}, rowVersion ${result.value.rowVersion}
+          ports.out(`  ${reportingSummary(result.value)}, revision ${result.value.revision}, rowVersion ${result.value.rowVersion}
 `);
         }
       });
@@ -1260,6 +1268,142 @@ export function buildProgram(
       });
     });
 
+  const comment = program.command("comment").description("read and replace the retained recipient comment");
+  comment
+    .command("show <handoff-id>")
+    .description("read the retained recipient comment; records nothing")
+    .action((id: string, _options: unknown, command: Command) => {
+      const globals = command.optsWithGlobals();
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode, true, { log: false })) return;
+      withCoveredRead(ports, json, reportExitCode, "handoff", (storage) => {
+        const result = readRecipientComment(
+          createNodeHandoffReadPorts({ database: storage.db }),
+          actorInputOf(globals),
+          id,
+        );
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json, undefined, { log: false }));
+          return;
+        }
+        if (json) ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+        else if (result.value === null) ports.out("no recipient comment\n");
+        else
+          ports.out(
+            `${result.value.body}\n  purpose ${result.value.purpose}, active ${result.value.active}, targetRevision ${result.value.targetRevision}, author ${result.value.authorKind}\n`,
+          );
+      });
+    });
+  comment
+    .command("set <handoff-id>")
+    .description("replace the recipient comment using the observed document and Row Version")
+    .option("--text <text>", "the comment text inline")
+    .option("--file <path>", "read UTF-8 comment text from a regular file")
+    .option("--purpose <purpose>", "general or change_request", "general")
+    .requiredOption("--expected-revision <n>", "the observed document Revision", parseInteger)
+    .action(
+      (
+        id: string,
+        options: { text?: string; file?: string; purpose: string; expectedRevision: number },
+        command: Command,
+      ) => {
+        const globals = command.optsWithGlobals();
+        const json = globals.json === true;
+        if (
+          typeof globals.expectedRowVersion !== "number" ||
+          (options.text === undefined) === (options.file === undefined)
+        ) {
+          ports.err("sorage: comment set requires one --text/--file source and --expected-row-version\n");
+          reportExitCode(2);
+          return;
+        }
+        if (!requireInitialized(ports, json, reportExitCode, true)) return;
+        const text = options.text ?? readNoteFile(options.file as string);
+        if (text === null) {
+          reportExitCode(
+            renderAppError(
+              appError("HANDOFF_INVALID_INPUT", "the comment source must be a readable regular UTF-8 file"),
+              ports,
+              json,
+            ),
+          );
+          return;
+        }
+        const result = setRecipientComment(createNodeReviewPorts(), {
+          ...actorInputOf(globals),
+          handoffId: id,
+          text,
+          purpose: options.purpose as "general" | "change_request",
+          expectedRevision: options.expectedRevision,
+          expectedRowVersion: globals.expectedRowVersion,
+        });
+        if (!result.ok) {
+          reportExitCode(renderAppError(result.error, ports, json));
+          return;
+        }
+        refreshMarker(id, ports);
+        if (json) ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+        else ports.out(`Comment set on ${id}; ${reportingSummary(result.value.handoff)}\n`);
+      },
+    );
+  const processing = program.command("processing").description("report work independently of document acceptance");
+  for (const [name, mutate] of [
+    ["start", startProcessing],
+    ["complete", completeProcessing],
+  ] as const) {
+    processing
+      .command(`${name} <handoff-id>`)
+      .description(`${name} processing with an optional general comment`)
+      .requiredOption("--expected-revision <n>", "the observed document Revision", parseInteger)
+      .option("--comment-text <text>", "replace the general comment inline")
+      .option("--comment-file <path>", "replace the general comment from a regular UTF-8 file")
+      .action(
+        (
+          id: string,
+          options: { expectedRevision: number; commentText?: string; commentFile?: string },
+          command: Command,
+        ) => {
+          const globals = command.optsWithGlobals();
+          const json = globals.json === true;
+          if (
+            typeof globals.expectedRowVersion !== "number" ||
+            (options.commentText !== undefined && options.commentFile !== undefined)
+          ) {
+            ports.err("sorage: processing requires --expected-row-version and at most one comment source\n");
+            reportExitCode(2);
+            return;
+          }
+          if (!requireInitialized(ports, json, reportExitCode, true)) return;
+          const text =
+            options.commentText ?? (options.commentFile === undefined ? undefined : readNoteFile(options.commentFile));
+          if (text === null) {
+            reportExitCode(
+              renderAppError(
+                appError("HANDOFF_INVALID_INPUT", "the comment source must be a readable regular UTF-8 file"),
+                ports,
+                json,
+              ),
+            );
+            return;
+          }
+          const result = mutate(createNodeReviewPorts(), {
+            ...actorInputOf(globals),
+            handoffId: id,
+            expectedRevision: options.expectedRevision,
+            expectedRowVersion: globals.expectedRowVersion,
+            comment: text,
+          });
+          if (!result.ok) {
+            reportExitCode(renderAppError(result.error, ports, json));
+            return;
+          }
+          refreshMarker(id, ports);
+          if (json) ports.out(`${JSON.stringify(successEnvelope(result.value, requestId()), null, 2)}\n`);
+          else ports.out(`Processing ${name} on ${id}; ${reportingSummary(result.value.handoff)}\n`);
+        },
+      );
+  }
+
   const review = program.command("review").description("read, create, withdraw, and remove Review Notes");
 
   review
@@ -1292,10 +1436,15 @@ export function buildProgram(
     .description("create or update this Handoff's Review Note as the recipient or the User")
     .option("--text <text>", "the note text inline")
     .option("--file <path>", "read the note text from a file, with ~ expansion")
-    .option("--target-revision <n>", "the Revision the note targets", parseInteger)
+    .requiredOption("--target-revision <n>", "the observed Revision the note targets", parseInteger)
     .action((id: string, options: { text?: string; file?: string; targetRevision?: number }, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
+      if (typeof globals.expectedRowVersion !== "number") {
+        ports.err("sorage: this command requires --expected-row-version\nRun 'sorage --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
       if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if ((options.text === undefined) === (options.file === undefined)) {
         ports.err(`sorage: ${REVIEW_SET_ONE_SOURCE}\n`);
@@ -1337,6 +1486,11 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
+      if (typeof globals.expectedRowVersion !== "number") {
+        ports.err("sorage: this command requires --expected-row-version\nRun 'sorage --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
       if (!requireInitialized(ports, json, reportExitCode, true)) return;
       const result = withdrawReviewNote(createNodeReviewPorts(), {
         ...actorInputOf(globals),
@@ -1363,6 +1517,11 @@ export function buildProgram(
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
+      if (typeof globals.expectedRowVersion !== "number") {
+        ports.err("sorage: this command requires --expected-row-version\nRun 'sorage --help' for usage.\n");
+        reportExitCode(2);
+        return;
+      }
       if (!requireInitialized(ports, json, reportExitCode, true)) return;
       if (globals.asUser !== true) {
         reportExitCode(
@@ -1396,7 +1555,9 @@ export function buildProgram(
 
   program
     .command("revise <handoff-id>")
-    .description("replace the current Artifact or resolve the Review Note without changing content")
+    .description(
+      "replace the current Artifact or resolve the Review Note; expectedRowVersion is required for fresh mutation and optional only for successful recorded replay",
+    )
     .option("--body <text>", "inline Markdown text materialized as the replacement document")
     .option("--file <path>", "the replacement document, with ~ expansion")
     .option("--no-change", "resolve the Review Note without changing content")
@@ -2598,8 +2759,8 @@ function reportListing(
 `);
     return;
   }
-  for (const handoff of value.handoffs as Array<{ title: string; id: string; reviewState: string }>) {
-    ports.out(`${handoff.id}  ${handoff.reviewState.padEnd(18)} ${handoff.title}
+  for (const handoff of value.handoffs as HandoffView[]) {
+    ports.out(`${handoff.id}  ${reportingSummary(handoff)}  ${handoff.title}
 `);
   }
   if (value.nextCursor !== null) {
@@ -2608,9 +2769,20 @@ function reportListing(
   }
 }
 
+function reportingSummary(handoff: HandoffView): string {
+  const stopped = handoff.reviewState === "declined" || handoff.reviewState === "withdrawn";
+  const comment =
+    handoff.comment === null
+      ? ""
+      : `, ${handoff.comment.purpose} comment for revision ${handoff.comment.targetRevision}${handoff.comment.targetRevision < handoff.revision ? " (older revision)" : ""}`;
+  return `${handoff.reviewState}, read ${handoff.read.status}, processing ${stopped ? `stopped (${handoff.processing.status})` : handoff.processing.status}${comment}`;
+}
+
 function readNoteFile(path: string): string | null {
   try {
-    return readFileSync(expandTilde(path), "utf8");
+    const resolved = expandTilde(path);
+    if (!statSync(resolved).isFile()) return null;
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(resolved));
   } catch {
     return null;
   }
@@ -2680,6 +2852,7 @@ const COVERED_READ_OPERANDS: ReadonlyArray<readonly string[]> = [
   ["get"],
   ["events"],
   ["review", "show"],
+  ["comment", "show"],
   ["memo", "list"],
   ["memo", "show"],
   ["project", "list"],

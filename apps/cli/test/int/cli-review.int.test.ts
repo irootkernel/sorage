@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,7 +122,12 @@ describe("sorage review", () => {
     // The workspace sender participates, so the permission matrix owes it FORBIDDEN_ACTOR
     // instead of hiding the Handoff behind HANDOFF_NOT_FOUND (the dba85b1 round-2 fix).
     const refused = capture();
-    expect(runCli(["review", "set", handoffId, "--text", "no", "--json"], refused.ports)).toBe(77);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "no", "--json", ...observedHandoffFlags(handoffId, "both")],
+        refused.ports,
+      ),
+    ).toBe(77);
     expect((JSON.parse(refused.errText()) as { error: { code: string } }).error.code).toBe("FORBIDDEN_ACTOR");
     process.chdir(original);
   });
@@ -132,27 +138,57 @@ describe("sorage review", () => {
 
     process.chdir(workA);
     const sender = capture();
-    expect(runCli(["review", "set", handoffId, "--text", "please adjust", "--json"], sender.ports)).toBe(77);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "please adjust", "--json", ...observedHandoffFlags(handoffId, "both")],
+        sender.ports,
+      ),
+    ).toBe(77);
 
     process.chdir(workB);
     const set = capture();
-    expect(runCli(["review", "set", handoffId, "--text", "please adjust", "--json"], set.ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "please adjust", "--json", ...observedHandoffFlags(handoffId, "both")],
+        set.ports,
+      ),
+    ).toBe(0);
     const report = JSON.parse(set.outText()) as { data: { handoff: { reviewState: string; rowVersion: number } } };
     expect(report.data.handoff.reviewState).toBe("changes_requested");
     expect(report.data.handoff.rowVersion).toBe(2);
 
     const stale = capture();
     expect(
-      runCli(["review", "set", handoffId, "--text", "again", "--target-revision", "5", "--json"], stale.ports),
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "again",
+          "--target-revision",
+          "5",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        stale.ports,
+      ),
     ).toBe(75);
 
     const update = capture();
-    expect(runCli(["review", "set", handoffId, "--text", "updated note", "--json"], update.ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "updated note", "--json", ...observedHandoffFlags(handoffId, "both")],
+        update.ports,
+      ),
+    ).toBe(0);
     expect(eventsOf(home, "REVIEW_NOTE_CREATED")).toBe(1);
     expect(eventsOf(home, "REVIEW_NOTE_UPDATED")).toBe(1);
 
     const withdrawn = capture();
-    expect(runCli(["review", "withdraw", handoffId, "--json"], withdrawn.ports)).toBe(0);
+    expect(
+      runCli(["review", "withdraw", handoffId, "--json", ...observedHandoffFlags(handoffId, "row")], withdrawn.ports),
+    ).toBe(0);
     const withdrawnReport = JSON.parse(withdrawn.outText()) as {
       data: { handoff: { reviewState: string; revision: number } };
     };
@@ -160,11 +196,24 @@ describe("sorage review", () => {
     expect(withdrawnReport.data.handoff.revision).toBe(1);
     expect(eventsOf(home, "REVIEW_NOTE_WITHDRAWN")).toBe(1);
 
-    expect(runCli(["review", "set", handoffId, "--text", "second round", "--json"], capture().ports)).toBe(0);
+    expect(
+      runCli(
+        ["review", "set", handoffId, "--text", "second round", "--json", ...observedHandoffFlags(handoffId, "both")],
+        capture().ports,
+      ),
+    ).toBe(0);
     const unauthorized = capture();
-    expect(runCli(["review", "remove", handoffId, "--confirm", "--json"], unauthorized.ports)).toBe(77);
+    expect(
+      runCli(
+        ["review", "remove", handoffId, "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+        unauthorized.ports,
+      ),
+    ).toBe(77);
     const removed = capture();
-    const removeExit = runCli(["review", "remove", handoffId, "--as-user", "--confirm", "--json"], removed.ports);
+    const removeExit = runCli(
+      ["review", "remove", handoffId, "--as-user", "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+      removed.ports,
+    );
     if (removeExit !== 0) throw new Error(`remove failed (${removeExit}): ${removed.errText()}`);
     expect(removeExit).toBe(0);
     const removedReport = JSON.parse(removed.outText()) as { data: { handoff: { reviewState: string } } };

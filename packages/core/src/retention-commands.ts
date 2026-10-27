@@ -4,6 +4,7 @@ import { type NewDomainEvent, SYSTEM_ACTOR, USER_ACTOR } from "./events";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { resolveWorkspaceActor } from "./project-commands";
+import { validateHandoffObservations } from "./reporting-commands";
 import { workspaceKey } from "./workspace-identity";
 
 /**
@@ -414,6 +415,8 @@ export function approveDeletion(
   if (input.confirm !== true) {
     return err(appError("CONFIRMATION_REQUIRED", "deletion approval is destructive; pass --confirm", {}));
   }
+  const scalar = validateHandoffObservations(input);
+  if (!scalar.ok) return err(scalar.error);
   // Replay is evaluated before every other guard, so a retried approval returns the
   // recorded outcome instead of HANDOFF_DELETED on the tombstone it created (section 17.3).
   const requestHash = deletionApprovalRequestHash(input.handoffId, input.confirmPinned);
@@ -433,6 +436,8 @@ export function approveDeletion(
       return ok({ ...(JSON.parse(seen.value.responseJson) as RetentionOutcome), replayed: true });
     }
   }
+  const fresh = validateHandoffObservations(input, ["expectedRowVersion"]);
+  if (!fresh.ok) return err(fresh.error);
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;

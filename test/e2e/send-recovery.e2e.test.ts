@@ -173,7 +173,7 @@ describe("AJ-25 compiled send recovery", () => {
     data(f.run(["withdraw", id, "--json"]));
     data(f.run(["archive", id, "--as-user", "--json"]));
     data(f.run(["delete", "request", id, "--json"], f.home, f.workB));
-    data(f.run(["delete", "approve", id, "--as-user", "--confirm", "--json"]));
+    data(f.run(["delete", "approve", id, "--as-user", "--confirm", "--expected-row-version", "5", "--json"]));
     data(f.run(["project", "archive", "alpha", "--json"]));
     data(f.run(["project", "archive", "beta", "--json"]));
     data(f.run(["project", "unbind", "beta", "--dir", f.workB, "--json"]));

@@ -868,6 +868,8 @@ describe("the Handoff domain transactions under contention (R2)", () => {
 
     const reviewPorts = createNodeReviewPorts({ database: db });
     const reviewed = setReviewNote(reviewPorts, {
+      targetRevision: 1,
+      expectedRowVersion: 1,
       handoffId,
       text: "note",
       path: dir,

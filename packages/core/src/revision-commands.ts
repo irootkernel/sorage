@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
+import { type ArtifactBodyPrepareRequest, isUtf8ExactText, type PreparedArtifactBody } from "./content";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceActor } from "./events";
 import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash, titleSlug } from "./handoff-commands";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
-import { isUtf8ExactText, type ArtifactBodyPrepareRequest, type PreparedArtifactBody } from "./content";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
+import { validateHandoffObservations } from "./reporting-commands";
 import { workspaceKey } from "./workspace-identity";
 
 /**
@@ -191,6 +192,8 @@ export function reviseHandoff(ports: RevisionPorts, input: ReviseInput): Result<
   const handoff = found.value.view;
   const role = roleOf(ports, input, handoff);
   if (!role.ok) return err(role.error);
+  const scalar = validateHandoffObservations(input);
+  if (!scalar.ok) return err(scalar.error);
   const suppliedSources = [input.body !== undefined, input.file !== undefined, input.noChange === true].filter(
     Boolean,
   ).length;
@@ -308,6 +311,8 @@ function reviseContent(
       if (!replayed.ok) return err(replayed.error);
       if (replayed.value !== null) return ok(replayed.value);
     }
+    const fresh = validateHandoffObservations(input, ["expectedRowVersion"]);
+    if (!fresh.ok) return err(fresh.error);
     const outcome = evaluateHandoffOperation(
       "revise no-change",
       { ...facts, hasReviewNote: handoff.hasReviewNote },
@@ -400,6 +405,8 @@ function reviseContent(
     if (!replayed.ok) return err(replayed.error);
     if (replayed.value !== null) return ok(replayed.value);
   }
+  const fresh = validateHandoffObservations(input, ["expectedRowVersion"]);
+  if (!fresh.ok) return err(fresh.error);
   // The state machine answers before any content comparison (row 23, row 24).
   const outcome = evaluateHandoffOperation("revise", facts, role, {
     participant: true,

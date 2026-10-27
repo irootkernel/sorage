@@ -51,6 +51,38 @@ beforeAll(async () => {
 });
 
 function normalize(text: string): string {
+  // UUID ordering is not meaningful after UUID redaction. Canonicalize only
+  // equal-timestamp timeline ties, keeping the runtime's newest-first order.
+  if (text.trimStart().startsWith("{")) {
+    type TimelineEnvelope = { data?: Array<{ id?: string; eventType?: string; createdAt?: string }> };
+    let envelope: TimelineEnvelope | null = null;
+    try {
+      envelope = JSON.parse(text) as TimelineEnvelope;
+    } catch {
+      // Stored goldens may contain non-JSON redaction tokens such as <bytes>.
+    }
+    if (
+      envelope !== null &&
+      Array.isArray(envelope.data) &&
+      envelope.data.length > 0 &&
+      envelope.data.every(
+        (event) =>
+          typeof event.eventType === "string" && typeof event.createdAt === "string" && event.createdAt !== "<ts>",
+      )
+    ) {
+      const rawOrder = [...envelope.data].sort((a, b) => {
+        const time = a.createdAt === b.createdAt ? 0 : (a.createdAt as string) > (b.createdAt as string) ? -1 : 1;
+        return time || (a.id === b.id ? 0 : (a.id as string) > (b.id as string) ? -1 : 1);
+      });
+      expect(envelope.data, "raw timeline retains (createdAt DESC, id DESC) before UUID redaction").toEqual(rawOrder);
+      envelope.data.sort(
+        (a, b) =>
+          (b.createdAt as string).localeCompare(a.createdAt as string) ||
+          (a.eventType as string).localeCompare(b.eventType as string),
+      );
+      text = `${JSON.stringify(envelope, null, 2)}\n`;
+    }
+  }
   return (
     text
       .split(home)
@@ -143,13 +175,43 @@ const steps: Step[] = [
   { name: "18-fetch", args: ["fetch", "{H1}", "--as", "beta", "--json"], cwd: workB },
   {
     name: "19-review-set",
-    args: ["review", "set", "{H1}", "--as", "beta", "--text", "Tighten the title", "--json"],
+    args: [
+      "review",
+      "set",
+      "{H1}",
+      "--target-revision",
+      "1",
+      "--expected-row-version",
+      "1",
+      "--as",
+      "beta",
+      "--text",
+      "Tighten the title",
+      "--json",
+    ],
     cwd: workB,
   },
-  { name: "20-review-withdraw", args: ["review", "withdraw", "{H1}", "--as", "beta", "--json"], cwd: workB },
+  {
+    name: "20-review-withdraw",
+    args: ["review", "withdraw", "{H1}", "--expected-row-version", "2", "--as", "beta", "--json"],
+    cwd: workB,
+  },
   {
     name: "21-review-set-again",
-    args: ["review", "set", "{H1}", "--as", "beta", "--text", "Tighten the title again", "--json"],
+    args: [
+      "review",
+      "set",
+      "{H1}",
+      "--target-revision",
+      "1",
+      "--expected-row-version",
+      "3",
+      "--as",
+      "beta",
+      "--text",
+      "Tighten the title again",
+      "--json",
+    ],
     cwd: workB,
   },
   { name: "21a-review-show", args: ["review", "show", "{H1}", "--as", "beta", "--json"], cwd: workB },
@@ -157,7 +219,18 @@ const steps: Step[] = [
   { name: "21c-events", args: ["events", "{H1}", "--as", "alpha", "--json"] },
   {
     name: "22-revise",
-    args: ["revise", "{H1}", "--as", "alpha", "--file", replacement, "--allow-external-source", "--json"],
+    args: [
+      "revise",
+      "{H1}",
+      "--expected-row-version",
+      "4",
+      "--as",
+      "alpha",
+      "--file",
+      replacement,
+      "--allow-external-source",
+      "--json",
+    ],
   },
   {
     name: "23-accept",
@@ -180,10 +253,26 @@ const steps: Step[] = [
   },
   {
     name: "30-review-set-h2",
-    args: ["review", "set", "{H2}", "--as", "beta", "--text", "Remove me", "--json"],
+    args: [
+      "review",
+      "set",
+      "{H2}",
+      "--target-revision",
+      "1",
+      "--expected-row-version",
+      "1",
+      "--as",
+      "beta",
+      "--text",
+      "Remove me",
+      "--json",
+    ],
     cwd: workB,
   },
-  { name: "31-review-remove", args: ["review", "remove", "{H2}", "--as-user", "--confirm", "--json"] },
+  {
+    name: "31-review-remove",
+    args: ["review", "remove", "{H2}", "--expected-row-version", "2", "--as-user", "--confirm", "--json"],
+  },
   { name: "31a-review-show-null", args: ["review", "show", "{H2}", "--as", "beta", "--json"], cwd: workB },
   {
     name: "32-send-h3",
@@ -212,7 +301,10 @@ const steps: Step[] = [
     cwd: workB,
   },
   { name: "38-delete-request", args: ["delete", "request", "{H5}", "--as", "beta", "--json"], cwd: workB },
-  { name: "39-delete-approve", args: ["delete", "approve", "{H5}", "--as-user", "--confirm", "--json"] },
+  {
+    name: "39-delete-approve",
+    args: ["delete", "approve", "{H5}", "--expected-row-version", "3", "--as-user", "--confirm", "--json"],
+  },
   { name: "39a-events-tombstone", args: ["events", "{H5}", "--as", "beta", "--json"], cwd: workB },
   { name: "39b-review-show-tombstone", args: ["review", "show", "{H5}", "--as", "beta", "--json"], cwd: workB },
   {
@@ -269,6 +361,66 @@ const steps: Step[] = [
   { name: "59-backup-disable-push", args: ["backup", "disable-push", "--as-user", "--json"] },
   { name: "60-backup-disable", args: ["backup", "disable", "--as-user", "--json"] },
   { name: "61-project-rebind", args: ["project", "rebind", "alpha", "--from", workA, "--to", workA2, "--json"] },
+  {
+    name: "62-send-report",
+    args: ["send", "--as-user", "--to", "beta", "--title", "Report case", "--body", "Report document", "--json"],
+    capture: "H6",
+  },
+  { name: "63-comment-show-null", args: ["comment", "show", "{H6}", "--as", "beta", "--json"], cwd: workB },
+  {
+    name: "64-comment-set",
+    args: [
+      "comment",
+      "set",
+      "{H6}",
+      "--as",
+      "beta",
+      "--text",
+      "General explanation",
+      "--expected-revision",
+      "1",
+      "--expected-row-version",
+      "1",
+      "--json",
+    ],
+    cwd: workB,
+  },
+  { name: "65-comment-show", args: ["comment", "show", "{H6}", "--as-user", "--json"] },
+  {
+    name: "66-processing-start",
+    args: [
+      "processing",
+      "start",
+      "{H6}",
+      "--as",
+      "beta",
+      "--expected-revision",
+      "1",
+      "--expected-row-version",
+      "2",
+      "--json",
+    ],
+    cwd: workB,
+  },
+  {
+    name: "67-processing-complete",
+    args: [
+      "processing",
+      "complete",
+      "{H6}",
+      "--as",
+      "beta",
+      "--comment-text",
+      "Completed report",
+      "--expected-revision",
+      "1",
+      "--expected-row-version",
+      "3",
+      "--json",
+    ],
+    cwd: workB,
+  },
+  { name: "68-report-get", args: ["get", "{H6}", "--as-user", "--json"] },
 ];
 
 describe("the golden tour of every catalog command", () => {

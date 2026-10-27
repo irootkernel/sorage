@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,7 +128,12 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     // Step 2: approving a non-terminal Handoff refuses.
     process.chdir(workB);
     const nonTerminal = capture();
-    expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm", "--json"], nonTerminal.ports)).toBe(65);
+    expect(
+      runCli(
+        ["delete", "approve", handoffId, "--as-user", "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+        nonTerminal.ports,
+      ),
+    ).toBe(65);
     expect((JSON.parse(nonTerminal.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_NOT_TERMINAL");
 
     // Step 3: rejection retains the Handoff with the decision recorded.
@@ -144,7 +150,12 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     ).toBe(0);
     expect(runCli(["delete", "request", handoffId, "--json"], capture().ports)).toBe(0);
     const unauthorized = capture();
-    expect(runCli(["delete", "approve", handoffId, "--confirm", "--json"], unauthorized.ports)).toBe(77);
+    expect(
+      runCli(
+        ["delete", "approve", handoffId, "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+        unauthorized.ports,
+      ),
+    ).toBe(77);
 
     // Step 5: a corrupted Artifact refuses without claiming deletion.
     const _vaultArtifact = join(home, "vault", "artifacts");
@@ -165,7 +176,12 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     chmodSync(artifactPath, 0o644);
     writeFileSync(artifactPath, "tampered bytes");
     const corrupted = capture();
-    expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm", "--json"], corrupted.ports)).toBe(73);
+    expect(
+      runCli(
+        ["delete", "approve", handoffId, "--as-user", "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+        corrupted.ports,
+      ),
+    ).toBe(73);
     expect((JSON.parse(corrupted.errText()) as { error: { code: string } }).error.code).toBe("ARTIFACT_CORRUPTED");
     // Step 5 continues: restore the bytes before the journey proceeds.
     writeFileSync(artifactPath, "# Shared\n");
@@ -173,14 +189,29 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     // Step 6: pin, then approve without the distinct confirmation.
     expect(runCli(["pin", handoffId, "--as-user", "--json"], capture().ports)).toBe(0);
     const pinned = capture();
-    expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm", "--json"], pinned.ports)).toBe(64);
+    expect(
+      runCli(
+        ["delete", "approve", handoffId, "--as-user", "--confirm", "--json", ...observedHandoffFlags(handoffId, "row")],
+        pinned.ports,
+      ),
+    ).toBe(64);
     expect((JSON.parse(pinned.errText()) as { error: { code: string } }).error.code).toBe("PINNED_DELETE_CONFIRMATION");
 
     // Step 7: approve with the distinct confirmation; every rendering names the Git caveat.
     const approved = capture();
     expect(
       runCli(
-        ["delete", "approve", handoffId, "--as-user", "--confirm", "--confirm-pinned", handoffId, "--json"],
+        [
+          "delete",
+          "approve",
+          handoffId,
+          "--as-user",
+          "--confirm",
+          "--confirm-pinned",
+          handoffId,
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
         approved.ports,
       ),
     ).toBe(0);
@@ -195,7 +226,15 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     const revised = capture();
     expect(
       runCli(
-        ["revise", handoffId, "--file", join(home, "brief.md"), "--allow-external-source", "--json"],
+        [
+          "revise",
+          handoffId,
+          "--file",
+          join(home, "brief.md"),
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
         revised.ports,
       ),
     ).toBe(65);
@@ -249,23 +288,24 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     ).toBe(0);
     expect(runCli(["delete", "request", first, "--json"], capture().ports)).toBe(0);
     const approved = capture();
-    expect(
-      runCli(
-        ["delete", "approve", first, "--as-user", "--confirm", "--idempotency-key", "k-approve-1", "--json"],
-        approved.ports,
-      ),
-    ).toBe(0);
+    const originalRequest = [
+      "delete",
+      "approve",
+      first,
+      "--as-user",
+      "--confirm",
+      "--idempotency-key",
+      "k-approve-1",
+      "--json",
+      ...observedHandoffFlags(first, "row"),
+    ];
+    expect(runCli(originalRequest, approved.ports)).toBe(0);
     expect(eventsOf(home, "DELETION_APPROVED")).toHaveLength(1);
 
     // The identical retry replays the recorded approval instead of meeting HANDOFF_DELETED
     // on the tombstone the first call created, because replay is evaluated first.
     const replayed = capture();
-    expect(
-      runCli(
-        ["delete", "approve", first, "--as-user", "--confirm", "--idempotency-key", "k-approve-1", "--json"],
-        replayed.ports,
-      ),
-    ).toBe(0);
+    expect(runCli(originalRequest, replayed.ports)).toBe(0);
     const report = JSON.parse(replayed.outText()) as {
       data: { handoffId: string; deleted: boolean; warning: string; replayed: boolean };
     };
@@ -283,7 +323,17 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     const conflict = capture();
     expect(
       runCli(
-        ["delete", "approve", second, "--as-user", "--confirm", "--idempotency-key", "k-approve-1", "--json"],
+        [
+          "delete",
+          "approve",
+          second,
+          "--as-user",
+          "--confirm",
+          "--idempotency-key",
+          "k-approve-1",
+          "--json",
+          ...observedHandoffFlags(second, "row"),
+        ],
         conflict.ports,
       ),
     ).toBe(75);
@@ -362,7 +412,12 @@ describe("the AJ-10 deletion journey and the retention rules", () => {
     }
 
     const approved = capture();
-    expect(runCli(["delete", "approve", handoffId, "--as-user", "--confirm"], approved.ports)).toBe(0);
+    expect(
+      runCli(
+        ["delete", "approve", handoffId, "--as-user", "--confirm", ...observedHandoffFlags(handoffId, "row")],
+        approved.ports,
+      ),
+    ).toBe(0);
     expect(approved.outText()).toContain("prior Git commits may retain earlier content");
 
     // The approval drained the stale intent at start (RUN-002): nothing is left pending.

@@ -1,18 +1,15 @@
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
+import { projectActor, USER_ACTOR } from "./events";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
-import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
-import { resolveWorkspaceActor } from "./project-commands";
-import { workspaceKey } from "./workspace-identity";
-
-/**
- * The Review Note lifecycle of section 10 (REV-002 to REV-007, REV-014 to REV-016,
- * CLI-011, CLI-019): the recipient or the User authors against a target Revision, the
- * sender may never author, the recipient withdraws the current Note whichever actor
- * authored it, and only the User removes one administratively. Every mutation runs
- * through the section 4.2 evaluator, the Row Version compare-and-set, and the event
- * ledger inside one transaction.
- */
+import { evaluateHandoffOperation, type HandoffFacts } from "./handoffs";
+import {
+  compareHandoffObservations,
+  type RecipientComment,
+  type ReportMutation,
+  reportingRole,
+  setRecipientComment,
+  validateHandoffObservations,
+} from "./reporting-commands";
 
 export interface ReviewNoteView {
   handoffId: string;
@@ -25,82 +22,19 @@ export interface ReviewNoteView {
 }
 
 export interface ReviewMutationPort {
-  /** Loads the note of one Handoff, or null when none exists. */
   findNote(handoffId: string): Result<ReviewNoteView | null, AppError>;
-  /**
-   * Applies one evaluated review mutation in a single transaction: the compare-and-set
-   * on the Handoff row, the note upsert or delete, the review_engaged_at first-set,
-   * and the event append all commit together or not at all.
-   */
-  applyReviewMutation(input: {
-    handoffId: string;
-    expectedRowVersion: number;
-    reviewState: string;
-    setReviewEngagedAt: boolean;
-    note:
-      | {
-          op: "upsert";
-          authorKind: "registered_project" | "user";
-          authorProjectId: string | null;
-          targetRevision: number;
-          body: string;
-          now: string;
-        }
-      | { op: "delete" };
-    event: NewDomainEvent;
-  }): Result<{ rowVersion: number }, AppError>;
+  findComment(handoffId: string): Result<RecipientComment | null, AppError>;
+  applyReportMutation(input: ReportMutation): Result<{ rowVersion: number }, AppError>;
 }
-
 export interface ReviewPorts extends HandoffReadPorts {
   reviews: ReviewMutationPort;
 }
-
 export interface ReviewSetInput extends ReadActorInput {
   handoffId: string;
-  /** The note body; the CLI resolves --text or --file into this one field (CLI-011). */
   text: string;
   targetRevision?: number | undefined;
-  /** Enforced against the current Row Version whenever supplied (HND-014, CLI-020). */
   expectedRowVersion?: number | undefined;
 }
-
-function roleFor(
-  ports: ReviewPorts,
-  actorInput: ReadActorInput,
-  facts: HandoffFacts & {
-    senderKind: string;
-    senderProjectId: string | null;
-    senderWorkspaceKey: string | null;
-    recipientProjectId: string;
-  },
-): Result<"sender" | "recipient" | "user", AppError> {
-  if (actorInput.asUser === true) return ok("user");
-  const resolved = resolveWorkspaceActor(ports.projectPorts, {
-    path: actorInput.path,
-    userHome: actorInput.userHome,
-    as: actorInput.as,
-  });
-  if (!resolved.ok) return err(resolved.error);
-  if (resolved.value.kind === "registered_project") {
-    if (resolved.value.project.id === facts.recipientProjectId) return ok("recipient");
-    if (facts.senderKind === "registered_project" && facts.senderProjectId === resolved.value.project.id)
-      return ok("sender");
-  }
-  // An unregistered Workspace that sent this Handoff participates as the sender: the
-  // permission matrix answers FORBIDDEN_ACTOR for the review side rather than hiding
-  // the Handoff from its own sender (REV-004, section 22.4).
-  if (
-    resolved.value.kind === "unregistered_workspace" &&
-    facts.senderKind === "unregistered_workspace" &&
-    facts.senderWorkspaceKey === workspaceKey(ports.projectPorts.installationId, resolved.value.directory)
-  ) {
-    return ok("sender");
-  }
-  return err(
-    appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: "" }),
-  );
-}
-
 export function setReviewNote(
   ports: ReviewPorts,
   input: ReviewSetInput,
@@ -108,99 +42,30 @@ export function setReviewNote(
   { handoff: { id: string; reviewState: string; rowVersion: number; revision: number }; note: ReviewNoteView },
   AppError
 > {
-  if (input.text.trim() === "") {
-    return err(appError("CONFIG_INVALID", "the review note text must not be empty"));
-  }
-  const found = ports.handoffs.findHandoffView(input.handoffId);
-  if (!found.ok) return err(found.error);
-  if (found.value === null) {
-    return err(
-      appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${input.handoffId}'`, { handoffId: input.handoffId }),
-    );
-  }
-  const handoff = found.value;
-  const note = ports.reviews.findNote(input.handoffId);
-  if (!note.ok) return err(note.error);
-  const targetRevision = input.targetRevision ?? handoff.revision;
-  const facts: HandoffFacts = {
-    reviewState: handoff.reviewState,
-    tombstone: handoff.deletedAt !== null,
-    hasReviewNote: note.value !== null,
-    firstFetchedAt: handoff.firstFetchedAt,
-    reviewEngagedAt: handoff.reviewEngagedAt,
-    pinned: handoff.pinned,
-    archived: handoff.archivedAt !== null,
-    artifactMaterialized: handoff.currentArtifact?.materialized === true,
-    consecutiveNoChangeResolutions: 0,
-    pendingDeletionRequest: handoff.pendingDeletionRequest,
-  };
-  const role = roleFor(ports, input, {
-    ...facts,
-    senderKind: handoff.senderKind,
-    senderProjectId: handoff.senderProjectId,
-    senderWorkspaceKey: handoff.senderWorkspaceKey,
-    recipientProjectId: handoff.recipientProjectId,
-  });
-  if (!role.ok) return err(role.error);
-  const outcome = evaluateHandoffOperation("review set", facts, role.value, {
-    participant: true,
-    targetRevisionCurrent: targetRevision === handoff.revision,
-    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
-  });
-  if (!outcome.ok) return err(outcome.error);
-  const now = ports.clock.now().toISOString();
-  const body = input.text;
-  const authorKind = role.value === "user" ? ("user" as const) : ("registered_project" as const);
-  const authorProjectId = role.value === "user" ? null : handoff.recipientProjectId;
-  const applied = ports.reviews.applyReviewMutation({
-    handoffId: input.handoffId,
-    expectedRowVersion: handoff.rowVersion,
-    reviewState: outcome.value.reviewState,
-    setReviewEngagedAt: outcome.value.setsReviewEngagedAt,
-    note: { op: "upsert", authorKind, authorProjectId, targetRevision, body, now },
-    event: {
-      id: ports.ids.next(),
-      handoffId: input.handoffId,
-      eventType: outcome.value.events[0] as "REVIEW_NOTE_CREATED" | "REVIEW_NOTE_UPDATED",
-      actor: role.value === "user" ? USER_ACTOR : projectActor(handoff.recipientProjectId),
-      rowVersion: handoff.rowVersion + 1,
-      metadata: { targetRevision, authorKind },
-      createdAt: now,
-    },
-  });
-  if (!applied.ok) return err(applied.error);
-  const saved = ports.reviews.findNote(input.handoffId);
-  if (!saved.ok || saved.value === null) {
-    return err(appError("INTERNAL_ERROR", "the review note did not survive its own transaction"));
-  }
-  return ok({
-    handoff: {
-      id: input.handoffId,
-      reviewState: outcome.value.reviewState,
-      rowVersion: applied.value.rowVersion,
-      revision: handoff.revision,
-    },
-    note: saved.value,
-  });
+  const result = setRecipientComment(
+    ports,
+    { ...input, expectedRevision: input.targetRevision, purpose: "change_request" },
+    true,
+  );
+  if (!result.ok) return err(result.error);
+  const { id, reviewState, rowVersion, revision } = result.value.handoff;
+  const { purpose: _purpose, active: _active, ...note } = result.value.comment as RecipientComment;
+  return ok({ handoff: { id, reviewState, rowVersion, revision }, note });
 }
-
 export function withdrawReviewNote(
   ports: ReviewPorts,
   input: ReadActorInput & { handoffId: string; expectedRowVersion?: number | undefined },
 ): Result<{ handoff: { id: string; reviewState: string; rowVersion: number; revision: number } }, AppError> {
   return removeSide(ports, input, "review withdraw");
 }
-
 export function removeReviewNote(
   ports: ReviewPorts,
   input: ReadActorInput & { handoffId: string; confirm: boolean; expectedRowVersion?: number | undefined },
 ): Result<{ handoff: { id: string; reviewState: string; rowVersion: number; revision: number } }, AppError> {
-  if (input.confirm !== true) {
+  if (input.confirm !== true)
     return err(appError("CONFIRMATION_REQUIRED", "review remove is an audited User operation; pass --confirm", {}));
-  }
   return removeSide(ports, input, "review remove");
 }
-
 function removeSide(
   ports: ReviewPorts,
   input: ReadActorInput & { handoffId: string; expectedRowVersion?: number | undefined },
@@ -208,65 +73,54 @@ function removeSide(
 ): Result<{ handoff: { id: string; reviewState: string; rowVersion: number; revision: number } }, AppError> {
   const found = ports.handoffs.findHandoffView(input.handoffId);
   if (!found.ok) return err(found.error);
-  if (found.value === null) {
-    return err(
-      appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${input.handoffId}'`, { handoffId: input.handoffId }),
-    );
-  }
+  if (found.value === null) return err(appError("HANDOFF_NOT_FOUND", "the Handoff does not exist"));
   const handoff = found.value;
-  const note = ports.reviews.findNote(input.handoffId);
-  if (!note.ok) return err(note.error);
+  const role = reportingRole(ports, input, handoff);
+  if (!role.ok) return err(role.error);
+  const valid = validateHandoffObservations(input, ["expectedRowVersion"]);
+  if (!valid.ok) return err(valid.error);
+  const comment = ports.reviews.findComment(handoff.id);
+  if (!comment.ok) return err(comment.error);
   const facts: HandoffFacts = {
     reviewState: handoff.reviewState,
     tombstone: handoff.deletedAt !== null,
-    hasReviewNote: note.value !== null,
+    hasReviewNote: operation === "review remove" ? comment.value !== null : handoff.hasReviewNote,
     firstFetchedAt: handoff.firstFetchedAt,
     reviewEngagedAt: handoff.reviewEngagedAt,
     pinned: handoff.pinned,
     archived: handoff.archivedAt !== null,
     artifactMaterialized: handoff.currentArtifact?.materialized === true,
-    consecutiveNoChangeResolutions: 0,
+    consecutiveNoChangeResolutions: handoff.consecutiveNoChangeResolutions,
     pendingDeletionRequest: handoff.pendingDeletionRequest,
   };
-  const role = roleFor(ports, input, {
-    ...facts,
-    senderKind: handoff.senderKind,
-    senderProjectId: handoff.senderProjectId,
-    senderWorkspaceKey: handoff.senderWorkspaceKey,
-    recipientProjectId: handoff.recipientProjectId,
-  });
-  if (!role.ok) return err(role.error);
-  const outcome = evaluateHandoffOperation(operation, facts, role.value, {
-    participant: true,
-    expectedRowVersionMatches: expectedRowVersionGuard(input.expectedRowVersion, handoff.rowVersion),
-  });
+  const outcome = evaluateHandoffOperation(operation, facts, role.value, { participant: true });
   if (!outcome.ok) return err(outcome.error);
+  const compared = compareHandoffObservations(handoff, input);
+  if (!compared.ok) return err(compared.error);
   const now = ports.clock.now().toISOString();
-  const applied = ports.reviews.applyReviewMutation({
-    handoffId: input.handoffId,
+  const reviewState = handoff.hasReviewNote ? "awaiting_recipient" : handoff.reviewState;
+  const applied = ports.reviews.applyReportMutation({
+    handoffId: handoff.id,
     expectedRowVersion: handoff.rowVersion,
-    reviewState: outcome.value.reviewState,
-    setReviewEngagedAt: outcome.value.setsReviewEngagedAt,
-    note: { op: "delete" },
-    event: {
-      id: ports.ids.next(),
-      handoffId: input.handoffId,
-      eventType: outcome.value.events[0] as "REVIEW_NOTE_WITHDRAWN" | "REVIEW_NOTE_REMOVED",
-      actor: role.value === "user" ? USER_ACTOR : projectActor(handoff.recipientProjectId),
-      rowVersion: handoff.rowVersion + 1,
-      metadata: operation === "review withdraw" ? {} : { administrative: true },
-      createdAt: now,
-    },
+    reviewState,
+    comment: operation === "review remove" ? null : "deactivate",
+    engage: false,
+    now,
+    events: [
+      {
+        id: ports.ids.next(),
+        handoffId: handoff.id,
+        eventType: operation === "review remove" ? "REVIEW_NOTE_REMOVED" : "REVIEW_NOTE_WITHDRAWN",
+        actor: role.value === "user" ? USER_ACTOR : projectActor(handoff.recipientProjectId),
+        rowVersion: handoff.rowVersion + 1,
+        metadata: operation === "review remove" ? { administrative: true } : {},
+        createdAt: now,
+      },
+    ],
   });
   if (!applied.ok) return err(applied.error);
   return ok({
-    handoff: {
-      id: input.handoffId,
-      reviewState: outcome.value.reviewState,
-      rowVersion: applied.value.rowVersion,
-      revision: handoff.revision,
-    },
+    handoff: { id: handoff.id, revision: handoff.revision, rowVersion: applied.value.rowVersion, reviewState },
   });
 }
-
 export type { ReadActorInput };

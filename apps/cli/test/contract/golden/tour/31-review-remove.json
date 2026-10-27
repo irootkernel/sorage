@@ -3,9 +3,9 @@
   "data": {
     "handoff": {
       "id": "<uuid>",
-      "reviewState": "awaiting_recipient",
+      "revision": 1,
       "rowVersion": 3,
-      "revision": 1
+      "reviewState": "awaiting_recipient"
     }
   },
   "meta": {

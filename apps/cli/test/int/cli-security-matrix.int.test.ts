@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,14 +135,42 @@ describe("matrix row 20: a full journey leaves no secret material in logs or JSO
     const inbox = capture();
     expect(runCli(["inbox", "--json", "--as", "alpha"], inbox.ports)).toBe(0);
     const review = capture();
-    expect(runCli(["review", "set", handoffId, "--text", noteBody, "--json", "--as", "alpha"], review.ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          noteBody,
+          "--json",
+          "--as",
+          "alpha",
+          ...observedHandoffFlags(handoffId, "both"),
+        ],
+        review.ports,
+      ),
+    ).toBe(0);
     const fetch = capture();
     expect(runCli(["fetch", handoffId, "--json", "--as", "alpha"], fetch.ports)).toBe(0);
     // The sender resolves the Note with a revision, which is the loop AJ-04 accepts.
     const revised = join(home, "brief-v2.md");
     writeFileSync(revised, `# Brief v2\n\n${artifactBytes}\n`);
     const revise = capture();
-    expect(runCli(["revise", handoffId, "--file", revised, "--allow-external-source", "--json"], revise.ports)).toBe(0);
+    expect(
+      runCli(
+        [
+          "revise",
+          handoffId,
+          "--file",
+          revised,
+          "--allow-external-source",
+          "--json",
+          ...observedHandoffFlags(handoffId, "row"),
+        ],
+        revise.ports,
+      ),
+    ).toBe(0);
     const accept = capture();
     expect(
       runCli(

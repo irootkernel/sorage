@@ -183,6 +183,7 @@ describe("the production stage fence observes a late vault-move.lock", () => {
       expect(stagingNames()).toEqual(stagingBefore);
 
       const pausedRevise = reviseHandoff(revisionPorts, {
+        expectedRowVersion: 1,
         as: undefined,
         handoffId,
         file: replacement,
@@ -214,6 +215,7 @@ describe("the production stage fence observes a late vault-move.lock", () => {
     });
     expect(resumed.ok).toBe(true);
     const revised = reviseHandoff(revisionPorts, {
+      expectedRowVersion: 1,
       as: undefined,
       handoffId,
       file: replacement,

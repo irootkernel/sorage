@@ -342,7 +342,7 @@ export function createSqliteHandoffWriteStore(
             }
           }
           const insertHandoff = db.prepare(
-            "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'awaiting_recipient', 0, 0, ?, ?)",
+            "INSERT INTO handoffs (id, dispatch_group_id, supersedes_handoff_id, title, sender_kind, sender_project_id, sender_workspace_key, sender_path_snapshot, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, read_status, processing_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'awaiting_recipient', 0, 0, 'unconfirmed', 'not_started', ?, ?)",
           );
           for (const handoff of commit.handoffs) {
             insertHandoff.run(
@@ -569,7 +569,7 @@ export function createSqliteRevisionStore(
           }
           const changed = db
             .prepare(
-              "UPDATE handoffs SET revision = revision + 1, read_status = 'unrecorded', read_revision = NULL, revision_read_at = NULL, processing_status = 'unrecorded', processing_started_at = NULL, processing_completed_at = NULL, review_state = ?, current_artifact_id = ?, consecutive_no_change_resolutions = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
+              "UPDATE handoffs SET revision = revision + 1, read_status = 'unconfirmed', read_revision = NULL, revision_read_at = NULL, processing_status = 'not_started', processing_started_at = NULL, processing_completed_at = NULL, review_state = ?, current_artifact_id = ?, consecutive_no_change_resolutions = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
             )
             .run(
               "awaiting_recipient",
@@ -581,7 +581,7 @@ export function createSqliteRevisionStore(
           if (changed.changes !== 1) {
             return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
           }
-          db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
+          db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
           // The replacement lands first, so the living Handoff's metadata is
           // coherent at reference-proof time: the strengthened proof inside
           // the shared removal would otherwise see the CAS'd current Artifact
@@ -710,7 +710,7 @@ export function createSqliteRevisionStore(
           if (changed.changes !== 1) {
             return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
           }
-          db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
+          db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
           for (const event of input.events) {
             ledger.append(event);
           }

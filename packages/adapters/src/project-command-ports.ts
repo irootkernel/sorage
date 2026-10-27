@@ -9,10 +9,10 @@ import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
-import { AppCommandError, carriedAppError, storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { AppCommandError, type ContentionSurface, carriedAppError, storageContentionOf } from "./storage-contention";
 
 /**
  * The production wiring of the `sorage project` commands: the migrated SQLite database,
@@ -209,7 +209,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): P
           if (!table) return ok(0);
           const row = db
             .prepare(
-              "SELECT COUNT(*) AS count FROM handoffs WHERE recipient_project_id = ? AND review_state IN ('awaiting_recipient', 'changes_requested') AND deleted_at IS NULL",
+              "SELECT COUNT(*) AS count FROM handoffs WHERE recipient_project_id = ? AND (review_state IN ('awaiting_recipient', 'changes_requested') OR (review_state = 'accepted' AND processing_status IN ('not_started', 'in_progress'))) AND deleted_at IS NULL",
             )
             .get(projectId) as { count: number };
           return ok(row.count);

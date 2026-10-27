@@ -346,12 +346,12 @@
             },
             "targetRevision": {
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 9007199254740991
             },
             "expectedRowVersion": {
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 9007199254740991
             },
             "cwd": {
@@ -359,7 +359,9 @@
             }
           },
           "required": [
-            "handoffId"
+            "handoffId",
+            "targetRevision",
+            "expectedRowVersion"
           ],
           "oneOf": [
             {
@@ -393,7 +395,7 @@
             },
             "expectedRowVersion": {
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 9007199254740991
             },
             "cwd": {
@@ -401,7 +403,8 @@
             }
           },
           "required": [
-            "handoffId"
+            "handoffId",
+            "expectedRowVersion"
           ],
           "additionalProperties": false
         },
@@ -414,7 +417,7 @@
       },
       {
         "name": "handoff_revise",
-        "description": "replace the current Artifact or resolve the Review Note without changing content",
+        "description": "replace the current Artifact or resolve the Review Note; expectedRowVersion is required for fresh mutation and optional only for successful recorded replay",
         "inputSchema": {
           "type": "object",
           "properties": {

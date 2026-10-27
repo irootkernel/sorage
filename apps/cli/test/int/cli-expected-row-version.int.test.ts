@@ -1,3 +1,4 @@
+import { observedHandoffFlags } from "../fixtures/handoff-observations";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -110,7 +111,7 @@ function expectConflict(label: string, args: string[]): void {
   expect(result.err, label).toContain("ROW_VERSION_CONFLICT");
 }
 
-describe("the uniform optional --expected-row-version", () => {
+describe("observed --expected-row-version on every writer", () => {
   it("refuses a stale expectation on every Handoff-mutating command", () => {
     const fx = fixture();
     const replacement = join(fx.home, "replacement.md");
@@ -121,6 +122,8 @@ describe("the uniform optional --expected-row-version", () => {
       "review",
       "set",
       h1,
+      "--target-revision",
+      "1",
       "--as",
       "beta",
       "--text",
@@ -128,14 +131,18 @@ describe("the uniform optional --expected-row-version", () => {
       "--expected-row-version",
       stale(h1),
     ]);
-    expect(run(["review", "set", h1, "--as", "beta", "--text", "Needs work"]).exit).toBe(0);
+    expect(
+      run(["review", "set", h1, "--as", "beta", "--text", "Needs work", ...observedHandoffFlags(h1, "both")]).exit,
+    ).toBe(0);
 
     // review withdraw: changes_requested now.
     expectConflict("review withdraw", ["review", "withdraw", h1, "--as", "beta", "--expected-row-version", stale(h1)]);
-    expect(run(["review", "withdraw", h1, "--as", "beta"]).exit).toBe(0);
+    expect(run(["review", "withdraw", h1, "--as", "beta", ...observedHandoffFlags(h1, "row")]).exit).toBe(0);
 
     // review remove: put a Note back, then remove administratively with a stale value.
-    expect(run(["review", "set", h1, "--as", "beta", "--text", "Again"]).exit).toBe(0);
+    expect(
+      run(["review", "set", h1, "--as", "beta", "--text", "Again", ...observedHandoffFlags(h1, "both")]).exit,
+    ).toBe(0);
     expectConflict("review remove", [
       "review",
       "remove",
@@ -145,11 +152,14 @@ describe("the uniform optional --expected-row-version", () => {
       "--expected-row-version",
       stale(h1),
     ]);
-    expect(run(["review", "remove", h1, "--as-user", "--confirm"]).exit).toBe(0);
+    expect(run(["review", "remove", h1, "--as-user", "--confirm", ...observedHandoffFlags(h1, "row")]).exit).toBe(0);
 
     // revise --file and revise --no-change: a Note exists on the next Handoff.
     const h2 = fx.send("Revise cases");
-    expect(run(["review", "set", h2, "--as", "beta", "--text", "Change the title"]).exit).toBe(0);
+    expect(
+      run(["review", "set", h2, "--as", "beta", "--text", "Change the title", ...observedHandoffFlags(h2, "both")])
+        .exit,
+    ).toBe(0);
     expectConflict("revise --file", [
       "revise",
       h2,
@@ -161,8 +171,21 @@ describe("the uniform optional --expected-row-version", () => {
       "--expected-row-version",
       stale(h2),
     ]);
-    expect(run(["revise", h2, "--as", "alpha", "--file", replacement, "--allow-external-source"]).exit).toBe(0);
-    expect(run(["review", "set", h2, "--as", "beta", "--text", "Still wrong"]).exit).toBe(0);
+    expect(
+      run([
+        "revise",
+        h2,
+        "--as",
+        "alpha",
+        "--file",
+        replacement,
+        "--allow-external-source",
+        ...observedHandoffFlags(h2, "row"),
+      ]).exit,
+    ).toBe(0);
+    expect(
+      run(["review", "set", h2, "--as", "beta", "--text", "Still wrong", ...observedHandoffFlags(h2, "both")]).exit,
+    ).toBe(0);
     expectConflict("revise --no-change", [
       "revise",
       h2,
@@ -174,7 +197,18 @@ describe("the uniform optional --expected-row-version", () => {
       "--expected-row-version",
       stale(h2),
     ]);
-    expect(run(["revise", h2, "--as", "alpha", "--no-change", "--reason", "Addressed elsewhere"]).exit).toBe(0);
+    expect(
+      run([
+        "revise",
+        h2,
+        "--as",
+        "alpha",
+        "--no-change",
+        "--reason",
+        "Addressed elsewhere",
+        ...observedHandoffFlags(h2, "row"),
+      ]).exit,
+    ).toBe(0);
 
     // withdraw: a fresh, unengaged Handoff.
     const h3 = fx.send("Withdraw case");
@@ -214,7 +248,7 @@ describe("the uniform optional --expected-row-version", () => {
       "--expected-row-version",
       stale(h7),
     ]);
-    expect(run(["delete", "approve", h7, "--as-user", "--confirm"]).exit).toBe(0);
+    expect(run(["delete", "approve", h7, "--as-user", "--confirm", ...observedHandoffFlags(h7, "row")]).exit).toBe(0);
 
     const h8 = fx.send("Reject case");
     expect(run(["accept", h8, "--as", "beta", "--expected-revision", "1", "--expected-row-version", "1"]).exit).toBe(0);
@@ -227,8 +261,19 @@ describe("the uniform optional --expected-row-version", () => {
     const fx = fixture();
     const h1 = fx.send("Matching case");
     expect(
-      run(["review", "set", h1, "--as", "beta", "--text", "Fine", "--expected-row-version", String(rowVersionOf(h1))])
-        .exit,
+      run([
+        "review",
+        "set",
+        h1,
+        "--as",
+        "beta",
+        "--text",
+        "Fine",
+        "--expected-row-version",
+        String(rowVersionOf(h1)),
+        "--target-revision",
+        "1",
+      ]).exit,
     ).toBe(0);
     expect(run(["withdraw", "--help"]).exit).toBe(0);
   });

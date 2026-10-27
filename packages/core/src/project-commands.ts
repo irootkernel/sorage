@@ -322,7 +322,7 @@ export function unbindProject(ports: ProjectCommandPorts, input: UnbindProjectIn
     return err(
       appError(
         "CONFIRMATION_REQUIRED",
-        `the Project '${input.slug}' still has ${open.value} open Handoff(s); pass --confirm to unbind anyway`,
+        `the Project '${input.slug}' still has ${open.value} open or known unfinished Handoff(s); pass --confirm to unbind anyway`,
         {
           slug: input.slug,
           openHandoffs: open.value,

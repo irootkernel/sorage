@@ -3,6 +3,7 @@ import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
 import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { resolveWorkspaceActor } from "./project-commands";
+import { validateHandoffObservations } from "./reporting-commands";
 import { workspaceKey } from "./workspace-identity";
 
 /**
@@ -120,6 +121,8 @@ export function acceptHandoff(ports: TerminalPorts, input: AcceptInput): Result<
   const { handoff, integrity } = loaded.value;
   const role = roleFor(ports, input, handoff);
   if (!role.ok) return err(role.error);
+  const valid = validateHandoffObservations(input, ["expectedRevision", "expectedRowVersion"]);
+  if (!valid.ok) return err(valid.error);
   const outcome = evaluateHandoffOperation("accept", factsOf(handoff), role.value, {
     participant: true,
     expectedRevisionMatches: input.expectedRevision === handoff.revision,
@@ -199,6 +202,8 @@ export function declineHandoff(ports: TerminalPorts, input: DeclineInput): Resul
   const { handoff } = loaded.value;
   const role = roleFor(ports, input, handoff);
   if (!role.ok) return err(role.error);
+  const valid = validateHandoffObservations(input, ["expectedRowVersion"]);
+  if (!valid.ok) return err(valid.error);
   const outcome = evaluateHandoffOperation("decline", factsOf(handoff), role.value, {
     participant: true,
     reasonSupplied: input.reason.trim() !== "",
@@ -216,7 +221,7 @@ export function declineHandoff(ports: TerminalPorts, input: DeclineInput): Resul
       eventType: "HANDOFF_DECLINED",
       actor: role.value === "user" ? USER_ACTOR : projectActor(handoff.recipientProjectId),
       rowVersion: handoff.rowVersion + 1,
-      metadata: { reason: input.reason },
+      metadata: { reason: input.reason, ...(handoff.hasReviewNote ? { requestDeactivated: true } : {}) },
       createdAt: now,
     },
   });

@@ -81,10 +81,25 @@ describe("README quick start", () => {
     expect(inbox.stdout).toContain(handoffId);
     succeeds(run(["get", handoffId], recipient));
     succeeds(run(["fetch", handoffId], recipient));
-    succeeds(run(["review", "set", handoffId, "--text", "Clarify the rollback procedure."], recipient));
+    succeeds(
+      run(
+        [
+          "review",
+          "set",
+          handoffId,
+          "--text",
+          "Clarify the rollback procedure.",
+          "--target-revision",
+          "1",
+          "--expected-row-version",
+          "1",
+        ],
+        recipient,
+      ),
+    );
 
     writeFileSync(proposal, "# Proposal\n\nThe revised draft includes a rollback procedure.\n", "utf8");
-    succeeds(run(["revise", handoffId, "--file", "./proposal.md"], sender));
+    succeeds(run(["revise", handoffId, "--file", "./proposal.md", "--expected-row-version", "2"], sender));
 
     const revised = run(["get", handoffId], recipient);
     succeeds(revised);
