@@ -90,7 +90,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `INIT-012` | M1 | `TASK-013` |
 | `INIT-013` | M1 | `TASK-012` |
 | `INIT-014` | M1 | `TASK-014` |
-| `INIT-015` | M1 | `TASK-009` |
+| `INIT-015` | M1 | `TASK-009`, `TASK-127` |
 | `INIT-016` | M3 | `TASK-059`, `TASK-069` |
 | `INIT-017` | M1 | `TASK-014`, `TASK-020`, `TASK-025`, `TASK-068`, `TASK-118` |
 | `CFG-001` | M1 | `TASK-010`, `TASK-063` |
@@ -363,15 +363,15 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `MEM-004` | M7 | `TASK-087`, `TASK-090`, `TASK-091`, `TASK-094` |
 | `MEM-005` | M7 | `TASK-087`, `TASK-089`, `TASK-092`, `TASK-094` |
 | `MEM-006` | M7 | `TASK-089`, `TASK-090`, `TASK-091`, `TASK-092`, `TASK-094` |
-| `MEM-007` | M7 | `TASK-087`, `TASK-089`, `TASK-090`, `TASK-091`, `TASK-092`, `TASK-094` |
+| `MEM-007` | M7 | `TASK-087`, `TASK-089`, `TASK-090`, `TASK-091`, `TASK-092`, `TASK-094`, `TASK-127` |
 | `MEM-008` | M7 | `TASK-089`, `TASK-094` |
 | `MEM-009` | M7 | `TASK-088`, `TASK-089`, `TASK-094` |
 | `MEM-010` | M7 | `TASK-088`, `TASK-089`, `TASK-094` |
 | `MEM-011` | M7 | `TASK-089`, `TASK-090`, `TASK-092`, `TASK-094` |
-| `MEM-012` | M7 | `TASK-090`, `TASK-094` |
+| `MEM-012` | M7 | `TASK-090`, `TASK-094`, `TASK-127` |
 | `MEM-013` | M7 | `TASK-091`, `TASK-094` |
 | `MEM-014` | M7 | `TASK-092`, `TASK-094` |
-| `MEM-015` | M7 | `TASK-087`, `TASK-089`, `TASK-091`, `TASK-092`, `TASK-094` |
+| `MEM-015` | M7 | `TASK-087`, `TASK-089`, `TASK-091`, `TASK-092`, `TASK-094`, `TASK-127` |
 | `MEM-016` | M7 | `TASK-088`, `TASK-089`, `TASK-090`, `TASK-094` |
 | `MEM-017` | M7 | `TASK-088`, `TASK-094` |
 | `MEM-018` | M7 | `TASK-088`, `TASK-094` |
@@ -390,7 +390,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `PFL-007` | M8 | `TASK-097`, `TASK-099`, `TASK-100` |
 | `PFL-008` | M8 | `TASK-100` |
 | `SND-001` | M8 | `TASK-101`, `TASK-102`, `TASK-103`, `TASK-104` |
-| `SND-002` | M8 | `TASK-101`, `TASK-102`, `TASK-104`, `TASK-119` |
+| `SND-002` | M8 | `TASK-101`, `TASK-102`, `TASK-104`, `TASK-119`, `TASK-127` |
 | `SND-003` | M8 | `TASK-101`, `TASK-102`, `TASK-104` |
 | `SND-004` | M8 | `TASK-101`, `TASK-102`, `TASK-103`, `TASK-104` |
 | `SND-005` | M8 | `TASK-101`, `TASK-102`, `TASK-103`, `TASK-104` |
@@ -409,7 +409,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SHR-012` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-121`, `TASK-123` |
 | `SHR-013` | M9 | `TASK-105`, `TASK-107`, `TASK-108`, `TASK-110`, `TASK-126` |
 | `SHR-014` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-110` |
-| `SHR-015` | M9 | `TASK-111`, `TASK-112`, `TASK-114`, `TASK-116`, `TASK-119`, `TASK-121` |
+| `SHR-015` | M9 | `TASK-111`, `TASK-112`, `TASK-114`, `TASK-116`, `TASK-119`, `TASK-121`, `TASK-127` |
 | `CHN-001` | M9 | `TASK-105`, `TASK-109`, `TASK-110`, `TASK-121`, `TASK-123`, `TASK-126` |
 | `CHN-002` | M9 | `TASK-105`, `TASK-109`, `TASK-121`, `TASK-123`, `TASK-126` |
 | `CHN-003` | M9 | `TASK-105`, `TASK-109`, `TASK-121`, `TASK-123`, `TASK-126` |

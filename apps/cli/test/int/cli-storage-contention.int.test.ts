@@ -7,6 +7,8 @@ import * as channelCommandPorts from "@sorage/adapters/src/channel-command-ports
 import * as handoffCommandPorts from "@sorage/adapters/src/handoff-command-ports";
 import * as inboxMarkerPorts from "@sorage/adapters/src/inbox-marker-ports";
 import * as projectCommandPorts from "@sorage/adapters/src/project-command-ports";
+import * as memoCommandPorts from "@sorage/adapters/src/memo-command-ports";
+import * as vaultCommandPorts from "@sorage/adapters/src/vault-command-ports";
 import type { SorageSqlite } from "@sorage/adapters/src/sqlite/connection";
 import * as sqliteConnections from "@sorage/adapters/src/sqlite/connection";
 import * as migrator from "@sorage/adapters/src/sqlite/migrator";
@@ -79,6 +81,119 @@ function throwOnOpen() {
     throw busyError();
   });
 }
+
+describe("Memo CLI startup refusal boundaries (TASK-127)", () => {
+  const id = "00000000-0000-4000-8000-000000000001";
+  const commands = [
+    ["memo", "add", "--title", "Never dispatched", "--body", "body-sentinel"],
+    ["memo", "update", id, "--body", "body-sentinel", "--expected-row-version", "1"],
+    ["memo", "done", id, "--expected-row-version", "1"],
+    ["memo", "dismiss", id, "--expected-row-version", "1"],
+    ["memo", "reopen", id, "--expected-row-version", "1"],
+  ];
+
+  it.each(commands)("refuses %j before body capture or operation dispatch in either mode", (...args) => {
+    const drain = vi.spyOn(vaultCommandPorts, "createNodeVaultCommandPorts").mockReturnValue({
+      drainAtStart: () =>
+        err(
+          appError("INTERNAL_ERROR", "Reading the database failed", {
+            cause: "attempt to write a readonly database body-sentinel",
+          }),
+        ),
+    } as ReturnType<typeof vaultCommandPorts.createNodeVaultCommandPorts>);
+    const open = vi.spyOn(memoCommandPorts, "createNodeMemoPorts");
+    for (const replay of [false, true]) {
+      const captured = capture();
+      const mode = replay ? ["--idempotency-key", randomUUID(), "--replay-only"] : [];
+      expect(runCli([...args, ...mode, "--json"], captured.ports)).toBe(75);
+      const envelope = envelopeOf(captured);
+      expect(envelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(envelope.error?.details).toEqual({ storageContention: true });
+      expect(envelope.error?.message).toContain("Memo storage is write-protected");
+      expect(envelope.error?.recovery?.suggestedCommand).toContain("current mode");
+      expect(envelope.error?.recovery?.suggestedCommand).toContain("MCP");
+      expect(captured.err.join("")).not.toContain("body-sentinel");
+      expect(captured.out).toEqual([]);
+    }
+    expect(drain).toHaveBeenCalledTimes(2);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each(["SQLITE_BUSY", "SQLITE_CANTOPEN", "SQLITE_READONLY"])(
+    "classifies raw factory %s before the generic fallback",
+    (code) => {
+      const open = vi.spyOn(memoCommandPorts, "createNodeMemoPorts").mockImplementation(() => {
+        throw Object.assign(new Error("body-sentinel"), { code });
+      });
+      const captured = capture();
+      expect(runCli(["memo", "add", "--title", "Never dispatched", "--json"], captured.ports)).toBe(75);
+      expect(open).toHaveBeenCalledOnce();
+      expect(envelopeOf(captured).error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(captured.err.join("")).not.toContain("body-sentinel");
+      expect(captured.out).toEqual([]);
+    },
+  );
+
+  it.each([
+    [false, "database is locked"],
+    [true, "database is locked"],
+    [false, "attempt to write a readonly database"],
+    [true, "attempt to write a readonly database"],
+  ] as const)(
+    "preserves migration restoration failure through the real drain (committed=%s, %s)",
+    (committed, message) => {
+      const failure = new migrator.MigrationConnectionError(
+        `Restoring migration connection failed: ${message}`,
+        committed,
+        false,
+        new Error(message),
+      );
+      const migration = vi.spyOn(migrator, "openAndMigrate").mockImplementation(() => {
+        throw failure;
+      });
+      const operation = vi.spyOn(memoCommandPorts, "createNodeMemoPorts");
+      const captured = capture();
+      const exit = runCli(["memo", "add", "--title", "Never dispatched", "--json"], captured.ports);
+      expect(migration).toHaveBeenCalledOnce();
+      expect(operation).not.toHaveBeenCalled();
+      expect(exit).toBe(1);
+      const error = envelopeOf(captured).error;
+      expect(error?.code).toBe("INTERNAL_ERROR");
+      expect(error?.message).toContain("Restoring migration connection failed");
+      // The retained throwable is internal metadata, not an added wire field.
+      expect(Object.hasOwn(error ?? {}, "cause")).toBe(false);
+      expect(captured.out).toEqual([]);
+    },
+  );
+
+  it.each(["CONFIG_INVALID", "STORAGE_INTEGRITY_ERROR", "SERVICE_PAUSED", "CONTENT_MATERIALIZING"] as const)(
+    "preserves a typed %s even with contention-like text",
+    (code) => {
+      const error = appError(code, "database is locked", { cause: "attempt to write a readonly database" });
+      error.recovery = { suggestedCommand: "preserve site recovery" };
+      vi.spyOn(vaultCommandPorts, "createNodeVaultCommandPorts").mockReturnValue({
+        drainAtStart: () => err(error),
+      } as ReturnType<typeof vaultCommandPorts.createNodeVaultCommandPorts>);
+      const captured = capture();
+      runCli(["memo", "add", "--title", "Never dispatched", "--json"], captured.ports);
+      expect(envelopeOf(captured).error).toEqual(error);
+    },
+  );
+
+  it("keeps unexpected startup errors internal with selected-home and absent-log guidance", () => {
+    const open = vi.spyOn(memoCommandPorts, "createNodeMemoPorts").mockImplementation(() => {
+      throw new Error("unexpected body-sentinel");
+    });
+    const captured = capture();
+    expect(runCli(["memo", "add", "--title", "Never dispatched", "--json"], captured.ports)).toBe(1);
+    expect(open).toHaveBeenCalledOnce();
+    const error = envelopeOf(captured).error;
+    expect(error?.code).toBe("INTERNAL_ERROR");
+    expect(error?.recovery?.suggestedCommand).toContain("SORAGE_HOME");
+    expect(error?.recovery?.suggestedCommand).toContain("If no log was written");
+    expect(captured.err.join("")).not.toContain("body-sentinel");
+  });
+});
 
 describe("typed refusals per family", () => {
   it("returns the envelope, exit 75, and per-surface recovery for Channel, Handoff, and Project", () => {
@@ -1014,14 +1129,14 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(sendEnvelope.error?.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
     expect(sendEnvelope.error?.message).toContain("Handoff storage is write-protected");
     expect(sendEnvelope.error?.recovery?.suggestedCommand).toBe(
-      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.",
+      "In a permitted writable execution context, retry the identical command with the original mode, inputs, and idempotency key. For an unknown send outcome, inspect the original material with sorage send --replay-only first: it writes no Sorage home or Vault data but needs writable private temporary scratch. If that scratch is denied and an already permitted MCP server is available, use handoff_send with replayOnly: true and the same Installation and sender context; never execute again or replace the key automatically.",
     );
 
     const sendHuman = capture();
     expect(runCli(["send", "--to", "alpha", "--title", "t", "--body", "b3"], sendHuman.ports)).toBe(75);
     expect(sendHuman.err.join("")).toBe(
       "STORAGE_INSPECTION_UNAVAILABLE: Handoff storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.\n" +
-        "Recovery: After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.\n",
+        "Recovery: In a permitted writable execution context, retry the identical command with the original mode, inputs, and idempotency key. For an unknown send outcome, inspect the original material with sorage send --replay-only first: it writes no Sorage home or Vault data but needs writable private temporary scratch. If that scratch is denied and an already permitted MCP server is available, use handoff_send with replayOnly: true and the same Installation and sender context; never execute again or replace the key automatically.\n",
     );
 
     // A covered zero-write read succeeds on the write-protected installation

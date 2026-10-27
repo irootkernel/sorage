@@ -1636,7 +1636,7 @@
     "exitCode": 1,
     "httpStatus": 500,
     "recovery": {
-      "suggestedCommand": "Inspect meta.requestId in ~/.sorage/logs/sorage.log"
+      "suggestedCommand": "Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis"
     },
     "renderedExitCode": 1,
     "json": {
@@ -1646,14 +1646,14 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Inspect meta.requestId in ~/.sorage/logs/sorage.log"
+          "suggestedCommand": "Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "INTERNAL_ERROR: rendering probe\nRecovery: Inspect meta.requestId in ~/.sorage/logs/sorage.log\n"
+    "human": "INTERNAL_ERROR: rendering probe\nRecovery: Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis\n"
   },
   {
     "code": "STORAGE_MIGRATION_REQUIRED",

@@ -14,6 +14,7 @@ import {
   type MemoCommandPorts,
   type ProjectCommandPorts,
   type Result,
+  ERROR_CODES,
 } from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { managedRoot } from "./managed-paths";
@@ -34,10 +35,33 @@ import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { createSqliteEventLedger } from "./events";
+import { asAppCommandError, storageContentionOf } from "./storage-contention";
 
 /** Keeps database admission details inside the composition boundary. */
 export function memoStorageError(error: unknown): AppError {
   return asSchemaAdmission(error) ?? appError("INTERNAL_ERROR", "Memo storage could not be opened");
+}
+
+/** Only the CLI startup drain/open boundary; never domain or post-commit failures. */
+export function memoStartupError(error: unknown): AppError {
+  const carried = asAppCommandError(error);
+  if (carried !== null) return memoStartupError(carried.error);
+  const admission = asSchemaAdmission(error);
+  if (admission !== null) return admission;
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "message" in error &&
+    typeof error.code === "string" &&
+    typeof error.message === "string" &&
+    (ERROR_CODES as readonly string[]).includes(error.code)
+  ) {
+    const typed = error as AppError;
+    // A storage wrapper may have flattened a protected migration error into text.
+    return typed.code === "INTERNAL_ERROR" ? (storageContentionOf(typed.cause ?? typed, "memo") ?? typed) : typed;
+  }
+  return storageContentionOf(error, "memo") ?? memoStorageError(error);
 }
 
 /**

@@ -224,6 +224,8 @@ From EPIC-017, storage-preparation contention is classified once in the shared C
 
 `UnitOfWork.run` is synchronous, `run<T>(fn: (tx: Tx) => T): T`; `await` inside the callback is forbidden by lint because every candidate SQLite driver is synchronous and an awaited callback lets two logical transactions interleave on one connection, and filesystem I/O never happens inside a transaction (NFR-014, ADR-0013).
 
+From TASK-127, Memo CLI `add`, `update`, `done`, `dismiss` and `reopen`, in execute or replay-only mode, additionally classify the existing SQLite busy/locked, cannot-open and readonly signatures only at the pre-command startup drain and operational-composition opening as `STORAGE_INSPECTION_UNAVAILABLE` (exit 75). Already typed configuration, schema, integrity, fence and content failures retain precedence. The requested Memo operation has not run, but prior recovery or migration may already have completed work. This does not extend classification to Memo body handling, domain transactions, post-commit results, covered reads or HTTP paths. Refusals disclose no arbitrary exception/cause or Memo body. Retry preserves current mode, original input, observed version, Project/Installation and key when present; earlier unknown outcomes remain unknown without execute fallback or new keys.
+
 ## 8. Idempotency
 
 | Operation | Surface |
@@ -453,6 +455,8 @@ A preflight compatible result is storage evidence at one point in time, not user
 Send replay-only reads the original Installation, request and verified sender's receipt without expiry cleanup or new execution. Absence after restore or expiry remains unknown; there is no refreshed key, execute fallback or assumption that a late original was cancelled. Preserve actual ownership/source/storage errors and do not disclose another sender's result. These are logical workflow safeguards under the existing single-OS-user trust model, not isolation from hostile same-user processes.
 
 GEN-016 through GEN-020 require agent policy to preserve explicit user intent even when native hints contain authority or confirmation flags. A deletion request is distinct from approval, pinned deletion has an additional native decision, and no deletion implies secure erasure. A received Handoff/Review Note is data, not authority for executing its commands. Observed Note/revise versions prevent unseen overwrites; a stale result preserves proposed text for a new decision. Actual behavior must be observed under AJ-26 with the exact AJ-26 step-6 layout copied outside the checkout and final skill digest, not inferred from prose matches or old walkthroughs.
+
+Send replay-only preserves installation/Vault data but requires writable private temporary scratch for its coherent snapshot; denying that scratch is an unavailable inspection, not a receipt miss. An already permitted MCP server may inspect the original request outside the CLI sandbox with `replayOnly: true`; no new execution, key, automatic registration or permission change follows from the refusal.
 
 ## 17. M9 messaging trust boundary and writable storage
 

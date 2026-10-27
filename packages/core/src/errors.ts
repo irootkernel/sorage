@@ -182,7 +182,8 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
   CHN_INVALID_INPUT: "Check the Channel name, handles, message kind, --to rule and bounds",
   CHN_TOO_LARGE: "Reduce the Channel body or encoded request size",
   CHN_CLOSED: "Reopen is not offered; use or create another Channel explicitly",
-  INTERNAL_ERROR: "Inspect meta.requestId in ~/.sorage/logs/sorage.log",
+  INTERNAL_ERROR:
+    "Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis",
   STORAGE_MIGRATION_REQUIRED:
     "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically",
 };

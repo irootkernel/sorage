@@ -1,9 +1,11 @@
-import { chmodSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   envelopeOf,
+  BINARY,
   errorEnvelopeOf,
   makeTempDir,
   registerCleanup,
@@ -33,7 +35,7 @@ const WRITE_PROTECTED_CHANNEL_RECOVERY =
 const WRITE_PROTECTED_HANDOFF_MESSAGE =
   "Handoff storage is write-protected: the Sorage database cannot be written by this invocation, so this command committed none of the changes it was asked to make.";
 const WRITE_PROTECTED_HANDOFF_RECOVERY =
-  "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.";
+  "In a permitted writable execution context, retry the identical command with the original mode, inputs, and idempotency key. For an unknown send outcome, inspect the original material with sorage send --replay-only first: it writes no Sorage home or Vault data but needs writable private temporary scratch. If that scratch is denied and an already permitted MCP server is available, use handoff_send with replayOnly: true and the same Installation and sender context; never execute again or replace the key automatically.";
 
 /** One installation with a retained keyed send and a committed Channel message, then — by default — write-protected. */
 function protectedInstallation(protect = true): {
@@ -94,6 +96,91 @@ function protectedInstallation(protect = true): {
 }
 
 describe("a write-protected installation (TASK-119)", () => {
+  it.runIf(existsSync("/usr/bin/sandbox-exec"))(
+    "classifies deny-all Memo startup refusals and preserves replay-only recovery (TASK-127)",
+    () => {
+      const f = protectedInstallation(false);
+      const tmp = realpathSync(makeTempDir("sorage-deny-all-scratch-"));
+      const env = { TMPDIR: `${tmp}/` };
+      const key = randomUUID();
+      const original = [
+        "memo",
+        "add",
+        "--project",
+        "alpha",
+        "--title",
+        "Retained memo",
+        "--body",
+        "body-sentinel",
+        "--idempotency-key",
+        key,
+      ];
+      const created = sorage([...original, "--json"], { home: f.home, cwd: f.work, env });
+      expect(created.status, created.stderr).toBe(0);
+      const id = (envelopeOf(created).data as { memo: { id: string } }).memo.id;
+      const commands = [
+        ["memo", "add", "--project", "alpha", "--title", "Never created", "--body", "body-sentinel"],
+        ["memo", "update", id, "--body", "never-updated", "--expected-row-version", "1"],
+        ["memo", "done", id, "--expected-row-version", "1"],
+        ["memo", "dismiss", id, "--expected-row-version", "1"],
+        ["memo", "reopen", id, "--expected-row-version", "1"],
+      ];
+      const before = storageProof(f.home);
+      const sandbox = (args: string[]) =>
+        sorage(["-p", "(version 1)(allow default)(deny file-write*)", BINARY, ...args, "--json"], {
+          binary: "/usr/bin/sandbox-exec",
+          home: f.home,
+          cwd: f.work,
+          env,
+        });
+      for (const command of commands) {
+        for (const replay of [false, true]) {
+          const result = sandbox([...command, "--idempotency-key", randomUUID(), ...(replay ? ["--replay-only"] : [])]);
+          expect(result.status, result.stderr).toBe(75);
+          expect(result.stdout).toBe("");
+          const error = JSON.parse(result.stderr).error as {
+            code: string;
+            details: unknown;
+            recovery: { suggestedCommand: string };
+          };
+          expect(error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+          expect(error.details).toEqual({ storageContention: true });
+          expect(error.recovery.suggestedCommand).toContain("current mode");
+          expect(error.recovery.suggestedCommand).toContain("MCP");
+          expect(result.stderr).not.toContain("body-sentinel");
+          expect(storageProof(f.home)).toEqual(before);
+        }
+      }
+      const keyless = sandbox(["memo", "add", "--project", "alpha", "--title", "Never created without a key"]);
+      expect(keyless.status, keyless.stderr).toBe(75);
+      expect(errorEnvelopeOf(keyless).error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+      expect(storageProof(f.home)).toEqual(before);
+      const replay = sandbox([...original, "--replay-only"]);
+      expect(replay.status).toBe(75);
+      const send = sandbox([...f.sendArgs, "--replay-only"]);
+      expect(send.status).toBe(75);
+      const recovery = JSON.parse(send.stderr).error.recovery.suggestedCommand as string;
+      expect(recovery).toContain("private temporary scratch");
+      expect(recovery).toContain("replayOnly: true");
+      expect(storageProof(f.home)).toEqual(before);
+      const restored = sorage([...original, "--replay-only", "--json"], { home: f.home, cwd: f.work, env });
+      expect(restored.status, restored.stderr).toBe(0);
+      const receipt = envelopeOf(restored).data as { replayed: boolean; memo: { id: string } };
+      expect(receipt.replayed).toBe(true);
+      expect(receipt.memo.id).toBe(id);
+      const missing = sorage([...original.slice(0, -1), randomUUID(), "--replay-only", "--json"], {
+        home: f.home,
+        cwd: f.work,
+        env,
+      });
+      expect(missing.status).toBe(75);
+      expect(errorEnvelopeOf(missing).error.code).toBe("MEMO_REPLAY_UNAVAILABLE");
+      const listed = sorage(["memo", "list", "--project", "alpha", "--json"], { home: f.home, cwd: f.work, env });
+      expect(listed.status, listed.stderr).toBe(0);
+      expect((envelopeOf(listed).data as { items: unknown[] }).items).toHaveLength(1);
+    },
+  );
+
   it("inspects normally: preflight reports its real verdict and both replays return their retained results, all without writing the installation", () => {
     const f = protectedInstallation();
     const before = storageProof(f.home);

@@ -21,7 +21,7 @@ import {
  */
 
 /** The invoking command family whose wording the refusal carries. */
-export type ContentionSurface = "channel" | "handoff" | "project";
+export type ContentionSurface = "channel" | "handoff" | "project" | "memo";
 
 /** A composition-thrown error that already carries its typed public error. */
 export class AppCommandError extends Error {
@@ -133,7 +133,8 @@ const CONDITION: Record<ContentionKind, string> = {
 function refusalMessage(surface: ContentionSurface, kind: ContentionKind): string {
   const head = surface === "channel" ? "Channel command" : "command";
   const state = kind === "readonly" ? "is write-protected" : "is contended";
-  return `${surface === "channel" ? "Channel" : surface === "handoff" ? "Handoff" : "Project"} storage ${state}: ${CONDITION[kind]}, so this ${head} committed none of the changes it was asked to make.`;
+  const family = { channel: "Channel", handoff: "Handoff", project: "Project", memo: "Memo" }[surface];
+  return `${family} storage ${state}: ${CONDITION[kind]}, so this ${head} committed none of the changes it was asked to make.`;
 }
 
 /**
@@ -141,9 +142,8 @@ function refusalMessage(surface: ContentionSurface, kind: ContentionKind): strin
  * identical retry converges, while write protection is repaired first — the
  * restore-access recovery never suggests a quieter-storage retry, a fresh
  * idempotency key, a mode switch, or an authority flag. Both replay-only
- * inspections run without write access, so an unknown keyed outcome is
- * inspected with the original material before any retry (interface section
- * 38.4, V1).
+ * inspections preserve their original mode and material; send inspection
+ * writes no installation data but needs writable private temporary scratch.
  */
 const RECOVERY: Record<ContentionSurface, Record<ContentionKind, string>> = {
   channel: {
@@ -156,13 +156,19 @@ const RECOVERY: Record<ContentionSurface, Record<ContentionKind, string>> = {
     lock: "Retry the same command with its original mode, input, and idempotency key when storage is quieter; after an unknown send outcome inspect with sorage send --replay-only first.",
     open: "Retry the same command with its original mode, input, and idempotency key when storage is quieter; after an unknown send outcome inspect with sorage send --replay-only first.",
     readonly:
-      "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access.",
+      "In a permitted writable execution context, retry the identical command with the original mode, inputs, and idempotency key. For an unknown send outcome, inspect the original material with sorage send --replay-only first: it writes no Sorage home or Vault data but needs writable private temporary scratch. If that scratch is denied and an already permitted MCP server is available, use handoff_send with replayOnly: true and the same Installation and sender context; never execute again or replace the key automatically.",
   },
   project: {
     lock: "Retry the same command when storage is quieter; it committed none of the changes it was asked to make.",
     open: "Retry the same command when storage is quieter; it committed none of the changes it was asked to make.",
     readonly:
       "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.",
+  },
+  memo: {
+    lock: "Retry the identical Memo command when storage is available, preserving the current mode, original inputs, observed version, Project/Installation and key when present. An earlier unknown outcome still requires replay-only; never switch to execution or replace the key.",
+    open: "Retry the identical Memo command when storage is available, preserving the current mode, original inputs, observed version, Project/Installation and key when present. An earlier unknown outcome still requires replay-only; never switch to execution or replace the key.",
+    readonly:
+      "Use a permitted writable execution context or the matching Memo tool on an already permitted MCP server, preserving the current mode, original inputs, observed version, Project/Installation and key when present. An earlier unknown outcome still requires replay-only; this refusal does not authorize execution, a replacement key or permission changes.",
   },
 };
 
@@ -186,10 +192,11 @@ export function storageContentionOf(error: unknown, surface: ContentionSurface):
  * states, which no thrown signature represents.
  */
 export function contentionRefusal(surface: ContentionSurface, kind: ContentionKind, cause: string): AppError {
-  const refusal = appError("STORAGE_INSPECTION_UNAVAILABLE", refusalMessage(surface, kind), {
-    storageContention: true,
-    cause,
-  });
+  const refusal = appError(
+    "STORAGE_INSPECTION_UNAVAILABLE",
+    refusalMessage(surface, kind),
+    surface === "memo" ? { storageContention: true } : { storageContention: true, cause },
+  );
   refusal.recovery = { suggestedCommand: RECOVERY[surface][kind] };
   return refusal;
 }

@@ -783,3 +783,7 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 | P3 | Minor behavior, usability, or presentation defect | Wording, ordering, or formatting that misleads without changing an outcome |
 
 P0 and P1 block every release gate.
+
+## Sandbox refusal diagnostic regressions
+
+The TASK-127 regression selection extends the existing storage-contention, write-protected compiled CLI and error-rendering suites. Distinguish chmod-protected installation files from a native sandbox denying every file write, including temporary scratch. Exercise Memo CLI startup/open failures before requested operation dispatch across the five mutations and execute/replay-only modes, including fresh execute keys, keyless execute and absent-receipt recovery; verify typed exit 75, protected domain state and no body/cause disclosure. Preserve typed schema/integrity/configuration/fence/content errors and unexpected internal failures, and prove original-request replay succeeds in its permitted execution context while a missing receipt never executes. Check selected-home/no-log and explicit site recovery, and send private-scratch/MCP guidance. This adds no read-only guarantee to operational Memo modes and changes no Channel close-during-wait contract. Existing full-suite MCP/CLI parity and deny-write read tests remain mandatory.

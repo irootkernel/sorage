@@ -45,7 +45,7 @@ export function renderSendRecoveryError(
     error.details,
   );
   failure.recovery = {
-    suggestedCommand: `Keep the original key, exact input/source bytes, Installation and sender context. Retain request ${options.requestId} and this output for diagnosis; the unknown outcome does not authorize another send.`,
+    suggestedCommand: `Keep the original key, exact input/source bytes, Installation and sender context. Retain request ${options.requestId} and this output for diagnosis; the unknown outcome does not authorize another send.${error.code === "STORAGE_INSPECTION_UNAVAILABLE" ? " CLI inspection needs writable private temporary scratch, without writing the Sorage home or Vault. If that scratch is denied and an already permitted MCP server is available, inspect the identical request through handoff_send with replayOnly: true and the same context; never switch to execution or replace the key." : ""}`,
   };
   if (options.json) options.ports.err(`${JSON.stringify(errorEnvelope(failure, options.requestId), null, 2)}\n`);
   else options.ports.err(`${failure.code}: ${failure.message}\nRecovery: ${failure.recovery.suggestedCommand}\n`);

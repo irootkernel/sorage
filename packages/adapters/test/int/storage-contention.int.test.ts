@@ -35,7 +35,7 @@ import {
   createNodeTerminalPorts,
 } from "../../src/handoff-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
-import { createNodeMemoPorts, memoStorageError } from "../../src/memo-command-ports";
+import { createNodeMemoPorts, memoStartupError, memoStorageError } from "../../src/memo-command-ports";
 import { createNodeProjectPorts } from "../../src/project-command-ports";
 import type { SorageSqlite } from "../../src/sqlite/connection";
 import * as sqliteConnections from "../../src/sqlite/connection";
@@ -273,7 +273,7 @@ describe("the shared classifier", () => {
         surface === "channel"
           ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical channel command; it committed none of the changes it was asked to make."
           : surface === "handoff"
-            ? "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command with its original mode, inputs, and idempotency key; when the original outcome of a keyed send is unknown, inspect with sorage send --replay-only and the original material first, which runs without write access."
+            ? "In a permitted writable execution context, retry the identical command with the original mode, inputs, and idempotency key. For an unknown send outcome, inspect the original material with sorage send --replay-only first: it writes no Sorage home or Vault data but needs writable private temporary scratch. If that scratch is denied and an already permitted MCP server is available, use handoff_send with replayOnly: true and the same Installation and sender context; never execute again or replace the key automatically."
             : "After write access to the Sorage home and Vault is restored (permissions, sandbox, or read-only mount), retry the identical command; it committed none of the changes it was asked to make.",
       );
     }
@@ -592,7 +592,53 @@ describe("the surfaced Handoff composition", () => {
   });
 });
 
-describe("the excluded Memo composition", () => {
+describe("the narrow Memo CLI startup classifier (TASK-127)", () => {
+  it.each([
+    "SQLITE_BUSY",
+    "SQLITE_LOCKED",
+    "ERR_SQLITE_BUSY",
+    "ERR_SQLITE_LOCKED",
+    "SQLITE_CANTOPEN",
+    "ERR_SQLITE_CANTOPEN",
+    "SQLITE_READONLY",
+    "ERR_SQLITE_READONLY",
+  ])("classifies %s without leaking exception text", (code) => {
+    const mapped = memoStartupError(Object.assign(new Error("body-sentinel"), { code }));
+    expect(mapped.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(mapped.details).toEqual({ storageContention: true });
+    expect(JSON.stringify(mapped)).not.toContain("body-sentinel");
+  });
+
+  it("recognizes wrapped migration contention and preserves typed admission and restoration errors", () => {
+    const wrapped = new MigrationFailedError(11, "channels-v2", busyError("database is locked body-sentinel"));
+    expect(memoStartupError(wrapped).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(JSON.stringify(memoStartupError(wrapped))).not.toContain("body-sentinel");
+    const admission = appError("STORAGE_SCHEMA_UNSUPPORTED", "database is locked");
+    expect(memoStartupError(new SchemaAdmissionError(admission))).toEqual(admission);
+    for (const code of [
+      "CONFIG_INVALID",
+      "STORAGE_INTEGRITY_ERROR",
+      "SERVICE_PAUSED",
+      "CONTENT_MATERIALIZING",
+    ] as const) {
+      const typed = appError(code, "database is locked", { cause: "attempt to write a readonly database" });
+      expect(memoStartupError(typed)).toBe(typed);
+      expect(memoStartupError(new AppCommandError(typed))).toBe(typed);
+    }
+    expect(memoStartupError(new MigrationConnectionError("restoration failed", true, false, busyError())).code).toBe(
+      "INTERNAL_ERROR",
+    );
+    expect(memoStartupError(new MigrationIntegrityError(2, 9, "step")).code).toBe("INTERNAL_ERROR");
+  });
+
+  it("preserves unrelated typed internal failures and their site recovery", () => {
+    const original = appError("INTERNAL_ERROR", "unexpected startup failure");
+    original.recovery = { suggestedCommand: "preserve this diagnosis" };
+    expect(memoStartupError(original)).toBe(original);
+  });
+});
+
+describe("the unchanged Memo repository and composition", () => {
   it("keeps Memo output byte-for-byte through factory contention and busy Project lookups (V2)", () => {
     // Factory open contention: the real open meets a held lock through the
     // connection seam with a short busy timeout.

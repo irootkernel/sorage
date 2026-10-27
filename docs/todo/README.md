@@ -10,4 +10,5 @@ When an adopted Epic closes, move lasting information to its role owner. Then re
 
 ## Adopted design references
 
+
 M8 installation preflight and Handoff recovery/agent policy are adopted in [the canonical roadmap](../roadmap/README.md#epic-014-non-mutating-installation-preflight), with their design in [the specification owners](../specs/README.md#m8-contract-entrypoints). They are not future-work candidates and do not need a duplicate lifecycle list here.

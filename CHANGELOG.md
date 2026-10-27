@@ -29,6 +29,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Return `STORAGE_INSPECTION_UNAVAILABLE`/75 for expected Memo CLI startup/open storage denial instead of `INTERNAL_ERROR`/1, preserving original recovery mode and requests; clarify send replay private-scratch requirements and permitted MCP recovery, and point internal-error diagnosis at the selected Sorage home with a fallback when no log was written.
+
 - Give Vault-open, configuration-access and unsafe-path failures recovery actions that apply to the actual state, preserving typed codes and avoiding initialization or verification advice that cannot work while storage is inaccessible.
 - Diagnose Vault policy and filesystem checks accurately in `sorage doctor`, and refuse unreadable or non-regular initialization configurations instead of treating an existing Installation as new.
 

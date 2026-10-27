@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   createNodeMemoPorts,
   memoStorageError,
+  memoStartupError,
   sweepMemoAcceptedInputs,
   type NodeMemoPorts,
 } from "@sorage/adapters/src/memo-command-ports";
@@ -140,15 +141,13 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
       return invalid("Memo mutations require --expected-row-version from the observed Memo");
     if (!mutation) return runCoveredRead(operation, id, options, globals, json);
     // Existing native recovery remains separate from the Memo operation's own effects.
-    const drained = createNodeVaultCommandPorts().drainAtStart();
-    if (!drained.ok) return output.fail(drained.error, json);
     let ports: NodeMemoPorts;
     try {
+      const drained = createNodeVaultCommandPorts().drainAtStart();
+      if (!drained.ok) return output.fail(memoStartupError(drained.error), json);
       ports = createNodeMemoPorts();
     } catch (error) {
-      // A schema admission refusal keeps its public code and exit mapping
-      // instead of collapsing into INTERNAL_ERROR (SHR-009).
-      return output.fail(memoStorageError(error), json);
+      return output.fail(memoStartupError(error), json);
     }
     let accepted: AcceptedMemoBody | undefined;
     // The per-invocation disclosure buffer of WR3: the core callback records

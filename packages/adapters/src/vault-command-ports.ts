@@ -166,9 +166,11 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         const contention = storageContentionOf(error, options.contentionSurface);
         if (contention !== null) return err(contention);
       }
-      return err(
-        appError("INTERNAL_ERROR", `Reading the database failed: ${messageOf(error)}.`, { cause: String(error) }),
-      );
+      return err({
+        ...appError("INTERNAL_ERROR", `Reading the database failed: ${messageOf(error)}.`, { cause: String(error) }),
+        // Keep the original kind for downstream classification; envelopes omit this internal field.
+        cause: error,
+      });
     }
   }
 

@@ -160,7 +160,7 @@ describe("preflight command", () => {
 
     for (const leaked of [
       "Inspect ~/.sorage/logs for details.",
-      "Inspect meta.requestId in ~/.sorage/logs/sorage.log",
+      "Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis",
     ]) {
       const leakedRun = capture();
       expect(
