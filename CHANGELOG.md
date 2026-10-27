@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Add per-Revision Handoff reading and processing reports with one retained recipient comment, separating general explanations and change requests from document acceptance.
+- Show Handoff reading, unfinished/completed/unrecorded processing and attributed retained feedback in the Web inbox, outbox and detail; support explicit User-proxy reporting, terminal general updates and exact proposal retention on conflicts or uncertain responses.
 
 - Add `sorage preflight` to report Installation compatibility without migration or managed-storage writes.
 - Add `sorage send --replay-only` to inspect the original request's receipt without sending again, preserving uncertainty when its original material or receipt is unavailable.

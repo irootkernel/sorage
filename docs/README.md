@@ -56,6 +56,8 @@ Its canonical outcomes belong to the specification and qualification owners belo
 
 TASK-128 adopts HPR-001 to HPR-016 and the earlier-rule amendments under [governance section 17](governance/README.md#17-handoff-processing-registration-boundary), with exact contracts in [interface section 40](specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9), architecture section 28, security-reliability section 18 and AJ-31 to AJ-33. Master selected M9/shared v0.1.3, extending the existing gate through EPIC-019. The accepted contract appends schema 12/format 4, preserves legacy unknown evidence and successful receipt replay, and classifies mandatory fresh-writer observations as breaking inputs. Adoption changes no product implementation, installed skill or runtime data; the roadmap alone records lifecycle and readiness.
 
+The [Handoff reporting qualification map](implementation-tips/handoff-reporting-qualification.md) describes core/CLI delivery settlement and the daemon-served Web list, retained-comment, processing, conflict and browser-check boundaries. It is implementation guidance rather than a second delivery-status record.
+
 ## Source of Truth precedence
 
 When documents conflict, apply this order:

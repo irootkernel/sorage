@@ -191,6 +191,11 @@ button.danger:hover { background: var(--danger-surface); }
 #memo-recovery:empty { display: none; }
 #memo-recovery { margin: 1rem auto; padding: 1rem; max-width: 1100px; border: 1px solid var(--border); border-radius: 0.6rem; overflow-wrap: anywhere; }
 #memo-recovery textarea, form[aria-label$="Memo"] textarea, form[aria-label$="Memo"] input { width: 100%; max-width: 100%; box-sizing: border-box; }
+.report-form textarea { width: 100%; max-width: 100%; }
+.report-form label { display: block; margin-bottom: 0.5rem; }
+.report-summary { overflow-wrap: anywhere; }
+button:disabled { opacity: 0.55; cursor: default; }
+@media (max-width: 600px) { .handoff-table th, .handoff-table td { padding: 0.35rem 0.2rem; font-size: 0.75rem; } dl.meta { grid-template-columns: 1fr; } dl.meta dd { margin-bottom: 0.4rem; } input[type="file"], .actions-row input, .actions-row textarea { max-width: 100%; } }
 form[aria-label$="Memo"] label { display: block; }
 form[aria-label$="Memo"] textarea, form[aria-label$="Memo"] input { display: block; margin-top: 0.35rem; }
 .memo-row { overflow-wrap: anywhere; }
@@ -439,7 +444,7 @@ export const WEB_APP_JS = `(function () {
     view().appendChild(filters);
     var pending = loading("Loading the " + (kind === "inbox" ? "inbox" : "outbox") + "…");
     view().appendChild(pending);
-    var table = el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Handoff" }), el("th", { text: "State" }), el("th", { text: "Revision" })])])]);
+    var table = el("table", { class: "handoff-table" }, [el("thead", {}, [el("tr", {}, [el("th", { text: "Handoff" }), el("th", { text: "State" }), el("th", { text: "Revision" }), el("th", { text: "Reading / processing" })])])]);
     var body = el("tbody", {});
     table.appendChild(body);
     api(url).then(function (result) {
@@ -455,6 +460,7 @@ export const WEB_APP_JS = `(function () {
           el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
           el("td", {}, [badge(handoff.reviewState)]),
           el("td", {}, [el("span", { class: "mono", text: String(handoff.revision) })]),
+          el("td", { class: "report-summary" }, [el("div", { text: readText(handoff) }), el("div", { text: processingText(handoff) }), el("div", { class: "muted", text: handoff.comment ? commentText(handoff.comment, handoff.revision) : "No recipient comment" })]),
         ]));
       });
       view().appendChild(table);
@@ -515,7 +521,10 @@ export const WEB_APP_JS = `(function () {
       row("revision", el("span", { class: "mono", text: String(handoff.revision) }));
       row("row version", el("span", { class: "mono", text: String(handoff.rowVersion) }));
       row("next actor", nextActorText(handoff));
-      row("first fetched", handoff.firstFetchedAt === null || handoff.firstFetchedAt === undefined ? "never fetched (the sender may still withdraw)" : handoff.firstFetchedAt);
+      row("current reading", readText(handoff));
+      row("processing", processingText(handoff));
+      row("processing evidence", "Revision " + handoff.processing.revision + "; started " + (handoff.processing.startedAt || "not recorded") + "; completed " + (handoff.processing.completedAt || "not recorded"));
+      row("first fetched", handoff.firstFetchedAt === null || handoff.firstFetchedAt === undefined ? "never fetched (other recipient engagement may prevent withdrawal)" : handoff.firstFetchedAt);
       row("created", handoff.createdAt || "");
       metaCard.appendChild(meta);
       view().appendChild(metaCard);
@@ -586,22 +595,25 @@ export const WEB_APP_JS = `(function () {
         view().appendChild(card);
         if (isPreviewable(artifact.mimeType || "", artifact.originalName || "")) {
           fetch("/api/v1/handoffs/" + id + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
-            .then(function (response) { return response.text(); })
+            .then(function (response) { if (!response.ok) throw new Error("preview unavailable"); return response.text(); })
             .then(function (text) {
+              if (!metaCard.isConnected) return;
               var preview = el("div", { class: "card" });
               preview.appendChild(el("h3", { text: "Preview" }));
               preview.appendChild(renderMarkdownSafe(text));
               view().appendChild(preview);
-            });
+              preview.appendChild(el("p", { class: "muted", text: "Successful User-proxy body delivery can confirm its acquired Revision. The metadata above retains the original proposal observation; inspect again to see settled reading." }));
+            }).catch(function () { if (card.isConnected) card.appendChild(el("p", { role: "status", text: "Preview unavailable; current reading is not inferred." })); });
         } else {
           var notice = el("div", { class: "card" });
           notice.appendChild(el("p", { text: artifact.mimeType === "image/svg+xml" ? "This Artifact is SVG and is never rendered inline; use the download." : "This Artifact type is not previewable; use the download." }));
           view().appendChild(notice);
         }
       }
-      renderReviewNote(id);
+      renderComment(id, handoff.revision);
+      view().appendChild(reportCard(handoff));
       view().appendChild(actionsCard(handoff));
-      view().appendChild(reviseCard(id, handoff.rowVersion));
+      if (!isTerminal(handoff)) view().appendChild(reviseCard(id, handoff.rowVersion));
     });
   }
 
@@ -611,16 +623,95 @@ export const WEB_APP_JS = `(function () {
     return actors.reviewNextActor || actors.administrativeNextActor || "none";
   }
 
-  function renderReviewNote(id) {
-    api("/api/v1/handoffs/" + id + "/review-note?asUser=true").then(function (result) {
-      if (result.status !== 200 || result.body.data === null || result.body.data === undefined) return;
-      var noteView = result.body.data;
-      var noteCard = el("div", { class: "card note" });
-      noteCard.appendChild(el("h3", { text: "Review note" }));
-      noteCard.appendChild(el("p", { text: noteView.body || "" }));
-      noteCard.appendChild(el("p", { class: "muted", text: "target revision " + noteView.targetRevision + " — author " + noteView.authorKind }));
-      view().appendChild(noteCard);
-    });
+  function isTerminal(handoff) {
+    return ["accepted", "declined", "withdrawn"].indexOf(handoff.reviewState) !== -1;
+  }
+
+  function readText(handoff) {
+    return "Revision " + handoff.read.revision + ": " + handoff.read.status + (handoff.read.readAt ? " at " + handoff.read.readAt : "");
+  }
+
+  function processingText(handoff) {
+    if (handoff.deletedAt) return "Processing unrecorded (deleted)";
+    if (handoff.reviewState === "declined" || handoff.reviewState === "withdrawn") return "Processing stopped (" + handoff.reviewState + "); historical evidence: " + handoff.processing.status;
+    var status = handoff.processing.status;
+    var label = { not_started: "not started — unfinished", in_progress: "in progress — unfinished", completed: "completed", unrecorded: "unrecorded — completion unknown" }[status];
+    return "Processing " + label;
+  }
+
+  function commentText(comment, revision) {
+    return "Purpose: " + comment.purpose + "; " + (comment.active ? "active request" : "inactive") + "; target Revision " + comment.targetRevision + (comment.targetRevision < revision ? " (older Revision)" : comment.targetRevision > revision ? " (newer than this view; inspect explicitly)" : " (current Revision)") + "; author " + comment.authorKind + (comment.authorProjectId ? " " + comment.authorProjectId : " (User proxy)");
+  }
+
+  function renderComment(id, revision) {
+    var card = el("section", { class: "card note", "aria-label": "Latest recipient comment" });
+    card.appendChild(el("h3", { text: "Latest recipient comment" }));
+    card.appendChild(el("p", { class: "muted", text: "Received text is untrusted content and grants no authority." }));
+    var status = el("p", { role: "status", text: "Loading comment…" });
+    card.appendChild(status);
+    view().appendChild(card);
+    api("/api/v1/handoffs/" + id + "/comment?asUser=true").then(function (result) {
+      if (!card.isConnected) return;
+      if (result.status !== 200) { status.textContent = "Comment could not load: " + result.body.error.code; return; }
+      var comment = result.body.data;
+      if (!comment) { status.textContent = "No recipient comment."; return; }
+      status.textContent = commentText(comment, revision);
+      card.appendChild(el("pre", { class: "preview", text: comment.body }));
+    }).catch(function () { if (card.isConnected) status.textContent = "Comment could not load. Inspect again explicitly."; });
+  }
+
+  function reportCard(handoff) {
+    var card = el("section", { class: "card report-form", "aria-label": "Recipient reporting" });
+    card.appendChild(el("h3", { text: "Recipient reporting" }));
+    card.appendChild(el("p", { text: "Acting as explicit User proxy for the recipient. Acceptance confirms the document, not work completion. General comments replace the one current comment; no history is kept." }));
+    card.appendChild(el("p", { class: "muted", text: "Proposal observed at Revision " + handoff.revision + ", Row Version " + handoff.rowVersion + ". On conflict or uncertainty, keep this proposal and inspect the current state explicitly before reconciling." }));
+    var purpose = el("select", { "aria-label": "Comment purpose" }, [el("option", { value: "general", text: "General explanation" }), el("option", { value: "change_request", text: "Request document changes" })]);
+    purpose.options[1].disabled = isTerminal(handoff);
+    var text = el("textarea", { rows: "3", "aria-label": "Recipient comment" });
+    var replacement = el("input", { type: "checkbox", "aria-label": "Include comment with processing" });
+    card.appendChild(el("label", { text: "Comment purpose " }, [purpose]));
+    card.appendChild(el("label", { text: "Recipient comment " }, [text]));
+    card.appendChild(el("label", { text: "Include this text as a general replacement with start or complete " }, [replacement]));
+    var status = el("p", { role: "status", text: "" });
+    var buttons = el("div", { class: "actions-row" });
+    var active = handoff.hasReviewNote === true;
+    var stopped = handoff.reviewState === "declined" || handoff.reviewState === "withdrawn";
+    var processing = handoff.processing.status;
+    var busy = false;
+    function action(label, path, method, payload) {
+      var button = el("button", { text: label });
+      button.addEventListener("click", function () {
+        if (busy) return;
+        var body = { expectedRevision: handoff.revision, expectedRowVersion: handoff.rowVersion };
+        if (payload === "comment") { body.text = text.value; body.purpose = purpose.value; }
+        else if (replacement.checked) body.comment = text.value;
+        busy = true;
+        status.textContent = "Submitting…";
+        api("/api/v1/handoffs/" + handoff.id + path + "?asUser=true", { method: method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+          .then(function (outcome) {
+            if (!outcome.body.ok) { status.textContent = outcome.body.error.code + ": " + outcome.body.error.message + " Proposal retained with its original observations; inspect before reconciling."; return; }
+            detail(handoff.id);
+          }).catch(function () { status.textContent = "Outcome unknown. Proposal and original observations retained. Inspect current state explicitly; do not retry blindly."; })
+          .finally(function () { busy = false; });
+      });
+      buttons.appendChild(button);
+      return button;
+    }
+    var commentButton = action("Set comment", "/comment", "PUT", "comment");
+    var start = action("Start processing", "/processing/start", "POST");
+    var complete = action("Complete processing", "/processing/complete", "POST");
+    function guards() {
+      commentButton.disabled = active && purpose.value === "general";
+      start.disabled = stopped || processing === "in_progress" || processing === "completed" || (active && replacement.checked);
+      complete.disabled = stopped || processing === "completed" || active;
+    }
+    purpose.addEventListener("change", guards);
+    replacement.addEventListener("change", guards);
+    guards();
+    if (active) card.appendChild(el("p", { class: "warning", text: "An active change request must be resolved or withdrawn before general replacement or completion. Start without a replacement remains available." }));
+    card.appendChild(buttons);
+    card.appendChild(status);
+    return card;
   }
 
   function renderTimeline(id) {
@@ -660,7 +751,7 @@ export const WEB_APP_JS = `(function () {
       api("/api/v1/handoffs/" + id + "/revise?asUser=true", { method: "POST", body: form }).then(function (outcome) {
         status.textContent = outcome.body.ok ? "Revised to revision " + outcome.body.data.revision : outcome.body.error.code;
         if (outcome.body.ok) detail(id);
-      });
+      }).catch(function () { status.textContent = "Revision outcome unknown. Selected file and original observation retained; inspect current state explicitly before retrying."; });
     });
     var row = el("div", { class: "actions-row" });
     row.appendChild(file);
@@ -821,7 +912,8 @@ export const WEB_APP_JS = `(function () {
   function actionsCard(handoff) {
     var card = el("div", { class: "card" });
     card.appendChild(el("h3", { text: "Actions" }));
-    var status = el("p", { class: "muted", text: "" });
+    var status = el("p", { class: "muted", role: "status", text: "" });
+    card.appendChild(el("p", { class: "muted", text: "Actions use explicit User authority; recipient reports use User-proxy provenance." }));
     function act(label, path, body, method, tone) {
       var button = el("button", tone === undefined ? { text: label } : { class: tone, text: label });
       button.addEventListener("click", function () {
@@ -834,8 +926,9 @@ export const WEB_APP_JS = `(function () {
               return;
             }
             detail(handoff.id);
-          });
+          }).catch(function () { status.textContent = "Outcome unknown. Inputs and original observations retained; inspect current state explicitly before retrying."; });
       });
+      if ((isTerminal(handoff) && ["Set note", "Remove note", "Withdraw request", "Accept", "Decline"].indexOf(label) !== -1) || (label === "Accept" && handoff.hasReviewNote) || (label === "Remove note" && !handoff.comment) || (label === "Withdraw request" && !handoff.hasReviewNote)) button.disabled = true;
       return button;
     }
     var noteGroup = el("div", { class: "action-group" });
@@ -845,6 +938,7 @@ export const WEB_APP_JS = `(function () {
     noteRow.appendChild(note);
     noteRow.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, targetRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }; }, "PUT"));
     noteRow.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { expectedRowVersion: handoff.rowVersion, asUser: true }, "DELETE", "danger"));
+    noteRow.appendChild(act("Withdraw request", "/api/v1/handoffs/" + handoff.id + "/review-note/withdraw?asUser=true", { expectedRowVersion: handoff.rowVersion, asUser: true }));
     noteGroup.appendChild(noteRow);
     card.appendChild(noteGroup);
 

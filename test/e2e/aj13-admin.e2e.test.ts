@@ -1,7 +1,7 @@
-import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { request as httpRequest } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
+import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeTempDir, sorage } from "./helpers";
@@ -147,13 +147,16 @@ describe("AJ-13 web administration", () => {
     expect(await page.textContent("main")).toContain("revision");
 
     // A User proxy Review Note records authorKind user and moves the state.
-    await page.fill("textarea", "Please tighten the intro");
+    await page.getByRole("textbox", { name: "Review note", exact: true }).fill("Please tighten the intro");
     await page.click('button:text("Set note")');
     await page.waitForFunction(() => document.body.textContent?.includes("changes_requested"));
     const events = await raw("/api/v1/handoffs?asUser=true&includeDeleted=true", {});
     expect(events.status).toBe(401); // the browser session is the only credential
-    // The note card renders from the review-note endpoint with its author kind (WEB-004).
-    await page.waitForSelector(".card.note");
+    // The single retained-comment resource includes the active request and its author (WEB-004).
+    await page
+      .getByRole("region", { name: "Latest recipient comment", exact: true })
+      .getByText("Please tighten the intro", { exact: true })
+      .waitFor();
     expect(await page.textContent(".card.note")).toContain("Please tighten the intro");
     expect(await page.textContent(".card.note")).toContain("author user");
 
