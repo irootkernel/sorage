@@ -22,7 +22,7 @@ Create/add/remove/ack/close are idempotent; an identical unhandled post returns 
 
 ## MCP for coding agents
 
-The source candidate provides `sorage mcp`, a STDIO server with 31 stable tools for Handoffs, Project Memos, Channels and Project reads. Harnesses launch the server outside their shell sandbox, so agents can send and read through MCP; the covered CLI reads also run directly because they write nothing. No daemon or ecosystem tool is required. Each accepted call runs the same executable's `sorage … --json` command and returns its envelope. Administration and User-admin commands are not exposed. The published v0.1.2 executable predates this surface; choose the qualified executable by path and revision.
+The source candidate provides `sorage mcp`, a STDIO server with 35 stable tools for Handoffs, Project Memos, Channels and Project reads. Harnesses launch the server outside their shell sandbox, so agents can send and read through MCP; the covered CLI reads also run directly because they write nothing. No daemon or ecosystem tool is required. Each accepted call runs the same executable's `sorage … --json` command and returns its envelope. Administration and User-admin commands are not exposed. The published v0.1.2 executable predates this surface; choose the qualified executable by path and revision.
 
 Pass the acting workspace's existing directory as `cwd` on every tool call; otherwise the server's directory is used. Prefer inline text; file inputs must stay inside that workspace. Read the envelope at `content[0]` or `structuredContent`, and any diagnostic warnings after it. Argument/usage refusals can be JSON-RPC `-32602`; coded failures are tool results with `isError: true`. Recovery hints never expand the user's request.
 
