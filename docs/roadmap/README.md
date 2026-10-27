@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** EPIC-019
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -105,7 +105,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-016` | Agent communication channels and shared content storage | M9 | Completed | `TASK-105` to `TASK-110` |
 | `EPIC-017` | Channel adoption hardening and v0.1.3 release readiness | M9 | Completed | `TASK-111` to `TASK-120` |
 | `EPIC-018` | MCP access, zero-write reads and Channel rebuild | M9 | Completed | `TASK-121` to `TASK-127` |
-| `EPIC-019` | Handoff processing status and recipient comment | M9 | In Progress | `TASK-128` to `TASK-134` |
+| `EPIC-019` | Handoff processing status and recipient comment | M9 | Completed | `TASK-128` to `TASK-134` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -560,17 +560,18 @@ The reviewed `error-renderings.json` diff changes only the common `INTERNAL_ERRO
 
 ## EPIC-019: Handoff processing status and recipient comment
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M9
 - **Objective:** Let senders see whether the recipient has read the current request Revision, is processing it or has completed it, while retaining one sender document and at most one recipient comment. Distinguish a general comment from an explicit change request, preserve the latest comment after resolution and completion, and keep document acceptance separate from actual work completion.
-- **Detailed SOT:** [Execution dossier](../todo/handoff-processing-and-recipient-comment.md).
+- **Canonical Outcomes:** [Required specification section 23](../specs/required-specification.md#23-handoff-processing-and-recipient-comment-milestone-m9), [ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment), [interface section 40](../specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9), [AJ-31 to AJ-33](../specs/testing-and-acceptance.md#aj-31-current-revision-reading-and-recipient-reporting) and the [qualification map](../implementation-tips/handoff-reporting-qualification.md).
 - **Design basis:** Master's approved direction and M9/shared-v0.1.3 execution choice of 2026-10-27, adopted by [accepted ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment). TASK-128 adopts the exact contracts in required-specification section 23 and interface section 40 before product implementation.
 - **Prerequisite:** EPIC-018 is Completed. No prior Task or Epic is reopened. Registration starts no Task and consumes no active implementation or review slot.
 - **Packages touched:** TASK-128 owns canonical design documents; TASK-129 owns core snapshot types and adapter storage/restore; TASK-130 owns core application use cases, Project unbind adapters, existing caller compatibility and CLI; TASK-131 owns the daemon HTTP routes and CLI MCP adapter; TASK-132 owns the daemon-served Web UI; TASK-133 owns the shipped skill and public/operations guidance; TASK-134 owns integrated qualification and lasting evidence. No consumer-repository edit is included.
 - **Execution policy:** Follow TASK-128 through TASK-134 sequentially through the approved Epic handler envelope. Each Task retains independent review and its applicable Definition of Done. No Design Gate registry is enrolled, so every row records Not required. Requirements cells and traceability use the TASK-128 adoption. Each intermediate candidate passes its own gate; TASK-129 keeps existing commands coherent and TASK-130 includes necessary existing-caller updates.
 - **Compatibility:** Exact document acceptance remains intact, but retained resolved comments, terminal comment updates and per-Revision reading change existing Handoff behavior. TASK-128 classifies every public contract and pins the new storage/snapshot generations before implementation. Existing Notes and legacy unknown read/processing evidence must be preserved honestly. F1 makes formerly optional legacy-writer observations mandatory for fresh mutations, a breaking input-contract change. F2 extends unbind confirmation to known unfinished accepted work while preserving unrecorded legacy evidence; F3 ends request activity on decline without changing its original purpose.
-- **Plan review response (2026-10-27):** Accept F1, F2 and F3 as planning revisions under the existing Task sequence. The [dossier response](../todo/handoff-processing-and-recipient-comment.md#plan-review-response-2026-10-27) records the writer-observation matrix, Project lifecycle/presentation rule and decline transition. TASK-128 adopts them into canonical authority before product implementation; no new Task, harness or review layer is added.
+- **Plan review response (2026-10-27):** Accept F1, F2 and F3 as planning revisions under the existing Task sequence. [Interface section 40](../specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9) records the adopted writer-observation matrix, Project lifecycle/presentation rule and decline transition. TASK-128 adopts them into canonical authority before product implementation; no new Task, harness or review layer is added.
 - **Release boundary:** Master selected M9/shared v0.1.3 for EPIC-019 on 2026-10-27. TASK-128 adopts ADR-0035 and expands the existing gate through AJ-31 to AJ-33; version edits, installation, consumer activation and publication remain separately authorized. The storage boundary is appended schema 12/global format 4, with earlier generations preserved.
+- **Qualification:** The [qualification map](../implementation-tips/handoff-reporting-qualification.md) records assembled CLI/HTTP/MCP/Web/skill evidence, AJ-31 to AJ-33 and earlier-regression applicability, isolated schema-7/schema-11 native upgrade and matched-backup rollback, format-4 and legacy restore, and the exact full-gate plus separately checked prose composition. Internal whole-Epic validation covers all seven Task outcomes and integration seams. This closeout retires the last-consumer dossier and its index entry; it grants no installation, version change or publication.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|

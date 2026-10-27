@@ -10,6 +10,4 @@ When an adopted Epic closes, move lasting information to its role owner. Then re
 
 ## Adopted design references
 
-- [Handoff processing and recipient comment](handoff-processing-and-recipient-comment.md) preserves the agreed design and next-session entry for [EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment). Its contracts require TASK-128 adoption under [proposed ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment); the roadmap alone owns delivery status.
-
 M8 installation preflight and Handoff recovery/agent policy are adopted in [the canonical roadmap](../roadmap/README.md#epic-014-non-mutating-installation-preflight), with their design in [the specification owners](../specs/README.md#m8-contract-entrypoints). They are not future-work candidates and do not need a duplicate lifecycle list here.

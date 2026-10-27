@@ -1454,7 +1454,7 @@ Append `12 / handoff-reporting-v1` and global format 4, preserving schema 11 and
 
 ### Required Source of Truth edits and roadmap impact
 
-TASK-128 adopts the requirements, accepted-decision amendments, architecture, interfaces, security/reliability, AJ-31 to AJ-33, shared M9 gate and complete requirement/Task reverse index before product implementation. TASK-129 through TASK-134 retain their existing sequential ownership and independent gates; storage-first TASK-129 preserves existing-command compatibility, TASK-130 includes the minimum updates to every existing caller, and later transports/Web/skill own their new capabilities. The [execution dossier](../todo/handoff-processing-and-recipient-comment.md) remains a thin execution map until final closeout, when lasting content is promoted to canonical owners and the dossier is removed.
+TASK-128 adopts the requirements, accepted-decision amendments, architecture, interfaces, security/reliability, AJ-31 to AJ-33, shared M9 gate and complete requirement/Task reverse index before product implementation. TASK-129 through TASK-134 retain their existing sequential ownership and independent gates; storage-first TASK-129 preserves existing-command compatibility, TASK-130 includes the minimum updates to every existing caller, and later transports/Web/skill own their new capabilities. The canonical owners above retain the adopted behavior and compatibility decisions; the [qualification map](../implementation-tips/handoff-reporting-qualification.md) retains the implementation, reproducible checks and operational limits. The roadmap retains Task ownership after retirement of the temporary execution dossier.
 
 ### Consequences
 

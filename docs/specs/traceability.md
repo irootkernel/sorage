@@ -49,7 +49,7 @@ TASK-096 additionally cites NFR-015 for the M8 checker extension. M8 entries abo
 
 ### Handoff processing registration
 
-[EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment) adopts HPR-001 to HPR-016 and the affected earlier-rule amendments under [ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment). Every member Task has its requirements below. AJ-31 to AJ-33 and the expanded shared M9/v0.1.3 gate are verification obligations; design adoption supplies no runtime evidence. The [dossier](../todo/handoff-processing-and-recipient-comment.md) maps execution ownership until closeout.
+[EPIC-019](../roadmap/README.md#epic-019-handoff-processing-status-and-recipient-comment) adopts HPR-001 to HPR-016 and the affected earlier-rule amendments under [ADR-0035](../architecture-decision-records/README.md#adr-0035-handoff-processing-status-and-recipient-comment). Every member Task has its requirements below. AJ-31 to AJ-33 and the expanded shared M9/v0.1.3 gate are verification obligations; design adoption supplies no runtime evidence. The canonical roadmap retains Task ownership, and the [qualification map](../implementation-tips/handoff-reporting-qualification.md) links the implemented flows and reproducible checks after retirement of the temporary execution dossier.
 
 ## 3. Reverse index
 
