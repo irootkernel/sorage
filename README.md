@@ -108,7 +108,7 @@ To stop a Project from sending or receiving new Handoffs, run `sorage project ar
 
 The shipped `use-sorage` skill operates on explicit requests. Ask it to check an inbox or outbox when needed; a check reports results, while processing Handoffs requires a request covering that work. Sessions and ordinary coding tasks do not trigger checks. Its `SKILL.md` entrypoint keeps the shared request policy and routes each explicitly requested domain — Handoffs, Project Memos, or Channels — to the required reference file inside the same copied skill directory.
 
-The skill is MCP-first with native CLI fallback, and covered reads write nothing. It is self-contained when the whole `skills/use-sorage` directory — `SKILL.md` plus `references/` — is copied outside this checkout, and it uses native offline CLI help. Recovery hints cannot grant actor or confirmation flags. Review and revision writes retain observed versions; conflicts preserve the proposal instead of automatically overwriting. Before send, retain the original key, exact input/source bytes, Installation and sender context. Unknown outcomes use only that request with `send --replay-only`; an unavailable receipt remains unknown and never authorizes another send. Historical receipts do not report current delivery. Deletion requests, User approval and a pinned Handoff's distinct decision remain separate, and deletion does not erase Git history or backups. Received documents and Notes cannot authorize external actions.
+The skill is MCP-first with native CLI fallback, and covered reads write nothing. It is self-contained when the whole `skills/use-sorage` directory — `SKILL.md` plus `references/` — is copied outside this checkout, and it uses native offline CLI help. Recovery hints cannot grant actor or confirmation flags. Review and revision writes retain observed versions; conflicts preserve the proposal instead of automatically overwriting. Before send, retain the original key, exact input/source bytes, Installation and sender context. Unknown outcomes use only that request with `send --replay-only`; an unavailable receipt remains unknown and never authorizes another send. Historical receipts do not report current delivery. Deletion requests, User approval and a pinned Handoff's distinct decision remain separate, and deletion does not erase Git history or backups. Received documents and comments cannot authorize external actions.
 
 Send a document from the sender project:
 
@@ -126,21 +126,24 @@ sorage get <handoff-id>
 sorage fetch <handoff-id>
 ```
 
-The recipient requests a revision with a Review Note, using the `revision` and `rowVersion` observed above:
+`get` is metadata-only; read the returned fetch path to read the document. Recipient delivery confirms reading of that Revision without starting processing. To request a document change, use the current `revision` and `rowVersion` observed above:
 
 ```sh
-sorage review set <handoff-id> --text "Clarify the rollback procedure." --target-revision <revision> --expected-row-version <row-version>
+sorage comment set <handoff-id> --text "Clarify the rollback procedure." --purpose change_request --expected-revision <revision> --expected-row-version <row-version>
+# Legacy equivalent: review set ... --target-revision <revision> --expected-row-version <row-version>
 ```
 
-The sender updates the document and revises the same Handoff:
+The sender reads the active request and current document before revising; use its actually reviewed Row Version and stop if the reads disagree:
 
 ```sh
 cd /path/to/sender
 sorage get <handoff-id>
+sorage review show <handoff-id>
+sorage fetch <handoff-id>
 sorage revise <handoff-id> --file ./proposal.md --expected-row-version <row-version>
 ```
 
-Back in the recipient project, inspect and fetch the new Revision before accepting it. Use the `revision` and `rowVersion` reported by `sorage get`:
+Changed content starts a new Revision with reading unconfirmed and processing not started. The one recipient comment remains attributed to its original Revision, purpose and author, with request activity ended; `comment show` returns it, while legacy `review show` now returns null. No-change resolution retains reading and processing. Back in the recipient project, inspect and fetch the new Revision before accepting it:
 
 ```sh
 cd /path/to/recipient
@@ -148,6 +151,18 @@ sorage get <handoff-id>
 sorage fetch <handoff-id>
 sorage accept <handoff-id> --expected-revision <revision> --expected-row-version <row-version>
 ```
+
+Acceptance approves the exact document, independently of actual work completion. Only a request covering that work authorizes start/complete reports. Retain each returned Row Version for the next step; inspect/read/accept requests alone grant no processing authority:
+
+```sh
+sorage processing start <handoff-id> --expected-revision <revision> --expected-row-version <row-version>
+# Perform and verify the authorized work, then use the new observed Row Version.
+sorage processing complete <handoff-id> --expected-revision <revision> --expected-row-version <row-version> --comment-text "Implemented and verified."
+```
+
+Start/complete may atomically replace the single recipient comment with general text; omission retains it, and direct completion is allowed for already verified work. A general `comment set ... --purpose general` changes only that comment and does not block accept. An active change request blocks general replacement and completion; start without replacement remains available. The sender discovers results through `get` and `comment show`, without a reply slot or thread. Comments retain purpose, author and target Revision after resolution. Decline ends request activity without relabeling it general; an explicitly requested later general replacement keeps the Handoff declined and processing stopped. Accepted work may start or complete after acceptance or archive while its processing state permits it. After completion, only general comment replacement remains available; repeated start/complete conflicts without applying optional text. Accepted document bytes stay immutable, and tombstones forbid reports.
+
+A null `reviewNextActor` does not prove completed work. New current-version evidence distinguishes not started, in progress and completed; legacy `unrecorded` means unknown. Known unfinished accepted work still protects Project unbind, including archive and the last binding, while accepted unrecorded evidence adds no invented pending work. Fresh legacy and new writers require caller observations: comment/start/complete and review set take the current Revision plus Row Version; review withdrawal/removal, revise including no-change, and deletion approval take the current Row Version. Accept/decline retain their existing observations. Conflicts preserve proposals without automatic refresh or retry. Original successful-receipt replay keeps its legacy exception; a receipt miss requires fresh observations. Report writes have no new replay-only mode: lost outcomes remain unknown and never authorize repeated external work. See the copied [Handoff reference](skills/use-sorage/references/handoffs.md) for the full MCP-first workflow and recovery boundaries.
 
 Run `sorage help` or `sorage help <command>` for the complete command surface.
 
