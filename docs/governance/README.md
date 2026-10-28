@@ -132,7 +132,7 @@ A Chore is a Task whose deliverable text starts with `Chore:`; it is closed when
 
 ### 9.2 Standard
 
-A Standard Task is closed when all of the following hold:
+A Standard Task is closed when all of the following hold, with the runtime-test execution exception for the bounded documentation-only TASK-135 candidate defined in [section 18](#18-pre-release-simplification-registration-boundary):
 
 - The required implementation exists and satisfies every requirement the Task cites.
 - Unit and integration tests pass.
@@ -175,7 +175,7 @@ A review MUST verify:
 - No session commits, amends, or pushes without an explicit instruction from the user for that exact action.
 - A commit carries either one exact Task relationship with an approved lifecycle edit, or an explicit statement that it is unrelated to every active Task.
 - `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. Sections 13 to 16 record the M8 and M9 registration boundaries. Checker support for those milestones does not waive make test, a passing Source of Truth result, independent review, or Contract classification for later implementation.
-- `make test` is the single verification gate for code and MUST pass before a Task moves to `In Review`.
+- `make test` is the single verification gate for code and MUST pass before a Task moves to `In Review`, except for the bounded documentation-only TASK-135 candidate defined in [section 18](#18-pre-release-simplification-registration-boundary).
 
 ## 12. Release change freeze
 
@@ -246,3 +246,13 @@ EPIC-019 Task Requirements cells temporarily use `None`, following the earlier r
 Master approved the EPIC-019 execution plan with M9/shared v0.1.3 and Subagent Review. TASK-128 adopts ADR-0035 and its dated ADR-0008, ADR-0024, ADR-0030, ADR-0033 and ADR-0034 amendments, HPR-001 to HPR-016 and the affected earlier rows, architecture section 28, interface section 40, security-reliability section 18, AJ-31 to AJ-33 and the expanded M9 gate. Every EPIC-019 Task Requirements cell and traceability entry is populated. The prior registration-only boundary above remains historical; the accepted product contract is now the canonical owner set, while implementation readiness remains solely in the roadmap.
 
 Material changes include mandatory fresh legacy-writer observations with preserved successful receipt replay, retained/inactive and terminal general comments, per-Revision reading and independent processing, known unfinished-work unbind confirmation and decline activity settlement. Interface section 40.6 classifies the breaking inputs/DTOs and additive surfaces, pins schema 12/global format 4 with immutable legacy generations and matched-backup/binary rollback, and assigns exact implementation and qualification ownership to the unchanged Task sequence. The documentation version advances to 0.11.0. Adoption changes documents only; runtime tests do not apply to this design candidate, and no product implementation, installed skill, runtime data, version metadata or publication is claimed.
+
+## 18. Pre-release simplification registration boundary
+
+Master's 2026-10-28 request registers [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) and TASK-135 through TASK-138 before shared v0.1.3. The dated ADR-0033 amendment adopts this release ordering; [ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) remains a proposed implementation policy. The [dossier](../todo/pre-release-simplification.md) specifies bounded removals, connection reuse and separation of routine E2E from release preparation. Existing requirement identifiers and their original milestones remain, with additional Task citations and reverse-index entries.
+
+Registration changes planning documents only. It does not remove packages or checks, change test targets, alter connection behavior, start a Task or waive an implementation gate. TASK-135 is the documentation-only adoption prerequisite: it must accept or refine ADR-0036, add the necessary dated ADR-0013/ADR-0016 amendments and align the root agent guide, governance, architecture, security-reliability, testing and current implementation guidance before the later Tasks rely on focused checks.
+
+Under ADR-0033's dated amendment, TASK-135 has a bounded documentation-only verification exception. It applies only to policy, planning and explanatory Markdown changes that preserve existing product behavior and contracts; executable code, scripts, tests or fixtures, schemas or goldens, manifests or lockfiles, toolchain/build configuration and generated artifacts are outside this boundary. Before review starts or TASK-135 enters `In Review`, `bun run check:sot` and `git diff --check` MUST exit 0 and changed documentation MUST satisfy NFR-015. These checks replace runtime-test execution under section 9.2 and the pre-review/`In Review` full `make test` requirement for this candidate; record why those runtime checks do not apply. Independent review MUST still confirm the documentation-only scope, consistent authority and preservation of existing product contracts before completion. TASK-135 retains Standard classification and all other completion and lifecycle rules. If the actual candidate exceeds this boundary, the existing code gate and applicable Task classification apply. This exception does not adopt ADR-0036, authorize focused implementation gates for later Tasks or waive an external workflow requirement.
+
+The adopted policy must preserve independent review, product safety, NFR-015's documentation rules and NFR-016's complete make test aggregate while making review/test scope and evidence reuse proportionate. TASK-138 owns the complete gate on the final integrated implementation candidate, including the signed-candidate release checks. No new validator, evidence system, review tier, acceptance journey or fixed-count model campaign is required. An external workflow's constraints must be reconciled through its existing supported mechanisms rather than silently claimed changed by Sorage documents.

@@ -18,6 +18,8 @@ The [M9 Channel concurrency qualification map](m9-channel-concurrency-qualificat
 
 The [copied-skill acceptance record](use-sorage-acceptance.md) records independent sender/recipient observations and their exact resource and harness limits. The [Handoff reporting qualification map](handoff-reporting-qualification.md) connects the common comment/processing use cases, per-Revision delivery settlement, Project protection, explicit legacy-writer observations and CLI contract classification to their owning checks.
 
+The [pre-release simplification dossier](../todo/pre-release-simplification.md) owns the bounded EPIC-020 execution plan. TASK-135 aligns current guidance and verification policy before TASK-136 to TASK-138 remove obsolete structure, reuse command-local resources and qualify the resulting build/test paths. The dossier records intended work, not implementation or qualification evidence; lifecycle remains in [the roadmap](../roadmap/README.md#epic-020-pre-release-simplification).
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:

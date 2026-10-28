@@ -58,6 +58,12 @@ TASK-128 adopts HPR-001 to HPR-016 and the earlier-rule amendments under [govern
 
 The [Handoff reporting qualification map](implementation-tips/handoff-reporting-qualification.md) describes core/CLI delivery settlement, daemon-served Web reporting and conflicts, and assembled CLI/MCP/HTTP/Web/skill evidence, native schema-7/schema-11 upgrade to schema 12, format-4/legacy restore and matched-binary rollback with explicit reuse and platform limits. It is implementation guidance rather than a second delivery-status record.
 
+## Pre-release simplification entrypoints
+
+[EPIC-020](roadmap/README.md#epic-020-pre-release-simplification) registers the 2026-10-28 pre-v0.1.3 cleanup of obsolete scaffolding/assertions, Handoff database composition and repeated verification work. [Proposed ADR-0036](architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) records the design and alternatives; the [execution dossier](todo/pre-release-simplification.md) defines the four Task boundaries, preserved product guarantees and focused/final verification. The dated ADR-0033 amendment adds the cleanup to shared M9/v0.1.3 without changing a runtime contract or starting implementation.
+
+TASK-135 must adopt the policy and align canonical guidance before later Tasks use focused gates. Existing implementation and command descriptions remain in effect until their owning changes land; registration supplies no test, independent-observation, installation or publication evidence. The roadmap alone records lifecycle and eligibility.
+
 ## Source of Truth precedence
 
 When documents conflict, apply this order:
@@ -86,7 +92,7 @@ Only the roadmap records lifecycle state. The dossier for an active Epic lives u
 
 ## Verification
 
-Run the narrowest relevant check first. Run the complete gate before asking for review:
+Run the narrowest relevant check first. Run the complete gate before asking for review, except for the bounded documentation-only TASK-135 candidate authorized by [governance section 18](governance/README.md#18-pre-release-simplification-registration-boundary):
 
 ```sh
 bun run check:sot

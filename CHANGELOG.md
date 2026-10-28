@@ -4,6 +4,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.3 - Unreleased
 
+Pre-release prerequisite: [EPIC-020](docs/roadmap/README.md#epic-020-pre-release-simplification) schedules bounded repository, resource-composition and verification cleanup before this shared release. Its [plan](docs/todo/pre-release-simplification.md) preserves current product contracts and the complete final gate. These cleanup outcomes are not claimed as implemented by this registration.
+
 ### Added
 
 - Add per-Revision Handoff reading and processing reports with one retained recipient comment, separating general explanations and change requests from document acceptance.

@@ -1267,6 +1267,14 @@ Problem: this record composed the shared v0.1.3 release as M8, M9 and the EPIC-0
 
 Master selected M9 and shared v0.1.3 for EPIC-019 during its Epic execution planning. ADR-0035 therefore expands the existing shared gate to require EPIC-019 and AJ-31 to AJ-33 alongside M8, EPIC-016, EPIC-017 and EPIC-018. Alternatives: separate M10/v0.1.4, not selected by Master; publish without the new contract, not selected. This is release-scope adoption, not a product version edit, installation, consumer activation or publication grant. The requirement, roadmap and testing gate owners are updated together; exact breaking inputs and schema-12/format-4 migration belong to interface section 40.
 
+### Amendment (2026-10-28): pre-release simplification under EPIC-020
+
+Master requested registration of the reviewed cleanup before v0.1.3. Add [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) to the existing shared M9/v0.1.3 delivery boundary without reopening completed Epics. The requirement, roadmap and testing gate owners record this allocation together. The detailed verification and implementation policy remains proposed in [ADR-0036](#adr-0036-pre-release-simplification-and-proportionate-verification) until TASK-135 adopts it; registration does not waive implementation gates or assert an implementation result.
+
+Master's approval of the review corrections on 2026-10-28 authorizes the bounded documentation-only TASK-135 verification exception defined in [governance section 18](../governance/README.md#18-pre-release-simplification-registration-boundary). It replaces that candidate's Standard runtime-test execution and pre-review/`In Review` full-gate requirements while retaining independent review and all other lifecycle rules. This resolves the adoption prerequisite without changing the complete code/release gate or activating ADR-0036 for later Tasks.
+
+Alternatives considered: defer all cleanup until after publication, not selected by the requested pre-release ordering; create another milestone or release line, unnecessary because this work preserves the current product contract. Compatibility and migration impact: none from this scope registration. No version edit, installation, consumer change, commit or publication is authorized by the allocation.
+
 ## ADR-0034: Sorage MCP adapter, zero-write reads and the Channel rebuild
 
 - **Status:** Accepted (2026-10-24; proposed 2026-10-23)
@@ -1459,3 +1467,52 @@ TASK-128 adopts the requirements, accepted-decision amendments, architecture, in
 ### Consequences
 
 A sender can distinguish current-version reading, acceptance and actual processing while retaining the recipient's latest explanation. The feature adds no routing subsystem, native conversation history, consumer-repository change or automatic authority from received content. The new schema and contracts require actual runtime qualification and independent review in their later owning Tasks; design adoption alone proves none of them implemented.
+
+## ADR-0036: Pre-release simplification and proportionate verification
+
+- **Status:** Proposed
+- **Date:** 2026-10-28
+- **Design owner:** TASK-135 under [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification).
+- **Execution detail:** [Pre-release simplification dossier](../todo/pre-release-simplification.md).
+
+### Problem
+
+The pre-v0.1.3 review at `3d119da` found an unused Web package retained by layout assertions, a literal UnitOfWork scanner with no matching production call, repeated database opens through nested Handoff command-port factories, release packaging coupled to routine E2E, and current guidance that overstates checker coverage or retains older architecture descriptions. Broad review/full-gate rules impose work unrelated to small changes, although recent qualification already reused evidence after prose-only edits. These are bounded maintenance problems; no measured latency regression or data-corruption defect was established by that review.
+
+### Proposed decision
+
+Keep this cleanup in M9 before the existing shared v0.1.3 release. The release allocation is recorded by the dated ADR-0033 amendment; the implementation policy in this record becomes authoritative only when TASK-135 accepts or refines it and updates the canonical owners.
+
+1. Adopt focused verification and independent review for affected behavior and relevant failures, reuse still-applicable evidence within the Epic, and retain one complete `make test` on the final integrated implementation candidate. Later material changes invalidate affected evidence; documentation-only closeout does not itself trigger another full suite.
+2. Remove the empty `apps/web` package and the obsolete literal UnitOfWork scanner with their exclusive scaffolding assertions. Preserve actual dependency direction, synchronous transaction behavior, NFR-015 documentation rules, strict typing and native runtime checks.
+3. Reuse the existing database injection seam within each applicable Handoff command composition. Preserve borrowed-versus-owned connection lifetime, the daemon's supplied database, covered read-only admission, transaction and filesystem boundaries, rollback, receipts, events and conflicts. Introduce no global singleton, pool, DI container or lifecycle framework.
+4. Separate routine compiled E2E preparation from release-specific distribution qualification. Keep `make test` as the complete aggregate, including frozen dependencies, pinned runtime, all existing test layers, AJ-16 on the signed candidate, independent double-build reproducibility, signing and checksum/manifest verification. Avoid repeated work with the same purpose; preserve work with distinct qualification purposes.
+5. Remove only presentation/layout assertions that lack required contract meaning, and correct current documentation instead of extending a checker to match an overstated guarantee. Preserve copied-resource validity, real command/schema examples and public-contract checks.
+
+TASK-135 must add explicit dated amendments to ADR-0013's literal UnitOfWork/lint statement and ADR-0016's obsolete package/frontend prescription, reconcile governance and current guidance, and preserve ADR-0019's lifecycle and independent-review rules and ADR-0023's distribution guarantees. Descriptions of current build and package behavior must remain accurate while TASK-136 and TASK-138 implement the approved changes. This proposal adds no validator, test-selection engine, evidence schema, review tier, acceptance journey or fixed model-observation count.
+
+### Alternatives considered
+
+- Keep the scaffolding and full per-change verification unchanged: rejected as the target design because they preserve avoidable maintenance and repeated execution without adding corresponding product protection.
+- Remove complex recovery, concurrency, migration or public compatibility paths: rejected because they enforce required product behavior and protect existing data.
+- Build a general change-impact, evidence or validation framework: rejected because it expands the very harness work this cleanup is intended to reduce.
+- Rewrite CLI, storage or the frontend before release: rejected because the identified problems have narrower remedies and a broad rewrite enlarges regression risk.
+- Make ordinary E2E use source code instead of a current compiled executable: rejected because the executable boundary remains part of the product being qualified.
+- Eliminate the second reproducibility build: rejected because the two independent builds establish a distinct release guarantee.
+- Defer all cleanup until after v0.1.3: not selected by Master's request to prepare this work before that release.
+
+### Compatibility impact
+
+No user-facing CLI/HTTP/MCP/Web behavior, permission boundary, protocol DTO, error catalogue, configuration, version or copied-skill behavior is intended to change. Developer command composition and routine test entrypoints change internally. Existing required Make targets and the complete `make test` guarantee remain. Unexpected public-contract changes must be corrected or separately resolved through material change control, not accepted by regenerating goldens.
+
+### Migration impact
+
+None. Preserve schema 12, global snapshot format 4, supported older readers and migrations, receipt semantics and the existing one-way upgrade/matched-binary rollback procedure. Connection reuse changes resource composition, not persistent data. Requalify affected admission and transaction behavior without inventing a new migration.
+
+### Required Source of Truth edits and roadmap impact
+
+Registration adds EPIC-020 and TASK-135 through TASK-138, the temporary dossier and index links, complete citations and reverse-index additions for existing requirements, the governance registration boundary and the shared release allocation. It starts no Task and introduces no new requirement identifier or milestone. TASK-135 adopts the scoped policy in the root agent guide, documentation index, accepted decisions, governance, architecture, security-reliability, testing-and-acceptance and current implementation guidance. TASK-136 removes obsolete structure/assertions; TASK-137 simplifies database composition; TASK-138 adjusts test/build entrypoints and owns final integrated qualification. Historical completed Tasks and accurately marked superseded qualification remain historical.
+
+### Consequences
+
+The repository can reduce repeated setup, review scope and unused structure while retaining the final safety and release guarantees. Independent reviewers assess the actual affected boundary rather than a mandatory whole-system checklist for every edit. Performance improvement remains unquantified until measured. Version edits, installation, consumer activation, commits and publication keep their separate authorization.
