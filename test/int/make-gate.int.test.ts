@@ -15,7 +15,15 @@ const preparation = [
   "run check:dependency-boundaries",
   "run check:sot",
 ];
-const stages = [...preparation, "run test:unit", "run test:int", "run test:contract", "run package", "run test:e2e"];
+const stages = [
+  ...preparation,
+  "run test:unit",
+  "run package",
+  "run test:int",
+  "run test:contract",
+  "run test:e2e",
+  "run test:release",
+];
 
 /** Exercise the real Makefile with a recording runner, without building or installing. */
 function runGate(target: string, fail = "") {
@@ -49,7 +57,15 @@ describe("the single make test gate", () => {
     expect(result.commands).toEqual(stages);
   });
 
-  it.each(["run check:toolchain", "run test:int", "run package"])("stops after %s fails", (command) => {
+  it.each([
+    "run check:toolchain",
+    "run test:unit",
+    "run package",
+    "run test:int",
+    "run test:contract",
+    "run test:e2e",
+    "run test:release",
+  ])("stops after %s fails", (command) => {
     const result = runGate("test", command);
     expect(result.error).toBeUndefined();
     expect(result.status).not.toBeNull();
@@ -57,9 +73,19 @@ describe("the single make test gate", () => {
     expect(result.commands).toEqual(stages.slice(0, stages.indexOf(command) + 1));
   });
 
-  it("prepares the package when E2E is requested directly", () => {
-    const result = runGate("test-e2e");
+  it.each([
+    ["test-int", ["run build:cli", "run test:int"]],
+    ["test-e2e", ["run build:cli", "run test:e2e"]],
+    ["test-release", ["run package", "run test:release"]],
+  ])("prepares the required executable for standalone %s", (target, commands) => {
+    const result = runGate(target);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.commands).toEqual(["run package", "run test:e2e"]);
+    expect(result.commands).toEqual(commands);
+  });
+
+  it.each(["test-int", "test-e2e"])("does not run %s after its build fails", (target) => {
+    const result = runGate(target, "run build:cli");
+    expect(result.status).not.toBe(0);
+    expect(result.commands).toEqual(["run build:cli"]);
   });
 });

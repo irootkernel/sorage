@@ -1,8 +1,8 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createSqliteEventLedger } from "@sorage/adapters/src/events";
 import {
   createNodeHandoffReadPorts,
@@ -24,19 +24,15 @@ import {
   setReviewNote,
   startProcessing,
 } from "@sorage/core";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cliData, memoCliFixture } from "../fixtures/memo-cli";
 
-const scratch = mkdtempSync(join(tmpdir(), "sorage-reporting-compiled-"));
-const binary = join(scratch, "sorage");
+// make test-int builds this current-source executable; make test shares its signed candidate.
+const binary = fileURLToPath(new URL("../../../../dist/sorage", import.meta.url));
 const cleanups: Array<() => void> = [];
-beforeAll(() =>
-  execFileSync("bun", ["build", "--compile", "apps/cli/src/main.ts", "--outfile", binary], { stdio: "pipe" }),
-);
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 function fixture(initialBody = "Revision one") {
   const f = memoCliFixture();
   cleanups.push(f.cleanup);

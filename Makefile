@@ -1,6 +1,6 @@
 BUN ?= bun
 
-.PHONY: all test-prepare test-unit test-int test-contract test-e2e test build package
+.PHONY: all test-prepare test-unit test-int test-contract test-e2e test-release test build package
 
 all: test
 
@@ -19,22 +19,27 @@ test-prepare:
 test-unit:
 	$(BUN) run test:unit
 
-test-int:
+test-int: build
 	$(BUN) run test:int
 
 test-contract:
 	$(BUN) run test:contract
 
-test-e2e: package
+test-e2e: build
 	$(BUN) run test:e2e
+
+test-release: package
+	$(BUN) run test:release
 
 # Recursive targets keep the gate ordered even when the caller uses make -j.
 test:
 	$(MAKE) test-prepare
 	$(MAKE) test-unit
-	$(MAKE) test-int
+	$(MAKE) package
+	$(BUN) run test:int
 	$(MAKE) test-contract
-	$(MAKE) test-e2e
+	$(BUN) run test:e2e
+	$(BUN) run test:release
 
 build:
 	$(BUN) run build:cli

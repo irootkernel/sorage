@@ -62,12 +62,12 @@ function installed(args: string[], home: string): { status: number | null; stdou
 }
 
 describe("AJ-16 packaging on a clean account", () => {
-  // `make test-e2e` prepares the signed candidate before running every journey.
+  // `make test-release` prepares the signed candidate; make test reuses its one package.
   // Missing artifacts are preparation failures, never a reason to skip AJ-16.
   const manifestPath = `${BINARY}.manifest.json`;
   const checksumPath = `${BINARY}.sha256`;
   it("installs nothing but the binary and completes the journey", () => {
-    expect(existsSync(manifestPath), "run make test-e2e to prepare the packaged candidate").toBe(true);
+    expect(existsSync(manifestPath), "run make test-release to prepare the packaged candidate").toBe(true);
     expect(existsSync(BINARY)).toBe(true);
     const account = tempDir("sorage-aj16-account-");
     const workA = join(account, "work-a");

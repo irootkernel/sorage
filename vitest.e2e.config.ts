@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,7 @@ export default defineConfig({
   test: {
     name: "e2e",
     include: ["**/test/e2e/**/*.test.ts"],
+    exclude: [...configDefaults.exclude, "**/test/e2e/aj16-packaging.e2e.test.ts"],
     passWithNoTests: true,
     // One real event-loop turn per test keeps the worker's RPC transport
     // acknowledged through long synchronous journeys (see the setup file).
