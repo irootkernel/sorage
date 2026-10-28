@@ -40,7 +40,7 @@ import { openVault } from "./vault";
 export interface NodeHandoffCommandPortsOptions {
   env?: HomeEnvironment | undefined;
   userHome?: string | undefined;
-  /** Daemon-owned connection shared by every request route and closed on drain. */
+  /** Borrowed connection: its daemon, covered-read caller or enclosing factory owns its lifetime. */
   database?: SorageSqlite | undefined;
   /** Shared clock for domain decisions and 24-hour idempotency expiry. */
   clock?: { now(): Date } | undefined;
@@ -53,8 +53,8 @@ export interface NodeHandoffCommandPortsOptions {
 }
 
 function databaseFor(options: NodeHandoffCommandPortsOptions, stateDir: string): SorageSqlite {
-  const plan = productionMigrationPlan();
   if (options.database !== undefined) return options.database;
+  const plan = productionMigrationPlan();
   try {
     return openAndMigrate(resolve(stateDir, "sorage.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds }).db;
   } catch (error) {
@@ -83,8 +83,25 @@ function operableConfiguration(
   return read.value;
 }
 
-function closeOwnedDatabase(options: NodeHandoffCommandPortsOptions, db: SorageSqlite): void {
-  if (options.database === undefined) db.close();
+/** Construction owns only a connection it acquired; successful CLI ports keep process-scoped lifetime. */
+function composeWithDatabase<T>(
+  options: NodeHandoffCommandPortsOptions,
+  stateDir: string,
+  compose: (database: SorageSqlite) => T,
+): T {
+  const db = databaseFor(options, stateDir);
+  try {
+    return compose(db);
+  } catch (error) {
+    if (options.database === undefined) {
+      try {
+        db.close();
+      } catch {
+        // Cleanup must not replace the original configuration or construction refusal.
+      }
+    }
+    throw error;
+  }
 }
 
 /**
@@ -240,91 +257,86 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = databaseFor(options, home.stateDir);
-  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  let effective: ReturnType<typeof operableConfiguration>["config"];
-  try {
-    effective = operableConfiguration(config, home).config;
-  } catch (error) {
-    closeOwnedDatabase(options, db);
-    throw error;
-  }
-  const ledger = createSqliteEventLedger(db);
-  const clock = options.clock ?? new SystemClock();
-  const contentStore = createSqliteContentStore({
-    db,
-    vaultPath: effective.vault.path,
-    installationId: effective.installationId,
-    runDir: home.runDir,
-  });
-  return {
-    projectPorts: createNodeProjectPorts({
-      env: env as HomeEnvironment,
-      userHome,
-      database: db,
-      contentionSurface: "handoff",
-    }),
-    handoffs: createSqliteHandoffWriteStore(
+  return composeWithDatabase(options, home.stateDir, (db) => {
+    const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+    const effective = operableConfiguration(config, home).config;
+    const ledger = createSqliteEventLedger(db);
+    const clock = options.clock ?? new SystemClock();
+    const contentStore = createSqliteContentStore({
       db,
-      ledger,
-      { now: () => clock.now(), contentionSurface: "handoff" },
-      artifactContentBindings(db, ledger, effective.vault.path, effective.installationId, () => clock.now()),
-    ),
-    artifactStore: legacyExecutorArtifactStore(
-      db,
-      createNodeArtifactStore({
-        vaultPath: effective.vault.path,
-        installationId: effective.installationId,
-        // The base observes a vault-move.lock acquired after these ports were
-        // built, so a stage that precedes the SQL transaction still pauses
-        // (RUN-014, SHR-011).
-        runDir: home.runDir,
-      }),
-      effective.vault.path,
-      effective.installationId,
-      home.runDir,
-    ),
-    content: {
-      // The one shared body-prepare implementation behind every producer
-      // (SHR-002, section 38.2): logical-name classification and threshold
-      // routing live in the content store, never duplicated here.
-      prepareArtifactBody: (request) => contentStore.prepareArtifactBody(request),
-    },
-    ids: new UuidGenerator(),
-    clock,
-    config: {
       vaultPath: effective.vault.path,
-      maxBytes: effective.artifact.maxBytes,
-      allowUnregisteredSenders: effective.handoff.allowUnregisteredSenders,
-    },
-    bindingDirectories: bindingDirectoriesOf(db),
-    inspectSource(path, currentUserHome) {
-      const expanded = expandHome(path, currentUserHome);
-      const inspected = inspectSourceFile(expanded);
-      if (!inspected.ok) return err(inspected.error);
-      return ok({
-        resolvedSourcePath: inspected.value.resolvedPath,
-        originalName: basename(inspected.value.resolvedPath),
-      });
-    },
-    digestSource(path) {
-      return digestFile(expandHome(path, userHome));
-    },
-    disclosures: {
-      backupEnabled: effective.gitBackup.enabled,
-      thresholdBytes: effective.gitBackup.largeArtifactWarningBytes,
-      largeContent: (sizeBytes: number, thresholdBytes: number) => {
-        // The CLI attaches its own stderr sink after composition; the default
-        // records the structured diagnostic (never user delivery).
-        appendStructuredLog(
-          { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "handoff", sizeBytes, thresholdBytes },
-          home,
-          effective.logging,
-        );
+      installationId: effective.installationId,
+      runDir: home.runDir,
+    });
+    return {
+      projectPorts: createNodeProjectPorts({
+        env: env as HomeEnvironment,
+        userHome,
+        database: db,
+        contentionSurface: "handoff",
+      }),
+      handoffs: createSqliteHandoffWriteStore(
+        db,
+        ledger,
+        { now: () => clock.now(), contentionSurface: "handoff" },
+        artifactContentBindings(db, ledger, effective.vault.path, effective.installationId, () => clock.now()),
+      ),
+      artifactStore: legacyExecutorArtifactStore(
+        db,
+        createNodeArtifactStore({
+          vaultPath: effective.vault.path,
+          installationId: effective.installationId,
+          // The base observes a vault-move.lock acquired after these ports were
+          // built, so a stage that precedes the SQL transaction still pauses
+          // (RUN-014, SHR-011).
+          runDir: home.runDir,
+        }),
+        effective.vault.path,
+        effective.installationId,
+        home.runDir,
+      ),
+      content: {
+        // The one shared body-prepare implementation behind every producer
+        // (SHR-002, section 38.2): logical-name classification and threshold
+        // routing live in the content store, never duplicated here.
+        prepareArtifactBody: (request) => contentStore.prepareArtifactBody(request),
       },
-      ...(options.completionWarning !== undefined ? { completionWarning: options.completionWarning } : {}),
-    },
-  };
+      ids: new UuidGenerator(),
+      clock,
+      config: {
+        vaultPath: effective.vault.path,
+        maxBytes: effective.artifact.maxBytes,
+        allowUnregisteredSenders: effective.handoff.allowUnregisteredSenders,
+      },
+      bindingDirectories: bindingDirectoriesOf(db),
+      inspectSource(path, currentUserHome) {
+        const expanded = expandHome(path, currentUserHome);
+        const inspected = inspectSourceFile(expanded);
+        if (!inspected.ok) return err(inspected.error);
+        return ok({
+          resolvedSourcePath: inspected.value.resolvedPath,
+          originalName: basename(inspected.value.resolvedPath),
+        });
+      },
+      digestSource(path) {
+        return digestFile(expandHome(path, userHome));
+      },
+      disclosures: {
+        backupEnabled: effective.gitBackup.enabled,
+        thresholdBytes: effective.gitBackup.largeArtifactWarningBytes,
+        largeContent: (sizeBytes: number, thresholdBytes: number) => {
+          // The CLI attaches its own stderr sink after composition; the default
+          // records the structured diagnostic (never user delivery).
+          appendStructuredLog(
+            { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "handoff", sizeBytes, thresholdBytes },
+            home,
+            effective.logging,
+          );
+        },
+        ...(options.completionWarning !== undefined ? { completionWarning: options.completionWarning } : {}),
+      },
+    };
+  });
 }
 
 function expandHome(path: string, userHome: string): string {
@@ -343,43 +355,44 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
   };
   disclosures?: import("@sorage/core").RetentionPorts["disclosures"];
 } {
-  const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = databaseFor(options, home.stateDir);
-  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  let read: ReadConfiguration;
-  try {
-    read = operableConfiguration(config, home);
-  } catch (error) {
-    closeOwnedDatabase(options, db);
-    throw error;
-  }
-  const artifactVaultPath = read.config.vault.path;
-  const artifactInstallationId = read.config.installationId;
-  const retentionLedger = createSqliteEventLedger(db);
-  const retentionClock = () => options.clock?.now() ?? new Date();
-  return {
-    ...reviews,
-    retention: createSqliteRetentionStore(
-      db,
-      retentionLedger,
-      { now: retentionClock, contentionSurface: "handoff" },
-      artifactContentBindings(db, retentionLedger, read.config.vault.path, read.config.installationId, retentionClock),
-    ),
-    artifact: {
-      // The read-side body seam comes from the review ports' production wiring;
-      // deletion approval's mandatory body gate resolves the Artifact's record
-      // by id, while the physical unlink keeps the shared legacy executor.
-      ...reviews.artifact,
-      remove: (key: string) =>
-        legacyRemoveThroughExecutor(db, artifactVaultPath, artifactInstallationId, home.runDir, key),
-    },
-    ...(options.completionWarning !== undefined
-      ? { disclosures: { completionWarning: options.completionWarning } }
-      : {}),
-  };
+  return composeWithDatabase(options, home.stateDir, (db) => {
+    const reviews = createNodeReviewPorts({ ...options, database: db });
+    const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+    const read = operableConfiguration(config, home);
+    const artifactVaultPath = read.config.vault.path;
+    const artifactInstallationId = read.config.installationId;
+    const retentionLedger = createSqliteEventLedger(db);
+    const retentionClock = () => options.clock?.now() ?? new Date();
+    return {
+      ...reviews,
+      retention: createSqliteRetentionStore(
+        db,
+        retentionLedger,
+        { now: retentionClock, contentionSurface: "handoff" },
+        artifactContentBindings(
+          db,
+          retentionLedger,
+          read.config.vault.path,
+          read.config.installationId,
+          retentionClock,
+        ),
+      ),
+      artifact: {
+        // The read-side body seam comes from the review ports' production wiring;
+        // deletion approval's mandatory body gate resolves the Artifact's record
+        // by id, while the physical unlink keeps the shared legacy executor.
+        ...reviews.artifact,
+        remove: (key: string) =>
+          legacyRemoveThroughExecutor(db, artifactVaultPath, artifactInstallationId, home.runDir, key),
+      },
+      ...(options.completionWarning !== undefined
+        ? { disclosures: { completionWarning: options.completionWarning } }
+        : {}),
+    };
+  });
 }
 
 /** The production terminal wiring of accept, decline, and withdraw (TASK-033). */
@@ -388,15 +401,16 @@ export function createNodeTerminalPorts(options: NodeHandoffCommandPortsOptions 
 > & {
   terminals: ReturnType<typeof createSqliteTerminalStore>;
 } {
-  const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = databaseFor(options, home.stateDir);
-  return {
-    ...reviews,
-    terminals: createSqliteTerminalStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
-  };
+  return composeWithDatabase(options, home.stateDir, (db) => {
+    const reviews = createNodeReviewPorts({ ...options, database: db });
+    return {
+      ...reviews,
+      terminals: createSqliteTerminalStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
+    };
+  });
 }
 
 /** The production revision wiring of `sorage revise` (TASK-032). */
@@ -411,161 +425,156 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   digestSource: (path: string) => Result<string, AppError>;
   disclosures?: NonNullable<RevisionPorts["disclosures"]>;
 } {
-  const reviews = createNodeReviewPorts(options);
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = databaseFor(options, home.stateDir);
-  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  let effective: ReturnType<typeof operableConfiguration>["config"];
-  try {
-    effective = operableConfiguration(config, home).config;
-  } catch (error) {
-    closeOwnedDatabase(options, db);
-    throw error;
-  }
-  const artifactStore = createNodeArtifactStore({
-    vaultPath: effective.vault.path,
-    installationId: effective.installationId,
-    // The base observes a vault-move.lock acquired after these ports were
-    // built, so a revision's stage still pauses before its transaction
-    // (RUN-014, SHR-011).
-    runDir: home.runDir,
-  });
-  const revisionLedger = createSqliteEventLedger(db);
-  const revisionClock = () => options.clock?.now() ?? new Date();
-  return {
-    ...reviews,
-    content: {
-      prepareArtifactBody: (request) =>
-        createSqliteContentStore({
-          db,
-          vaultPath: effective.vault.path,
-          installationId: effective.installationId,
-          runDir: home.runDir,
-        }).prepareArtifactBody(request),
-    },
-    revisions: createSqliteRevisionStore(
-      db,
-      revisionLedger,
-      { now: revisionClock, contentionSurface: "handoff" },
-      artifactContentBindings(db, revisionLedger, effective.vault.path, effective.installationId, revisionClock),
-    ),
-    // The ordinary revise physical steps run through the same shared legacy
-    // executor as the drain (section 3): dependency-aware eligibility before
-    // the unlink effect, with the store's marker/fence guard preserved.
-    artifactStore: legacyExecutorArtifactStore(
-      db,
-      artifactStore,
-      effective.vault.path,
-      effective.installationId,
-      home.runDir,
-    ),
-    config: {
+  return composeWithDatabase(options, home.stateDir, (db) => {
+    const reviews = createNodeReviewPorts({ ...options, database: db });
+    const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+    const effective = operableConfiguration(config, home).config;
+    const artifactStore = createNodeArtifactStore({
       vaultPath: effective.vault.path,
-      maxBytes: effective.artifact.maxBytes,
-      verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch,
-    },
-    bindingDirectories: bindingDirectoriesOf(db),
-    digestSource(path: string) {
-      return digestFile(path);
-    },
-    disclosures: {
-      backupEnabled: effective.gitBackup.enabled,
-      thresholdBytes: effective.gitBackup.largeArtifactWarningBytes,
-      largeContent: (sizeBytes: number, thresholdBytes: number) => {
-        appendStructuredLog(
-          { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "handoff", sizeBytes, thresholdBytes },
-          home,
-          effective.logging,
-        );
+      installationId: effective.installationId,
+      // The base observes a vault-move.lock acquired after these ports were
+      // built, so a revision's stage still pauses before its transaction
+      // (RUN-014, SHR-011).
+      runDir: home.runDir,
+    });
+    const revisionLedger = createSqliteEventLedger(db);
+    const revisionClock = () => options.clock?.now() ?? new Date();
+    return {
+      ...reviews,
+      content: {
+        prepareArtifactBody: (request) =>
+          createSqliteContentStore({
+            db,
+            vaultPath: effective.vault.path,
+            installationId: effective.installationId,
+            runDir: home.runDir,
+          }).prepareArtifactBody(request),
       },
-      ...(options.completionWarning !== undefined ? { completionWarning: options.completionWarning } : {}),
-    },
-  };
+      revisions: createSqliteRevisionStore(
+        db,
+        revisionLedger,
+        { now: revisionClock, contentionSurface: "handoff" },
+        artifactContentBindings(db, revisionLedger, effective.vault.path, effective.installationId, revisionClock),
+      ),
+      // The ordinary revise physical steps run through the same shared legacy
+      // executor as the drain (section 3): dependency-aware eligibility before
+      // the unlink effect, with the store's marker/fence guard preserved.
+      artifactStore: legacyExecutorArtifactStore(
+        db,
+        artifactStore,
+        effective.vault.path,
+        effective.installationId,
+        home.runDir,
+      ),
+      config: {
+        vaultPath: effective.vault.path,
+        maxBytes: effective.artifact.maxBytes,
+        verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch,
+      },
+      bindingDirectories: bindingDirectoriesOf(db),
+      digestSource(path: string) {
+        return digestFile(path);
+      },
+      disclosures: {
+        backupEnabled: effective.gitBackup.enabled,
+        thresholdBytes: effective.gitBackup.largeArtifactWarningBytes,
+        largeContent: (sizeBytes: number, thresholdBytes: number) => {
+          appendStructuredLog(
+            { level: "warn", event: "LARGE_CONTENT_DISCLOSED", domain: "handoff", sizeBytes, thresholdBytes },
+            home,
+            effective.logging,
+          );
+        },
+        ...(options.completionWarning !== undefined ? { completionWarning: options.completionWarning } : {}),
+      },
+    };
+  });
 }
 
 /** The production read wiring of `sorage inbox`, `outbox`, `get`, and `fetch` (TASK-030). */
 export function createNodeReviewPorts(
   options: NodeHandoffCommandPortsOptions = {},
 ): ReturnType<typeof createNodeHandoffReadPorts> & { reviews: ReturnType<typeof createSqliteReviewStore> } {
-  const read = createNodeHandoffReadPorts(options);
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = databaseFor(options, home.stateDir);
-  return {
-    ...read,
-    reviews: createSqliteReviewStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
-  };
+  return composeWithDatabase(options, home.stateDir, (db) => {
+    const read = createNodeHandoffReadPorts({ ...options, database: db });
+    return {
+      ...read,
+      reviews: createSqliteReviewStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
+    };
+  });
 }
 
 export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptions = {}): HandoffDetailReadPorts {
-  const send = createNodeSendPorts(options);
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const db = databaseFor(options, home.stateDir);
-  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  let effective: ReturnType<typeof operableConfiguration>["config"];
-  try {
-    effective = operableConfiguration(config, home).config;
-  } catch (error) {
-    closeOwnedDatabase(options, db);
-    throw error;
-  }
-  return {
-    projectPorts: send.projectPorts,
-    // The production store carries the first-fetch write fence's known run
-    // directory (RUN-014, SHR-011): every CLI and HTTP settlement through these
-    // ports pauses on a live vault-move lock or database move fence.
-    handoffs: createSqliteHandoffReadStore(db, createSqliteEventLedger(db), {
-      runDir: home.runDir,
-      contentionSurface: "handoff",
-    }),
-    // The note read the detail surface needs is the same findNote seam the review
-    // mutations load through, so the two can never disagree on the current Note.
-    reviews: createSqliteReviewStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
-    events: {
-      listRecent(handoffId: string, limit: number): Result<HandoffEventView[], AppError> {
-        try {
-          const rows = db
-            .prepare(
-              "SELECT id, event_type, actor_kind, actor_id, row_version, created_at FROM events WHERE handoff_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
-            )
-            .all(handoffId, limit) as Array<{
-            id: string;
-            event_type: string;
-            actor_kind: HandoffEventView["actorKind"];
-            actor_id: string | null;
-            row_version: number | null;
-            created_at: string;
-          }>;
-          return ok(
-            rows.map((row) => ({
-              id: row.id,
-              eventType: row.event_type,
-              actorKind: row.actor_kind,
-              actorId: row.actor_id,
-              rowVersion: row.row_version,
-              createdAt: row.created_at,
-            })),
-          );
-        } catch (error) {
-          return err(appError("INTERNAL_ERROR", `Reading the Handoff timeline failed: ${String(error)}`));
-        }
+  return composeWithDatabase(options, home.stateDir, (db) => {
+    const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+    const effective = operableConfiguration(config, home).config;
+    return {
+      projectPorts: createNodeProjectPorts({
+        env: env as HomeEnvironment,
+        userHome,
+        database: db,
+        contentionSurface: "handoff",
+      }),
+      // The production store carries the first-fetch write fence's known run
+      // directory (RUN-014, SHR-011): every CLI and HTTP settlement through these
+      // ports pauses on a live vault-move lock or database move fence.
+      handoffs: createSqliteHandoffReadStore(db, createSqliteEventLedger(db), {
+        runDir: home.runDir,
+        contentionSurface: "handoff",
+      }),
+      // The note read the detail surface needs is the same findNote seam the review
+      // mutations load through, so the two can never disagree on the current Note.
+      reviews: createSqliteReviewStore(db, createSqliteEventLedger(db), { contentionSurface: "handoff" }),
+      events: {
+        listRecent(handoffId: string, limit: number): Result<HandoffEventView[], AppError> {
+          try {
+            const rows = db
+              .prepare(
+                "SELECT id, event_type, actor_kind, actor_id, row_version, created_at FROM events WHERE handoff_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+              )
+              .all(handoffId, limit) as Array<{
+              id: string;
+              event_type: string;
+              actor_kind: HandoffEventView["actorKind"];
+              actor_id: string | null;
+              row_version: number | null;
+              created_at: string;
+            }>;
+            return ok(
+              rows.map((row) => ({
+                id: row.id,
+                eventType: row.event_type,
+                actorKind: row.actor_kind,
+                actorId: row.actor_id,
+                rowVersion: row.row_version,
+                createdAt: row.created_at,
+              })),
+            );
+          } catch (error) {
+            return err(appError("INTERNAL_ERROR", `Reading the Handoff timeline failed: ${String(error)}`));
+          }
+        },
       },
-    },
-    config: { vaultPath: effective.vault.path, verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch },
-    artifact: createArtifactBodyPorts({
-      db,
-      vaultPath: effective.vault.path,
-      installationId: effective.installationId,
-      stateDir: home.stateDir,
-    }),
-    ids: send.ids,
-    clock: send.clock,
-  };
+      config: { vaultPath: effective.vault.path, verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch },
+      artifact: createArtifactBodyPorts({
+        db,
+        vaultPath: effective.vault.path,
+        installationId: effective.installationId,
+        stateDir: home.stateDir,
+      }),
+      ids: new UuidGenerator(),
+      clock: options.clock ?? new SystemClock(),
+    };
+  });
 }
 
 /** The resolved binding directories the Vault containment check runs against (VLT-017). */

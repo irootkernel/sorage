@@ -678,6 +678,8 @@ interface UnitOfWork {
 
 Transaction callbacks must not suspend, and filesystem I/O must remain outside transactions. Strict callback types, transaction/rollback tests, crash-recovery checks and independent review enforce the actual boundaries; lint does not prove either property. The obsolete literal `UnitOfWork.run` scanner is removed; no production transaction depended on it. NFR-014's actual import-direction checks remain. Staging and verification run before the transaction; renames and unlinks run after it.
 
+Handoff Send, Read, Review, Terminal, Revision and Retention factories share one operational SQLite connection throughout each composition, including nested Project and Handoff ports. An outer factory without an injected database acquires and migrates that connection once; migration admission can still use its own short-lived inspection resources. If construction fails after acquisition, the outer factory closes its owned connection without replacing the original refusal if cleanup also fails. Successful CLI ports keep the existing process-scoped lifetime. An injected connection is borrowed: nested factories neither reopen nor migrate it and never close it, on success or failure. The daemon retains shutdown ownership, while covered-read callers retain admission and close their exact read connection in `finally`, including each inbox-wait poll. Read composition builds its Project resolver, Handoff and Review stores, timeline and required body-read ports directly, without Send's ArtifactStore, body-preparation bindings or binding-directory lookup. This changes resource composition, not transactions, replay, contention classification or post-commit warnings.
+
 ## 17. Operational storage
 
 Sorage home:
