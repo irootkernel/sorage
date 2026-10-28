@@ -363,7 +363,7 @@ Artifact durability follows write, `fsync(file)`, rename, `fsync(parent director
 
 ### Amendment (2026-10-28): synchronous transaction enforcement
 
-ADR-0036 replaces the literal `UnitOfWork.run` lint prescription. Production uses synchronous SQLite transactions, including typed `runInTransaction` callbacks that return `Result<T>` rather than promises. Strict types, relevant transaction/rollback and crash-recovery tests, and independent review protect the no-suspension and no-filesystem-I/O boundaries; the literal scanner does not prove them and TASK-136 removes it with its exclusive tests. Preserve the intent ordering, atomic domain/events/intents, durability and recovery guarantees above. This amendment changes no transaction or persistence contract.
+ADR-0036 replaces the literal `UnitOfWork.run` lint prescription. Production uses synchronous SQLite transactions, including typed `runInTransaction` callbacks that return `Result<T>` rather than promises. Strict types, relevant transaction/rollback and crash-recovery tests, and independent review protect the no-suspension and no-filesystem-I/O boundaries; the literal scanner did not prove them and is removed with its exclusive tests. Preserve the intent ordering, atomic domain/events/intents, durability and recovery guarantees above. This amendment changes no transaction or persistence contract.
 
 ## ADR-0014: Review state machine extension
 
@@ -475,7 +475,7 @@ The workspace is five packages â€” `core`, `adapters`, `cli`, `daemon`, `web` â€
 
 ### Amendment (2026-10-28): actual frontend and package boundaries
 
-ADR-0036 replaces the Vite/Preact and fixed-five-package prescription. The current Web UI is a no-build static SPA served by `apps/daemon/src/web-app.ts`, with its actual script/style assets; `apps/web` is an unused placeholder, retained until TASK-136 removes its incidental package/configuration assertions. Keep the Bun pin, SQLite driver, strict types, actual dependency-direction checks and ADR-0023 distribution guarantees. Package count and a future framework choice are not product guarantees. No new frontend pipeline is introduced.
+ADR-0036 replaces the Vite/Preact and fixed-five-package prescription. The current Web UI is a no-build static SPA served by `apps/daemon/src/web-app.ts`, with its actual script/style assets; the unused `apps/web` placeholder and its incidental package/configuration assertions are removed. Keep the Bun pin, SQLite driver, strict types, actual dependency-direction checks and ADR-0023 distribution guarantees. Package count and a future framework choice are not product guarantees. No new frontend pipeline is introduced.
 
 ## ADR-0017: Browser authentication and the local network boundary
 

@@ -18,7 +18,7 @@
     },
     "apps/cli": {
       "name": "@sorage/cli",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@sorage/adapters": "0.1.0",
         "@sorage/core": "0.1.0",
@@ -28,19 +28,15 @@
     },
     "apps/daemon": {
       "name": "@sorage/daemon",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@sorage/adapters": "0.1.0",
         "@sorage/core": "0.1.0",
       },
     },
-    "apps/web": {
-      "name": "@sorage/web",
-      "version": "0.1.0",
-    },
     "packages/adapters": {
       "name": "@sorage/adapters",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "@sorage/core": "0.1.0",
         "yaml": "2.9.0",
@@ -48,7 +44,7 @@
     },
     "packages/core": {
       "name": "@sorage/core",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
         "yaml": "2.9.0",
       },
@@ -188,8 +184,6 @@
     "@sorage/core": ["@sorage/core@workspace:packages/core"],
 
     "@sorage/daemon": ["@sorage/daemon@workspace:apps/daemon"],
-
-    "@sorage/web": ["@sorage/web@workspace:apps/web"],
 
     "@types/bun": ["@types/bun@1.2.20", "", { "dependencies": { "bun-types": "1.2.20" } }, "sha512-dX3RGzQ8+KgmMw7CsW4xT5ITBSCrSbfHc36SNT31EOUg/LA9JWq0VDdEXDRSe1InVWpd2yLUM1FUF/kEOyTzYA=="],
 

@@ -611,8 +611,7 @@ sorage/
 │   └── adapters/                 # SQLite, filesystem, git, macOS, HTTP, testkit
 ├── apps/
 │   ├── cli/
-│   ├── daemon/
-│   └── web/                     # unused placeholder; removal belongs to TASK-136
+│   └── daemon/                  # HTTP server and shipped Web assets
 ├── migrations/
 └── scripts/
 ```
@@ -637,7 +636,7 @@ Rules:
 - `adapters` implements the ports declared in `core` and depends on `core` only.
 - `apps/*` import `core` application use cases and protocol DTOs and compose adapters at their entry point; they never import domain internals.
 - Database rows never leave `adapters`; public responses use protocol DTOs.
-- The Web UI is the daemon-served static SPA in `apps/daemon/src/web-app.ts` and its script/style modules, not an `apps/web` runtime. It consumes public HTTP DTOs, never database rows. The unused `apps/web` manifest/stub still exists until TASK-136 removes it and its incidental configuration.
+- The Web UI is the daemon-served static SPA in `apps/daemon/src/web-app.ts` and its script/style modules, not an `apps/web` runtime. It consumes public HTTP DTOs, never database rows. The unused `apps/web` placeholder and its incidental configuration are removed; the daemon remains the Web runtime owner.
 
 ### 15.1 Ecosystem boundary
 
@@ -677,7 +676,7 @@ interface UnitOfWork {
 }
 ```
 
-Transaction callbacks must not suspend, and filesystem I/O must remain outside transactions. Strict callback types, transaction/rollback tests, crash-recovery checks and independent review enforce the actual boundaries; lint does not prove either property. The existing literal `UnitOfWork.run` scanner has no corresponding production call and remains only until TASK-136 removes it. NFR-014's actual import-direction checks remain. Staging and verification run before the transaction; renames and unlinks run after it.
+Transaction callbacks must not suspend, and filesystem I/O must remain outside transactions. Strict callback types, transaction/rollback tests, crash-recovery checks and independent review enforce the actual boundaries; lint does not prove either property. The obsolete literal `UnitOfWork.run` scanner is removed; no production transaction depended on it. NFR-014's actual import-direction checks remain. Staging and verification run before the transaction; renames and unlinks run after it.
 
 ## 17. Operational storage
 

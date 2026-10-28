@@ -52,7 +52,7 @@ Bun does not use libuv, so `F_FULLFSYNC` durability MUST be verified empirically
 
 For focused work, select existing checks and relevant failure paths under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review); no automatic impact selector is needed. Avoid repeating frozen installation for unchanged dependencies. Record exact changed boundaries, commands/results, reused evidence and its applicability in the existing handoff. TASK-138 owns the complete `make test` on the integrated EPIC-020 candidate; reuse that result for overlapping consumers and rerun evidence invalidated by later changes. The Make/package descriptions above remain the current implementation until TASK-138 changes the entrypoints; policy adoption alone does not separate E2E from packaging. Preserve independent reproducibility builds and signed-candidate checks.
 
-The current workspace still contains five manifests, including an unused Web placeholder; TASK-136 owns its removal. The actual Web UI ships from the daemon. Import/dependency guards run inside `make test-prepare` (NFR-014); fixed package count is not a product invariant:
+The workspace contains four implementation packages. The unused Web placeholder is removed; the actual Web UI ships from the daemon. Import/dependency guards run inside `make test-prepare` (NFR-014); fixed package count is not a product invariant:
 
 | Package | Contents | May import |
 |---|---|---|
@@ -60,7 +60,6 @@ The current workspace still contains five manifests, including an unused Web pla
 | `adapters` | SQLite, filesystem, git, macOS, HTTP, and `testkit` implementations of `core` ports | `core` |
 | `cli` | `apps/cli`, argument parsing, output rendering, process wiring | `core`, allowed adapter composition modules, daemon entrypoint |
 | `daemon` | `apps/daemon`, HTTP server, scheduler, garbage collection | `core`, `adapters` |
-| `web` | Unused `apps/web` placeholder, pending TASK-136 removal; no runtime Web consumer | Current placeholder rule permits `core` only |
 
 The `apps/*` import rule is narrower than the table alone suggests: an app imports `core` application use cases and protocol DTOs and composes adapters at its entry point, and it never imports domain internals.
 
@@ -133,7 +132,7 @@ const result = unitOfWork.run((tx) => {
 });
 ```
 
-An awaited callback would suspend mid-transaction and let another logical transaction interleave on the same connection. Strict callback types, actual transaction/rollback tests and independent review protect this boundary and the absence of filesystem I/O. Do not claim lint proves either property: the literal `UnitOfWork.run` scanner has no production target and remains only until TASK-136 removes it. Keep the independent import/dependency guards.
+An awaited callback would suspend mid-transaction and let another logical transaction interleave on the same connection. Strict callback types, actual transaction/rollback tests and independent review protect this boundary and the absence of filesystem I/O. Do not claim lint proves either property: the obsolete literal `UnitOfWork.run` scanner is removed because it had no production target. Keep the independent import/dependency guards.
 
 Filesystem I/O never happens inside a transaction: staging, hashing, and verification run before it, and renames and unlinks run after it.
 

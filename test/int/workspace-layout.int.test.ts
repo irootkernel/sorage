@@ -2,13 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("workspace layout", () => {
-  it("contains the five packages of the fixed layout", () => {
+  it("contains the implementation package manifests", () => {
     for (const manifest of [
       "packages/core/package.json",
       "packages/adapters/package.json",
       "apps/cli/package.json",
       "apps/daemon/package.json",
-      "apps/web/package.json",
     ]) {
       expect(existsSync(manifest), manifest).toBe(true);
     }

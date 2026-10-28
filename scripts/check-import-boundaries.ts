@@ -1,5 +1,4 @@
-// Enforces the package import rules of docs/implementation-tips/README.md section 2 and the
-// rule that no `await` appears inside a `UnitOfWork.run` callback (NFR-014).
+// Enforces the package import rules of docs/implementation-tips/README.md section 2 (NFR-014).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -9,7 +8,6 @@ const IMPORT_RULES: Record<string, string[]> = {
   "@sorage/adapters": ["@sorage/core"],
   "@sorage/cli": ["@sorage/core", "@sorage/adapters", "@sorage/daemon"],
   "@sorage/daemon": ["@sorage/core", "@sorage/adapters"],
-  "@sorage/web": ["@sorage/core"],
 };
 
 /**
@@ -85,15 +83,6 @@ function stripComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 }
 
-// Additionally blanks string literal contents so the UnitOfWork scanner cannot match
-// the word await inside a quoted value.
-function stripStrings(text: string): string {
-  return text
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
-    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
-    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
-}
-
 function ecosystemToolFor(spec: string): string | null {
   for (const tool of ECOSYSTEM_PACKAGES) {
     if (new RegExp(`(^|/)@?${tool}(/|$)|(^|/)@?${tool}-`).test(spec)) return tool;
@@ -133,36 +122,11 @@ function checkImportsForPackage(pkgDir: string, pkgName: string, allowed: string
   });
 }
 
-function checkAwaitInUnitOfWork(pkgDir: string): void {
-  walk(join(pkgDir, "src"), (path) => {
-    const text = stripStrings(stripComments(readFileSync(path, "utf8")));
-    const pattern = /\bUnitOfWork\.run\s*\(/g;
-    for (const match of text.matchAll(pattern)) {
-      const openParen = match.index + match[0].length - 1;
-      let depth = 0;
-      for (let i = openParen; i < text.length; i++) {
-        if (text[i] === "(") depth++;
-        else if (text[i] === ")") {
-          depth--;
-          if (depth === 0) {
-            const body = text.slice(openParen, i);
-            if (/\bawait\b/.test(body)) {
-              violations.push(`${path}: await is forbidden inside a UnitOfWork.run callback`);
-            }
-            break;
-          }
-        }
-      }
-    }
-  });
-}
-
 for (const [pkgName, allowed] of Object.entries(IMPORT_RULES)) {
   const pkgDir = join(root, "packages", pkgName.replace("@sorage/", ""));
   const appDir = join(root, "apps", pkgName.replace("@sorage/", ""));
   const dir = existsSync(pkgDir) ? pkgDir : appDir;
   checkImportsForPackage(dir, pkgName, allowed);
-  checkAwaitInUnitOfWork(dir);
 }
 
 if (violations.length > 0) {
@@ -171,4 +135,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log("import-boundary check passed: package import rules and the UnitOfWork await rule hold.");
+console.log("import-boundary check passed: package import rules hold.");

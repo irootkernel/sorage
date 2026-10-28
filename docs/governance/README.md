@@ -261,7 +261,7 @@ The adopted policy must preserve independent review, product safety, NFR-015's d
 
 ### 18.1 Proportionate verification and review
 
-TASK-135 adopts ADR-0036 on 2026-10-28. The registration-only text above remains the historical approval boundary; the policy below governs subsequent work. It preserves Standard/Contract classification, independent review, all product safety guarantees, NFR-015 and the complete NFR-016 aggregate. It changes no executable or public contract. TASK-136 owns the pending placeholder/scanner removal, TASK-137 the resource composition, and TASK-138 the test-entrypoint implementation; current command descriptions remain accurate until their owning changes land.
+TASK-135 adopts ADR-0036 on 2026-10-28. The registration-only text above remains the historical approval boundary; the policy below governs subsequent work. It preserves Standard/Contract classification, independent review, all product safety guarantees, NFR-015 and the complete NFR-016 aggregate. It changes no executable or public contract. TASK-136 owns the placeholder/scanner removal, TASK-137 the resource composition, and TASK-138 the test-entrypoint implementation; current command descriptions remain accurate until their owning changes land.
 
 | Candidate change | Required verification before review |
 |---|---|

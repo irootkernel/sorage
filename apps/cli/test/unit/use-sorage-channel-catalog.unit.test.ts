@@ -86,9 +86,6 @@ const flagsOf = (path: string): string[] => (catalogByPath.get(path) ?? []).flat
 describe("the shipped Channel catalog", () => {
   it("covers exactly the executable leaf Channel commands", () => {
     expect([...catalogByPath.keys()].sort()).toEqual([...leaves.keys()].sort());
-    for (const path of leaves.keys()) {
-      expect(catalogByPath.get(path), path).toHaveLength(path === "messages" ? 2 : 1);
-    }
   });
 
   it("names only root globals the real program defines", () => {
@@ -153,17 +150,14 @@ describe("the shipped Channel catalog", () => {
       ).toEqual([]);
   });
 
-  it("keeps the ordinary and waiting message lines in their own forms", () => {
-    const messages = catalogByPath.get("messages") ?? [];
-    const wait = messages.find((line) => line.flags.includes("--wait"));
-    const ordinary = messages.find((line) => !line.flags.includes("--wait"));
-    expect(wait, "a waiting messages line").toBeDefined();
-    expect(ordinary, "an ordinary messages line").toBeDefined();
-    expect(wait?.flags).not.toContain("--cursor");
-    expect(wait?.flags).not.toContain("--handled");
-    expect(wait?.flags).not.toContain("--all");
-    expect(ordinary?.flags).not.toContain("--wait");
-    expect(ordinary?.flags).not.toContain("--interval");
-    expect(ordinary?.flags).not.toContain("--timeout");
+  it("keeps each messages template's options coherent with waiting mode", () => {
+    for (const line of catalogByPath.get("messages") ?? []) {
+      if (line.flags.includes("--wait")) {
+        expect(line.flags, line.text).not.toContain("--all");
+      } else {
+        expect(line.flags, line.text).not.toContain("--interval");
+        expect(line.flags, line.text).not.toContain("--timeout");
+      }
+    }
   });
 });

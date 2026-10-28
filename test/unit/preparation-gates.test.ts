@@ -14,7 +14,6 @@ function makeFixture(build: (root: string) => void): string {
   mkdirSync(join(root, "packages/adapters/src"), { recursive: true });
   mkdirSync(join(root, "apps/cli/src"), { recursive: true });
   mkdirSync(join(root, "apps/daemon/src"), { recursive: true });
-  mkdirSync(join(root, "apps/web/src"), { recursive: true });
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", workspaces: ["packages/*", "apps/*"] }));
   build(root);
   return root;
@@ -51,42 +50,6 @@ describe("import-boundary gate", () => {
     const result = runScript("check-import-boundaries.ts", root);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("@sorage/core must not import @sorage/adapters");
-  });
-
-  it("fails when web imports adapters", () => {
-    const root = makeFixture((r) => {
-      writeFileSync(join(r, "apps/web/src/bad.ts"), 'import { y } from "@sorage/adapters";\nexport const x = y;\n');
-    });
-    const result = runScript("check-import-boundaries.ts", root);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("@sorage/web must not import @sorage/adapters");
-  });
-
-  it("fails when await appears inside a UnitOfWork.run callback", () => {
-    const root = makeFixture((r) => {
-      writeFileSync(
-        join(r, "packages/adapters/src/uow.ts"),
-        "export function run(callback: () => void): void { callback(); }\nexport const UnitOfWork = { run };\n",
-      );
-      writeFileSync(
-        join(r, "packages/adapters/src/bad.ts"),
-        "export function g(): void {\n  UnitOfWork.run(async () => {\n    await Promise.resolve(1);\n  });\n}\n",
-      );
-    });
-    const result = runScript("check-import-boundaries.ts", root);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("await is forbidden inside a UnitOfWork.run callback");
-  });
-
-  it("accepts await outside a UnitOfWork.run callback", () => {
-    const root = makeFixture((r) => {
-      writeFileSync(
-        join(r, "packages/adapters/src/ok.ts"),
-        "export async function h(): Promise<number> {\n  return await Promise.resolve(1);\n}\n",
-      );
-    });
-    const result = runScript("check-import-boundaries.ts", root);
-    expect(result.exitCode).toBe(0);
   });
 });
 
