@@ -60,9 +60,9 @@ The [Handoff reporting qualification map](implementation-tips/handoff-reporting-
 
 ## Pre-release simplification entrypoints
 
-[EPIC-020](roadmap/README.md#epic-020-pre-release-simplification) registers the 2026-10-28 pre-v0.1.3 cleanup of obsolete scaffolding/assertions, Handoff database composition and repeated verification work. [Proposed ADR-0036](architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) records the design and alternatives; the [execution dossier](todo/pre-release-simplification.md) defines the four Task boundaries, preserved product guarantees and focused/final verification. The dated ADR-0033 amendment adds the cleanup to shared M9/v0.1.3 without changing a runtime contract or starting implementation.
+[EPIC-020](roadmap/README.md#epic-020-pre-release-simplification) registers the 2026-10-28 pre-v0.1.3 cleanup of obsolete scaffolding/assertions, Handoff database composition and repeated verification work. [Accepted ADR-0036](architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) records the design and alternatives; the [execution dossier](todo/pre-release-simplification.md) defines the four Task boundaries, preserved product guarantees and focused/final verification. The dated ADR-0033 amendment adds the cleanup to shared M9/v0.1.3 without changing a runtime contract or starting implementation.
 
-TASK-135 must adopt the policy and align canonical guidance before later Tasks use focused gates. Existing implementation and command descriptions remain in effect until their owning changes land; registration supplies no test, independent-observation, installation or publication evidence. The roadmap alone records lifecycle and eligibility.
+TASK-135 adopts the policy in [governance section 18.1](governance/README.md#181-proportionate-verification-and-review). Later Tasks use their focused gates, and TASK-138 owns the complete integrated gate. Existing package/scanner and command descriptions remain in effect until their owning changes land; policy adoption supplies no implementation, installation or publication evidence. The roadmap alone records lifecycle and eligibility.
 
 ## Source of Truth precedence
 
@@ -92,12 +92,17 @@ Only the roadmap records lifecycle state. The dossier for an active Epic lives u
 
 ## Verification
 
-Run the narrowest relevant check first. Run the complete gate before asking for review, except for the bounded documentation-only TASK-135 candidate authorized by [governance section 18](governance/README.md#18-pre-release-simplification-registration-boundary):
+Run focused checks for the changed boundary before review under [governance section 18.1](governance/README.md#181-proportionate-verification-and-review). Reuse evidence only while its inputs remain applicable. The commands below include the complete gate, which is required on the final integrated candidate; TASK-138 owns it for EPIC-020. TASK-135 uses its bounded documentation-only gate:
 
 ```sh
 bun run check:sot
-make test
 git diff --check
 ```
 
-`scripts/sot-check.ts` validates relative links, document layout, roadmap identifiers, dependency order, requirement citations, traceability, and the relationship between the configuration schema and its example. The Aquarium documentation inspector checks structure during setup. It does not replace repository checks or a semantic review.
+For the final integrated implementation candidate, also run:
+
+```sh
+make test
+```
+
+`scripts/sot-check.ts` checks prose wrapping, relative-link target paths, roadmap identifiers, dependency order, requirement citations/milestones and the traceability reverse index. It checks neither heading fragments nor configuration-schema/example compatibility nor CLI/API agreement with the error table; those need their applicable contract tests and semantic review. The Aquarium documentation inspector checks structure during setup and does not replace those checks.

@@ -15,7 +15,7 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 
 | Target | Contents |
 |---|---|
-| `test-prepare` | Format check, lint including the `core`-to-`adapters` import-boundary guard (NFR-014) and the rule forbidding `await` inside a `UnitOfWork.run` callback, TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
+| `test-prepare` | Format check, lint and the real import/dependency-boundary checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |
@@ -28,13 +28,13 @@ Verification runs locally on the developer's macOS machine through `make test`; 
 
 ### 1.1 Pre-release simplification registration
 
-[EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) adds the bounded cleanup to shared v0.1.3 under ADR-0033's 2026-10-28 amendment. TASK-135 adopts the proposed scoped-verification policy in [ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification); TASK-136 removes obsolete scaffolding/assertions, TASK-137 reuses command-local database resources and TASK-138 implements the routine/release entrypoint separation. The [dossier](../todo/pre-release-simplification.md) specifies the intended checks and preserved guarantees. The target table above describes the existing implementation until those owning Tasks update it. ADR-0033 separately authorizes the bounded documentation-only TASK-135 exception in [governance section 18](../governance/README.md#18-pre-release-simplification-registration-boundary); that exception does not activate the proposed policy for later Tasks or replace a release gate.
+[EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) adds the bounded cleanup to shared v0.1.3 under ADR-0033's 2026-10-28 amendment. TASK-135 adopts the scoped-verification policy in [ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification); TASK-136 removes obsolete scaffolding/assertions, TASK-137 reuses command-local database resources and TASK-138 implements the routine/release entrypoint separation. The [dossier](../todo/pre-release-simplification.md) specifies the intended checks and preserved guarantees. The target table above describes the existing implementation until those owning Tasks update it. ADR-0033 separately authorizes TASK-135's bounded documentation-only gate. The adopted [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review) now defines focused gates for later work, still-applicable evidence reuse and invalidation. Focused results remain partial; they never replace or claim a passing release gate.
 
-The intended result retains make test as the complete aggregate, including frozen dependencies, the pinned runtime, all existing layers and AJ-16 against the signed candidate. Independent double-build reproducibility, signature/checksum/manifest verification, native-runtime coverage and failure propagation remain. No new journey, model campaign or fixed test-count condition is introduced; TASK-138 qualifies the final integrated cleanup candidate, with evidence reuse and invalidation adopted first by TASK-135.
+The intended result retains make test as the complete aggregate, including frozen dependencies, the pinned runtime, all existing layers and AJ-16 against the signed candidate. Independent double-build reproducibility, signature/checksum/manifest verification, native-runtime coverage and failure propagation remain. No new journey, model campaign or fixed test-count condition is introduced. TASK-136 and TASK-137 run the relevant existing checks and failure paths in their roadmap gates, with native/compiled checks for guarantees the test aliases cannot establish. TASK-138 runs the complete gate on the final integrated cleanup candidate; the same result may serve Task/Epic/readiness consumers while its inputs remain applicable. A prose-only closeout needs document checks, while a later implementation/build/dependency change requires affected reruns and a repeated complete gate when integrated evidence is invalidated. Earlier gate records remain historical. Transaction safety uses actual synchronous typed paths, behavior tests and review rather than a literal UnitOfWork scanner, whose pending removal belongs to TASK-136.
 
 ## 2. `testkit` contract
 
-`testkit` ships inside the `adapters` package, is never imported by `core`, and is the only place a test may construct infrastructure; the import-boundary lint of `test-prepare` enforces both halves (NFR-014).
+`testkit` ships inside the `adapters` package and is never imported by `core`; the import-boundary check protects the core dependency direction (NFR-014). Reuse fixture helpers for isolated infrastructure where applicable. The scanner does not prove that all test infrastructure is constructed in `testkit`; fixture safety and cleanup also require tests and review.
 
 | Fixture | Contract |
 |---|---|
@@ -179,7 +179,7 @@ Expected: every worktree of A resolves to A; binding a worktree path of an alrea
 4. From B: `sorage get <id> --json` returns the representation without setting `firstFetchedAt` and without appending any event.
 5. From A, the sender, `sorage fetch <id> --json` returns the Artifact and leaves `firstFetchedAt` null with no event; from B: `sorage fetch <id> --json` returns Artifact metadata and a local path; `firstFetchedAt` is set, `rowVersion` is still 1, and `ARTIFACT_FETCHED_FIRST_TIME` is appended; a second `fetch` appends nothing.
 6. From B: `sorage review set <id> --text <note>` moves the Handoff to `changes_requested` with `rowVersion` 2.
-7. From A: `sorage revise <id> --file <changed-path> --expected-row-version 2` returns `awaiting_recipient` with `revision` 2, `rowVersion` 3, and no Review Note, appending `HANDOFF_REVISED` and `REVIEW_NOTE_RESOLVED`.
+7. From A: `sorage revise <id> --file <changed-path> --expected-row-version 2` returns `awaiting_recipient` with `revision` 2, `rowVersion` 3, and no active Review Note (M9 retains the comment text/purpose), appending `HANDOFF_REVISED` and `REVIEW_NOTE_RESOLVED`.
 8. From an unrelated Project C, run `sorage get <id>` and `sorage fetch <id>`.
 9. From B: `sorage accept <id> --expected-revision 2 --expected-row-version 3` sets `accepted`, `acceptedRevision` 2, and `acceptedAt`.
 10. Attempt `sorage revise <id> --file <other>` and `sorage review set <id> --text <t>`.
@@ -732,7 +732,7 @@ Each milestone closes with its own gate, and a gate passes only when every condi
 ### 9.1 Gate M1, CLI release, end of `EPIC-006`
 
 - AJ-01 to AJ-10 pass against the compiled binary on a clean temporary `SORAGE_HOME`.
-- `make test` is green, including the `test-prepare` lint rules for the import boundary and for `await` inside `UnitOfWork.run`.
+- `make test` is green, including the real `test-prepare` import/dependency guards, strict types and transaction behavior tests. ADR-0036 replaces the obsolete literal UnitOfWork lint claim without changing this release gate.
 - Every requirement listed under milestone M1 in section 17 of [required-specification.md](required-specification.md) is satisfied.
 - The crash-point and failure matrix of section 4 passes for every M1 row.
 - `sorage doctor` reports no `blocking` check on a fresh installation, and the catalog matches its contract snapshot.

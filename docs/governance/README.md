@@ -114,7 +114,7 @@ Before changing a Task to `In Progress`, the implementer MUST:
 
 - Confirm every dependency is `Completed` or explicitly waived by an accepted decision.
 - Read the linked requirements and the decisions they cite.
-- Declare the packages touched, using the five-package layout of [../architecture/README.md](../architecture/README.md).
+- Declare the affected implementation areas using the current repository layout in [../architecture/README.md](../architecture/README.md), including the daemon-served Web assets rather than treating the placeholder Web package as their runtime owner.
 - Declare the milestone the Task belongs to, one of `M1`, `M2`, `M3`, `M4`, `M5`, `M6`, `M7`, `M8`, or `M9`.
 - Verify that no requirement the Task cites carries a later milestone than the Task itself, because a requirement whose every citing Task lands after its own release gate cannot be satisfied at that gate; `scripts/sot-check` fails on exactly that condition.
 - Declare the Task class, one of Chore, Standard, or Contract, as defined in section 9.
@@ -135,8 +135,8 @@ A Chore is a Task whose deliverable text starts with `Chore:`; it is closed when
 A Standard Task is closed when all of the following hold, with the runtime-test execution exception for the bounded documentation-only TASK-135 candidate defined in [section 18](#18-pre-release-simplification-registration-boundary):
 
 - The required implementation exists and satisfies every requirement the Task cites.
-- Unit and integration tests pass.
-- Error paths are tested, not only the success path.
+- Applicable unit and integration evidence passes under section 18.1, either freshly run for the affected candidate or reused with its unchanged inputs and limits recorded.
+- Relevant error paths are verified, not only the success path.
 - Documentation and examples affected by the change are updated in the same change.
 - The Task row in [../roadmap/README.md](../roadmap/README.md) and the active pointer are updated.
 - No higher-authority conflict remains.
@@ -155,10 +155,12 @@ The Reviewer is a separate AI session with no write access to the implementation
 
 The implementing session MUST NOT review its own work, and an unreviewed Standard or Contract Task MUST NOT reach `Completed`.
 
-A review MUST verify:
+A review MUST verify every applicable criterion and the changed behavior, callers and relevant failure paths. The checklist below applies to affected boundaries; it is not a requirement to audit every unrelated subsystem for each change. Reuse applicable unchanged review evidence and assess the material delta under section 18.1.
+
+For an affected boundary, verify:
 
 - Behavioral compliance with the cited requirements, not only code style
-- Transactional integrity, including that no `await` appears inside a `UnitOfWork.run` callback and that no filesystem I/O happens inside a transaction
+- Transactional integrity: synchronous transaction callbacks, no asynchronous suspension, and no filesystem I/O inside a transaction; the protection comes from actual typed transaction paths, behavior tests and review, not a literal `UnitOfWork.run` scanner
 - Intent-log invariants: intents committed with the domain change, executed afterwards, cleared in a second transaction, drained idempotently at process start, and never fabricating a missing file
 - Failure recovery at the enumerated crash points
 - Identity and provenance correctness, including binding resolution, git common-directory folding, `--as`, `--as-user`, and the downgrade guard
@@ -174,8 +176,8 @@ A review MUST verify:
 - Every commit is created through `$aquarium:task-commit` once a roadmap file is tracked in this repository, because the Aquarium gate then classifies the whole repository as a roadmap repository and blocks direct shell commits.
 - No session commits, amends, or pushes without an explicit instruction from the user for that exact action.
 - A commit carries either one exact Task relationship with an approved lifecycle edit, or an explicit statement that it is unrelated to every active Task.
-- `scripts/sot-check` verifies this document set, covering identifier uniqueness, dangling references, relative-link resolution, the schema against the example, the CLI and API surface against the error table, and the milestone rule of section 8; it MUST pass in CI on every change. Sections 13 to 16 record the M8 and M9 registration boundaries. Checker support for those milestones does not waive make test, a passing Source of Truth result, independent review, or Contract classification for later implementation.
-- `make test` is the single verification gate for code and MUST pass before a Task moves to `In Review`, except for the bounded documentation-only TASK-135 candidate defined in [section 18](#18-pre-release-simplification-registration-boundary).
+- `scripts/sot-check` checks prose wrapping, relative-link target paths, identifier and dependency consistency, requirement citations and milestone coverage, and the traceability reverse index against the roadmap. It does not check heading fragments, validate the configuration example against its JSON Schema, or compare CLI/API behavior with the error table. Those product contracts need their applicable contract tests and semantic review. Run the checker locally for affected documentation; this repository uses no hosted CI. Sections 13 to 17 preserve earlier registration and verification history; section 18.1 governs current verification scope without rewriting those completed outcomes.
+- `make test` remains the complete code verification gate. Before a Task enters `In Review`, its applicable focused gate and evidence-reuse conditions in section 18.1 MUST be satisfied. The final integrated candidate MUST pass the complete gate; TASK-138 owns this result for EPIC-020.
 
 ## 12. Release change freeze
 
@@ -249,10 +251,28 @@ Material changes include mandatory fresh legacy-writer observations with preserv
 
 ## 18. Pre-release simplification registration boundary
 
-Master's 2026-10-28 request registers [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) and TASK-135 through TASK-138 before shared v0.1.3. The dated ADR-0033 amendment adopts this release ordering; [ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) remains a proposed implementation policy. The [dossier](../todo/pre-release-simplification.md) specifies bounded removals, connection reuse and separation of routine E2E from release preparation. Existing requirement identifiers and their original milestones remain, with additional Task citations and reverse-index entries.
+Master's 2026-10-28 request registered [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) and TASK-135 through TASK-138 before shared v0.1.3. The dated ADR-0033 amendment adopts this release ordering; [ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) was a proposed implementation policy at registration. The [dossier](../todo/pre-release-simplification.md) specifies bounded removals, connection reuse and separation of routine E2E from release preparation. Existing requirement identifiers and their original milestones remain, with additional Task citations and reverse-index entries.
 
-Registration changes planning documents only. It does not remove packages or checks, change test targets, alter connection behavior, start a Task or waive an implementation gate. TASK-135 is the documentation-only adoption prerequisite: it must accept or refine ADR-0036, add the necessary dated ADR-0013/ADR-0016 amendments and align the root agent guide, governance, architecture, security-reliability, testing and current implementation guidance before the later Tasks rely on focused checks.
+Registration changes planning documents only. It does not remove packages or checks, change test targets, alter connection behavior, start a Task or waive an implementation gate. Registration made TASK-135 the documentation-only adoption prerequisite: it required accepting or refining ADR-0036, adding the necessary dated ADR-0013/ADR-0016 amendments and aligning the root agent guide, governance, architecture, security-reliability, testing and current implementation guidance before the later Tasks could rely on focused checks. Section 18.1 records that adoption.
 
 Under ADR-0033's dated amendment, TASK-135 has a bounded documentation-only verification exception. It applies only to policy, planning and explanatory Markdown changes that preserve existing product behavior and contracts; executable code, scripts, tests or fixtures, schemas or goldens, manifests or lockfiles, toolchain/build configuration and generated artifacts are outside this boundary. Before review starts or TASK-135 enters `In Review`, `bun run check:sot` and `git diff --check` MUST exit 0 and changed documentation MUST satisfy NFR-015. These checks replace runtime-test execution under section 9.2 and the pre-review/`In Review` full `make test` requirement for this candidate; record why those runtime checks do not apply. Independent review MUST still confirm the documentation-only scope, consistent authority and preservation of existing product contracts before completion. TASK-135 retains Standard classification and all other completion and lifecycle rules. If the actual candidate exceeds this boundary, the existing code gate and applicable Task classification apply. This exception does not adopt ADR-0036, authorize focused implementation gates for later Tasks or waive an external workflow requirement.
 
 The adopted policy must preserve independent review, product safety, NFR-015's documentation rules and NFR-016's complete make test aggregate while making review/test scope and evidence reuse proportionate. TASK-138 owns the complete gate on the final integrated implementation candidate, including the signed-candidate release checks. No new validator, evidence system, review tier, acceptance journey or fixed-count model campaign is required. An external workflow's constraints must be reconciled through its existing supported mechanisms rather than silently claimed changed by Sorage documents.
+
+### 18.1 Proportionate verification and review
+
+TASK-135 adopts ADR-0036 on 2026-10-28. The registration-only text above remains the historical approval boundary; the policy below governs subsequent work. It preserves Standard/Contract classification, independent review, all product safety guarantees, NFR-015 and the complete NFR-016 aggregate. It changes no executable or public contract. TASK-136 owns the pending placeholder/scanner removal, TASK-137 the resource composition, and TASK-138 the test-entrypoint implementation; current command descriptions remain accurate until their owning changes land.
+
+| Candidate change | Required verification before review |
+|---|---|
+| Explanatory prose, links or lifecycle-only closeout | Read changed text and affected links, run `bun run check:sot` and `git diff --check`, and confirm that executable behavior and product contracts did not change |
+| Test-only correction | Run the affected tests, verify the expectations against the required behavior, and broaden coverage if the protected behavior changes |
+| Local implementation | Run relevant unit/integration tests and failure paths, plus affected format, lint, type, boundary and documentation checks |
+| Shared connection, transaction, build or test entrypoint | Include cross-boundary and native/compiled checks for the affected guarantees; an alias or static source test cannot substitute for actual runtime coverage |
+| Final integrated implementation candidate | Run the complete `make test`, including frozen dependencies, pinned toolchain, every existing test layer, signed-candidate AJ-16 and distribution guarantees |
+
+For EPIC-020, TASK-136 and TASK-137 use their roadmap focused gates without an additional whole suite. TASK-138 owns the complete gate on the integrated TASK-135-to-TASK-138 candidate. One successful result may serve Task, Epic and release-readiness consumers of the same candidate. Documentation-only closeout after that result requires its document checks rather than another full run. Keep frozen installation for clean setup, dependency changes and final qualification; unchanged-dependency focused work need not reinstall.
+
+The existing report or handoff MUST identify the affected boundary, exact candidate, actual checks and results, omitted checks with reasons, reused evidence and its unchanged input basis, and remaining limits. Reuse only evidence whose source, executable, dependency, configuration, fixture and guidance inputs remain applicable. Changes invalidate the evidence that depends on them: rerun affected checks and review the material delta. Repeat the complete gate when shared behavior, executable composition, toolchain/dependencies or unresolved cross-boundary risk makes the integrated result unreliable. A prior green result never proves changed bytes merely because they belong to the same Epic. Preserve historical results as historical, and do not dismiss a failure as baseline without establishing its origin and effect on acceptance.
+
+Independent review still covers every current mandatory criterion, including relevant failure paths and preserved contracts. A complete unchanged review remains usable evidence; changed bytes require delta assessment or the selected workflow's supported, verified local-settlement route. Reviewer coverage, missing evidence and final Evaluator obligations cannot be replaced by the implementer's assertion. External workflows keep their own approved review topology, assessment budgets and lifecycle rules; use their supported scope/reuse routes and report any remaining constraint rather than claiming Sorage changed an external skill. No new validator, evidence schema, review tier, model campaign or acceptance journey is required.

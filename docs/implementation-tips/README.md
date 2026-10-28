@@ -36,7 +36,7 @@ TypeScript types do not replace runtime validation.
 The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 
 - Bun `1.4.2`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017). The shipped product version has one runtime source in `packages/core/src/version.ts`; the same preparation gate rejects a workspace manifest or internal dependency declaration that drifts from it, and CLI, daemon, and packaging code consume that source directly (NFR-003, NFR-012).
-- `bun:sqlite` as the only SQLite driver; it is synchronous, which is what makes the synchronous `UnitOfWork` natural.
+- `bun:sqlite` as the only SQLite driver; keep actual transaction callbacks synchronous, with strict typed results, behavior tests and review as described in section 5.
 - Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone M2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.
 - The `yaml` package used through its Document API rather than `parse`/`stringify`, because only the document tree preserves existing comments and key order across a write (CFG-018).
@@ -50,15 +50,17 @@ The native LaunchAgent journey runs a SHA-256-identical copy of the compiled can
 
 Bun does not use libuv, so `F_FULLFSYNC` durability MUST be verified empirically in the foundation milestone rather than assumed.
 
-The workspace is five packages, and the import rules are lint-enforced inside `make test-prepare` (NFR-014):
+For focused work, select existing checks and relevant failure paths under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review); no automatic impact selector is needed. Avoid repeating frozen installation for unchanged dependencies. Record exact changed boundaries, commands/results, reused evidence and its applicability in the existing handoff. TASK-138 owns the complete `make test` on the integrated EPIC-020 candidate; reuse that result for overlapping consumers and rerun evidence invalidated by later changes. The Make/package descriptions above remain the current implementation until TASK-138 changes the entrypoints; policy adoption alone does not separate E2E from packaging. Preserve independent reproducibility builds and signed-candidate checks.
+
+The current workspace still contains five manifests, including an unused Web placeholder; TASK-136 owns its removal. The actual Web UI ships from the daemon. Import/dependency guards run inside `make test-prepare` (NFR-014); fixed package count is not a product invariant:
 
 | Package | Contents | May import |
 |---|---|---|
 | `core` | Domain model, application use cases, versioned protocol DTOs | Nothing in this repository |
 | `adapters` | SQLite, filesystem, git, macOS, HTTP, and `testkit` implementations of `core` ports | `core` |
-| `cli` | `apps/cli`, argument parsing, output rendering, process wiring | `core`, `adapters` |
+| `cli` | `apps/cli`, argument parsing, output rendering, process wiring | `core`, allowed adapter composition modules, daemon entrypoint |
 | `daemon` | `apps/daemon`, HTTP server, scheduler, garbage collection | `core`, `adapters` |
-| `web` | `apps/web`, the Preact SPA | Protocol DTOs from `core` only |
+| `web` | Unused `apps/web` placeholder, pending TASK-136 removal; no runtime Web consumer | Current placeholder rule permits `core` only |
 
 The `apps/*` import rule is narrower than the table alone suggests: an app imports `core` application use cases and protocol DTOs and composes adapters at its entry point, and it never imports domain internals.
 
@@ -114,7 +116,7 @@ The mapping from symbolic code to HTTP status is published in `../specs/interfac
 
 ## 5. Transactions
 
-`UnitOfWork.run` is synchronous, and its callback contains no `await`:
+`UnitOfWork.run` in the examples below is schematic. Production uses explicit synchronous SQLite transactions, including `runInTransaction` in `packages/adapters/src/sqlite/transaction.ts`, whose callback returns `Result<T>` rather than a promise. Keep all transaction callbacks synchronous:
 
 ```typescript
 interface UnitOfWork {
@@ -131,7 +133,7 @@ const result = unitOfWork.run((tx) => {
 });
 ```
 
-Every candidate SQLite driver is synchronous, so an awaited callback would suspend mid-transaction and let statements from a second logical transaction interleave on the same connection; a lint rule forbids `await` inside the callback.
+An awaited callback would suspend mid-transaction and let another logical transaction interleave on the same connection. Strict callback types, actual transaction/rollback tests and independent review protect this boundary and the absence of filesystem I/O. Do not claim lint proves either property: the literal `UnitOfWork.run` scanner has no production target and remains only until TASK-136 removes it. Keep the independent import/dependency guards.
 
 Filesystem I/O never happens inside a transaction: staging, hashing, and verification run before it, and renames and unlinks run after it.
 
@@ -187,7 +189,7 @@ The application asserts `changes === 1`; any other value means another writer mo
 - Starts at 1.
 - Increments only when the current Artifact hash changes.
 - The same hash returns `NO_CONTENT_CHANGE` unless the caller invoked `revise --no-change --reason <text>`.
-- A no-change resolution clears the Review Note and returns the Handoff to `awaiting_recipient` without changing Revision (REV-017); it is valid only from `changes_requested`, and anywhere else it fails with `NO_REVIEW_NOTE`.
+- A no-change resolution deactivates the change request and returns the Handoff to `awaiting_recipient` without changing Revision (REV-017); the legacy Review Note projection becomes null, but the recipient comment text and purpose remain. It is valid only from `changes_requested`, and anywhere else it fails with `NO_REVIEW_NOTE`. Use [interface section 40](../specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9) for current comment and processing semantics.
 - At most one no-change resolution may occur consecutively; the counter `consecutiveNoChangeResolutions` resets to 0 on a content revision, and a second consecutive attempt fails with `NO_CHANGE_LIMIT`.
 - Note, pin, archive, and deletion request never change it.
 - Accept records the exact current Revision in `acceptedRevision`.
@@ -261,7 +263,7 @@ The seven Memo routes in `apps/daemon/src/memo-routes.ts` use the daemon's exist
 - Explicit flags over positional ambiguity, and no inference of a recipient from history.
 - `--as <project-slug>` overrides working-directory resolution for a Project that has a binding, and `--as-user` selects User-admin context and records `actorKind = user`; a User-admin command invoked without it fails with `USER_CONTEXT_REQUIRED` (CLI-019, CLI-020).
 - Call application use cases directly, in-process; the daemon is contacted only by `web` and `daemon` commands, where `DAEMON_UNAVAILABLE` is meaningful (RUN-003). A shipped app process reaches the adapters only through the command-port and infrastructure modules of the import-boundary allowlist, never the adapters index or a storage implementation module (CLI-018).
-- Drain `pending_fs_ops` at operational process start, before executing the requested command (RUN-002); M8 inspection paths bypass this wiring under section 20 below.
+- Drain `pending_fs_ops` at operational process start, before executing the requested command (RUN-002); M8 inspection paths and covered RDR reads bypass this writer wiring under their canonical contracts. Fresh Handoff writers must carry the caller observations from [interface section 40.3](../specs/interfaces-and-operations.md#403-caller-observation-replay-and-input-validation), including legacy review/revision/deletion writers. Preserve original input/observations/key for receipt recovery; never supply freshly loaded defaults or automatically retry a conflict.
 - Implement `inbox --wait` as a poll of SQLite every `--interval` seconds, defaulting to 2, until a new inbox item appears for the resolved actor or `--timeout` seconds, defaulting to 300, elapse; a timeout exits 0 with an empty list and `meta.timedOut: true`.
 - Require interactive confirmation or an explicit confirmation flag for destructive User operations, and treat `--confirm-pinned <id>` as a second, distinct confirmation that a blanket `--confirm` cannot satisfy.
 

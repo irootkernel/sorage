@@ -114,14 +114,14 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 
 - Definition of Done depends on the Task class, and the three classes are defined in [docs/governance/README.md](docs/governance/README.md).
 - Chore: a deliverable whose text starts with `Chore:`, closed by the change plus one test or a recorded reason why a test does not apply, with no unresolved Source of Truth conflict.
-- Standard: implementation, unit and integration tests, tested error paths, updated documentation and examples, an updated roadmap status, and a Reviewer confirmation. The bounded documentation-only TASK-135 exception in [governance section 18](docs/governance/README.md#18-pre-release-simplification-registration-boundary) replaces only its runtime-test execution requirements.
+- Standard: implementation, applicable unit/integration and error-path evidence, updated documentation and examples, an updated roadmap status, and independent Reviewer confirmation under [governance section 18.1](docs/governance/README.md#181-proportionate-verification-and-review). TASK-135 retains its bounded documentation-only gate; TASK-138 owns the final integrated EPIC-020 full gate.
 - Contract: Standard plus a reviewed snapshot diff classified as breaking or non-breaking plus a recorded migration impact, required for every Task touching the protocol package, the CLI JSON contract, HTTP DTOs, the configuration schema, or a database migration.
 
 #### Verification
 
 - `make test` is the single verification gate for code.
 - `scripts/sot-check.ts`, run through `bun run check:sot` and `make test-prepare`, verifies this document set.
-- Run the narrowest meaningful check first, then `make test` before asking for review, except for the bounded documentation-only TASK-135 candidate defined in [governance section 18](docs/governance/README.md#18-pre-release-simplification-registration-boundary); report every skipped check with its reason.
+- Before review, run the focused checks required by the changed behavior and its failure paths under [governance section 18.1](docs/governance/README.md#181-proportionate-verification-and-review). Reuse unchanged applicable evidence with its candidate and limitations recorded. Run the complete `make test` for the final integrated candidate and repeat it when later changes invalidate that integrated evidence; focused checks are never reported as a full gate. Report every skipped check with its reason.
 
 #### Documentation Style
 

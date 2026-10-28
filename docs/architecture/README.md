@@ -451,7 +451,7 @@ All-or-nothing creation is a database property. Every Handoff, Artifact and cont
 - Revision starts at 1.
 - Revision increases only when the current Artifact SHA-256 changes.
 - Review Note creation, update, withdrawal, and administrative removal do not increase Revision.
-- A no-change resolution does not increase Revision; it only clears the Note and returns the Handoff to `awaiting_recipient`.
+- A no-change resolution does not increase Revision; it deactivates the change request and returns the Handoff to `awaiting_recipient`, while retaining the recipient comment text and purpose. The legacy Review Note projection then becomes null; [interface section 40](../specs/interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9) owns the current comment contract.
 - Pin, unpin, archive, unarchive, deletion request, fetch, and configuration do not increase Revision.
 - `consecutiveNoChangeResolutions` resets to 0 on every content revision.
 - Row Version increases exactly once for every successful Handoff mutation, including Note withdrawal, administrative Note removal, no-change resolution, pin, unpin, archive, unarchive, and deletion decisions.
@@ -496,7 +496,7 @@ Accept also does not mean:
 - The Handoff is pinned.
 - The Handoff is deleted.
 
-Accept records the exact Revision in `acceptedRevision` and the moment in `acceptedAt`. It fails with `REVIEW_NOTE_PRESENT` while a Review Note exists, fails with `ARTIFACT_MATERIALIZING` while the current Artifact has `materialized = 0`, and requires both `--expected-revision` and `--expected-row-version`.
+Accept records the exact Revision in `acceptedRevision` and the moment in `acceptedAt`. It fails with `REVIEW_NOTE_PRESENT` while an active change request exists, fails with `ARTIFACT_MATERIALIZING` while the current Artifact has `materialized = 0`, and requires both `--expected-revision` and `--expected-row-version`.
 
 The two other terminal outcomes are recorded the same way. Decline records `declinedAt` and a mandatory `declineReason`. Withdraw records `withdrawnAt` and is available only while the recipient has neither fetched nor reviewed, that is while `firstFetchedAt` and `reviewEngagedAt` are both null; a fetched Handoff returns `HANDOFF_ALREADY_FETCHED` and a Handoff carrying a Note returns `REVIEW_NOTE_PRESENT`. All three are immutable in content, and all three keep retention operations and approved deletion available.
 
@@ -612,7 +612,7 @@ sorage/
 ├── apps/
 │   ├── cli/
 │   ├── daemon/
-│   └── web/
+│   └── web/                     # unused placeholder; removal belongs to TASK-136
 ├── migrations/
 └── scripts/
 ```
@@ -621,7 +621,7 @@ Dependency direction:
 
 ```mermaid
 flowchart TD
-    Apps[apps: cli, daemon, web]
+    Apps[apps: cli, daemon; Web assets in daemon]
     Adapters[adapters]
     Core[core: domain, application, protocol]
 
@@ -637,7 +637,7 @@ Rules:
 - `adapters` implements the ports declared in `core` and depends on `core` only.
 - `apps/*` import `core` application use cases and protocol DTOs and compose adapters at their entry point; they never import domain internals.
 - Database rows never leave `adapters`; public responses use protocol DTOs.
-- The Web application imports protocol types, not database types.
+- The Web UI is the daemon-served static SPA in `apps/daemon/src/web-app.ts` and its script/style modules, not an `apps/web` runtime. It consumes public HTTP DTOs, never database rows. The unused `apps/web` manifest/stub still exists until TASK-136 removes it and its incidental configuration.
 
 ### 15.1 Ecosystem boundary
 
@@ -669,7 +669,7 @@ interface UnitOfWork {}
 
 `GitClient` and `BackupService` arrive with milestone M3; `PlatformService` is defined in section 23. Interfaces are designed around application behavior, not adapter convenience.
 
-`UnitOfWork.run` is synchronous, because every candidate SQLite driver is synchronous and an awaited callback would let two logical transactions interleave on one connection:
+`UnitOfWork` below is a schematic application boundary, not a required production symbol. Production uses explicit synchronous SQLite transactions, including the typed `runInTransaction` helper in `packages/adapters/src/sqlite/transaction.ts`; its work callback returns `Result<T>` rather than a promise. Suspending a transaction would let statements from another logical transaction interleave on the same connection:
 
 ```typescript
 interface UnitOfWork {
@@ -677,7 +677,7 @@ interface UnitOfWork {
 }
 ```
 
-Two rules follow, and both are lint-enforced: no `await` may appear inside the callback, and filesystem I/O never happens inside a transaction. Staging and verification run before the transaction; renames and unlinks run after it.
+Transaction callbacks must not suspend, and filesystem I/O must remain outside transactions. Strict callback types, transaction/rollback tests, crash-recovery checks and independent review enforce the actual boundaries; lint does not prove either property. The existing literal `UnitOfWork.run` scanner has no corresponding production call and remains only until TASK-136 removes it. NFR-014's actual import-direction checks remain. Staging and verification run before the transaction; renames and unlinks run after it.
 
 ## 17. Operational storage
 

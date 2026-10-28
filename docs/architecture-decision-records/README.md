@@ -361,6 +361,10 @@ Artifact durability follows write, `fsync(file)`, rename, `fsync(parent director
 - Reads of a Handoff whose Artifact is not yet materialized return `ARTIFACT_MATERIALIZING` instead of a missing file.
 - Seven crash points must be enumerated and tested by the fault-injection filesystem adapter.
 
+### Amendment (2026-10-28): synchronous transaction enforcement
+
+ADR-0036 replaces the literal `UnitOfWork.run` lint prescription. Production uses synchronous SQLite transactions, including typed `runInTransaction` callbacks that return `Result<T>` rather than promises. Strict types, relevant transaction/rollback and crash-recovery tests, and independent review protect the no-suspension and no-filesystem-I/O boundaries; the literal scanner does not prove them and TASK-136 removes it with its exclusive tests. Preserve the intent ordering, atomic domain/events/intents, durability and recovery guarantees above. This amendment changes no transaction or persistence contract.
+
 ## ADR-0014: Review state machine extension
 
 - **Status:** Accepted
@@ -469,6 +473,10 @@ The workspace is five packages â€” `core`, `adapters`, `cli`, `daemon`, `web` â€
 - Bun does not use libuv, so `F_FULLFSYNC` durability must be verified empirically in the foundation milestone.
 - Twelve planned packages collapse to five, and the dependency boundary is enforced by a lint rule in `make test-prepare`.
 
+### Amendment (2026-10-28): actual frontend and package boundaries
+
+ADR-0036 replaces the Vite/Preact and fixed-five-package prescription. The current Web UI is a no-build static SPA served by `apps/daemon/src/web-app.ts`, with its actual script/style assets; `apps/web` is an unused placeholder, retained until TASK-136 removes its incidental package/configuration assertions. Keep the Bun pin, SQLite driver, strict types, actual dependency-direction checks and ADR-0023 distribution guarantees. Package count and a future framework choice are not product guarantees. No new frontend pipeline is introduced.
+
 ## ADR-0017: Browser authentication and the local network boundary
 
 - **Status:** Accepted
@@ -576,6 +584,10 @@ The task table carries `Milestone`, `Requirements`, and `Design Gate impact` col
 - Task status lives in exactly one place, which keeps status-only edits reviewable.
 
 ADR-0023 renames the three internal milestone snapshots to `M1`, `M2`, and `M3` and separates those local historical labels from the first public product release tag. The three-milestone scope, gates, governance, and task history in this decision remain in force.
+
+### Amendment (2026-10-28): proportionate verification
+
+ADR-0036 and governance section 18.1 adopt focused verification/review and reuse of still-applicable evidence, with one complete gate on the final integrated candidate and affected reruns after invalidation. The sequential lifecycle, independent Reviewer, Definition-of-Done classes, canonical status owner and exact commit boundaries remain. Earlier completed gate records retain their historical scope.
 
 ## ADR-0020: A binding requires a working tree, so a bare Git repository cannot be bound
 
@@ -1470,7 +1482,7 @@ A sender can distinguish current-version reading, acceptance and actual processi
 
 ## ADR-0036: Pre-release simplification and proportionate verification
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-28; proposed 2026-10-28)
 - **Date:** 2026-10-28
 - **Design owner:** TASK-135 under [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification).
 - **Execution detail:** [Pre-release simplification dossier](../todo/pre-release-simplification.md).
@@ -1479,9 +1491,9 @@ A sender can distinguish current-version reading, acceptance and actual processi
 
 The pre-v0.1.3 review at `3d119da` found an unused Web package retained by layout assertions, a literal UnitOfWork scanner with no matching production call, repeated database opens through nested Handoff command-port factories, release packaging coupled to routine E2E, and current guidance that overstates checker coverage or retains older architecture descriptions. Broad review/full-gate rules impose work unrelated to small changes, although recent qualification already reused evidence after prose-only edits. These are bounded maintenance problems; no measured latency regression or data-corruption defect was established by that review.
 
-### Proposed decision
+### Decision
 
-Keep this cleanup in M9 before the existing shared v0.1.3 release. The release allocation is recorded by the dated ADR-0033 amendment; the implementation policy in this record becomes authoritative only when TASK-135 accepts or refines it and updates the canonical owners.
+Keep this cleanup in M9 before the existing shared v0.1.3 release. The release allocation is recorded by the dated ADR-0033 amendment; TASK-135 adopts this implementation policy and aligns its canonical owners. This is documentation-only policy adoption, not completion evidence for the later implementation Tasks.
 
 1. Adopt focused verification and independent review for affected behavior and relevant failures, reuse still-applicable evidence within the Epic, and retain one complete `make test` on the final integrated implementation candidate. Later material changes invalidate affected evidence; documentation-only closeout does not itself trigger another full suite.
 2. Remove the empty `apps/web` package and the obsolete literal UnitOfWork scanner with their exclusive scaffolding assertions. Preserve actual dependency direction, synchronous transaction behavior, NFR-015 documentation rules, strict typing and native runtime checks.
@@ -1489,7 +1501,7 @@ Keep this cleanup in M9 before the existing shared v0.1.3 release. The release a
 4. Separate routine compiled E2E preparation from release-specific distribution qualification. Keep `make test` as the complete aggregate, including frozen dependencies, pinned runtime, all existing test layers, AJ-16 on the signed candidate, independent double-build reproducibility, signing and checksum/manifest verification. Avoid repeated work with the same purpose; preserve work with distinct qualification purposes.
 5. Remove only presentation/layout assertions that lack required contract meaning, and correct current documentation instead of extending a checker to match an overstated guarantee. Preserve copied-resource validity, real command/schema examples and public-contract checks.
 
-TASK-135 must add explicit dated amendments to ADR-0013's literal UnitOfWork/lint statement and ADR-0016's obsolete package/frontend prescription, reconcile governance and current guidance, and preserve ADR-0019's lifecycle and independent-review rules and ADR-0023's distribution guarantees. Descriptions of current build and package behavior must remain accurate while TASK-136 and TASK-138 implement the approved changes. This proposal adds no validator, test-selection engine, evidence schema, review tier, acceptance journey or fixed model-observation count.
+The dated ADR-0013/ADR-0016 amendments above replace the literal UnitOfWork/lint statement and obsolete package/frontend prescription; the ADR-0019 amendment adopts verification cadence while preserving lifecycle and independent review. ADR-0023's distribution guarantees remain. Descriptions of current build and package behavior must remain accurate while TASK-136 and TASK-138 implement the approved changes. This decision adds no validator, test-selection engine, evidence schema, review tier, acceptance journey or fixed model-observation count.
 
 ### Alternatives considered
 

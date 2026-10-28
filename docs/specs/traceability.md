@@ -10,7 +10,7 @@ The roadmap is the source of the mapping; this document is derived from the `Req
 
 Milestone values come from the specification and name the release gate at whose passing the requirement must be fully satisfied, as defined in section 1 of [required-specification.md](required-specification.md).
 
-`scripts/sot-check`, delivered by `TASK-008`, regenerates section 3 from the roadmap and fails the build when the two disagree, when a Task cites an identifier that does not exist, when a requirement that is not `Deferred` has no citing Task, or when every citing Task of a requirement belongs to a later milestone than the requirement itself.
+`scripts/sot-check`, delivered by `TASK-008`, reads section 3 and compares it with the roadmap without writing or regenerating it; maintainers update both owners together. The check fails when the two disagree, when a Task cites an identifier that does not exist, when a requirement that is not `Deferred` has no citing Task, or when every citing Task of a requirement belongs to a later milestone than the requirement itself.
 
 ## 2. Requirement group map
 
