@@ -1482,6 +1482,70 @@ describe("the SIGKILL escalation is discriminated by a waiter that cannot end on
 });
 
 describe("reporting through real MCP CLI children (interface section 40)", () => {
+  it("executes the shipped Handoff example with real version observations and sender discovery", async () => {
+    const { home, workA, workB } = installation("sorage-mcp-skill-example-");
+    const document = "Verify result.txt contains pending followed by LF; report the result.";
+    const sent = runCli(
+      ["send", "--to", "beta", "--title", "Verify existing bytes", "--body", document, "--json"],
+      home,
+      workA,
+    );
+    expect(sent.status, sent.stderr).toBe(0);
+    const handoffId = JSON.parse(sent.stdout).data.handoffs[0].handoffId;
+    const resultPath = join(workB, "result.txt");
+    writeFileSync(resultPath, "pending\n");
+    const reference = readFileSync(
+      fileURLToPath(new URL("../../../../skills/use-sorage/references/handoffs.md", import.meta.url)),
+      "utf8",
+    );
+    const calls = [...reference.matchAll(/```json\n([\s\S]*?)\n```/g)].map(
+      ([, json]) => JSON.parse(json as string) as { tool: string; arguments: Record<string, unknown> },
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    const session = startServer(home, workB);
+    await session.request("initialize", { protocolVersion: "2025-11-25" });
+    const workspaces = new Map([
+      ["/lab/recipient", workB],
+      ["/lab/sender", workA],
+    ]);
+    for (const call of calls) {
+      const cwd = workspaces.get(call.arguments.cwd as string);
+      expect(cwd, call.tool).toBeDefined();
+      if (call.tool === "handoff_processing_complete") expect(readFileSync(resultPath, "utf8")).toBe("pending\n");
+      const answer = await toolCall(session, call.tool, {
+        ...call.arguments,
+        handoffId: call.arguments.handoffId === "handoff-id" ? handoffId : call.arguments.handoffId,
+        cwd,
+      });
+      expect(answer.error, call.tool).toBeUndefined();
+      expect(answer.result?.isError, JSON.stringify(answer.result)).toBe(false);
+      expect(answer.result?.structuredContent.ok, call.tool).toBe(true);
+      if (call.tool === "handoff_fetch") {
+        const data = answer.result?.structuredContent.data as { localPath: string };
+        expect(readFileSync(data.localPath, "utf8")).toBe(document);
+      }
+    }
+    const metadata = runCli(["get", handoffId, "--json"], home, workA);
+    expect(metadata.status, metadata.stderr).toBe(0);
+    expect(JSON.parse(metadata.stdout).data).toMatchObject({
+      revision: 1,
+      rowVersion: 4,
+      reviewState: "awaiting_recipient",
+      read: { status: "read" },
+      processing: { status: "completed" },
+    });
+    const comment = runCli(["comment", "show", handoffId, "--json"], home, workA);
+    expect(comment.status, comment.stderr).toBe(0);
+    expect(JSON.parse(comment.stdout).data).toMatchObject({
+      body: "Verified result.txt contains pending; no file changed.",
+      purpose: "general",
+      active: false,
+      targetRevision: 1,
+    });
+    expect(readFileSync(resultPath, "utf8")).toBe("pending\n");
+    await session.close();
+  }, 30_000);
+
   it("preserves exact CLI envelopes, observations, declined feedback and independent processing", async () => {
     const { home, workA, workB } = installation("sorage-mcp-reporting-");
     const session = startServer(home, workB);
