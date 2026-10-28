@@ -1485,7 +1485,7 @@ A sender can distinguish current-version reading, acceptance and actual processi
 - **Status:** Accepted (2026-10-28; proposed 2026-10-28)
 - **Date:** 2026-10-28
 - **Design owner:** TASK-135 under [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification).
-- **Execution detail:** [Pre-release simplification dossier](../todo/pre-release-simplification.md).
+- **Canonical Outcomes:** [Verification and review policy](../governance/README.md#181-proportionate-verification-and-review), [repository layout](../architecture/README.md#15-repository-layout), [command composition](../architecture/README.md#16-core-application-ports), [test entrypoints](../specs/testing-and-acceptance.md#1-tooling) and [writer observations and replay](../specs/interfaces-and-operations.md#403-caller-observation-replay-and-input-validation).
 
 ### Problem
 

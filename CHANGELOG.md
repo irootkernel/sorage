@@ -4,7 +4,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.3 - Unreleased
 
-Pre-release prerequisite: [EPIC-020](docs/roadmap/README.md#epic-020-pre-release-simplification) schedules bounded repository, resource-composition and verification cleanup before this shared release. Its [plan](docs/todo/pre-release-simplification.md) preserves current product contracts and the complete final gate. These cleanup outcomes are not claimed as implemented by this registration.
+Pre-release cleanup in [EPIC-020](docs/roadmap/README.md#epic-020-pre-release-simplification) removes unused scaffolding and obsolete assertions, reuses Handoff database resources and separates routine compiled verification from release qualification while retaining the complete final gate. [ADR-0036](docs/architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) records the design and preserved product contracts for this shared release.
 
 ### Added
 

@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-020`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -588,10 +588,10 @@ The reviewed `error-renderings.json` diff changes only the common `INTERNAL_ERRO
 
 ## EPIC-020: Pre-release simplification
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M9
 - **Objective:** Reduce unused repository structure, repeated Handoff resource initialization and disproportionate verification work before the shared v0.1.3 release, while preserving current product behavior, data safety and the complete final release gate.
-- **Detailed SOT:** [Pre-release simplification](../todo/pre-release-simplification.md).
+- **Canonical Outcomes:** [ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification), [verification and review policy](../governance/README.md#181-proportionate-verification-and-review), [command composition](../architecture/README.md#16-core-application-ports), [test entrypoints](../specs/testing-and-acceptance.md#1-tooling) and [writer observations and replay](../specs/interfaces-and-operations.md#403-caller-observation-replay-and-input-validation).
 - **Design basis:** Master's 2026-10-28 request following the review of `3d119da`; [accepted ADR-0036](../architecture-decision-records/README.md#adr-0036-pre-release-simplification-and-proportionate-verification) and the dated ADR-0033 release-allocation amendment. TASK-135 adopts the implementation policy before later Tasks use it.
 - **Prerequisite:** EPIC-019 is Completed. Registration starts no Task, consumes no implementation/review slot and reopens no completed Epic. The active pointer alone names the next eligible Task.
 - **Packages touched:** TASK-135 owns current policy and guidance; TASK-136 owns obsolete `apps/web` scaffolding, its incidental configuration and low-value assertions; TASK-137 owns adapter/CLI command composition and affected daemon injection boundaries; TASK-138 owns Make/package/test entrypoints and integrated qualification. No consumer repository, installed tool or live Sorage home is modified by registration.

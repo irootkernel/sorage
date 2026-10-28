@@ -4,7 +4,7 @@ Record only small, actionable findings that have been intentionally postponed. M
 
 ## EPIC-010 whole-epic audit
 
-Two Low findings were confirmed during the EPIC-010 validation audit. Timeline overflow coverage remains below. The review-port factory connection-reuse finding is now owned by TASK-137 in [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification), with its bounded resource-lifetime and zero-write checks in [the execution dossier](../todo/pre-release-simplification.md#task-137-reuse-database-resources-within-handoff-command-composition). It is no longer tracked here as a separate conditional cleanup, and EPIC-010 is not reopened.
+Two Low findings were confirmed during the EPIC-010 validation audit. Timeline overflow coverage remains below. The review-port factory connection-reuse finding was addressed through TASK-137 in [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification): [architecture section 16](../architecture/README.md#16-core-application-ports) documents command-local ownership and failure cleanup, preserving the [covered-read contract](../specs/security-reliability.md#17-m9-messaging-trust-boundary-and-writable-storage). It is no longer tracked here as a separate conditional cleanup, and EPIC-010 is not reopened.
 
 ### Timeline bound overflow coverage
 
