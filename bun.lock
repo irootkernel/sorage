@@ -18,33 +18,33 @@
     },
     "apps/cli": {
       "name": "@sorage/cli",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@sorage/adapters": "0.1.0",
-        "@sorage/core": "0.1.0",
-        "@sorage/daemon": "0.1.0",
+        "@sorage/adapters": "0.1.3",
+        "@sorage/core": "0.1.3",
+        "@sorage/daemon": "0.1.3",
         "commander": "14.0.2",
       },
     },
     "apps/daemon": {
       "name": "@sorage/daemon",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@sorage/adapters": "0.1.0",
-        "@sorage/core": "0.1.0",
+        "@sorage/adapters": "0.1.3",
+        "@sorage/core": "0.1.3",
       },
     },
     "packages/adapters": {
       "name": "@sorage/adapters",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@sorage/core": "0.1.0",
+        "@sorage/core": "0.1.3",
         "yaml": "2.9.0",
       },
     },
     "packages/core": {
       "name": "@sorage/core",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "yaml": "2.9.0",
       },

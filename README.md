@@ -4,11 +4,11 @@ Sorage (소라게) is a local broker for document handoffs between AI coding ses
 
 Copying a file into another repository, pasting it into chat, or passing around a temporary path can lose track of who owns the document, where its review stands, and which Revision was accepted. Sorage keeps that context. If one send names several recipients, Sorage creates a separate Handoff for each one, so their reviews and retention decisions stay independent.
 
-> **Release status:** Sorage `v0.1.2` is the current public release on GitHub Releases. The supported release target is Apple Silicon macOS. See [CHANGELOG.md](CHANGELOG.md) for shipped outcomes.
+> **Release status:** Sorage `v0.1.3` is the current public release on GitHub Releases. The supported release target is Apple Silicon macOS. See [CHANGELOG.md](CHANGELOG.md) for shipped outcomes.
 
-## Planned shared v0.1.3 release
+## Shared v0.1.3 release
 
-The planned v0.1.3 release carries M8, M9, and the EPIC-017 Channel adoption corrections together under [ADR-0033](docs/architecture-decision-records/README.md#adr-0033-channel-adoption-hardening-and-the-shared-v013-release). It includes the M8 preflight and send-recovery paths, the M9 shared storage and Channels, the EPIC-017 reliability corrections, the EPIC-018 MCP/read-path rebuild and EPIC-019 Handoff reading/processing and retained recipient-comment contracts; the published v0.1.2 executable and skill predate all of them. The M9 storage upgrade from schema 7 through 12 is one-way for a v0.1.2 home: keep a verified pre-upgrade backup made with the matching old executable and roll back only with that executable in a separate empty home, as the [shared v0.1.3 upgrade and rollback procedure](docs/ops/README.md#m9-shared-content-upgrade-and-rollback) describes. `preflight` should report `upgrade_required` before the upgrade and `compatible` after it. Delivery status belongs only to [the roadmap](docs/roadmap/README.md); no version change, installation, or publication is implied here.
+The v0.1.3 release carries M8, M9, and the EPIC-017 Channel adoption corrections together under [ADR-0033](docs/architecture-decision-records/README.md#adr-0033-channel-adoption-hardening-and-the-shared-v013-release). It includes the M8 preflight and send-recovery paths, the M9 shared storage and Channels, the EPIC-017 reliability corrections, the EPIC-018 MCP/read-path rebuild and EPIC-019 Handoff reading/processing and retained recipient-comment contracts; the published v0.1.2 executable and skill predate all of them. The M9 storage upgrade from schema 7 through 12 is one-way for a v0.1.2 home: keep a verified pre-upgrade backup made with the matching old executable and roll back only with that executable in a separate empty home, as the [shared v0.1.3 upgrade and rollback procedure](docs/ops/README.md#m9-shared-content-upgrade-and-rollback) describes. `preflight` should report `upgrade_required` before the upgrade and `compatible` after it. Delivery status belongs only to [the roadmap](docs/roadmap/README.md); no version change, installation, or publication is implied here.
 
 [EPIC-020](docs/roadmap/README.md#epic-020-pre-release-simplification) removes unused scaffolding and obsolete assertions, reuses Handoff database resources and separates routine compiled verification from release qualification while preserving product contracts and the complete final gate. [The verification policy](docs/governance/README.md#181-proportionate-verification-and-review) and [test entrypoints](docs/specs/testing-and-acceptance.md#1-tooling) describe the current source behavior; delivery status remains in the roadmap.
 
@@ -55,6 +55,24 @@ Sorage preserves accepted document bytes and tracks their custody and review. In
 - Apple Silicon Mac
 - Git
 - [Bun 1.4.2](https://bun.sh/) only when building from source
+
+## Install v0.1.3
+
+Download the Apple Silicon macOS binary, its checksum, and its release manifest from GitHub Releases:
+
+```sh
+release_url="https://github.com/irootkernel/sorage/releases/download/v0.1.3"
+curl -fLO "$release_url/sorage-v0.1.3-darwin-arm64"
+curl -fLO "$release_url/sorage-v0.1.3-darwin-arm64.sha256"
+curl -fLO "$release_url/sorage-v0.1.3-darwin-arm64.manifest.json"
+shasum -a 256 -c sorage-v0.1.3-darwin-arm64.sha256
+codesign --verify --strict sorage-v0.1.3-darwin-arm64
+mkdir -p "$HOME/.local/bin"
+install -m 0755 sorage-v0.1.3-darwin-arm64 "$HOME/.local/bin/sorage"
+"$HOME/.local/bin/sorage" version
+```
+
+The expected version output is `sorage v0.1.3`. The adjacent manifest records the reviewed Git revision, target, binary name, signed SHA-256 digest, reproducible unsigned digest, and `ad-hoc` signature mode. This release does not claim Intel macOS, Linux, Homebrew, notarization, or Developer ID support.
 
 ## Install v0.1.2
 
