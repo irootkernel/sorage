@@ -69,6 +69,8 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 
 ## Project Configuration
 
+- Aquarium release notes: CHANGELOG.md
+
 ### Repository Index and Authorities
 
 - Read [README.md](README.md) for the public product overview, installation, and basic usage.
