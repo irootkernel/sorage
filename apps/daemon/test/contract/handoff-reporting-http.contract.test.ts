@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
+import { openNodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
 import { productionMigrationPlan } from "@sorage/adapters/src/sqlite/migrations";
 import { openAndMigrate } from "@sorage/adapters/src/sqlite/migrator";
 import {
@@ -26,6 +27,7 @@ const recipient = join(home, "recipient");
 let port = 0;
 let token = "";
 let server: ReturnType<typeof createDaemonServer>;
+let database: ReturnType<typeof openNodeDaemonDatabase>;
 function cli(args: string[], cwd = sender) {
   const result = spawnSync("bun", [entry, ...args, "--json"], {
     cwd,
@@ -127,6 +129,9 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
   port = (probe.address() as AddressInfo).port;
   await new Promise<void>((resolve) => probe.close(() => resolve()));
+  // Match production's daemon-lifetime connection: garbage collection of
+  // request-owned connections must not checkpoint WAL during read assertions.
+  database = openNodeDaemonDatabase(stateDir);
   server = createDaemonServer({
     host: "127.0.0.1",
     port,
@@ -136,13 +141,14 @@ beforeAll(async () => {
       webSecret: createNodeWebSecretStore({ stateDir, clock: { now: () => new Date() } }),
       entropy: createNodeTokenEntropy(),
     }),
-    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined }),
+    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined, database }),
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   port = (server.address() as AddressInfo).port;
 });
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  database.close();
   delete process.env.SORAGE_HOME;
   rmSync(home, { recursive: true, force: true });
 });

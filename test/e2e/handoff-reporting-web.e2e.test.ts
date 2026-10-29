@@ -3,7 +3,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { chromium, type Page } from "@playwright/test";
+import { chromium, expect as browserExpect, type Page } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeTempDir, sorage } from "./helpers";
 
@@ -533,6 +533,8 @@ describe("versioned Web recipient reporting (AJ-31/32)", () => {
       expect(entry.status).toBe(0);
       await page.goto(JSON.parse(entry.stdout).url as string);
       await page.waitForSelector(".counts");
+      // Same-document navigation retains this load state while the comment is pending.
+      await page.waitForLoadState("networkidle");
       const id = send("Concurrent separate comment acquisition");
       let release: () => void = () => {};
       let arrived: () => void = () => {};
@@ -564,10 +566,10 @@ describe("versioned Web recipient reporting (AJ-31/32)", () => {
         "--expected-row-version",
         "2",
       ]);
+      expect(await comment(page).innerText()).toContain("Loading comment…");
       release();
-      await page.waitForLoadState("networkidle");
+      await browserExpect(comment(page)).toContainText("target Revision 2 (newer than this view; inspect explicitly)");
       const text = await comment(page).innerText();
-      expect(text).toContain("target Revision 2 (newer than this view; inspect explicitly)");
       expect(text).not.toContain("current Revision");
       expect(await report(page).innerText()).toContain("Revision 1, Row Version 1");
       expect(await page.getByLabel("Recipient comment", { exact: true }).inputValue()).toBe(
