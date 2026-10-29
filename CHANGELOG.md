@@ -2,6 +2,8 @@
 
 This file records concise shipped outcomes and the planned next stable release.
 
+## v0.1.4 - Unreleased
+
 ## v0.1.3 - 2026-10-29
 
 ### Added
