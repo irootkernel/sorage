@@ -108,7 +108,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-017` | Channel adoption hardening and v0.1.3 release readiness | M9 | Completed | `TASK-111` to `TASK-120` |
 | `EPIC-018` | MCP access, zero-write reads and Channel rebuild | M9 | Completed | `TASK-121` to `TASK-127` |
 | `EPIC-019` | Handoff processing status and recipient comment | M9 | Completed | `TASK-128` to `TASK-134` |
-| `EPIC-020` | Pre-release simplification | M9 | In Progress | `TASK-135` to `TASK-138` |
+| `EPIC-020` | Pre-release simplification | M9 | Completed | `TASK-135` to `TASK-138` |
 
 ## EPIC-001: Foundation and toolchain
 

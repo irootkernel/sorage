@@ -20,7 +20,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- **Breaking Handoff data contract:** `storageKey` is always present and may be `null` for inline content, requiring updates to string-only consumers while preserving protocol version 1, the response envelope and `/api/v1`.
+- **Breaking Handoff data contract:** `storageKey` is always present and may be `null` for inline content, and Handoff get/list/detail and report results always include `read`, `processing` and body-free `comment` metadata, requiring updates to string-only and closed-DTO consumers while protocol version 1, the response envelope and `/api/v1` remain unchanged.
 - **Breaking read-state behavior:** covered reads refuse an older or empty database with `STORAGE_MIGRATION_REQUIRED`/78 and a missing database with `STORAGE_INTEGRITY_ERROR`/73 instead of migrating or recreating it, and refuse unsafe or unavailable WAL/SHM state without repairing it as detailed in [the compatibility record](docs/roadmap/README.md#task-122-contract-record).
 - **Breaking Handoff writer inputs:** fresh comment/start/complete and review set require the current Revision and Row Version, while review withdrawal/removal, revise including no-change and deletion approval require Row Version; original successful-receipt replay retains its legacy exception.
 - Protect Project unbind, including archived Projects and the last binding, while accepted work is known unfinished, without inferring pending work from legacy `unrecorded` evidence.
