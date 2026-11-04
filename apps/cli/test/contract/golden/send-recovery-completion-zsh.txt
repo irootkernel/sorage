@@ -46,7 +46,7 @@ _sorage() {
     'inbox:list the Handoffs sent to the resolved recipient Project'
     'outbox:list the Handoffs the resolved sender sent'
     'get:read one Handoff'\''s metadata; records nothing'
-    'fetch:read the current Artifact'\''s metadata and local path; the recipient'\''s first fetch is recorded'
+    'fetch:read the current document'\''s metadata and local path; does not edit the document, report processing or accept it'
     'events:read the bounded recent metadata timeline; records nothing'
     'comment:read and replace the retained recipient comment'
     'comment show:read the retained recipient comment; records nothing'

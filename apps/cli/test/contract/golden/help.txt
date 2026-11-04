@@ -43,8 +43,9 @@ Commands:
                                   recipient Project
   outbox [options]                list the Handoffs the resolved sender sent
   get <handoff-id>                read one Handoff's metadata; records nothing
-  fetch <handoff-id>              read the current Artifact's metadata and local
-                                  path; the recipient's first fetch is recorded
+  fetch <handoff-id>              read the current document's metadata and local
+                                  path; does not edit the document, report
+                                  processing or accept it
   events <handoff-id>             read the bounded recent metadata timeline;
                                   records nothing
   comment                         read and replace the retained recipient

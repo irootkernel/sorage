@@ -281,7 +281,7 @@
       },
       {
         "name": "handoff_fetch",
-        "description": "read the current Artifact's metadata and local path; the recipient's first fetch is recorded",
+        "description": "read the current document's metadata and local path; does not edit the document, report processing or accept it",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -298,7 +298,7 @@
           "additionalProperties": false
         },
         "annotations": {
-          "readOnlyHint": false,
+          "readOnlyHint": true,
           "destructiveHint": false,
           "idempotentHint": false,
           "openWorldHint": false

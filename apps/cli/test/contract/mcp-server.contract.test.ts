@@ -408,9 +408,17 @@ describe("accepted calls through real children (MCP-002, MCP-006)", () => {
       ?.handoffId as string;
     // Before the fetch, the recipient has not engaged: firstFetchedAt is null.
     const beforeFetch = JSON.parse(runCli(["get", handoffId, "--json"], home, workA).stdout) as {
-      data: { firstFetchedAt: string | null };
+      data: {
+        firstFetchedAt: string | null;
+        read: { status: string; readAt: string | null };
+        processing: { status: string };
+        revision: number;
+        rowVersion: number;
+        reviewState: string;
+      };
     };
     expect(beforeFetch.data.firstFetchedAt).toBeNull();
+    expect(beforeFetch.data.read.status).toBe("unconfirmed");
     const session = startServer(home, workA);
     await session.request("initialize", { protocolVersion: "2025-06-18" });
     const answer = (await toolCall(session, "handoff_fetch", { handoffId })) as unknown as {
@@ -421,13 +429,34 @@ describe("accepted calls through real children (MCP-002, MCP-006)", () => {
     // The claimed effect: the recipient's first fetch is recorded, so the read
     // after it observes a non-null firstFetchedAt where it was null before.
     const afterFetch = JSON.parse(runCli(["get", handoffId, "--json"], home, workA).stdout) as {
-      data: { firstFetchedAt: string | null };
+      data: {
+        firstFetchedAt: string | null;
+        read: { status: string; readAt: string | null };
+        processing: { status: string };
+        revision: number;
+        rowVersion: number;
+        reviewState: string;
+      };
     };
     expect(afterFetch.data.firstFetchedAt).not.toBeNull();
     const fetched = (await toolCall(session, "handoff_get", { handoffId })) as unknown as {
       result: { structuredContent: { data: { firstFetchedAt: string | null } } };
     };
     expect(fetched.result?.structuredContent.data.firstFetchedAt).not.toBeNull();
+    expect(afterFetch.data.read.status).toBe("read");
+    expect(afterFetch.data.read.readAt).not.toBeNull();
+    expect(afterFetch.data.processing).toEqual(beforeFetch.data.processing);
+    expect(afterFetch.data.reviewState).toBe(beforeFetch.data.reviewState);
+    expect(afterFetch.data.revision).toBe(beforeFetch.data.revision);
+    expect(afterFetch.data.rowVersion).toBe(beforeFetch.data.rowVersion);
+    // Re-reading keeps the original receipt and does not imply external work.
+    await toolCall(session, "handoff_fetch", { handoffId });
+    const repeated = JSON.parse(runCli(["get", handoffId, "--json"], home, workA).stdout);
+    expect(repeated.data.read).toEqual(afterFetch.data.read);
+    expect(repeated.data.firstFetchedAt).toBe(afterFetch.data.firstFetchedAt);
+    expect(repeated.data.processing).toEqual(beforeFetch.data.processing);
+    expect(repeated.data.reviewState).toBe(beforeFetch.data.reviewState);
+    expect(repeated.data.rowVersion).toBe(beforeFetch.data.rowVersion);
     await session.close();
   });
 

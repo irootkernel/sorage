@@ -1213,7 +1213,9 @@ export function buildProgram(
 
   program
     .command("fetch <handoff-id>")
-    .description("read the current Artifact's metadata and local path; the recipient's first fetch is recorded")
+    .description(
+      "read the current document's metadata and local path; does not edit the document, report processing or accept it",
+    )
     .action((id: string, _options: unknown, command: Command) => {
       const globals = command.optsWithGlobals();
       const json = globals.json === true;

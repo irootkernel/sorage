@@ -159,6 +159,7 @@ describe("the MCP catalogue shape (MCP-005)", () => {
       "handoff_outbox",
       "handoff_get",
       "handoff_events",
+      "handoff_fetch",
       "handoff_review_show",
       "handoff_comment_show",
       "memo_list",

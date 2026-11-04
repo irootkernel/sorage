@@ -4,7 +4,7 @@ This reference is a required resource for explicitly requested Handoff work, ins
 
 ## MCP and CLI surfaces
 
-Use the MCP tools below first, with the acting workspace's `cwd` on every call. The CLI forms in the workflow are fallback equivalents: for example, `handoff_comment_show` reads retained feedback and `handoff_review_show` reads only an active change request before `handoff_revise`. Source groups and conditional rules apply in addition to required properties. Handoff reads `inbox`, `outbox`, `get`, `events`, `review show` and `comment show` (including inbox waiting) write nothing; `fetch` is a mutation. Native offline help supplies CLI syntax.
+Use the MCP tools below first, with the acting workspace's `cwd` on every call. The CLI forms in the workflow are fallback equivalents: for example, `handoff_comment_show` reads retained feedback and `handoff_review_show` reads only an active change request before `handoff_revise`. Source groups and conditional rules apply in addition to required properties. Native offline help supplies CLI syntax.
 
 | Tool | Required properties | Other properties | Input rules |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Use the MCP tools below first, with the acting workspace's `cwd` on every call. 
 | `handoff_outbox` | None | `currentWorkspace: boolean`, `state: string`, `sender: string`, `recipient: string`, `updatedSince: string`, `updatedUntil: string`, `includeArchived: boolean`, `includeDeleted: boolean`, `limit: integer`, `cursor: string`, `cwd: string` | currentWorkspace and the filters retain their CLI meanings; broaden scope only when requested. |
 | `handoff_get` | `handoffId: string` | `cwd: string` | Metadata only, including read/processing evidence and comment attribution; no document/comment body. |
 | `handoff_events` | `handoffId: string` | `cwd: string` | Recent metadata, not document content; not required on every revision. |
-| `handoff_fetch` | `handoffId: string` | `cwd: string` | Returns localPath; successful recipient delivery records current-Revision reading and can set historical firstFetchedAt, without changing Row Version. This is not a covered read. |
+| `handoff_fetch` | `handoffId: string` | `cwd: string` | Returns localPath; recipient delivery records current-Revision reading without changing Row Version. |
 | `handoff_review_show` | `handoffId: string` | `cwd: string` | Returns only the active change-request Note or null, without recording engagement. |
 | `handoff_comment_show` | `handoffId: string` | `cwd: string` | Returns the retained recipient comment with body, purpose/activity, author and target Revision, including inactive/older feedback, or null; writes nothing. |
 | `handoff_comment_set` | `handoffId: string`, `expectedRevision: integer`, `expectedRowVersion: integer` | `text: string`, `file: string`, `purpose: string`, `cwd: string` | Exactly one text/file source; purpose is general (default) or change_request. Only the recipient authors reports; an active request blocks general replacement. Files remain inside cwd. |

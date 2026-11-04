@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.4 - Unreleased
 
+### Fixed
+
+- Classify Handoff fetch as a read-only MCP operation while retaining automatic read receipts; internal bookkeeping no longer classifies requested document reading as a caller write.
+
 ## v0.1.3 - 2026-10-29
 
 ### Added

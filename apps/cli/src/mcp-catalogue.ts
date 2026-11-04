@@ -349,8 +349,9 @@ const HANDOFF_TOOLS: McpTool[] = [
   },
   {
     name: "handoff_fetch",
-    description: "read the current Artifact's metadata and local path; the recipient's first fetch is recorded",
-    annotations: WRITE,
+    description:
+      "read the current document's metadata and local path; does not edit the document, report processing or accept it",
+    annotations: READ,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" } },
     inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },

@@ -44,13 +44,11 @@ Prefer inline `body`/`text`. File inputs (`file`, `bodyFile`, `commentFile`) mus
 
 Schemas publish the full input contract but do not alone determine the refusal channel. Handoff/Channel integer encoding mirrors CLI zero-to-safe-integer bounds; Memo numeric failures stay `MEMO_INVALID_INPUT`. Send/revise/review-set source-group or blank-body usage errors differ from coded Memo/Channel body-source refusals. Comment-set source-count/missing-required-option errors are usage errors; supplied blank comment text is `HANDOFF_INVALID_INPUT`. Invalid Channel role/state/relay/ack values are `CHN_INVALID_INPUT`; missing no-change reason is `CONFIG_INVALID`.
 
-## Reads, waits and annotations
+## Waits and annotations
 
 MCP inbox/Channel waits default to timeout 30 seconds, interval 2; CLI inbox/Channel timeouts remain 300/60. Pass timeout/interval only with wait and interval at least 1; a longer timeout must fit the requested wait. CLI inbox ignores wait options without wait, while Channel messages refuses them. Empty timeout is success with `meta.timedOut: true`, not handling or a failed write.
 
-The thirteen covered reads are `handoff_inbox`, `handoff_outbox`, `handoff_get`, `handoff_events`, `handoff_review_show`, `handoff_comment_show`, `memo_list`, `memo_show`, `channel_messages`, `channel_list`, `channel_show`, `project_list` and `project_show`. Their CLI counterparts write nothing: no startup recovery, migration, cleanup or logging. `handoff_fetch` is a mutation: recipient delivery may record current-Revision reading and historical `firstFetchedAt`, never processing. Use permitted MCP writes, with CLI fallback.
-
-All four hints are explicit: `readOnlyHint` only on those thirteen reads; `destructiveHint` only on `handoff_decline`, `handoff_withdraw`, `channel_close`; `idempotentHint` only on `channel_create`, `channel_add`, `channel_remove`, `channel_ack`, `channel_close`; `openWorldHint` always false. Other values are false. Hints and handles grant no authority. Report denied writes without changing approval settings, weakening annotations, bypassing denial or claiming success.
+Tool annotations describe each operation; they grant no authority. Report actual tool denials without changing approval settings or bypassing denial.
 
 ## Project lookups
 
