@@ -154,24 +154,8 @@ describe("the MCP catalogue shape (MCP-005)", () => {
 
   it("sets the exact annotation memberships of section 39", () => {
     const readOnly = MCP_TOOLS.filter((entry) => entry.annotations.readOnlyHint).map((entry) => entry.name);
-    expect(readOnly).toEqual([
-      "handoff_inbox",
-      "handoff_outbox",
-      "handoff_get",
-      "handoff_events",
-      "handoff_fetch",
-      "handoff_review_show",
-      "handoff_comment_show",
-      "memo_list",
-      "memo_show",
-      "channel_messages",
-      "channel_list",
-      "channel_show",
-      "project_list",
-      "project_show",
-    ]);
-    const destructive = MCP_TOOLS.filter((entry) => entry.annotations.destructiveHint).map((entry) => entry.name);
-    expect(destructive).toEqual(["handoff_decline", "handoff_withdraw", "channel_close"]);
+    expect(readOnly).toEqual(MCP_TOOLS.map((entry) => entry.name));
+    expect(MCP_TOOLS.every((entry) => entry.annotations.destructiveHint === false)).toBe(true);
     const idempotent = MCP_TOOLS.filter((entry) => entry.annotations.idempotentHint).map((entry) => entry.name);
     expect(idempotent).toEqual(["channel_create", "channel_add", "channel_remove", "channel_ack", "channel_close"]);
     expect(MCP_TOOLS.every((entry) => entry.annotations.openWorldHint === false)).toBe(true);

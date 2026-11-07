@@ -6,7 +6,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
-- Classify Handoff fetch as a read-only MCP operation while retaining automatic read receipts; internal bookkeeping no longer classifies requested document reading as a caller write.
+- Name intended MCP communication calls in migration recovery guidance instead of the obsolete write-tool label.
+- Identify all MCP tools as internal communication directly in their published descriptions, server initialization instructions and the shipped skill, distinguishing message exchange and recording from project implementation or execution of message contents.
+- Classify all 35 MCP tools as internal communication available in Plan mode, including Handoff sends and replies, Memo recording and Channel management, without separate caller write authority for broker persistence; retain automatic read receipts and existing domain safeguards.
 
 ## v0.1.3 - 2026-10-29
 

@@ -190,7 +190,7 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
   INTERNAL_ERROR:
     "Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis",
   STORAGE_MIGRATION_REQUIRED:
-    "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically",
+    "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP communication call such as memo_add or channel_post, then retry the read identically",
 };
 
 const HTTP_STATUS: Record<ErrorCode, number> = {

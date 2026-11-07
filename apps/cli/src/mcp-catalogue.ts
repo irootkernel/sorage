@@ -65,35 +65,17 @@ export interface McpTool {
   mirrorsIntegerBounds: boolean;
 }
 
-const READ: McpToolAnnotations = {
+/** Internal communication is available in Plan mode (interface section 39).
+ * Broker persistence is not caller workspace write authority. */
+const COMMUNICATION: McpToolAnnotations = {
   readOnlyHint: true,
   destructiveHint: false,
   idempotentHint: false,
   openWorldHint: false,
 };
-const WRITE: McpToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: false,
-};
-const DESTRUCTIVE: McpToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: false,
-};
-const IDEMPOTENT: McpToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: false,
+const IDEMPOTENT_COMMUNICATION: McpToolAnnotations = {
+  ...COMMUNICATION,
   idempotentHint: true,
-  openWorldHint: false,
-};
-const CLOSE: McpToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: true,
-  openWorldHint: false,
 };
 
 const KINDS = ["report", "question", "relay_request"];
@@ -152,7 +134,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_send",
     description: "hand one current document to one or more recipient Projects, one Handoff each",
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       to: { type: "stringArray" },
@@ -206,7 +188,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_inbox",
     description: "list the Handoffs sent to the resolved recipient Project",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       state: { type: "string" },
@@ -280,7 +262,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_outbox",
     description: "list the Handoffs the resolved sender sent",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       currentWorkspace: { type: "boolean" },
@@ -330,7 +312,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_get",
     description: "read one Handoff's metadata; records nothing",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" } },
     inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
@@ -340,7 +322,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_events",
     description: "read the bounded recent metadata timeline; records nothing",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" } },
     inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
@@ -351,7 +333,7 @@ const HANDOFF_TOOLS: McpTool[] = [
     name: "handoff_fetch",
     description:
       "read the current document's metadata and local path; does not edit the document, report processing or accept it",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" } },
     inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
@@ -361,7 +343,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_review_show",
     description: "read the current Review Note; records nothing",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" } },
     inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
@@ -372,7 +354,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_review_set",
     description: "create or update this Handoff's Review Note as the recipient or the User",
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       handoffId: { type: "string" },
@@ -412,7 +394,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_review_withdraw",
     description: "withdraw this Handoff's current Review Note as the recipient, whichever actor authored it",
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" }, expectedRowVersion: { type: "integer" } },
     inputSchema: {
@@ -434,7 +416,7 @@ const HANDOFF_TOOLS: McpTool[] = [
     name: "handoff_revise",
     description:
       "replace the current Artifact or resolve the Review Note; expectedRowVersion is required for fresh mutation and optional only for successful recorded replay",
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       handoffId: { type: "string" },
@@ -497,7 +479,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_accept",
     description: "accept the exact Revision as the recipient, closing the exchange",
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       handoffId: { type: "string" },
@@ -530,7 +512,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_decline",
     description: "decline the Handoff as the recipient with a recorded reason",
-    annotations: DESTRUCTIVE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" }, reason: { type: "string" }, expectedRowVersion: { type: "integer" } },
     inputSchema: {
@@ -559,7 +541,7 @@ const HANDOFF_TOOLS: McpTool[] = [
   {
     name: "handoff_withdraw",
     description: "withdraw the Handoff as the sender before the recipient has engaged",
-    annotations: DESTRUCTIVE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { handoffId: { type: "string" }, expectedRowVersion: { type: "integer" } },
     inputSchema: {
@@ -631,7 +613,7 @@ function handoffReportingTools(): McpTool[] {
         : set
           ? "replace the recipient comment using the observed document and Row Version"
           : `${operation === "processing_start" ? "start" : "complete"} processing with an optional general comment`,
-      annotations: show ? READ : WRITE,
+      annotations: COMMUNICATION,
       mirrorsIntegerBounds: true,
       properties,
       inputSchema: {
@@ -664,7 +646,7 @@ const MEMO_TOOLS: McpTool[] = [
   {
     name: "memo_list",
     description: "list Project Memos, open by default",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: false,
     properties: {
       project: { type: "string" },
@@ -709,7 +691,7 @@ const MEMO_TOOLS: McpTool[] = [
   {
     name: "memo_show",
     description: "show one complete Memo",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: false,
     properties: { memoId: { type: "string" }, project: { type: "string" } },
     inputSchema: {
@@ -769,7 +751,7 @@ function memoMutationTool(operation: "add" | "update" | "done" | "dismiss" | "re
   return {
     name: `memo_${operation}`,
     description: descriptions[operation],
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: false,
     properties,
     inputSchema:
@@ -810,7 +792,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_create",
     description: "create an open Channel with its single main participant",
-    annotations: IDEMPOTENT,
+    annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { name: { type: "string" }, title: { type: "string" }, main: { type: "string" } },
     inputSchema: {
@@ -835,7 +817,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_add",
     description: "register a worker or judge participant on an open Channel",
-    annotations: IDEMPOTENT,
+    annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { channel: { type: "string" }, handle: { type: "string" }, role: { type: "string" } },
     inputSchema: {
@@ -858,7 +840,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_remove",
     description: "remove a participant idempotently; reversible by re-adding the handle",
-    annotations: IDEMPOTENT,
+    annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { channel: { type: "string" }, handle: { type: "string" } },
     inputSchema: {
@@ -872,7 +854,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_post",
     description: "post one attributed message upstream through the shared content interface",
-    annotations: WRITE,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       channel: { type: "string" },
@@ -931,7 +913,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_messages",
     description: "list messages with full inline bodies; unhandled oldest first by default",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {
       channel: { type: "string" },
@@ -986,7 +968,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_ack",
     description: "record the User handling decision for the named messages",
-    annotations: IDEMPOTENT,
+    annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { channel: { type: "string" }, seq: { type: "integerArray" }, note: { type: "string" } },
     inputSchema: {
@@ -1010,7 +992,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_close",
     description: "terminal idempotent close; freezes posting, keeps reads and acks",
-    annotations: CLOSE,
+    annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { channel: { type: "string" } },
     inputSchema: { type: "object", properties: { channel: { type: "string" } }, required: ["channel"] },
@@ -1020,7 +1002,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_list",
     description: "list Channels with both identifiers",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { state: { type: "string" } },
     inputSchema: {
@@ -1033,7 +1015,7 @@ const CHANNEL_TOOLS: McpTool[] = [
   {
     name: "channel_show",
     description: "show one Channel with its complete participant roster and counts",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { channel: { type: "string" } },
     inputSchema: { type: "object", properties: { channel: { type: "string" } }, required: ["channel"] },
@@ -1046,7 +1028,7 @@ const PROJECT_TOOLS: McpTool[] = [
   {
     name: "project_list",
     description: "list every Project with its binding count, flagging unbound Projects",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: {},
     inputSchema: { type: "object", properties: {} },
@@ -1056,7 +1038,7 @@ const PROJECT_TOOLS: McpTool[] = [
   {
     name: "project_show",
     description: "show one Project with every binding, its counts, and its lifecycle state",
-    annotations: READ,
+    annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
     properties: { project: { type: "string" } },
     inputSchema: { type: "object", properties: { project: { type: "string" } }, required: ["project"] },

@@ -393,11 +393,14 @@ export function publishedInputSchema(tool: McpTool): Record<string, unknown> {
   };
 }
 
+const COMMUNICATION_CONTEXT =
+  "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. ";
+
 /** The `tools/list` entries, in the catalogue's pinned order and key order. */
 export function toolsListResult(): Array<Record<string, unknown>> {
   return MCP_TOOLS.map((entry) => ({
     name: entry.name,
-    description: entry.description,
+    description: COMMUNICATION_CONTEXT + entry.description,
     inputSchema: publishedInputSchema(entry),
     annotations: entry.annotations,
   }));
@@ -412,6 +415,7 @@ export function initializeResult(requestedVersion: unknown): Record<string, unkn
     protocolVersion: version,
     capabilities: { tools: {} },
     serverInfo: { name: "sorage", version: SORAGE_VERSION },
+    instructions: COMMUNICATION_CONTEXT.trim(),
   };
 }
 

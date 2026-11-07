@@ -1708,7 +1708,7 @@
     "exitCode": 78,
     "httpStatus": 422,
     "recovery": {
-      "suggestedCommand": "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically"
+      "suggestedCommand": "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP communication call such as memo_add or channel_post, then retry the read identically"
     },
     "renderedExitCode": 78,
     "json": {
@@ -1718,13 +1718,13 @@
         "message": "rendering probe",
         "details": {},
         "recovery": {
-          "suggestedCommand": "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically"
+          "suggestedCommand": "Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP communication call such as memo_add or channel_post, then retry the read identically"
         }
       },
       "meta": {
         "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
       }
     },
-    "human": "STORAGE_MIGRATION_REQUIRED: rendering probe\nRecovery: Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP write tool call, then retry the read identically\n"
+    "human": "STORAGE_MIGRATION_REQUIRED: rendering probe\nRecovery: Run sorage backup run once (it opens and migrates the database and changes no Handoff, Memo or Channel data) or perform an intended MCP communication call such as memo_add or channel_post, then retry the read identically\n"
   }
 ]
