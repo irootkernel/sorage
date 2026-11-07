@@ -6,7 +6,7 @@
     },
     "serverInfo": {
       "name": "sorage",
-      "version": "0.1.3"
+      "version": "0.1.4"
     },
     "instructions": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning."
   },

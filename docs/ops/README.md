@@ -10,19 +10,19 @@ Do not expose authentication material or copy output containing secrets into an 
 
 ## Release-candidate verification
 
-The commands below describe the published v0.1.3 packaging identity. The shared v0.1.3 release carries M8, M9, the EPIC-017/EPIC-018 corrections and EPIC-019 Handoff reporting together and requires the separate [M9 shared content upgrade and rollback procedure](#m9-shared-content-upgrade-and-rollback); a matching version string does not establish a matching build or storage contract.
+The commands below describe the published v0.1.4 packaging identity. The v0.1.4 release retains the shared v0.1.3 storage contract; upgrades from older storage still require the separate [M9 shared content upgrade and rollback procedure](#m9-shared-content-upgrade-and-rollback); a matching version string does not establish a matching build or storage contract.
 
 Before publication, build and inspect the Apple Silicon macOS candidate from the reviewed checkout:
 
 ```sh
 make package
 cd dist
-shasum -a 256 -c sorage-v0.1.3-darwin-arm64.sha256
-codesign --verify --strict sorage-v0.1.3-darwin-arm64
-./sorage-v0.1.3-darwin-arm64 version
+shasum -a 256 -c sorage-v0.1.4-darwin-arm64.sha256
+codesign --verify --strict sorage-v0.1.4-darwin-arm64
+./sorage-v0.1.4-darwin-arm64 version
 ```
 
-The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.3`, target `darwin-arm64`, binary `sorage-v0.1.3-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
+The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.4`, target `darwin-arm64`, binary `sorage-v0.1.4-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
 
 ## Replace the withdrawn v0.1.2 binary
 
