@@ -13,21 +13,22 @@
     "apps/*"
   ],
   "scripts": {
-    "check:toolchain": "bun run scripts/check-toolchain.ts",
-    "check:version": "bun run scripts/check-version.ts",
-    "check:format": "biome format .",
-    "check:lint": "biome lint . --error-on-warnings",
-    "check:typecheck": "bun run scripts/check-typecheck.ts",
-    "check:import-boundaries": "bun run scripts/check-import-boundaries.ts",
-    "check:dependency-boundaries": "bun run scripts/check-dependency-boundaries.ts",
-    "test:unit": "vitest run --config vitest.unit.config.ts",
-    "test:int": "vitest run --config vitest.int.config.ts",
-    "test:contract": "vitest run --config vitest.contract.config.ts",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:release": "vitest run --config vitest.release.config.ts",
-    "build:cli": "bun run scripts/build-cli.ts",
-    "package": "bun run scripts/package.ts",
-    "check:sot": "bun run scripts/sot-check.ts"
+    "format": "/bin/sh scripts/toolchain.sh script format",
+    "check:toolchain": "/bin/sh scripts/toolchain.sh script check:toolchain",
+    "check:version": "/bin/sh scripts/toolchain.sh script check:version",
+    "check:format": "/bin/sh scripts/toolchain.sh script check:format",
+    "check:lint": "/bin/sh scripts/toolchain.sh script check:lint",
+    "check:typecheck": "/bin/sh scripts/toolchain.sh script check:typecheck",
+    "check:import-boundaries": "/bin/sh scripts/toolchain.sh script check:import-boundaries",
+    "check:dependency-boundaries": "/bin/sh scripts/toolchain.sh script check:dependency-boundaries",
+    "test:unit": "/bin/sh scripts/toolchain.sh script test:unit",
+    "test:int": "/bin/sh scripts/toolchain.sh script test:int",
+    "test:contract": "/bin/sh scripts/toolchain.sh script test:contract",
+    "test:e2e": "/bin/sh scripts/toolchain.sh script test:e2e",
+    "test:release": "/bin/sh scripts/toolchain.sh script test:release",
+    "build:cli": "/bin/sh scripts/toolchain.sh script build:cli",
+    "package": "/bin/sh scripts/toolchain.sh script package",
+    "check:sot": "/bin/sh scripts/toolchain.sh script check:sot"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.4",
@@ -39,5 +40,6 @@
   },
   "dependencies": {
     "commander": "14.0.2"
-  }
+  },
+  "packageManager": "bun@1.4.2"
 }

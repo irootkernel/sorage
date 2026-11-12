@@ -106,6 +106,7 @@ interface Session {
   child: ChildProcess;
   lines: string[];
   stderr: string;
+  readonly pendingRequestCount: number;
   send(message: unknown): void;
   request(method: string, params?: unknown, timeoutMs?: number): Promise<Record<string, unknown>>;
   notify(method: string, params?: unknown): void;
@@ -161,6 +162,9 @@ function startServer(home: string, cwd: string, env: Record<string, string> = {}
     lines,
     get stderr() {
       return stderr;
+    },
+    get pendingRequestCount() {
+      return pending.size;
     },
     send(message: unknown): void {
       child.stdin?.write(`${JSON.stringify(message)}\n`);
@@ -913,12 +917,19 @@ describe("the lifecycle (plan 4.5)", () => {
     const session = startServer(home, workA);
     await session.request("initialize", { protocolVersion: "2025-06-18" });
     const linesBefore = session.lines.length;
-    void toolCall(session, "channel_messages", { channel: "cancel", wait: true, timeout: 30 });
+    // Cancellation intentionally suppresses the response. Do not create a
+    // response Promise and timeout for this wire-only lifecycle probe.
+    session.send({
+      jsonrpc: "2.0",
+      id: "cancel-wait",
+      method: "tools/call",
+      params: { name: "channel_messages", arguments: { channel: "cancel", wait: true, timeout: 30 } },
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
     const liveChildren = childrenOf(session.child.pid);
     expect(liveChildren).toHaveLength(1);
     const waiterPid = liveChildren[0] as number;
-    session.notify("notifications/cancelled", { requestId: 2 });
+    session.notify("notifications/cancelled", { requestId: "cancel-wait" });
     // The claimed effect: the captured child PID terminates — asserted before
     // any cleanup could conceal a leaked waiter.
     const cancelled = await new Promise<boolean>((resolve) => {
@@ -935,6 +946,7 @@ describe("the lifecycle (plan 4.5)", () => {
       poll();
     });
     expect(cancelled).toBe(true);
+    expect(session.pendingRequestCount, "cancelled requests must leave no response waiter").toBe(0);
     expect(session.lines.length).toBe(linesBefore);
     const after = (await session.request("ping", {}, 5_000)) as unknown as { result: Record<string, unknown> };
     expect(after.result).toEqual({});
@@ -952,7 +964,12 @@ describe("the lifecycle (plan 4.5)", () => {
     }
     const session = startServer(home, workA);
     await session.request("initialize", { protocolVersion: "2025-06-18" });
-    void toolCall(session, "channel_messages", { channel: "eof", wait: true, timeout: 30 });
+    session.send({
+      jsonrpc: "2.0",
+      id: "eof-wait",
+      method: "tools/call",
+      params: { name: "channel_messages", arguments: { channel: "eof", wait: true, timeout: 30 } },
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
     const liveChildren = childrenOf(session.child.pid);
     expect(liveChildren).toHaveLength(1);
@@ -971,6 +988,7 @@ describe("the lifecycle (plan 4.5)", () => {
     session.child.stdin?.end();
     await session.close();
     expect(await waiterGone).toBe(true);
+    expect(session.pendingRequestCount, "EOF must leave no response waiter").toBe(0);
     expect(session.child.exitCode).not.toBeNull();
   });
 
@@ -1207,7 +1225,12 @@ describe("C2 additions: request validation, crash safety, late cancellation, mul
     }
     const session = startServer(home, workA);
     await session.request("initialize", { protocolVersion: "2025-06-18" });
-    void toolCall(session, "channel_messages", { channel: "sig", wait: true, timeout: 30 });
+    session.send({
+      jsonrpc: "2.0",
+      id: "sigterm-wait",
+      method: "tools/call",
+      params: { name: "channel_messages", arguments: { channel: "sig", wait: true, timeout: 30 } },
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
     const live = await new Promise<number[]>((resolve) => {
       const poll = (): void => {
@@ -1239,6 +1262,7 @@ describe("C2 additions: request validation, crash safety, late cancellation, mul
       poll();
     });
     expect(waiterGone).toBe(true);
+    expect(session.pendingRequestCount, "SIGTERM must leave no response waiter").toBe(0);
   });
 });
 

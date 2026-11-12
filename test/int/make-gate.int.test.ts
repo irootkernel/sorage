@@ -1,14 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const preparation = [
+  "install --frozen-lockfile",
   "run check:toolchain",
   "run check:version",
-  "install --frozen-lockfile",
-  "run check:format",
+  "run format",
   "run check:lint",
   "run check:typecheck",
   "run check:import-boundaries",
@@ -31,6 +31,8 @@ function runGate(target: string, fail = "") {
   try {
     copyFileSync(new URL("../../Makefile", import.meta.url), join(directory, "Makefile"));
     const runner = join(directory, "bun");
+    mkdirSync(join(directory, "scripts"));
+    writeFileSync(join(directory, "scripts/toolchain.sh"), 'shift; exec "$GATE_RUNNER" "$@"\n');
     const log = join(directory, "commands.log");
     writeFileSync(log, "");
     writeFileSync(
@@ -42,7 +44,13 @@ function runGate(target: string, fail = "") {
       cwd: directory,
       encoding: "utf8",
       timeout: 10_000,
-      env: { ...process.env, SORAGE_HOME: join(directory, "home"), GATE_LOG: log, GATE_FAIL: fail },
+      env: {
+        ...process.env,
+        SORAGE_HOME: join(directory, "home"),
+        GATE_LOG: log,
+        GATE_FAIL: fail,
+        GATE_RUNNER: runner,
+      },
     });
     return { ...result, commands: readFileSync(log, "utf8").trim().split("\n") };
   } finally {
@@ -59,6 +67,7 @@ describe("the single make test gate", () => {
 
   it.each([
     "run check:toolchain",
+    "run format",
     "run test:unit",
     "run package",
     "run test:int",

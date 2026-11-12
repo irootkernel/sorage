@@ -85,7 +85,7 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 - A conflict with a higher-authority document stops the active Task; record the conflict and resolve it in the Source of Truth before writing implementation code.
 - Never let an implementation shortcut become product behavior without the material change process in [docs/governance/README.md](docs/governance/README.md).
 
-- Bun is pinned to `1.4.2`. `make build` builds the CLI and `make package` creates the packaged executable. `make test` is the canonical code gate; `make test-prepare` includes format, lint, type, boundary, and SOT checks.
+- Exact versions are owned by `.bun-version`, `.node-version`, and the TypeScript devDependency. Follow [the toolchain guide](docs/implementation-tips/toolchains.md); use `make toolchain-install`, `make toolchain-sync`, `make deps`, and `make toolchain-check` for setup. Build and package scripts require managed Bun; development tools use managed Node. `make test` is the canonical code gate.
 - Gaori command `test` runs `["make", "test"]` with the `generic` parser and a 3600-second timeout because the full gate combines preparation and several test stages. Configuration validation is `gaori --json config check`.
 
 ### Commit Messages

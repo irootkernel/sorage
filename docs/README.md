@@ -92,6 +92,8 @@ Only the roadmap records lifecycle state. The dossier for an active Epic lives u
 
 ## Verification
 
+Use the [project toolchain guide](implementation-tips/toolchains.md) for exact runtime selection, setup, commands and explicit upgrades.
+
 Run focused checks for the changed boundary before review under [governance section 18.1](governance/README.md#181-proportionate-verification-and-review). Reuse evidence only while its inputs remain applicable. The commands below include the complete gate, which is required on the final integrated candidate; TASK-138 owns it for EPIC-020. TASK-135 uses its bounded documentation-only gate:
 
 ```sh

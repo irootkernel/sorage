@@ -589,7 +589,12 @@ describe("format-3 filesystem and representation boundaries", () => {
     const child = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 10_000 });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({ nativeBun: "1.4.2", restored: 1, reopened: 2, receipts: 0 });
+    expect(JSON.parse(child.stdout)).toEqual({
+      nativeBun: readFileSync(".bun-version", "utf8").trim(),
+      restored: 1,
+      reopened: 2,
+      receipts: 0,
+    });
   });
 
   it("preserves native Review Note BOM/CRLF bytes through restore and reopened TEXT reads", () => {
@@ -634,7 +639,7 @@ describe("format-3 filesystem and representation boundaries", () => {
     const child = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 10_000 });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({ nativeBun: "1.4.2", reopened: 2 });
+    expect(JSON.parse(child.stdout)).toEqual({ nativeBun: readFileSync(".bun-version", "utf8").trim(), reopened: 2 });
   });
 
   it.each([2, 3])(
@@ -686,7 +691,7 @@ describe("format-3 filesystem and representation boundaries", () => {
       const child = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 10_000 });
       expect(child.error).toBeUndefined();
       expect(child.status, child.stderr).toBe(0);
-      expect(JSON.parse(child.stdout)).toEqual({ nativeBun: "1.4.2", reopened: 2 });
+      expect(JSON.parse(child.stdout)).toEqual({ nativeBun: readFileSync(".bun-version", "utf8").trim(), reopened: 2 });
     },
   );
 

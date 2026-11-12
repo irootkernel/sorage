@@ -15,7 +15,7 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 
 | Target | Contents |
 |---|---|
-| `test-prepare` | Frozen dependency installation, format check, lint and the real import/dependency-boundary checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
+| `test-prepare` | Frozen dependency installation, automatic formatting with Biome, lint and the real import/dependency-boundary checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | Build a current `dist/sorage`, then run SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |
@@ -27,7 +27,7 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 
 The raw `bun run test:int`, `bun run test:e2e` and `bun run test:release` scripts run their selected suites without preparation. Prepare current-source outputs first: `make build` for focused integration or ordinary E2E, and `make package` for release qualification. The release script selects only AJ-16 and fails if no tests match; its candidate, signed digest, checksum and manifest must agree. A normal build deliberately withdraws release metadata, so do not run it between packaging and release qualification. Packaging compares two independent unsigned compilations with the same basename before signing; it removes its unique temporary reproducibility output and any owned staged/candidate files on failure. Successful `make package` retains the final distribution outputs.
 
-Verification runs locally on the developer's macOS machine through `make test`; `test-prepare` asserts Bun `1.4.2` as pinned in `.bun-version` at the repository root and mirrored in the `package.json` `engines` field, so no environment can silently drift from the pin; a mismatch fails in `test-prepare` before any test executes. This repository uses no hosted continuous-integration service.
+Verification runs locally on the developer's macOS machine through `make test`. The [project toolchain guide](../implementation-tips/toolchains.md) defines managed Bun and development Node selection, compiler locking, setup and explicit upgrades. Every supported entry selects its required managed runtime, and direct build/package scripts reject another Bun before changing outputs. Missing or mismatched versions fail without system fallback. `test-prepare` installs frozen dependencies and verifies synchronized metadata and the local compiler before tests. This repository uses no hosted continuous-integration service.
 
 ### 1.1 Pre-release simplification registration
 

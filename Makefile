@@ -1,4 +1,28 @@
-BUN ?= bun
+override BUN := /bin/sh scripts/toolchain.sh bun
+.DEFAULT_GOAL := all
+
+.PHONY: help toolchain-install toolchain-sync toolchain-check deps deps-lock
+help:
+	@echo 'Setup: make toolchain-install toolchain-sync deps toolchain-check'
+	@echo 'Develop: make test-prepare test-unit test-int test-contract test-e2e build package'
+	@echo 'Verify: make test (complete gate); make test-release (package and AJ-16)'
+	@echo 'Upgrade: edit .bun-version/.node-version; make toolchain-install toolchain-sync'
+	@echo 'Dependencies: edit package.json; make deps-lock deps'
+
+toolchain-install:
+	/bin/sh scripts/toolchain.sh install
+
+toolchain-sync:
+	/bin/sh scripts/toolchain.sh sync
+
+toolchain-check:
+	/bin/sh scripts/toolchain.sh check
+
+deps:
+	$(BUN) install --frozen-lockfile
+
+deps-lock:
+	$(BUN) install --lockfile-only
 
 .PHONY: all test-prepare test-unit test-int test-contract test-e2e test-release test build package
 
@@ -6,10 +30,10 @@ all: test
 
 # Installs from the lockfile and verifies the pinned toolchain before any test runs.
 test-prepare:
+	$(MAKE) deps
 	$(BUN) run check:toolchain
 	$(BUN) run check:version
-	$(BUN) install --frozen-lockfile
-	$(BUN) run check:format
+	$(BUN) run format
 	$(BUN) run check:lint
 	$(BUN) run check:typecheck
 	$(BUN) run check:import-boundaries

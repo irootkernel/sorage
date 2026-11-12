@@ -128,7 +128,7 @@ describe("the shared content store application boundary", () => {
     const child = spawnSync("bun", ["-e", script], { encoding: "utf8", timeout: 10_000 });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({ nativeBun: "1.4.2", verified: 8 });
+    expect(JSON.parse(child.stdout)).toEqual({ nativeBun: readFileSync(".bun-version", "utf8").trim(), verified: 8 });
   });
 
   it("routes small text inline and larger text into the Vault without caller choice", () => {

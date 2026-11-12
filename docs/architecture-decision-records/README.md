@@ -436,6 +436,8 @@ A binding of kind `git_repository` stores the git common directory, resolved wit
 
 ## ADR-0016: Bun toolchain with `bun:sqlite` and Homebrew distribution
 
+- **Amended:** 2026-11-12 — Master approved project-local runtime management: `.bun-version` owns Bun, `.node-version` owns development Node, and the exact TypeScript devDependency owns the compiler. A common launcher selects verified managed executables, including child processes; missing versions fail without system fallback. Metadata mirrors are synchronized explicitly. Vitest and TypeScript retain their observed Node execution, while the product and build scripts retain Bun. Alternatives: system PATH plus a prepare-only check leaves standalone and child execution unpinned; forcing all tools onto Bun adds an unrelated runtime migration; a global manager adds a prerequisite to this standalone repository. Product interfaces and stored data have no migration impact. Existing completed Tasks and historical qualification records remain unchanged; this directly approved maintenance has no active Task relationship. See the [toolchain guide](../implementation-tips/toolchains.md).
+
 - **Status:** Accepted (distribution decision partially superseded by ADR-0023)
 - **Date:** 2026-08-22
 - **Amended:** 2026-09-01 — the pinned Bun version moved from `1.3.14` to `1.4.0` after the M3 MVP gate passed; the pin mechanics, storage, test runner, and distribution decisions below are unchanged, and the full verification gate including the reproducible-build check of `make package` was re-run green under the new pin.

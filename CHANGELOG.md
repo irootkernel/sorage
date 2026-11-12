@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.5 - Unreleased
 
+### Changed
+
+- Pin source-development toolchains and run automatic formatting before the complete test gate; add explicit runtime installation, version synchronization, and dependency-lock commands.
+
 ## v0.1.4 - 2026-11-08
 
 ### Fixed

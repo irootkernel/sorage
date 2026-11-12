@@ -35,9 +35,9 @@ TypeScript types do not replace runtime validation.
 
 The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 
-- Bun `1.4.2`, pinned in `.bun-version` at the repository root and mirrored in the `engines` field of `package.json`; `make test-prepare` asserts both and fails the build on a mismatch (NFR-017). The shipped product version has one runtime source in `packages/core/src/version.ts`; the same preparation gate rejects a workspace manifest or internal dependency declaration that drifts from it, and CLI, daemon, and packaging code consume that source directly (NFR-003, NFR-012).
+- Exact Bun, development Node and TypeScript versions follow the [project toolchain guide](toolchains.md). Every supported command selects its managed runtime; metadata mirrors are synchronized explicitly, and missing or mismatched runtimes fail without system fallback (NFR-017). The shipped product version has one runtime source in `packages/core/src/version.ts`; preparation rejects workspace manifest or internal dependency drift, and CLI, daemon and packaging code consume that source directly (NFR-003, NFR-012).
 - `bun:sqlite` as the only SQLite driver; keep actual transaction callbacks synchronous, with strict typed results, behavior tests and review as described in section 5.
-- Vitest executed through Bun for unit, integration, and contract tests; Playwright for Web end-to-end from milestone M2.
+- Vitest launched by the project runner under managed Node for unit, integration and contract tests; native Bun and compiled regressions retain production-engine coverage. Playwright drives Web end-to-end from milestone M2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.
 - The `yaml` package used through its Document API rather than `parse`/`stringify`, because only the document tree preserves existing comments and key order across a write (CFG-018).
 - The Web control plane ships as a no-build static SPA served by the daemon under `apps/daemon/src/web-app.ts`: one HTML document, one external script, and one external stylesheet, all CSP-safe by construction. A Vite and Preact build remains a candidate if the SPA outgrows this shape; the required behavior (WEB-001 to WEB-019) is framework-independent.

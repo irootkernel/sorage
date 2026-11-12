@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -23,7 +22,12 @@ describe("package failure cleanup", () => {
       for (const directory of ["scripts", "packages/core/src", "dist", "bin", "scratch"]) {
         mkdirSync(join(root, directory), { recursive: true });
       }
-      copyFileSync(new URL("../../scripts/package.ts", import.meta.url), join(root, "scripts/package.ts"));
+      const pipeline = readFileSync(new URL("../../scripts/package.ts", import.meta.url), "utf8")
+        .replace('import { assertManagedBun } from "./toolchain-runtime";\n', "")
+        .replace("assertManagedBun();", "")
+        .replace("execFileSync(process.execPath,", 'execFileSync("bun",');
+      // Isolate compiler/signer faults; runtime admission is tested separately.
+      writeFileSync(join(root, "scripts/package.ts"), pipeline);
       writeFileSync(join(root, "packages/core/src/version.ts"), 'export const SORAGE_VERSION = "0.1.2";\n');
       const bun = spawnSync("bun", ["-p", "process.execPath"], { encoding: "utf8" });
       expect(bun.status, bun.stderr).toBe(0);

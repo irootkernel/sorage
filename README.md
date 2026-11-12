@@ -54,7 +54,7 @@ Sorage preserves accepted document bytes and tracks their custody and review. In
 
 - Apple Silicon Mac
 - Git
-- [Bun 1.4.2](https://bun.sh/) only when building from source
+- The project-pinned Bun and Node toolchains only when building or testing from source; see the [toolchain guide](docs/implementation-tips/toolchains.md)
 
 ## Install v0.1.4
 
@@ -99,6 +99,9 @@ The corrected v0.1.2 distribution replaces the withdrawn original dated 2026-09-
 ```sh
 git clone https://github.com/irootkernel/sorage.git
 cd sorage
+make toolchain-install
+make toolchain-sync
+make deps
 make package
 mkdir -p "$HOME/.local/bin"
 install -m 0755 dist/sorage "$HOME/.local/bin/sorage"

@@ -1,3 +1,4 @@
+import { assertManagedBun } from "./toolchain-runtime";
 /**
  * The release-candidate packaging pipeline (GEN-002, CLI-015, NFR-012,
  * NFR-013, NFR-017): compile twice, reject irreproducible unsigned output,
@@ -21,6 +22,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SORAGE_VERSION } from "../packages/core/src/version";
+
+assertManagedBun();
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
@@ -46,7 +49,7 @@ function sh(command: string, args: string[]): string {
 function compile(outfile: string): void {
   rmSync(outfile, { force: true });
   try {
-    execFileSync("bun", ["build", "--compile", "apps/cli/src/main.ts", "--outfile", outfile], {
+    execFileSync(process.execPath, ["build", "--compile", "apps/cli/src/main.ts", "--outfile", outfile], {
       cwd: root,
       stdio: "inherit",
     });

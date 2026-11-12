@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const PINNED_BUN = "1.4.2";
+const PINNED_BUN = readFileSync(".bun-version", "utf8").trim();
 
 describe("toolchain pin", () => {
   it("records the pinned Bun version in .bun-version and package.json engines", () => {
@@ -28,7 +28,7 @@ describe("toolchain pin", () => {
   });
 
   it("pins the version the toolchain check enforces at prepare time", () => {
-    const check = readFileSync("scripts/check-toolchain.ts", "utf8");
-    expect(check).toContain(`"${PINNED_BUN}"`);
+    const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+    expect(pkg.packageManager).toBe(`bun@${PINNED_BUN}`);
   });
 });

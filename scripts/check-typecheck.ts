@@ -1,5 +1,10 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { assertManagedBun, managedCompiler, managedNode } from "./toolchain-runtime";
+
+assertManagedBun();
+const node = managedNode();
+const tsc = managedCompiler();
 
 const root = process.argv[2] ?? ".";
 const groups = ["packages", "apps"];
@@ -12,7 +17,7 @@ for (const group of groups) {
     const project = join(group, entry);
     if (!existsSync(join(root, project, "tsconfig.json"))) continue;
     const result = Bun.spawnSync({
-      cmd: ["bunx", "tsc", "-p", join(project, "tsconfig.json")],
+      cmd: [node, tsc, "-p", join(project, "tsconfig.json")],
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",
@@ -26,7 +31,7 @@ for (const group of groups) {
 
 if (existsSync(join(root, "tsconfig.json"))) {
   const result = Bun.spawnSync({
-    cmd: ["bunx", "tsc", "-p", "tsconfig.json"],
+    cmd: [node, tsc, "-p", "tsconfig.json"],
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",

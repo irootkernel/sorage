@@ -17,6 +17,8 @@
 .gaori/tester/rules/*
 !.gaori/tester/rules/*.yaml
 
+/.toolchains/
+
 dist/
 node_modules/
 
