@@ -160,18 +160,421 @@ describe("sot-check", () => {
     expect(result.status).toBe(0);
   });
 
-  it("rejects an unadopted milestone beyond M9", () => {
+  it("rejects an M9 requirement covered only by M10 Tasks", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M9 |"));
+        }
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(roadmap, readTheFile(roadmap).replaceAll("| M1 |", "| M10 |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement GEN-001 (milestone M9) is cited only by later-milestone Tasks");
+    expect(result.stderr).not.toContain("invalid milestone");
+  });
+
+  it("accepts M10 requirements, Tasks, and their matching reverse index", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of ["specs/required-specification.md", "roadmap/README.md", "specs/traceability.md"]) {
+          const path = join(root, "docs", relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M10 |"));
+        }
+      }),
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it("fails when an M10 requirement has no citing Task", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(
+          spec,
+          readTheFile(spec).replace(
+            "| INIT-001 | M1 | Home directory is fixed. |\n",
+            "| INIT-001 | M1 | Home directory is fixed. |\n| EXC-001 | M10 | Exchange membership is explicit. |\n",
+          ),
+        );
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace(
+            "| `INIT-001` | M1 | `TASK-001` |\n",
+            "| `INIT-001` | M1 | `TASK-001` |\n| `EXC-001` | M10 | None |\n",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requirement EXC-001 (milestone M10) has no citing Task");
+  });
+
+  it("rejects an unadopted milestone beyond M10", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "roadmap", "README.md");
         writeFileSync(
           path,
-          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M10 |"),
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M11 |"),
         );
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "M10"');
+    expect(result.stderr).toContain('invalid milestone "M11"');
+  });
+
+  it.each([
+    ["an unadopted milestone", "M11"],
+    ["a misspelled milestone", "m10"],
+    ["an empty milestone", ""],
+  ])("reports a requirement row with %s instead of skipping it", (_label, milestone) => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(
+          spec,
+          readTheFile(spec).replace(
+            "| GEN-002 | M1 | Another rule holds. |",
+            `| GEN-002 | ${milestone} | Another rule holds. |`,
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/required-specification.md:6");
+    expect(result.stderr).toContain(
+      `requirement GEN-002 has unsupported milestone ${JSON.stringify(milestone)}; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, or Deferred`,
+    );
+    expect(result.stderr.split("requirement GEN-002 has unsupported milestone")).toHaveLength(2);
+    // TASK-001 cites GEN-002 and the reverse index lists it, so a discarded row would surface here.
+    expect(result.stderr).not.toContain("unknown requirement");
+    expect(result.stderr).not.toContain("missing its row");
+    expect(result.stderr).not.toContain("absent from the specification");
+  });
+
+  it("reports a requirement row that lacks its text and keeps the requirement known", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(spec, readTheFile(spec).replace("| GEN-002 | M1 | Another rule holds. |", "| GEN-002 | M1 |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/required-specification.md:6");
+    expect(result.stderr.split("malformed requirement row for GEN-002")).toHaveLength(2);
+    expect(result.stderr).not.toContain("unknown requirement");
+    expect(result.stderr).not.toContain("absent from the specification");
+  });
+
+  it("reports a requirement row whose identifier is code-formatted", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(spec, readTheFile(spec).replace("| GEN-002 | M1 |", "| `GEN-002` | M1 |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("malformed requirement row for GEN-002");
+  });
+
+  it("reports a second definition of a requirement", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(
+          spec,
+          readTheFile(spec).replace(
+            "| INIT-001 | M1 | Home directory is fixed. |\n",
+            "| INIT-001 | M1 | Home directory is fixed. |\n| GEN-002 | M1 | A conflicting rule holds. |\n",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/required-specification.md:8");
+    expect(result.stderr).toContain("duplicate requirement identifier GEN-002");
+  });
+
+  it("accepts an escaped pipe inside requirement text and Task prose", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(spec, readTheFile(spec).replace("Another rule holds.", "The role is worker\\|judge."));
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(roadmap, readTheFile(roadmap).replace("| Gate two. |", "| Gate two accepts a\\|b. |"));
+      }),
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it("ends a cell at a pipe that follows an even run of backslashes", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const roadmap = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(
+          roadmap,
+          readTheFile(roadmap).replace("line of prose. | Gate two. |", "line of prose.\\\\| Gate two. |"),
+        );
+      }),
+    );
+    // Two literal backslashes do not escape the delimiter, so TASK-002 keeps its eight cells.
+    expect(result.status).toBe(0);
+  });
+
+  it("reports a requirement row whose text continues in a fourth cell", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(
+          spec,
+          readTheFile(spec).replace(
+            "| GEN-002 | M1 | Another rule holds. |",
+            "| GEN-002 | M1 | Keep A | MUST also keep B. |",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/required-specification.md:6");
+    expect(result.stderr).toContain("malformed requirement row for GEN-002");
+  });
+
+  it("reports a requirement row whose rendered text cell is empty", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const spec = join(root, "docs", "specs", "required-specification.md");
+        writeFileSync(
+          spec,
+          readTheFile(spec).replace(
+            "| GEN-002 | M1 | Another rule holds. |",
+            "| GEN-002 | M1 | | Another rule holds. |",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/required-specification.md:6");
+    expect(result.stderr).toContain("malformed requirement row for GEN-002");
+  });
+
+  it("reports a reverse-index row whose identifier is padded inside its code span", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| ` GEN-002 ` | M11 | `TASK-001` |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/traceability.md:8");
+    expect(result.stderr).toContain("malformed reverse-index row for GEN-002");
+  });
+
+  it("reports a Task row with a status outside the canonical set", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(path, readTheFile(path).replace("| `TASK-002` | Planned |", "| `TASK-002` | Planed |"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/roadmap/README.md:12");
+    expect(result.stderr).toContain(
+      'Task TASK-002 has invalid status "Planed"; expected Planned, In Progress, In Review, Completed, Blocked, or Deferred',
+    );
+  });
+
+  it("reports a requirement range that spans two namespaces", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(
+          path,
+          readTheFile(path).replace("GEN-001, GEN-002 to GEN-002, INIT-001", "GEN-002, GEN-001 to INIT-001"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/roadmap/README.md:11");
+    expect(result.stderr).toContain('Task TASK-001 cites the invalid requirement range "GEN-001 to INIT-001"');
+  });
+
+  it("expands a range to the requirements between its endpoints", () => {
+    const withRange = (citation: string) =>
+      runCheck(
+        docFixture((root) => {
+          const spec = join(root, "docs", "specs", "required-specification.md");
+          writeFileSync(
+            spec,
+            readTheFile(spec).replace(
+              "| GEN-002 | M1 | Another rule holds. |\n",
+              "| GEN-002 | M1 | Another rule holds. |\n| GEN-003 | M1 | A third rule holds. |\n",
+            ),
+          );
+          const roadmap = join(root, "docs", "roadmap", "README.md");
+          writeFileSync(roadmap, readTheFile(roadmap).replace("GEN-001, GEN-002 to GEN-002, INIT-001", citation));
+          const traceability = join(root, "docs", "specs", "traceability.md");
+          writeFileSync(
+            traceability,
+            readTheFile(traceability).replace(
+              "| `GEN-002` | M1 | `TASK-001` |\n",
+              "| `GEN-002` | M1 | `TASK-001` |\n| `GEN-003` | M1 | `TASK-001` |\n",
+            ),
+          );
+        }),
+      );
+    // GEN-002 is cited only through the range, and the reverse index lists TASK-001 for it.
+    expect(withRange("GEN-001 to GEN-003, INIT-001").status).toBe(0);
+    const endpointsOnly = withRange("GEN-001, GEN-003, INIT-001");
+    expect(endpointsOnly.status).toBe(1);
+    expect(endpointsOnly.stderr).toContain("reverse-index citing tasks for GEN-002 disagree");
+  });
+
+  it("reports a reverse-index row with an unsupported milestone instead of skipping it", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| `GEN-002` | M11 | `TASK-001` |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/traceability.md:8");
+    expect(result.stderr).toContain(
+      'reverse-index row GEN-002 has unsupported milestone "M11"; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, or Deferred',
+    );
+    expect(result.stderr).not.toContain("missing its row for GEN-002");
+  });
+
+  it("reports a reverse-index row that lacks its citing-task cell", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| `GEN-002` | M1 |"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/traceability.md:8");
+    expect(result.stderr).toContain("malformed reverse-index row for GEN-002");
+  });
+
+  it("reports a padded second reverse-index row instead of skipping it", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace(
+            "| `GEN-002` | M1 | `TASK-001` |\n",
+            "| `GEN-002` | M1 | `TASK-001` |\n|  `GEN-002`  | M11 | `TASK-001` |\n",
+          ),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/traceability.md:9");
+    expect(result.stderr).toContain('reverse-index row GEN-002 has unsupported milestone "M11"');
+    expect(result.stderr).toContain("duplicate reverse-index row GEN-002");
+  });
+
+  it.each([
+    ["an unformatted Task identifier", "TASK-001"],
+    ["text that names no Task", "nonsense"],
+    ["text around a Task identifier", "see `TASK-001`"],
+  ])("reports a reverse-index citing cell with %s", (_label, citing) => {
+    const result = runCheck(
+      docFixture((root) => {
+        const traceability = join(root, "docs", "specs", "traceability.md");
+        writeFileSync(
+          traceability,
+          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", `| \`GEN-002\` | M1 | ${citing} |`),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/traceability.md:8");
+    expect(result.stderr).toContain("malformed reverse-index row for GEN-002");
+  });
+
+  it("accepts a Deferred requirement only with an exact None citing cell", () => {
+    const withDeferred = (citing: string) =>
+      runCheck(
+        docFixture((root) => {
+          const spec = join(root, "docs", "specs", "required-specification.md");
+          writeFileSync(
+            spec,
+            readTheFile(spec).replace(
+              "| INIT-001 | M1 | Home directory is fixed. |\n",
+              "| INIT-001 | M1 | Home directory is fixed. |\n| FUT-001 | Deferred | A later rule holds. |\n",
+            ),
+          );
+          const traceability = join(root, "docs", "specs", "traceability.md");
+          writeFileSync(
+            traceability,
+            readTheFile(traceability).replace(
+              "| `INIT-001` | M1 | `TASK-001` |\n",
+              `| \`INIT-001\` | M1 | \`TASK-001\` |\n| \`FUT-001\` | Deferred | ${citing} |\n`,
+            ),
+          );
+        }),
+      );
+    expect(withDeferred("None").status).toBe(0);
+    const result = withDeferred("nonsense");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/specs/traceability.md:10");
+    expect(result.stderr).toContain("malformed reverse-index row for FUT-001");
+  });
+
+  it("reports a Task row that lost a cell instead of skipping it", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(
+          path,
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 | Second", "| `TASK-002` | Planned M1 | Second"),
+        );
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/roadmap/README.md:12");
+    expect(result.stderr.split("malformed Task row for TASK-002")).toHaveLength(2);
+  });
+
+  it("keeps a last Task row whose cell delimiters lost their spacing", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(path, readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned |M11|"));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Task TASK-002 has invalid milestone "M11"');
+  });
+
+  it.each([
+    ["Dependencies", "| Gate two. | `TASK-001` | GEN-001 |", "| Gate two. | nonsense | GEN-001 |"],
+    ["Requirements", "| Gate two. | `TASK-001` | GEN-001 |", "| Gate two. | `TASK-001` | nonsense |"],
+  ])("reports a Task row with a malformed %s cell instead of reading it as None", (column, from, to) => {
+    const result = runCheck(
+      docFixture((root) => {
+        const path = join(root, "docs", "roadmap", "README.md");
+        writeFileSync(path, readTheFile(path).replace(from, to));
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("docs/roadmap/README.md:12");
+    expect(result.stderr).toContain(`Task TASK-002 has a malformed ${column} cell`);
   });
 
   it("fails when an M8 requirement has no citing Task", () => {
@@ -340,7 +743,7 @@ describe("sot-check", () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, M8, or M9');
+    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, or M10');
   });
 
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {

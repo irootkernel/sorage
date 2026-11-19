@@ -1,7 +1,9 @@
 // scripts/sot-check enforces the Source of Truth documentation rules of this
 // repository: no hard-wrapped prose, a resolvable target for every relative link,
 // unique Epic and Task identifiers, no forward or self dependency, no citation of a
-// requirement identifier absent from required-specification.md, no requirement
+// requirement identifier absent from required-specification.md, no malformed or
+// duplicate Task, requirement or reverse-index row, no such row with an unsupported
+// milestone value, no requirement
 // whose every citing Task belongs to a later milestone than the requirement itself,
 // no requirement that is not Deferred with no citing Task, and a reverse index in
 // traceability.md that matches the roadmap's Requirements column.
@@ -88,8 +90,61 @@ const MILESTONE_ORDER = new Map([
   ["M7", 7],
   ["M8", 8],
   ["M9", 9],
+  ["M10", 10],
 ]);
-const MILESTONE_ALT = "M[1-9]|Deferred";
+const TASK_MILESTONES = [...MILESTONE_ORDER.keys()];
+const REQUIREMENT_MILESTONES = [...TASK_MILESTONES, "Deferred"];
+
+function expectedValues(values: string[]): string {
+  return `${values.slice(0, -1).join(", ")}, or ${values.at(-1)}`;
+}
+
+/**
+ * Splits a table line into its trimmed cells. A Task, requirement or reverse-index
+ * row is recognized by the identifier in its first cell alone; its shape, spelling
+ * and remaining cells are validated afterwards, so a malformed row is reported
+ * instead of disappearing from every later check.
+ */
+function tableRow(line: string): { cells: string[]; closed: boolean } | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|")) return undefined;
+  // As Markdown renders it, a pipe after an odd run of backslashes is cell content
+  // and a pipe after an even run, including none, ends the cell.
+  const parts: string[] = [];
+  let current = "";
+  let backslashes = 0;
+  for (const char of trimmed) {
+    if (char === "|" && backslashes % 2 === 0) {
+      parts.push(current);
+      current = "";
+    } else current += char;
+    backslashes = char === "\\" ? backslashes + 1 : 0;
+  }
+  const closed = parts.length >= 2 && current === "";
+  if (!closed) parts.push(current);
+  return { cells: parts.slice(1).map((cell) => cell.trim()), closed };
+}
+
+/** Returns the identifier a first cell names, whatever its code formatting or padding. */
+function rowIdentifier(cell: string | undefined, pattern: string): string | undefined {
+  return (cell ?? "").match(new RegExp(`^\`?\\s*(${pattern})\\s*\`?$`))?.[1];
+}
+
+const TASK_STATUSES = ["Planned", "In Progress", "In Review", "Completed", "Blocked", "Deferred"];
+
+const REQUIREMENT_ID = "[A-Z]{3,6}-\\d{3}";
+const REQUIREMENT_ITEM = `${REQUIREMENT_ID}(?: to ${REQUIREMENT_ID})?`;
+const REQUIREMENT_LIST = new RegExp(`^${REQUIREMENT_ITEM}(?:, ${REQUIREMENT_ITEM})*$`);
+const DEPENDENCY_LIST = /^`(?:EPIC|TASK)-\d{3}`(?:, `(?:EPIC|TASK)-\d{3}`)*$/;
+const CITING_TASK_LIST = /^`TASK-\d{3}`(?:, `TASK-\d{3}`)*$/;
+
+function checkRequirementMilestone(location: string, subject: string, milestone: string): void {
+  if (REQUIREMENT_MILESTONES.includes(milestone)) return;
+  fail(
+    location,
+    `${subject} has unsupported milestone ${JSON.stringify(milestone)}; expected ${expectedValues(REQUIREMENT_MILESTONES)}`,
+  );
+}
 
 /** Expands range notation like `CFG-001 to CFG-009` into the full inclusive id set. */
 function expandRanges(cell: string): string[] {
@@ -114,11 +169,28 @@ function expandRanges(cell: string): string[] {
   return [...ids];
 }
 
-function parseRoadmap(): {
+interface Roadmap {
   epics: Map<string, number>;
   tasks: Map<string, TaskRow>;
   taskLines: Array<[string, number]>;
-} {
+}
+
+let parsedRoadmap: Roadmap | undefined;
+
+/** Names each range whose endpoints cannot bound one requirement series. */
+function invalidRanges(cell: string): string[] {
+  const invalid: string[] = [];
+  for (const match of cell.matchAll(/([A-Z]{3,6}-)(\d{3}) to ([A-Z]{3,6}-)(\d{3})/g)) {
+    const span = Number(match[4]) - Number(match[2]);
+    if (match[1] !== match[3] || span < 0 || span > 200) invalid.push(match[0]);
+  }
+  return invalid;
+}
+
+function parseRoadmap(): Roadmap {
+  // Identifier and traceability checks both need the rows; parse once so a row's
+  // violation is reported once.
+  if (parsedRoadmap !== undefined) return parsedRoadmap;
   const roadmapPath = join(root, "docs", "roadmap", "README.md");
   const lines = readFileSync(roadmapPath, "utf8").split("\n");
   const epics = new Map<string, number>();
@@ -126,49 +198,92 @@ function parseRoadmap(): {
   const taskLines: Array<[string, number]> = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
-    let match = line.match(/^\| `(EPIC-\d{3})` \|/);
+    const match = line.match(/^\| `(EPIC-\d{3})` \|/);
     if (match !== null) {
       const id = match[1] as string;
       if (epics.has(id)) fail(`${roadmapPath}:${index + 1}`, `duplicate Epic identifier ${id}`);
       epics.set(id, index + 1);
       continue;
     }
-    match = line.match(/^\| `(TASK-\d{3})` \| ([^|]+) \| ([^|]+) \|/);
-    if (match !== null) {
-      const id = match[1] as string;
-      if (tasks.has(id)) {
-        // Keep the first occurrence so its dependency and citation diagnostics survive.
-        fail(`${roadmapPath}:${index + 1}`, `duplicate Task identifier ${id}`);
-      }
-      const milestone = (match[3] ?? "").trim();
-      const cells = line.split("|").map((cell) => cell.trim());
-      // Roadmap task rows: | ID | Status | Milestone | Deliverable | Gate | Dependencies | Requirements | Design Gate |
-      const dependencyCell = cells[6] ?? "";
-      const requirementCell = cells[7] ?? "";
-      if (!tasks.has(id))
-        tasks.set(id, {
-          id,
-          milestone,
-          dependencies:
-            dependencyCell === "None" || dependencyCell === ""
-              ? []
-              : (dependencyCell.match(/(EPIC|TASK)-\d{3}/g) ?? []),
-          requirements: requirementCell === "None" || requirementCell === "" ? [] : expandRanges(requirementCell),
-          line: index + 1,
-        });
-      taskLines.push([id, index + 1]);
+    const row = tableRow(line);
+    const id = rowIdentifier(row?.cells[0], "TASK-\\d{3}");
+    if (row === undefined || id === undefined) continue;
+    const location = `${roadmapPath}:${index + 1}`;
+    // Roadmap task rows: | ID | Status | Milestone | Deliverable | Gate | Dependencies | Requirements | Design Gate |
+    const [idCell, status = "", milestone = "", , , dependencyCell = "", requirementCell = ""] = row.cells;
+    if (!row.closed || row.cells.length !== 8 || row.cells.includes("") || idCell !== `\`${id}\``) {
+      fail(location, `malformed Task row for ${id}: expected eight non-empty cells starting with \`${id}\``);
+      continue;
     }
+    if (!TASK_STATUSES.includes(status)) {
+      fail(
+        location,
+        `Task ${id} has invalid status ${JSON.stringify(status)}; expected ${expectedValues(TASK_STATUSES)}`,
+      );
+    }
+    if (dependencyCell !== "None" && !DEPENDENCY_LIST.test(dependencyCell)) {
+      fail(
+        location,
+        `Task ${id} has a malformed Dependencies cell; expected None or code-formatted Epic and Task identifiers`,
+      );
+    }
+    if (requirementCell !== "None" && !REQUIREMENT_LIST.test(requirementCell)) {
+      fail(
+        location,
+        `Task ${id} has a malformed Requirements cell; expected None or requirement identifiers and ranges`,
+      );
+    }
+    for (const range of invalidRanges(requirementCell)) {
+      fail(location, `Task ${id} cites the invalid requirement range ${JSON.stringify(range)}`);
+    }
+    if (tasks.has(id)) {
+      // Keep the first occurrence so its dependency and citation diagnostics survive.
+      fail(location, `duplicate Task identifier ${id}`);
+    } else {
+      tasks.set(id, {
+        id,
+        milestone,
+        dependencies: dependencyCell.match(/(EPIC|TASK)-\d{3}/g) ?? [],
+        requirements: expandRanges(requirementCell),
+        line: index + 1,
+      });
+    }
+    taskLines.push([id, index + 1]);
   }
-  return { epics, tasks, taskLines };
+  parsedRoadmap = { epics, tasks, taskLines };
+  return parsedRoadmap;
 }
+
+let parsedRequirements: Map<string, string> | undefined;
 
 function parseRequirements(): Map<string, string> {
   const specPath = join(root, "docs", "specs", "required-specification.md");
+  // Both identifier and traceability checks need the rows; parse once so a row's
+  // milestone violation is reported once.
+  if (parsedRequirements !== undefined) return parsedRequirements;
   const requirements = new Map<string, string>();
-  for (const match of readFileSync(specPath, "utf8").matchAll(
-    new RegExp(`^\\| ([A-Z]{3,6}-\\d{3}) \\| (${MILESTONE_ALT}) \\|`, "gm"),
-  )) {
-    requirements.set(match[1] as string, match[2] as string);
+  parsedRequirements = requirements;
+  const lines = readFileSync(specPath, "utf8").split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const row = tableRow(lines[index] ?? "");
+    const id = rowIdentifier(row?.cells[0], REQUIREMENT_ID);
+    if (row === undefined || id === undefined) continue;
+    const location = `${specPath}:${index + 1}`;
+    // A requirement row is exactly: | ID | Milestone | Requirement |. A fourth cell
+    // means an unescaped pipe cut the rendered requirement short.
+    const [idCell, milestone, text = ""] = row.cells;
+    if (!row.closed || idCell !== id || text === "" || row.cells.length !== 3) {
+      fail(location, `malformed requirement row for ${id}: expected ${id}, a milestone, and the requirement text`);
+    }
+    // A row that still names its milestone stays known, so its one defect is the only diagnostic.
+    if (milestone === undefined) continue;
+    checkRequirementMilestone(location, `requirement ${id}`, milestone);
+    if (requirements.has(id)) {
+      // Keep the first definition so its citation and reverse-index diagnostics survive.
+      fail(location, `duplicate requirement identifier ${id}`);
+      continue;
+    }
+    requirements.set(id, milestone);
   }
   return requirements;
 }
@@ -181,7 +296,7 @@ function checkIdentifiers(): void {
     if (!MILESTONE_ORDER.has(task.milestone)) {
       fail(
         `docs/roadmap/README.md:${task.line}`,
-        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected M1, M2, M3, M4, M5, M6, M7, M8, or M9`,
+        `Task ${task.id} has invalid milestone ${JSON.stringify(task.milestone)}; expected ${expectedValues(TASK_MILESTONES)}`,
       );
     }
     for (const dependency of task.dependencies) {
@@ -266,16 +381,26 @@ function checkTraceability(): void {
     const line = lines[index] ?? "";
     if (line.startsWith("## ")) inReverseIndex = line.startsWith("## 3.");
     if (!inReverseIndex) continue;
-    const match = line.match(new RegExp(`^\\| \`([A-Z]{3,6}-\\d{3})\` \\| (${MILESTONE_ALT}) \\| (.+) \\|$`));
-    if (match === null) continue;
-    const id = match[1] as string;
-    if (rows.has(id)) fail(`${traceabilityPath}:${index + 1}`, `duplicate reverse-index row ${id}`);
-    const citing = match[3] ?? "";
-    rows.set(id, {
-      milestone: match[2] as string,
-      tasks: citing === "None" ? [] : (citing.match(/TASK-\d{3}/g) ?? []),
-      line: index + 1,
-    });
+    const row = tableRow(line);
+    const id = rowIdentifier(row?.cells[0], REQUIREMENT_ID);
+    if (row === undefined || id === undefined) continue;
+    const location = `${traceabilityPath}:${index + 1}`;
+    // A reverse-index row is exactly: | `ID` | Milestone | Citing tasks |
+    const [idCell, milestone = "", citing = ""] = row.cells;
+    const citingIsExact = citing === "None" || CITING_TASK_LIST.test(citing);
+    if (!row.closed || row.cells.length !== 3 || idCell !== `\`${id}\`` || !citingIsExact) {
+      fail(
+        location,
+        `malformed reverse-index row for ${id}: expected \`${id}\`, a milestone, and None or code-formatted Task identifiers`,
+      );
+      continue;
+    }
+    checkRequirementMilestone(location, `reverse-index row ${id}`, milestone);
+    if (rows.has(id)) {
+      fail(location, `duplicate reverse-index row ${id}`);
+      continue;
+    }
+    rows.set(id, { milestone, tasks: citing.match(/TASK-\d{3}/g) ?? [], line: index + 1 });
   }
 
   for (const [id, milestone] of requirements) {

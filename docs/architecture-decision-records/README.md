@@ -1554,3 +1554,66 @@ Registration adds EPIC-020 and TASK-135 through TASK-138, the temporary dossier 
 ### Consequences
 
 The repository can reduce repeated setup, review scope and unused structure while retaining the final safety and release guarantees. Independent reviewers assess the actual affected boundary rather than a mandatory whole-system checklist for every edit. Performance improvement remains unquantified until measured. Version edits, installation, consumer activation, commits and publication keep their separate authorization.
+
+## ADR-0037: Exchange as a separate peer-collaboration domain in M10
+
+- **Status:** Proposed
+- **Date:** 2026-11-19
+- **Design owner:** TASK-139 under [EPIC-021](../roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects).
+- **Execution detail:** [Exchange dossier](../todo/exchange-dossier.md).
+
+### Problem
+
+Registered Projects that verify one shared change together, such as a server, several clients and another Project, need directed requests, results and evidence under one identity that survives agent sessions, model changes, upgrades and restarts. Handoff owns document delivery and review between one sender and one recipient. Channel owns upstream reports and relay requests through one `main` participant, enforced by its schema and snapshot validators. Project Memo is a single-Project reminder. None of them has peer membership, requester acceptance of a specific report version, unanimous completion, pause and resumption, or retention that retires working evidence after completion.
+
+Master approved the Exchange requirements and requested registration on 2026-11-19, with qualification, adoption and implementation in later Tasks. The non-normative product charter says Sorage is not a chat or discussion service and not a multi-agent orchestrator. Exchange records collaboration and enforces only its own transitions, while agents and their existing tools own external execution, cancellation and side-effect reconciliation; TASK-139 must state that boundary where it adopts the design.
+
+### Proposed decision
+
+1. Add Exchange as a fourth domain beside Handoff, Project Memo and Channel, with its own membership, per-Exchange message sequence, request, report and acceptance records, completion proposals and votes, pause state and retention rules. Reuse Project resolution, body handling, transactions, zero-write storage admission, polling and deadline primitives and the MCP adapter only where their contracts fit.
+2. Deliver the first version through the CLI and MCP on one Installation. Read-only and Plan-mode agents participate through MCP: broker writes and session support run on the MCP side, and history, inspection, bounded retrieval and wait stay physically read-only.
+3. Record requester acceptance only by the accountable requester, against a named report version, after the relevant conditions were actually checked. Complete an Exchange only through unanimous votes of the current roster on one exact proposal bound to its roster, criteria, summary and substantive work revision, with every actionable request accepted or explicitly disposed.
+4. Pause on an explicit user stop without a vote, and resume through the single join entry point against the observed pause version.
+5. Keep usable large-material paths: bounded lossless retrieval of bodies, managed working copies and original references. Keep disposable working bytes in Installation state and state-directory files outside the Vault worktree and out of snapshot bodies, event payloads and operation receipts. Retain compact workflow records, bounded workflow text and concise summaries, and commit final agreement together with a durable cleanup intent.
+6. Maintain one renewable lease per Exchange and Project with an opaque claim as its fencing token. The MCP server owns keeper scheduling and process lifetime only; accepted tool calls, renewal and release run through the common CLI operations, and the MCP server acquires no domain or storage implementation.
+7. Give each durable business mutation a caller-supplied operation ID with retained recovery records that are distinct from the operational idempotency receipts restore clears.
+8. Ship independently invocable `start-exchange` and `join-exchange` skills from one canonical loop-reference source, while `skills/use-sorage/SKILL.md` remains the shipped policy for the existing domains.
+9. Use milestone M10. This is a deliberate choice because Exchange introduces a new domain and substantial new public CLI, storage, backup and migration contracts; it is not derived from the release-freeze rule of governance section 12. Reserve the requirement namespace `EXC`. No `EXC` requirement exists until TASK-139 adopts it.
+
+The [Exchange dossier](../todo/exchange-dossier.md) holds the detailed requirements, authority table, retention classes and acceptance evidence. It cannot override current authority while this decision is Proposed.
+
+### Qualification before acceptance
+
+TASK-139 must record, from actual Plan-mode and read-only MCP communication in isolated homes, the keeper owner and CLI entry point, observable lifecycle signals, cancellation and shutdown behavior, supported harness modes, and the renewal cadence and lease duration selected from measured startup and renewal latency, log growth and lock contention. In a home without pending recovery intents, repeated renewal alone must leave retained events and canonical snapshot bytes unchanged. At least the intended primary read-only and Plan-mode path must actually pass; a path that needs caller-side writes or a shell keeper does not qualify, and a support disclaimer does not satisfy the requirement.
+
+Registration checks established only that the checker and the planning records behave as intended. They are not evidence of read-only or Plan-mode participation, keeper lifetime, renewal cost, or workflow correctness.
+
+### Alternatives considered
+
+- A Channel mode: rejected because the Channel schema and snapshot validators enforce one `main` participant and upstream reporting, so a peer mode would rewrite those accepted contracts instead of extending them.
+- A Handoff thread: rejected because Handoff is a document-review contract with one sender document and at most one recipient comment (ADR-0035); multi-party requests, votes and working evidence would redefine it.
+- A skill-only workflow without broker records: rejected because it has no durable acceptance or completion state, cannot fence a replaced agent, and does not survive session or model changes.
+- Grouping the work under M9: not selected. Exchange is a new domain with its own schema and backup generation, and a separate gate keeps its acceptance scoped.
+- Routing disposable file-backed bodies through Vault `content/`: rejected because backup stages the managed `content` pathspec, so working evidence would enter Git history even when snapshot JSON omits it.
+- Implementing keeper renewal or Exchange behavior inside the MCP server process: rejected because MCP-002 keeps the CLI as the single behavior source. Server ownership is limited to scheduling and process lifetime.
+- An independently versioned Exchange snapshot: rejected by SHR-010's single global snapshot format.
+- Reusing operational idempotency receipts for business-operation recovery: rejected because they expire and restore deliberately clears them.
+- Inferring acceptance or completion from silence, timeouts, disconnection or membership changes: rejected because neither proves that the relevant conditions were checked.
+
+### Compatibility impact
+
+The proposal is additive: a new CLI `exchange` command group, new MCP tools that expand the published catalogue and the MCP-001 domain scope, and two new skills. Existing Handoff, Project Memo and Channel behavior, their Vault storage and legacy backup import are preserved. Older executables are not required to read the new global backup format; they must refuse it before import with `VAULT_SCHEMA_UNSUPPORTED` and import nothing, as SHR-010 requires. TASK-139 classifies each public contract as breaking or non-breaking before implementation and classifies that backup-format transition separately from the additive commands.
+
+### Migration impact
+
+Implementation appends a schema migration and introduces the next global backup format. From the HPR-012 baseline of schema 12 and format 4, the expected targets are schema 13 and format 5; TASK-139 and the implementing Tasks reconfirm them, and they are not the final schema version of every later Exchange increment. Upgrade is one-way, with rollback through the matching prior executable and a verified pre-upgrade backup restored into a separate home. The refusal of the new format by an earlier build, and of a later incompatible representation under that format, is verified on its own; a legacy restore and a matched-binary rollback do not prove it. Restore leaves session leases and notice claims empty and restores no Project binding. Registration itself changes no schema, format or runtime data.
+
+### Required Source of Truth edits and roadmap impact
+
+Registration adds EPIC-021 with TASK-139 through TASK-146, the dossier and its index links, the [governance registration boundary](../governance/README.md#19-exchange-registration-boundary), a traceability registration note, and M10 recognition in the documentation checker together with explicit reporting of malformed or duplicate rows and unsupported milestone values, and the escaping of one pipe in the CHN-003 requirement row so that the stricter check passes and the row renders in full. It adds no requirement, release-gate row, acceptance journey, product code, shipped skill or version change, and starts no Task.
+
+TASK-139 must adopt the `EXC` requirements in a new required-specification section, add M10 to the specification's milestone list and summary, and settle the M10 gate, its acceptance journeys and the release boundary. It must review and record dated amendments to the affected accepted decisions and rows. These are ADR-0007, whose 2026-10-24 amendment lifts the MCP deferral only for the Handoff, Memo, Channel and Project-read domains, so TASK-139 extends that domain-specific lift to Exchange while preserving the CLI as the single behavior source, the CLI child-process adapter boundary, an application layer free of MCP types, and no second domain or storage implementation inside the MCP server; ADR-0034 for the MCP-001 domain scope and the public tool catalogue, which must explicitly expand to include Exchange, for the MCP-002 keeper-lifecycle clarification, and for MCP-004 and the MCP interface, which accept a file argument only inside the call workspace, so that the supplying Project registers a local source inside its own call workspace, retrieval names the registered material identifier, live and versioned local paths share one revalidation, a changed or lost source authorization has a defined outcome, and no tool takes a raw recipient path; ADR-0030 for the Exchange storage scope beside SHR-001, SHR-002 and SHR-003, where SHR-002 currently routes every larger accepted text body and all binary content of every domain to the Vault, so its scope is amended or the Exchange exception is stated in that row while the inline threshold, the mid-stream `artifact.maxBytes` bound and the binary classification are kept, with SHR-010's single-format invariant and fail-closed refusal retained; ADR-0018 and GEN-011 for the two additional skills; and ADR-0035's HPR-012 baseline for the next schema and format. Any further accepted decision the adoption review finds affected is amended in the same design candidate. TASK-139 records these classifications in the reviewed contract snapshot diff and migration record that [governance section 9.3](../governance/README.md#93-contract) requires. It then updates the interface, architecture, security-reliability, testing-and-acceptance and traceability owners and the root agent guidance, and populates every EPIC-021 Requirements cell and reverse-index row.
+
+### Consequences
+
+Projects gain a durable peer collaboration record with explicit acceptance and completion, and working evidence no longer accumulates in the Vault or its Git history. The cost is a new domain with its own storage scope, session leases and a global backup-format transition. An unfinished Exchange keeps its working material and can continue to occupy storage. Acceptance of this decision depends on the recorded qualification; version edits, installation, consumer activation, commits and publication keep their separate authorization.

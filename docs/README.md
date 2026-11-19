@@ -20,7 +20,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 | Implementation tips | [implementation-tips/README.md](implementation-tips/README.md) | Non-normative engineering and release guidance |
 | Operations | [ops/README.md](ops/README.md) | Local macOS installation, daemon, diagnosis, backup, recovery, and escalation |
 | Roadmap | [roadmap/README.md](roadmap/README.md) | Epic and Task identity, dependencies, ordering, status, and active pointers |
-| TODO | [todo/README.md](todo/README.md) | Future candidates and temporary active-Epic dossiers |
+| TODO | [todo/README.md](todo/README.md) | Future candidates and temporary dossiers for registered or adopted Epics |
 | Deferred feedback | [deferred-feedback/README.md](deferred-feedback/README.md) | Small actionable findings intentionally postponed |
 
 [governance/README.md](governance/README.md) defines SOT change control and Task completion. [product/README.md](product/README.md) provides non-normative product context. The changelog is a public release-notes document. It is not a Source of Truth role and does not record roadmap status.
@@ -33,7 +33,7 @@ The M7 [Project Memo contract](specs/project-memos.md) defines the independent r
 
 The [required specification](specs/required-specification.md#19-installation-preflight-milestone-m8) defines PFL-001 through PFL-008, SND-001 through SND-006 and GEN-016 through GEN-020. The [preflight contract](specs/interfaces-and-operations.md#36-installation-preflight-milestone-m8) and [send recovery and agent policy contract](specs/interfaces-and-operations.md#37-send-replay-only-and-agent-policy-milestone-m8) detail their interfaces. ADR-0028 and ADR-0029 record their accepted design. [The roadmap](roadmap/README.md#epic-014-non-mutating-installation-preflight) allocates EPIC-014 and EPIC-015 to shared M8, with AJ-24 through AJ-26 and intended product release v0.1.3.
 
-This adoption changes documents only. It does not implement commands, rewrite the shipped skill, change the executable version, start a Task, or authorize installation or publication. TASK-096 owns support for M8 and scoped checker-status documentation cleanup. The Source of Truth checker now recognizes milestones M1 through M9 and citations of PFL-001 through PFL-008, SND-001 through SND-006, and GEN-016 through GEN-020. It still rejects invalid milestones, missing requirement coverage, forward dependencies, reverse-index mismatches, unresolved links, and bad identifiers. Completed M7 outcomes and past skill evidence remain preserved.
+This adoption changes documents only. It does not implement commands, rewrite the shipped skill, change the executable version, start a Task, or authorize installation or publication. TASK-096 owns support for M8 and scoped checker-status documentation cleanup. The Source of Truth checker now recognizes milestones M1 through M10 and citations of PFL-001 through PFL-008, SND-001 through SND-006, and GEN-016 through GEN-020. It still rejects invalid milestones, missing requirement coverage, forward dependencies, reverse-index mismatches, unresolved links, and bad identifiers. Completed M7 outcomes and past skill evidence remain preserved.
 
 ## M9 design entrypoints
 
@@ -64,6 +64,12 @@ The [Handoff reporting qualification map](implementation-tips/handoff-reporting-
 
 The unused Web package and obsolete literal transaction scanner are removed without changing the daemon-served assets, real dependency guards or synchronous transaction guarantees. Handoff factories share one owned or borrowed operational connection while preserving read-only admission and caller lifetimes. Standalone integration and ordinary compiled E2E build their current executable; release qualification packages the candidate separately. The full gate packages once and reuses that signed candidate across integration, contract, ordinary E2E and AJ-16 without an intervening build. The canonical owners above define current behavior; installation and publication remain separately authorized, and the roadmap alone records lifecycle and eligibility.
 
+## Exchange planning entrypoints
+
+[EPIC-021](roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects) registers Master's 2026-11-19 direction for Exchange: durable peer collaboration between registered Projects with directed requests, versioned results, requester acceptance, unanimous completion, pause and resumption, and cleanup of disposable evidence. [Proposed ADR-0037](architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10) records the material change and its alternatives, and the [Exchange dossier](todo/exchange-dossier.md) holds the detailed requirements, implementation contract and acceptance evidence with their owning Tasks.
+
+This is planning registration under [governance section 19](governance/README.md#19-exchange-registration-boundary), not adopted product behavior or release allocation. It adds the new milestone M10 to the documentation checker, which now also reports unsupported milestone values in requirement and reverse-index rows instead of skipping them. TASK-139 owns the pre-adoption qualification, specification adoption including the reserved `EXC` requirements, accepted-decision amendments, the M10 gate and release boundary, and requirement and traceability population before implementation. Product code, shipped skills, normative specifications, Source of Truth version and CHANGELOG are unchanged. The roadmap alone records lifecycle and eligibility.
+
 ## Source of Truth precedence
 
 When documents conflict, apply this order:
@@ -88,7 +94,7 @@ The Memo contract owns its detailed lifecycle, CLI/HTTP data, Web pending-attemp
 
 The roadmap namespace is `docs/roadmap/README.md`. Epic IDs use `EPIC-NNN`, while Task IDs follow one global, increasing `TASK-NNN` sequence. Once committed, an identifier cannot change or be reused.
 
-Only the roadmap records lifecycle state. The dossier for an active Epic lives under `todo/`, appears in the adopted section of the TODO index, and is linked from the Epic through `Detailed SOT`. When the Epic closes, move lasting information to its canonical owner, remove the dossier and its index entry, and replace `Detailed SOT` with repository-relative `Canonical Outcomes` links.
+Only the roadmap records lifecycle state. The dossier for a registered or adopted Epic that has not closed lives under `todo/`, appears under the registered or adopted dossier heading of the TODO index, and is linked from the Epic through `Detailed SOT`. When the Epic closes, move lasting information to its canonical owner, remove the dossier and its index entry, and replace `Detailed SOT` with repository-relative `Canonical Outcomes` links.
 
 ## Verification
 
@@ -107,4 +113,4 @@ For the final integrated implementation candidate, also run:
 make test
 ```
 
-`scripts/sot-check.ts` checks prose wrapping, relative-link target paths, roadmap identifiers, dependency order, requirement citations/milestones and the traceability reverse index. It checks neither heading fragments nor configuration-schema/example compatibility nor CLI/API agreement with the error table; those need their applicable contract tests and semantic review. The Aquarium documentation inspector checks structure during setup and does not replace those checks.
+`scripts/sot-check.ts` checks prose wrapping, relative-link target paths, roadmap identifiers, dependency order, requirement citations/milestones and the traceability reverse index, and reports unsupported milestone values in Task, requirement and reverse-index rows. It checks neither heading fragments nor configuration-schema/example compatibility nor CLI/API agreement with the error table; those need their applicable contract tests and semantic review. The Aquarium documentation inspector checks structure during setup and does not replace those checks.
