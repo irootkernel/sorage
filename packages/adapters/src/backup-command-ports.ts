@@ -43,6 +43,8 @@ import {
   channelIdFromSnapshotPath,
   type DrainReport,
   ensureVaultGitRepository,
+  EXCHANGE_SNAPSHOT_FILE,
+  type ExchangeSnapshotValidator,
   err,
   expandConfigurationPath,
   exportSnapshot,
@@ -55,6 +57,7 @@ import {
   memoContentFilePath,
   nextDueAt,
   ok,
+  openExchangeSnapshot,
   parseChannelSnapshotShard,
   parseMemoSnapshot,
   parseMemoSnapshotV3,
@@ -65,9 +68,10 @@ import {
   type Result,
   type SnapshotArtifact,
   type SnapshotArtifactV3,
-  type SnapshotData,
   type SnapshotDataV3,
   type SnapshotDataV4,
+  type SnapshotDataV5,
+  type BackupSnapshotData,
   type SnapshotDeletionRequest,
   type SnapshotEvent,
   type SnapshotFile,
@@ -99,11 +103,12 @@ import {
   validateMemoContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
+import { EXCHANGE_FOUNDATION_TABLES, readExchangeRecords, restoreExchangeRecords } from "./exchange-records";
 import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
-import { digestManagedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
+import { digestManagedFile, managedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import {
   insertMemoWithFileRecordRows,
@@ -528,7 +533,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /** Reads the complete snapshot set inside one consistent read transaction (BKP-007). */
-  function readSnapshotData(): Result<SnapshotDataV4, AppError> {
+  function readSnapshotData(): Result<SnapshotDataV5, AppError> {
     return withDatabase((db) => {
       try {
         db.exec("BEGIN");
@@ -551,7 +556,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         }
         return links;
       }
-      let data: Result<SnapshotDataV4, AppError>;
+      let data: Result<SnapshotDataV5, AppError>;
       let pendingContentFiles: MemoContentReference[] = [];
       let pendingChannelContentFiles: ChannelContentReference[] = [];
       try {
@@ -608,6 +613,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           ...mapSnapshotData({ projects, bindings, handoffs, artifacts, reviewNotes, deletionRequests, events }),
           memos: memosResult.value.memos,
           channels: channelsResult.value.channels,
+          exchanges: readExchangeRecords(db),
         });
       } catch (error) {
         db.exec("ROLLBACK");
@@ -799,16 +805,36 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function readSourceSnapshot(sourcePath: string) {
-    return (): Result<SnapshotData | SnapshotDataV3 | SnapshotDataV4, AppError> => {
+    return (): Result<BackupSnapshotData, AppError> => {
       const manifest = readSourceManifest(sourcePath)();
       if (!manifest.ok) return manifest;
+      const snapshotManifest = manifest.value;
+      const sharedContent = "contentDigests" in snapshotManifest;
+      const reporting = snapshotManifest.formatVersion === 4 || snapshotManifest.formatVersion === 5;
+      let validateExchange: ExchangeSnapshotValidator | undefined;
+      if (snapshotManifest.formatVersion === 5) {
+        const exchangeRaw = readSourceFile(sourcePath, `snapshots/${EXCHANGE_SNAPSHOT_FILE}`);
+        if (!exchangeRaw.ok) return exchangeRaw;
+        const exchange = openExchangeSnapshot(exchangeRaw.value, snapshotManifest.counts.exchanges);
+        if (!exchange.ok) return exchange;
+        validateExchange = exchange.value;
+      } else {
+        try {
+          if (managedFile(sourcePath, `snapshots/${EXCHANGE_SNAPSHOT_FILE}`).stat !== undefined) {
+            return err(
+              appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries an unexpected Exchange inventory."),
+            );
+          }
+        } catch {
+          return err(appError("VAULT_INTEGRITY_ERROR", "The Exchange snapshot path is unsafe."));
+        }
+      }
       const channels = snapshotTreeFiles(join(sourcePath, "snapshots", "channels"));
       if (!channels.ok) return channels;
       const content = snapshotTreeFiles(join(sourcePath, "snapshots", "content"));
       if (!content.ok) return content;
-      const contentDigests =
-        manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4 ? manifest.value.contentDigests : {};
-      if (manifest.value.formatVersion !== 3 && manifest.value.formatVersion !== 4 && content.value.length !== 0)
+      const contentDigests = sharedContent ? snapshotManifest.contentDigests : {};
+      if (!sharedContent && content.value.length !== 0)
         return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected content files"));
       /** Read one carried content file's exact bytes; the map's digests were already shape-checked. */
       const readContentFile = (relative: string): Result<Uint8Array, AppError> => {
@@ -828,12 +854,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         }
         return ok(read.value);
       };
-      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
+      if (sharedContent) {
         // The content-file inventory must agree with the map exactly: a file
         // the map omits, a map key with no regular file, or a non-Memo content
         // path this build cannot faithfully import is refused before adoption.
         const contentNames = new Set(content.value.map((file) => `content/${file}`));
-        const mapKeys = Object.keys(manifest.value.contentDigests);
+        const mapKeys = Object.keys(contentDigests);
         if (
           mapKeys.some((key) => !contentNames.has(key)) ||
           [...contentNames].some((name) => !(name in contentDigests))
@@ -862,7 +888,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const memoExports: SnapshotMemoV3[] = [];
       const memoContentFiles: MemoContentFileExport[] = [];
       for (const file of memoFiles.value) {
-        if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
+        if (sharedContent) {
           const parsed = parseMemoSnapshotV3(file.path, file.bytes, file.digest);
           if (!parsed.ok) return parsed;
           const imported = parsed.value;
@@ -915,16 +941,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       }
       const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
       if (!projectsRaw.ok) return err(projectsRaw.error);
-      const projects =
-        manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
-          ? parseUniqueSnapshotJson(projectsRaw.value)
-          : parseJsonArray(projectsRaw.value, "snapshots/projects.json");
+      const projects = sharedContent
+        ? parseUniqueSnapshotJson(projectsRaw.value)
+        : parseJsonArray(projectsRaw.value, "snapshots/projects.json");
       if (!projects.ok) return err(projects.error);
-      if (
-        !Array.isArray(projects.value) ||
-        ((manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) &&
-          canonicalJson(projects.value) !== projectsRaw.value)
-      )
+      if (!Array.isArray(projects.value) || (sharedContent && canonicalJson(projects.value) !== projectsRaw.value))
         return err(appError("VAULT_INTEGRITY_ERROR", "The snapshot Project metadata is not a canonical array."));
 
       const shardFiles: string[] = [];
@@ -934,7 +955,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const legacyHandoffs: SnapshotHandoff[] = [];
       const v3Handoffs: SnapshotHandoffV3[] = [];
       const v4Handoffs: SnapshotHandoffV4[] = [];
-      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
+      if (sharedContent) {
         const files = snapshotTreeFiles(shardsRoot);
         if (!files.ok) return files;
         shardFiles.push(...files.value.map((file) => `handoffs/${file}`));
@@ -961,16 +982,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         // Format 3 parses its Handoff shards with the duplicate-key-rejecting
         // parser of the Memo contract, over the same safe bounded reader the
         // memo shards use; formats 1 and 2 keep their existing parser and rules.
-        const parsed =
-          manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
-            ? parseUniqueSnapshotJson(raw.value)
-            : parseJsonObject(raw.value, `snapshots/${shardFile}`);
+        const parsed = sharedContent
+          ? parseUniqueSnapshotJson(raw.value)
+          : parseJsonObject(raw.value, `snapshots/${shardFile}`);
         if (!parsed.ok) return parsed;
         const value = parsed.value;
-        if (
-          (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) &&
-          canonicalJson(value) !== raw.value
-        ) {
+        if (sharedContent && canonicalJson(value) !== raw.value) {
           return err(
             appError("VAULT_INTEGRITY_ERROR", `The handoff shard ${shardFile} does not carry canonical bytes.`),
           );
@@ -980,16 +997,13 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             appError("VAULT_INTEGRITY_ERROR", `The backup entry snapshots/${shardFile} is not a JSON object.`),
           );
         }
-        const handoff =
-          manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
-            ? (value as unknown as SnapshotHandoffV3)
-            : (value as unknown as SnapshotHandoff);
-        if ((manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) && !isMemoUuid(handoff.id)) {
+        const handoff = sharedContent ? (value as unknown as SnapshotHandoffV3) : (value as unknown as SnapshotHandoff);
+        if (sharedContent && !isMemoUuid(handoff.id)) {
           return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
         }
         const expected = `${handoff.id}.json`;
         if (
-          manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4
+          sharedContent
             ? typeof handoff.id !== "string" || shardFile !== `handoffs/${handoff.id.slice(0, 2)}/${expected}`
             : !shardFile.endsWith(`/${expected}`)
         ) {
@@ -1001,7 +1015,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             ),
           );
         }
-        if (manifest.value.formatVersion === 4) v4Handoffs.push(value as unknown as SnapshotHandoffV4);
+        if (reporting) v4Handoffs.push(value as unknown as SnapshotHandoffV4);
         else if (manifest.value.formatVersion === 3) v3Handoffs.push(value as unknown as SnapshotHandoffV3);
         else legacyHandoffs.push(value as unknown as SnapshotHandoff);
       }
@@ -1026,9 +1040,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       // path (section 38.8, CHN-009).
       const channelShards: SnapshotChannelShard[] = [];
       const channelContentFileExports: ChannelContentFileExport[] = [];
-      if (manifest.value.formatVersion !== 3 && manifest.value.formatVersion !== 4 && channels.value.length !== 0)
+      if (!sharedContent && channels.value.length !== 0)
         return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected Channel shards"));
-      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
+      if (sharedContent) {
         for (const channelFile of channels.value) {
           const shardPath = `channels/${channelFile}`;
           if (!channelIdFromSnapshotPath(shardPath).ok) {
@@ -1059,7 +1073,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         // The manifest's Channel count must match the shard family exactly: a
         // positive count with zero shards and a zero count with stray shards
         // are both inventory disagreements (section 38.8).
-        if (manifest.value.counts.channels !== channelShards.length) {
+        if (snapshotManifest.counts.channels !== channelShards.length) {
           return err(
             appError("VAULT_INTEGRITY_ERROR", `The manifest's Channel count disagrees with the shard family.`),
           );
@@ -1073,15 +1087,19 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         ...(channelShards.length > 0 ? { channels: channelShards } : {}),
         ...(channelContentFileExports.length > 0 ? { channelContentFiles: channelContentFileExports } : {}),
       };
-      const data: SnapshotData | SnapshotDataV3 | SnapshotDataV4 =
-        manifest.value.formatVersion === 4
-          ? { ...common, handoffs: v4Handoffs }
-          : manifest.value.formatVersion === 3
-            ? { ...common, handoffs: v3Handoffs }
-            : { projects: common.projects, handoffs: legacyHandoffs, events, memos };
-      const valid = validateSnapshot(data, manifest.value);
+      let data: BackupSnapshotData = reporting
+        ? { ...common, handoffs: v4Handoffs }
+        : snapshotManifest.formatVersion === 3
+          ? { ...common, handoffs: v3Handoffs }
+          : { projects: common.projects, handoffs: legacyHandoffs, events, memos };
+      if (validateExchange !== undefined) {
+        const exchanges = validateExchange(common.projects);
+        if (!exchanges.ok) return exchanges;
+        data = { ...common, handoffs: v4Handoffs, exchanges: exchanges.value };
+      }
+      const valid = validateSnapshot(data, snapshotManifest);
       if (!valid.ok) return valid;
-      if (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) {
+      if (sharedContent) {
         const canonicalLedger = [...events]
           .sort((a, b) =>
             a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
@@ -1140,29 +1158,26 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     };
   }
 
+  function targetDatabaseIsEmpty(db: SorageSqlite): boolean {
+    const tables = [
+      "projects",
+      "project_bindings",
+      "handoffs",
+      "artifacts",
+      "review_notes",
+      "deletion_requests",
+      "events",
+      "project_memos",
+      "channels",
+      "channel_participants",
+      "channel_messages",
+      ...EXCHANGE_FOUNDATION_TABLES,
+    ];
+    return !tables.some((table) => db.prepare(`SELECT 1 AS present FROM ${table} LIMIT 1`).get());
+  }
+
   function targetIsEmpty(): Result<boolean, AppError> {
-    return withDatabase((db) => {
-      const tables = [
-        "projects",
-        "handoffs",
-        "artifacts",
-        "review_notes",
-        "deletion_requests",
-        "events",
-        "project_memos",
-        // The Channel domain tables join the emptiness census (CHN-009,
-        // section 32): an installation holding only Channel records — even one
-        // whose ledger rows were lost — is not an empty target.
-        "channels",
-        "channel_participants",
-        "channel_messages",
-      ];
-      for (const table of tables) {
-        const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as Record<string, unknown> | undefined;
-        if (Number(row?.count ?? 0) > 0) return ok(false);
-      }
-      return ok(true);
-    });
+    return withDatabase((db) => ok(targetDatabaseIsEmpty(db)));
   }
 
   /** The database-side census `backup verify` cross-checks the manifest against. */
@@ -1176,6 +1191,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             (SELECT COUNT(*) FROM events) AS events,
             (SELECT COUNT(*) FROM artifacts) AS artifacts,
             (SELECT COUNT(*) FROM project_memos) AS memos,
+            (SELECT COUNT(*) FROM exchanges) AS exchanges,
             (SELECT COUNT(*) FROM handoffs h JOIN artifacts a ON a.id = h.current_artifact_id
               JOIN content_records c ON c.id = a.content_record_id
               WHERE h.deleted_at IS NULL AND c.materialized = 0) AS materializing,
@@ -1190,6 +1206,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         events: Number(row?.events ?? 0),
         artifacts: Number(row?.artifacts ?? 0),
         memos: Number(row?.memos ?? 0),
+        exchanges: Number(row?.exchanges ?? 0),
         // The Channel census reads the actual Channel count: a schema-11
         // database with zero channels contributes zero, a database with
         // channels contributes its true count, and a pre-Channel database
@@ -1208,7 +1225,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     });
   }
 
-  function materializedArtifacts(data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Array<{
+  function materializedArtifacts(data: BackupSnapshotData): Array<{
     handoff: SnapshotHandoff | SnapshotHandoffV3 | SnapshotHandoffV4;
     artifact: SnapshotArtifact | SnapshotArtifactV3;
   }> {
@@ -1225,9 +1242,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /** The file-backed subset a backup tree actually carries; an inline body's bytes live in its shard. */
-  function fileBackedArtifacts(
-    data: SnapshotData | SnapshotDataV3 | SnapshotDataV4,
-  ): Array<{ artifact: SnapshotArtifact }> {
+  function fileBackedArtifacts(data: BackupSnapshotData): Array<{ artifact: SnapshotArtifact }> {
     const entries: Array<{ artifact: SnapshotArtifact }> = [];
     for (const { artifact } of materializedArtifacts(data)) {
       if (typeof artifact.storageKey === "string") {
@@ -1238,7 +1253,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function verifyArtifacts(sourcePath: string) {
-    return (data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Result<{ verified: number }, AppError> => {
+    return (data: BackupSnapshotData): Result<{ verified: number }, AppError> => {
       // An inline body's exact bytes live in its shard: the gate re-digests
       // the stored text, the same success gate the shape validator applied
       // (SHR-003, SHR-010).
@@ -1292,7 +1307,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   function copyArtifacts(vaultPath: string, sourcePath: string) {
-    return (data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Result<{ copied: number }, AppError> => {
+    return (data: BackupSnapshotData): Result<{ copied: number }, AppError> => {
       let copied = 0;
       // Only the file representation has bytes in the backup tree to copy; an
       // inline record restores through the database rebuild alone.
@@ -1375,10 +1390,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     return ok(undefined);
   }
 
-  function rebuildDatabase(
-    data: SnapshotData | SnapshotDataV3 | SnapshotDataV4,
-    marker: VaultMarker,
-  ): Result<void, AppError> {
+  function rebuildDatabase(data: BackupSnapshotData, marker: VaultMarker): Result<void, AppError> {
     const resolvedInstallation = installation();
     if (!resolvedInstallation.ok) return err(resolvedInstallation.error);
     const vaultPath = resolvedInstallation.value.vaultPath;
@@ -1534,6 +1546,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         return err(appError("INTERNAL_ERROR", `Beginning the restore rebuild failed: ${messageOf(error)}.`));
       }
       try {
+        if (!targetDatabaseIsEmpty(db)) {
+          db.exec("ROLLBACK");
+          cleanupSafe = true;
+          return err(appError("RESTORE_TARGET_NOT_EMPTY", "The restore target is no longer empty."));
+        }
         // The installation identity lives in config.yaml and the Vault marker,
         // not in a database row; the two adoption writes already ran when the
         // rebuild starts, so this transaction owns exactly the restored rows.
@@ -1550,6 +1567,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             project.updatedAt,
           );
         }
+        if ("exchanges" in data) restoreExchangeRecords(db, data.exchanges);
         // `supersedes_handoff_id` is a plain foreign key, so the older Handoff
         // rows insert first; both artifact references defer to the commit.
         for (const handoff of [...data.handoffs].sort(byCreatedThenId)) {

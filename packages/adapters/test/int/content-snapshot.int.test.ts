@@ -1,6 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -659,8 +668,10 @@ describe("format-3 filesystem and representation boundaries", () => {
       const raw = canonicalJson(memo);
       writeFileSync(path, raw);
       const manifest = JSON.parse(readFileSync(manifestPath(source), "utf8"));
+      manifest.formatVersion = formatVersion;
+      delete manifest.counts.exchanges;
+      rmSync(join(source.vault, "snapshots", "exchanges.json"));
       if (formatVersion === 2) {
-        manifest.formatVersion = 2;
         delete manifest.counts.channels;
         delete manifest.contentDigests;
       }
@@ -867,6 +878,11 @@ describe("format-3 historical physical-content snapshots", () => {
   ] as const)("keeps format %s's frozen event family closed against %s", (formatVersion, eventType) => {
     const source = installation();
     unwrap(exportSnapshot(unwrap(ports(source).exportPorts())));
+    rmSync(join(source.vault, "snapshots", "exchanges.json"));
+    const expected = {
+      code: "VAULT_INTEGRITY_ERROR",
+      message: "The snapshot ledger carries an event type this format does not define.",
+    };
     const event = {
       id: randomUUID(),
       handoffId: null,
@@ -905,12 +921,12 @@ describe("format-3 historical physical-content snapshots", () => {
     const before = inventory(target);
     expect(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date() })).toMatchObject({
       ok: false,
-      error: { code: "VAULT_INTEGRITY_ERROR" },
+      error: expected,
     });
     for (const dryRun of [true, false]) {
       expect(backupRestore(unwrap(ports(target, source).restorePorts()), { dryRun })).toMatchObject({
         ok: false,
-        error: { code: "VAULT_INTEGRITY_ERROR" },
+        error: expected,
       });
       expect(inventory(target)).toEqual(before);
     }

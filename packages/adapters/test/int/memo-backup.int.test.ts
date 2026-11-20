@@ -120,8 +120,8 @@ describe("Memo snapshot export and recovery", () => {
     expect(JSON.parse(bytes.toString())).toEqual({ ...memoRecord, bodyContent: { inline: memo.body } });
     expect(bytes.toString()).toBe(canonicalJson({ ...memoRecord, bodyContent: { inline: memo.body } }));
     expect(manifest(source)).toEqual({
-      formatVersion: 4,
-      counts: { projects: 1, handoffs: 0, artifacts: 0, events: 3, memos: 1, channels: 0 },
+      formatVersion: 5,
+      counts: { projects: 1, handoffs: 0, artifacts: 0, events: 3, memos: 1, channels: 0, exchanges: 0 },
       memoDigests: { [memoPath]: createHash("sha256").update(bytes).digest("hex") },
       contentDigests: {},
     });
@@ -172,12 +172,12 @@ describe("Memo snapshot export and recovery", () => {
     db.close();
   });
 
-  it("always exports an empty format-4 inventory and restores it without Memo shards", () => {
+  it("always exports an empty format-5 inventory and restores it without Memo shards", () => {
     const source = installation();
     unwrap(exportOnce(source));
     expect(manifest(source)).toEqual({
-      formatVersion: 4,
-      counts: { projects: 0, handoffs: 0, artifacts: 0, events: 0, memos: 0, channels: 0 },
+      formatVersion: 5,
+      counts: { projects: 0, handoffs: 0, artifacts: 0, events: 0, memos: 0, channels: 0, exchanges: 0 },
       memoDigests: {},
       contentDigests: {},
     });
@@ -442,7 +442,7 @@ const corruptions: Array<[string, (source: Installation) => void]> = [
     "future format",
     (s) => {
       const m = manifest(s);
-      m.formatVersion = 5;
+      m.formatVersion = 6;
       writeManifest(s, m);
     },
   ],

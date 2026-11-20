@@ -131,6 +131,7 @@ describe("the replaced version-11 slot (channels-v2)", () => {
       ...MIGRATIONS.map((step) => ({ version: step.version, name: step.name })),
       { version: 11, name: "channels-v2" },
       { version: 12, name: "handoff-reporting-v1" },
+      { version: 13, name: "exchange-foundation" },
     ]);
     const catalog = [
       ...plan.migrations.map((migration) => ({ version: migration.version, name: migration.name })),

@@ -132,7 +132,15 @@ export interface SnapshotData {
 
 export interface SnapshotManifest {
   formatVersion: number;
-  counts: { projects: number; handoffs: number; events: number; artifacts: number; memos?: number; channels?: number };
+  counts: {
+    projects: number;
+    handoffs: number;
+    events: number;
+    artifacts: number;
+    memos?: number;
+    channels?: number;
+    exchanges?: number;
+  };
   memoDigests?: Record<string, string>;
   /** Format 3 only: the exported shared-content file inventory (SHR-010). */
   contentDigests?: Record<string, string>;

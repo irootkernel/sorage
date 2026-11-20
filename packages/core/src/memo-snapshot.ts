@@ -44,11 +44,16 @@ export interface ContentSnapshotManifest {
 export interface HandoffReportingSnapshotManifest extends Omit<ContentSnapshotManifest, "formatVersion"> {
   formatVersion: 4;
 }
+export interface ExchangeSnapshotManifest extends Omit<ContentSnapshotManifest, "formatVersion" | "counts"> {
+  formatVersion: 5;
+  counts: ContentSnapshotManifest["counts"] & { exchanges: number };
+}
 export type VersionedSnapshotManifest =
   | LegacySnapshotManifest
   | MemoSnapshotManifest
   | ContentSnapshotManifest
-  | HandoffReportingSnapshotManifest;
+  | HandoffReportingSnapshotManifest
+  | ExchangeSnapshotManifest;
 export interface MemoSnapshotEvent extends SnapshotEvent {
   memoId: string | null;
 }
@@ -115,10 +120,16 @@ export function parseVersionedSnapshotManifest(text: string): Result<VersionedSn
   const value = parsed.value;
   if (!memoObject(value, ["formatVersion"], ["counts", "memoDigests", "contentDigests"]))
     return corrupt("Snapshot manifest is invalid");
-  if (value.formatVersion !== 1 && value.formatVersion !== 2 && value.formatVersion !== 3 && value.formatVersion !== 4)
+  if (
+    value.formatVersion !== 1 &&
+    value.formatVersion !== 2 &&
+    value.formatVersion !== 3 &&
+    value.formatVersion !== 4 &&
+    value.formatVersion !== 5
+  )
     return err(appError("VAULT_SCHEMA_UNSUPPORTED", "Snapshot format is not supported"));
   const version2 = value.formatVersion === 2;
-  const version3 = value.formatVersion === 3 || value.formatVersion === 4;
+  const version3 = value.formatVersion === 3 || value.formatVersion === 4 || value.formatVersion === 5;
   if (
     !memoObject(
       value,
@@ -137,6 +148,7 @@ export function parseVersionedSnapshotManifest(text: string): Result<VersionedSn
     "artifacts",
     ...(version2 || version3 ? ["memos"] : []),
     ...(version3 ? ["channels"] : []),
+    ...(value.formatVersion === 5 ? ["exchanges"] : []),
   ];
   if (
     !memoObject(value.counts, countFields) ||
@@ -364,7 +376,7 @@ export function validateMemoInventory(
         return corrupt("Non-Memo event association is invalid for this format");
       continue;
     }
-    const parsed = parseMemoEventAssociation(event, manifest.formatVersion, owners);
+    const parsed = parseMemoEventAssociation(event, manifest.formatVersion === 5 ? 4 : manifest.formatVersion, owners);
     if (!parsed.ok) return parsed;
     const id = parsed.value.memoId as string;
     const history = histories.get(id) ?? [];

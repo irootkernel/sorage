@@ -19,6 +19,7 @@ import { type AppError, appError } from "./errors";
  * is refused by the migration-name check rather than migrated (CHN-009).
  * Version 12 appends the Handoff reporting fields and recipient comment
  * purpose/activity without rewriting the version-11 tables or migration.
+ * Version 13 appends the Exchange storage foundation.
  */
 
 export interface KnownSchemaVersion {
@@ -39,6 +40,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 10, name: "memo-shared-content-v1" },
   { version: 11, name: "channels-v2" },
   { version: 12, name: "handoff-reporting-v1" },
+  { version: 13, name: "exchange-foundation" },
 ];
 
 /** The highest database schema version this build knows. */

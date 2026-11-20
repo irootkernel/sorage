@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Changed
 
 - Pin source-development toolchains and run automatic formatting before the complete test gate; add explicit runtime installation, version synchronization, and dependency-lock commands.
+- **Breaking upgrade:** Advance live storage to schema 13 and backups to format 5. The upgrade is one-way. Use the new executable with migrated storage and for format-5 restores. Before upgrading, verify and retain a backup and its matching executable. For rollback, restore that backup with its matching executable into a separate empty home and Vault. The new reader continues to import formats 1–4.
 
 ## v0.1.4 - 2026-11-08
 

@@ -217,7 +217,7 @@ describe("the frozen legacy revision through migration 8", () => {
     }
   });
 
-  it("exports and verifies as format 4 through the direct ports while the source's operational rows stay untouched", () => {
+  it("exports and verifies as current format 5 through the direct ports while the source's operational rows stay untouched", () => {
     const fixture = legacyReviseInstallation();
     try {
       fixture.upgradeToCurrent();
@@ -243,7 +243,7 @@ describe("the frozen legacy revision through migration 8", () => {
         counts: { artifacts: number; channels: number; memos: number };
         contentDigests: Record<string, string>;
       };
-      expect(manifest.formatVersion).toBe(4);
+      expect(manifest.formatVersion).toBe(5);
       expect(manifest.counts.artifacts).toBe(1);
       expect(manifest.counts.channels).toBe(0);
       expect(manifest.contentDigests).toEqual({});

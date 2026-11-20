@@ -173,6 +173,10 @@ describe("versioned manifest and Memo event association", () => {
     expect(parseVersionedSnapshotManifest(duplicate).ok).toBe(false);
     expect(parseVersionedSnapshotManifest('{"formatVersion":5}')).toMatchObject({
       ok: false,
+      error: { code: "VAULT_INTEGRITY_ERROR" },
+    });
+    expect(parseVersionedSnapshotManifest('{"formatVersion":6}')).toMatchObject({
+      ok: false,
       error: { code: "VAULT_SCHEMA_UNSUPPORTED" },
     });
   });

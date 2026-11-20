@@ -130,6 +130,7 @@ describe("exportSnapshot over a real installation", () => {
     const paths = Object.keys(firstTree).sort();
     expect(paths).toEqual([
       "events.jsonl",
+      "exchanges.json",
       "handoffs/1a/1a111111-1111-4111-8111-111111111111.json",
       "manifest.json",
       "projects.json",
@@ -158,7 +159,15 @@ describe("exportSnapshot over a real installation", () => {
     expect(redacted["events.jsonl"]).not.toContain("/somewhere");
     expect(redacted["events.jsonl"]).toContain("storageKey");
     const manifest = JSON.parse(redacted["manifest.json"] as string) as { counts: Record<string, number> };
-    expect(manifest.counts).toEqual({ projects: 1, handoffs: 1, events: 1, artifacts: 1, memos: 0, channels: 0 });
+    expect(manifest.counts).toEqual({
+      projects: 1,
+      handoffs: 1,
+      events: 1,
+      artifacts: 1,
+      memos: 0,
+      channels: 0,
+      exchanges: 0,
+    });
 
     // Flipping the policy off exposes the same paths the redaction removed.
     const configPath = join(home, "config.yaml");

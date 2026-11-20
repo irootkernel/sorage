@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { admitAppliedHistory, KNOWN_SCHEMA_HISTORY } from "../../src/known-schemas";
 
 const HISTORY = KNOWN_SCHEMA_HISTORY;
+const FUTURE_VERSION = Math.max(...HISTORY.map((entry) => entry.version)) + 1;
 
 function rows(versions: number[]) {
   return versions.map((version) => ({
@@ -12,13 +13,12 @@ function rows(versions: number[]) {
 
 describe("admitAppliedHistory maximum and integrity ordering", () => {
   it("classifies future-plus-duplicate as unsupported, not deferred integrity", () => {
-    const futureVersion = Math.max(...HISTORY.map((entry) => entry.version)) + 1;
-    const mixed = [...rows([...HISTORY.map((entry) => entry.version), 3]), { version: futureVersion, name: "future" }];
+    const mixed = [...rows([...HISTORY.map((entry) => entry.version), 3]), { version: FUTURE_VERSION, name: "future" }];
     const verdict = admitAppliedHistory(mixed, HISTORY);
     expect(verdict.kind).toBe("unsupported");
     if (verdict.kind === "unsupported") {
       expect(verdict.error.code).toBe("STORAGE_SCHEMA_UNSUPPORTED");
-      expect(verdict.error.message).toContain(String(futureVersion));
+      expect(verdict.error.message).toContain(String(FUTURE_VERSION));
     }
   });
 
@@ -41,7 +41,7 @@ describe("admitAppliedHistory maximum and integrity ordering", () => {
   });
 
   it("keeps forward-only refusal unchanged", () => {
-    const forward = [...rows([1, 2, 3, 4, 5, 6, 7, 8]), { version: 13, name: "far-future" }];
+    const forward = [...rows([1, 2, 3, 4, 5, 6, 7, 8]), { version: FUTURE_VERSION, name: "far-future" }];
     const verdict = admitAppliedHistory(forward, HISTORY);
     expect(verdict.kind).toBe("unsupported");
   });

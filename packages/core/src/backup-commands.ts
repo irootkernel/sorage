@@ -20,6 +20,7 @@ import {
   validateSnapshotProjectV3,
 } from "./content-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
+import { snapshotFilesV5, type SnapshotDataV5, validateExchangeInventory } from "./exchange-snapshot";
 import {
   classifyPushFailure,
   GIT_ARGS,
@@ -57,7 +58,7 @@ export interface BackupExportPorts {
   /** The `gitBackup.snapshot.redactWorkspacePaths` policy, default `true` (BKP-003). */
   redactWorkspacePaths: boolean;
   /** Reads every snapshot row inside one consistent SQLite read transaction (BKP-007). */
-  readSnapshotData(): Result<SnapshotDataV3 | SnapshotDataV4, AppError>;
+  readSnapshotData(): Result<SnapshotDataV3 | SnapshotDataV4 | SnapshotDataV5, AppError>;
   /** Writes the snapshot tree through temporary files and an atomic replacement (BKP-008). */
   writeSnapshotTree(files: SnapshotFile[]): Result<void, AppError>;
 }
@@ -76,7 +77,8 @@ export function exportSnapshot(ports: BackupExportPorts): Result<BackupExportRep
     handoffs: read.value.handoffs.map((handoff) => ("comment" in handoff ? handoff : upgradeSnapshotHandoff(handoff))),
   };
   const data = ports.redactWorkspacePaths ? redactSnapshotDataV4(current) : current;
-  const built = snapshotFilesV4(data);
+  const built =
+    "exchanges" in read.value ? snapshotFilesV5({ ...data, exchanges: read.value.exchanges }) : snapshotFilesV4(data);
   if (!built.ok) return built;
   const written = ports.writeSnapshotTree(built.value.files);
   if (!written.ok) return err(written.error);
@@ -105,6 +107,8 @@ export interface RestoreOutcome {
   apiTokenRegenerated: true;
 }
 
+export type BackupSnapshotData = SnapshotData | SnapshotDataV3 | SnapshotDataV4 | SnapshotDataV5;
+
 export interface BackupRestorePorts {
   sourcePath: string;
   installationId: string;
@@ -117,7 +121,7 @@ export interface BackupRestorePorts {
   /** Parses the source Vault marker; a newer schemaVersion is VAULT_SCHEMA_UNSUPPORTED (VLT-019). */
   readSourceMarker(): Result<VaultMarker, AppError>;
   /** Reads and parses `snapshots/` from the source Vault into one snapshot set. */
-  readSourceSnapshot(): Result<SnapshotData | SnapshotDataV3 | SnapshotDataV4, AppError>;
+  readSourceSnapshot(): Result<BackupSnapshotData, AppError>;
   /** Cross-checks the manifest counts against the parsed snapshot (BKP-005). */
   readSourceManifest(): Result<VersionedSnapshotManifest, AppError>;
   /** False once any domain row or ledger row exists; the empty rule of section 32 (BKP-021). */
@@ -127,9 +131,9 @@ export interface BackupRestorePorts {
    * SHA-256; a missing file or one altered byte is ARTIFACT_CORRUPTED and
    * aborts the restore (SEC-014, VLT-023).
    */
-  verifyArtifacts(data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Result<{ verified: number }, AppError>;
+  verifyArtifacts(data: BackupSnapshotData): Result<{ verified: number }, AppError>;
   /** Copies Artifact bytes into the target Vault, re-verifying in pass and setting 0444. */
-  copyArtifacts(data: SnapshotData | SnapshotDataV3 | SnapshotDataV4): Result<{ copied: number }, AppError>;
+  copyArtifacts(data: BackupSnapshotData): Result<{ copied: number }, AppError>;
   /** Rewrites the target Vault marker with the adopted installationId (VLT-019). */
   adoptMarker(marker: VaultMarker): Result<void, AppError>;
   /** Adopts the installationId in config.yaml, fenced on the etag that was read. */
@@ -139,7 +143,7 @@ export interface BackupRestorePorts {
    * exported ledger verbatim in one write transaction, swaps the installation
    * identity, and appends VAULT_ADOPTED followed by RESTORE_COMPLETED.
    */
-  rebuildDatabase(data: SnapshotData | SnapshotDataV3 | SnapshotDataV4, marker: VaultMarker): Result<void, AppError>;
+  rebuildDatabase(data: BackupSnapshotData, marker: VaultMarker): Result<void, AppError>;
   /** Regenerates the API token; it is the only credential restore creates (BKP-021). */
   regenerateApiToken(): Result<void, AppError>;
 }
@@ -162,9 +166,18 @@ function snapshotProblem(message: string): Result<never, AppError> {
  * halfway through it.
  */
 export function validateSnapshot(
-  input: SnapshotData | SnapshotDataV3 | SnapshotDataV4,
+  input: BackupSnapshotData,
   manifest: VersionedSnapshotManifest,
 ): Result<{ reviewNotes: number }, AppError> {
+  if (manifest.formatVersion === 5) {
+    if (!("exchanges" in input)) return snapshotProblem("A format-5 snapshot must provide an Exchange inventory.");
+    const { exchanges, ...previous } = input;
+    const valid = validateExchangeInventory(exchanges, previous.projects, manifest.counts.exchanges);
+    if (!valid.ok) return valid;
+    const { exchanges: _exchangeCount, ...counts } = manifest.counts;
+    return validateSnapshot(previous, { ...manifest, counts, formatVersion: 4 });
+  }
+  if ("exchanges" in input) return snapshotProblem("A legacy snapshot cannot contain Exchange records.");
   if (manifest.formatVersion === 4) {
     for (const handoff of input.handoffs) {
       const shape = validateSnapshotHandoffV4(handoff);
@@ -508,6 +521,7 @@ export interface BackupCensus {
   memos?: number;
   /** Always zero at this schema: the Channel tables arrive with TASK-109 (SHR-010). */
   channels: number;
+  exchanges?: number;
   /** Live Handoffs whose current Artifact has `materialized = 0`. */
   materializing: number;
   /** Tombstoned Handoffs that still hold an active Artifact row. */
@@ -630,7 +644,17 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
   if (manifest.value === null) {
     findings.push("snapshots/manifest.json is missing; a backup run has not exported the current snapshots yet.");
   } else {
-    manifestChecked = { present: true, ...manifest.value.counts };
+    if (manifest.value.formatVersion === 5) {
+      const { exchanges, ...publicCounts } = manifest.value.counts;
+      manifestChecked = { present: true, ...publicCounts };
+      if (exchanges !== census.value.exchanges) {
+        findings.push(
+          `The manifest counts ${exchanges} Exchange record(s) against the database's ${census.value.exchanges ?? 0}.`,
+        );
+      }
+    } else {
+      manifestChecked = { present: true, ...manifest.value.counts };
+    }
     const shards = ports.countShards();
     if (!shards.ok) return err(shards.error);
     const eventLines = ports.countEventLines();
@@ -660,10 +684,7 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
         `The manifest counts ${manifest.value.counts.memos ?? 0} Memo(s) against the database's ${census.value.memos ?? 0}.`,
       );
     }
-    if (
-      (manifest.value.formatVersion === 3 || manifest.value.formatVersion === 4) &&
-      manifest.value.counts.channels !== census.value.channels
-    ) {
+    if ("channels" in manifest.value.counts && manifest.value.counts.channels !== census.value.channels) {
       findings.push(
         `The manifest counts ${manifest.value.counts.channels} Channel record(s) against the database's ${census.value.channels}.`,
       );

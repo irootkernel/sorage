@@ -3,11 +3,13 @@ import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFil
 import { join } from "node:path";
 import {
   backupRestore,
+  backupVerify,
   canonicalJson,
   canonicalJsonLine,
   exportSnapshot,
   initializeInstallation,
   sha256OfText,
+  snapshotFilesV4,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
@@ -71,7 +73,7 @@ function reports(db: SorageSqlite) {
     .get(HANDOFF);
 }
 
-describe("schema12 reporting persistence and snapshot4", () => {
+describe("schema-12 reporting persistence and current snapshot", () => {
   it.each(["changes_requested", "accepted"])(
     "upgrades schema11 %s without invented evidence and preserves a rollback copy",
     (state) => {
@@ -87,7 +89,7 @@ describe("schema12 reporting persistence and snapshot4", () => {
       const backup = join(home, "pre-upgrade.sqlite3");
       copyFileSync(database, backup);
       const current = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
-      expect(current.outcome.appliedVersions).toEqual([12]);
+      expect(current.outcome.appliedVersions).toEqual([12, 13]);
       expect(current.db.prepare("SELECT purpose,active,body FROM review_notes").get()).toEqual({
         purpose: "change_request",
         active: state === "changes_requested" ? 1 : 0,
@@ -116,7 +118,7 @@ describe("schema12 reporting persistence and snapshot4", () => {
     },
   );
 
-  it("round-trips deterministic current reports and one general comment through format4", () => {
+  it.each([4, 5])("round-trips deterministic reports and one general comment through format %s", (formatVersion) => {
     const source = fresh();
     const target = fresh();
     const db = openSorageDatabase(source.database);
@@ -128,23 +130,43 @@ describe("schema12 reporting persistence and snapshot4", () => {
     const before = reports(db);
     db.close();
     const exp = unwrap(ports(source).exportPorts());
-    unwrap(exportSnapshot(exp));
+    const writeSnapshot = () => {
+      if (formatVersion === 4) {
+        const data = unwrap(exp.readSnapshotData());
+        if (!("exchanges" in data)) throw new Error("Expected the current export's full source data.");
+        unwrap(exp.writeSnapshotTree(unwrap(snapshotFilesV4(data)).files));
+      } else {
+        unwrap(exportSnapshot(exp));
+      }
+    };
+    writeSnapshot();
     const manifestFile = join(source.vault, "snapshots/manifest.json");
     const beforeManifest = readFileSync(manifestFile);
     const shardFile = join(source.vault, "snapshots/handoffs", HANDOFF.slice(0, 2), `${HANDOFF}.json`);
     const beforeShard = readFileSync(shardFile);
     const shard = JSON.parse(beforeShard.toString());
-    expect(JSON.parse(beforeManifest.toString()).formatVersion).toBe(4);
+    expect(JSON.parse(beforeManifest.toString()).formatVersion).toBe(formatVersion);
     expect(shard).not.toHaveProperty("reviewNote");
     expect(shard.comment).toMatchObject({ purpose: "general", active: false });
-    unwrap(exportSnapshot(exp));
+    writeSnapshot();
     expect(readFileSync(manifestFile)).toEqual(beforeManifest);
     expect(readFileSync(shardFile)).toEqual(beforeShard);
+    expect(backupVerify(unwrap(ports(source).verifyPorts()), { now: new Date(TIME) }).ok).toBe(true);
     const restoring = unwrap(ports(target, source).restorePorts());
     expect(backupRestore(restoring, { dryRun: true }).ok).toBe(true);
     unwrap(backupRestore(restoring, { dryRun: false }));
     const restored = openSorageDatabase(target.database);
     expect(reports(restored)).toEqual(before);
+    expect(
+      restored
+        .prepare(
+          `SELECT p.id AS projectId, a.id AS artifactId, c.inline_text AS body
+          FROM handoffs h JOIN projects p ON p.id = h.recipient_project_id
+          JOIN artifacts a ON a.id = h.current_artifact_id AND a.handoff_id = h.id
+          JOIN content_records c ON c.id = a.content_record_id WHERE h.id = ?`,
+        )
+        .get(HANDOFF),
+    ).toEqual({ projectId: PROJECT, artifactId: ARTIFACT, body: "body" });
     expect(restored.prepare("SELECT purpose,active,body FROM review_notes").get()).toEqual({
       purpose: "general",
       active: 0,

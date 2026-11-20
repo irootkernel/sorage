@@ -865,6 +865,59 @@ UPDATE review_notes SET active = CASE WHEN EXISTS (
 `,
 };
 
+/** Exchange working bytes and activation intents have an Installation-state scope. */
+export const EXCHANGE_FOUNDATION_MIGRATION: Migration = {
+  version: 13,
+  name: "exchange-foundation",
+  sql: `
+CREATE TABLE exchanges (
+  id TEXT PRIMARY KEY,
+  opening_project_id TEXT NOT NULL REFERENCES projects(id),
+  goal TEXT NOT NULL CHECK (length(CAST(goal AS BLOB)) BETWEEN 1 AND 8192),
+  criteria_json TEXT NOT NULL CHECK (json_valid(criteria_json) AND json_type(criteria_json) = 'array'),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE exchange_members (
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  PRIMARY KEY (exchange_id, project_id)
+);
+CREATE TABLE exchange_read_ranges (
+  exchange_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  first_seq INTEGER NOT NULL CHECK (first_seq >= 1),
+  last_seq INTEGER NOT NULL CHECK (last_seq >= first_seq),
+  PRIMARY KEY (exchange_id, project_id, first_seq),
+  FOREIGN KEY (exchange_id, project_id) REFERENCES exchange_members(exchange_id, project_id)
+);
+CREATE TABLE exchange_creation_outcomes (
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  operation_id TEXT NOT NULL CHECK (length(operation_id) > 0),
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+  PRIMARY KEY (project_id, operation_id)
+);
+CREATE TABLE exchange_working_content (
+  id TEXT PRIMARY KEY,
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  inline_text TEXT,
+  storage_key TEXT UNIQUE,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+  sha256 TEXT NOT NULL CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+  materialized INTEGER NOT NULL CHECK (materialized IN (0, 1)),
+  CHECK ((inline_text IS NULL) != (storage_key IS NULL)),
+  CHECK (inline_text IS NULL OR (materialized = 1 AND length(CAST(inline_text AS BLOB)) = size_bytes
+    AND size_bytes <= 65536)),
+  CHECK (storage_key IS NULL OR storage_key = 'content/' || id)
+);
+CREATE TABLE exchange_activation_intents (
+  content_id TEXT PRIMARY KEY REFERENCES exchange_working_content(id),
+  staging_key TEXT NOT NULL UNIQUE CHECK (staging_key = 'staging/' || content_id),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)
+);
+`,
+};
+
 export interface ProductionMigrationPlan {
   migrations: Migration[];
   rebuilds: Migration[];
@@ -875,9 +928,10 @@ export interface ProductionMigrationPlan {
  * interface section 38.7): the raw `MIGRATIONS` list stays exactly versions 1
  * to 8 — the legacy fixture catalog every historical builder migrates with —
  * while the production accessor appends the Channel migration at version 11
- * and Handoff reporting migration at version 12 as ordinary steps and registers versions 9 and 10
+ * and appends Handoff reporting at version 12 and Exchange at version 13 as
+ * ordinary steps. It registers versions 9 and 10
  * exactly once each as the rebuild-marked steps. The combined runner orders
- * every pending step by version, so ordinary 11 and 12 execute after rebuilds
+ * every pending step by version, so ordinary 11 through 13 execute after rebuilds
  * 9 and 10 inside the one guarded whole-batch path the non-empty rebuild set already
  * selects; no runner branch changes. Every production opener, the migrator's
  * admission catalog, and preflight's reference catalog consume this one
@@ -886,7 +940,7 @@ export interface ProductionMigrationPlan {
  */
 export function productionMigrationPlan(): ProductionMigrationPlan {
   return {
-    migrations: [...MIGRATIONS, CHANNEL_DOMAIN_MIGRATION, HANDOFF_REPORTING_MIGRATION],
+    migrations: [...MIGRATIONS, CHANNEL_DOMAIN_MIGRATION, HANDOFF_REPORTING_MIGRATION, EXCHANGE_FOUNDATION_MIGRATION],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };
 }
