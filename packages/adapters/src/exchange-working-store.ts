@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fsyncSync, linkSync, openSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fsyncSync, linkSync, openSync, readSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type AppError,
@@ -19,6 +19,7 @@ import {
   managedFile,
   managedPath,
   managedRoot,
+  openManagedFile,
   UnsafeManagedPathError,
 } from "./managed-paths";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -51,6 +52,11 @@ interface ExchangeWorkingIdentity {
   id: string;
   sizeBytes: number;
   sha256: string;
+}
+
+export interface PreparedExchangeBody extends ExchangeWorkingIdentity {
+  exchangeId: string;
+  inline: string | null;
 }
 
 function contains(root: string, path: string): boolean {
@@ -172,153 +178,287 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
     );
   }
 
-  return {
-    /** Persist immutable bytes; keep a file intent committed until verified activation. */
-    write(input: ExchangeWorkingBody): Result<ExchangeWorkingIdentity> {
-      if (paused()) return err(pauseRefusal());
-      if (!isMemoUuid(input.exchangeId) || !Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0) {
-        return err(appError("INTERNAL_ERROR", "Invalid Exchange working-content identity or byte bound."));
-      }
-      const id = randomUUID();
-      const staging = `staging/${id}`;
-      let root: string | undefined;
-      let staged: string | undefined;
-      let handle: number | undefined;
-      let recorded = false;
-      try {
-        // Small UTF-8 content may stay inline, so buffer only the threshold.
-        const prefix: Uint8Array[] = [];
-        let length = 0;
-        const hash = createHash("sha256");
-        const writeBytes = (bytes: Uint8Array): void => {
-          let written = 0;
-          while (written < bytes.byteLength) {
-            const count = writeSync(handle as number, bytes, written, bytes.byteLength - written);
-            if (count <= 0) throw new Error("Exchange staging did not make progress");
-            written += count;
-          }
-        };
-        const startFile = (): void => {
-          root = workingRoot(options, true);
-          const path = managedPath(root, staging, true, 0o700);
-          handle = openSync(
-            path,
-            constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-            0o600,
-          );
-          staged = path;
-          for (const bytes of prefix) writeBytes(bytes);
-          prefix.length = 0;
-        };
-        // Resolve the placement before reading input or writing DB state. We
-        // don't require a pre-existing state subdirectory for an inline body.
-        workingBoundary(options);
-        for (const chunk of input.chunks) {
-          if (chunk.byteLength > input.maxBytes - length) {
-            return err(
-              appError("ARTIFACT_TOO_LARGE", "The Exchange body crossed artifact.maxBytes.", {
-                maxBytes: input.maxBytes,
-              }),
-            );
-          }
-          length += chunk.byteLength;
-          hash.update(chunk);
-          if (handle === undefined && (input.classification === "binary" || length > CONTENT_INLINE_MAX_UTF8_BYTES)) {
-            startFile();
-          }
-          if (handle !== undefined) writeBytes(chunk);
-          else if (chunk.byteLength > 0) prefix.push(Uint8Array.from(chunk));
+  /** Prepare bytes without creating database authority. */
+  function prepare(input: ExchangeWorkingBody): Result<PreparedExchangeBody> {
+    if (paused()) return err(pauseRefusal());
+    if (!isMemoUuid(input.exchangeId) || !Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0) {
+      return err(appError("INTERNAL_ERROR", "Invalid Exchange working-content identity or byte bound."));
+    }
+    const id = randomUUID();
+    const staging = `staging/${id}`;
+    let root: string | undefined;
+    let staged: string | undefined;
+    let handle: number | undefined;
+    let prepared = false;
+    try {
+      // Small UTF-8 content may stay inline, so buffer only the threshold.
+      const prefix: Uint8Array[] = [];
+      let length = 0;
+      const hash = createHash("sha256");
+      const writeBytes = (bytes: Uint8Array): void => {
+        let written = 0;
+        while (written < bytes.byteLength) {
+          const count = writeSync(handle as number, bytes, written, bytes.byteLength - written);
+          if (count <= 0) throw new Error("Exchange staging did not make progress");
+          written += count;
         }
-        const inline =
-          handle === undefined && input.classification === "text"
-            ? decodeStrictUtf8(Buffer.concat(prefix, length))
-            : null;
-        const sha256 = hash.digest("hex");
-        if (inline !== null) {
-          const inserted = runInTransaction(
-            db,
-            "BEGIN IMMEDIATE",
-            () => {
-              db.prepare(
-                "INSERT INTO exchange_working_content (id, exchange_id, inline_text, size_bytes, sha256, materialized) VALUES (?, ?, CAST(? AS TEXT), ?, ?, 1)",
-              ).run(id, input.exchangeId, Buffer.from(inline, "utf8"), length, sha256);
-              return ok(undefined);
-            },
-            tx,
-          );
-          return inserted.ok ? ok({ id, sizeBytes: length, sha256 }) : inserted;
-        }
-        if (handle === undefined) startFile();
-        if (handle === undefined || staged === undefined) throw new Error("Exchange staging did not open");
-        fsyncSync(handle);
-        closeSync(handle);
-        handle = undefined;
-        fsyncDirectory(dirname(staged));
-        fsyncDirectory(dirname(dirname(staged)));
-        if (paused()) return err(pauseRefusal());
-        const storageKey = `content/${id}`;
-        const inserted = runInTransaction(
-          db,
-          "BEGIN IMMEDIATE",
-          () => {
-            db.prepare(
-              "INSERT INTO exchange_working_content (id, exchange_id, storage_key, size_bytes, sha256, materialized) VALUES (?, ?, ?, ?, ?, 0)",
-            ).run(id, input.exchangeId, storageKey, length, sha256);
-            db.prepare("INSERT INTO exchange_activation_intents (content_id, staging_key) VALUES (?, ?)").run(
-              id,
-              staging,
-            );
-            // A thrown COMMIT leaves the stage in place for recovery, because
-            // the caller cannot otherwise prove its bytes are unreferenced.
-            recorded = true;
-            return ok(undefined);
-          },
-          tx,
+      };
+      const startFile = (): void => {
+        root = workingRoot(options, true);
+        const path = managedPath(root, staging, true, 0o700);
+        handle = openSync(
+          path,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+          0o600,
         );
-        if (!inserted.ok) return inserted;
-        const completed = complete({
-          content_id: id,
-          staging_key: staging,
-          storage_key: storageKey,
-          size_bytes: length,
-          sha256,
+        staged = path;
+        for (const bytes of prefix) writeBytes(bytes);
+        prefix.length = 0;
+      };
+      // Resolve the placement before reading input or writing DB state. We
+      // don't require a pre-existing state subdirectory for an inline body.
+      workingBoundary(options);
+      for (const chunk of input.chunks) {
+        if (chunk.byteLength > input.maxBytes - length) {
+          return err(
+            appError("ARTIFACT_TOO_LARGE", "The Exchange body crossed artifact.maxBytes.", {
+              maxBytes: input.maxBytes,
+            }),
+          );
+        }
+        length += chunk.byteLength;
+        hash.update(chunk);
+        if (handle === undefined && (input.classification === "binary" || length > CONTENT_INLINE_MAX_UTF8_BYTES)) {
+          startFile();
+        }
+        if (handle !== undefined) writeBytes(chunk);
+        else if (chunk.byteLength > 0) prefix.push(Uint8Array.from(chunk));
+      }
+      const inline =
+        handle === undefined && input.classification === "text"
+          ? decodeStrictUtf8(Buffer.concat(prefix, length))
+          : null;
+      const sha256 = hash.digest("hex");
+      if (inline !== null) {
+        return ok({ id, exchangeId: input.exchangeId, inline, sizeBytes: length, sha256 });
+      }
+      if (handle === undefined) startFile();
+      if (handle === undefined || staged === undefined) throw new Error("Exchange staging did not open");
+      fsyncSync(handle);
+      closeSync(handle);
+      handle = undefined;
+      fsyncDirectory(dirname(staged));
+      fsyncDirectory(dirname(dirname(staged)));
+      if (paused()) return err(pauseRefusal());
+      prepared = true;
+      return ok({ id, exchangeId: input.exchangeId, inline: null, sizeBytes: length, sha256 });
+    } catch (error) {
+      return err(contentFailure(error, id));
+    } finally {
+      try {
+        if (handle !== undefined) closeSync(handle);
+        if (!prepared && staged !== undefined && root !== undefined) {
+          const pending = managedFile(root, staging);
+          if (pending.stat !== undefined) unlinkSync(pending.path);
+        }
+      } catch {
+        // Preserve the original failure; never follow a changed stage path.
+      }
+    }
+  }
+
+  function intentOf(body: PreparedExchangeBody): ActivationRow {
+    return {
+      content_id: body.id,
+      staging_key: `staging/${body.id}`,
+      storage_key: `content/${body.id}`,
+      size_bytes: body.sizeBytes,
+      sha256: body.sha256,
+    };
+  }
+
+  /** Invoke only inside the same transaction as the body owner and its operation outcome. */
+  function record(body: PreparedExchangeBody): void {
+    if (body.inline !== null) {
+      db.prepare(
+        "INSERT INTO exchange_working_content (id, exchange_id, inline_text, size_bytes, sha256, materialized) VALUES (?, ?, CAST(? AS TEXT), ?, ?, 1)",
+      ).run(body.id, body.exchangeId, Buffer.from(body.inline, "utf8"), body.sizeBytes, body.sha256);
+      return;
+    }
+    const intent = intentOf(body);
+    db.prepare(
+      "INSERT INTO exchange_working_content (id, exchange_id, storage_key, size_bytes, sha256, materialized) VALUES (?, ?, ?, ?, ?, 0)",
+    ).run(body.id, body.exchangeId, intent.storage_key, body.sizeBytes, body.sha256);
+    db.prepare("INSERT INTO exchange_activation_intents (content_id, staging_key) VALUES (?, ?)").run(
+      body.id,
+      intent.staging_key,
+    );
+  }
+
+  function discard(body: PreparedExchangeBody): void {
+    if (body.inline !== null) return;
+    try {
+      const pending = managedFile(workingRoot(options, false), intentOf(body).staging_key);
+      if (pending.stat !== undefined) unlinkSync(pending.path);
+    } catch {
+      // Cleanup is best effort and must never follow a changed stage path.
+    }
+  }
+
+  /** A failed COMMIT can leave the outcome uncertain until committed state can be read. */
+  function discardAfterFailedCommit(body: PreparedExchangeBody): void {
+    if (body.inline !== null) return;
+    try {
+      // The Bun and Node SQLite adapters expose the same autocommit state under different names.
+      const inTransaction =
+        "inTransaction" in db ? db.inTransaction : "isTransaction" in db ? db.isTransaction : undefined;
+      if (inTransaction !== false) return;
+      const owner = db
+        .prepare(
+          `SELECT 1 FROM exchange_working_content WHERE id = ?
+          UNION ALL SELECT 1 FROM exchange_activation_intents WHERE content_id = ? OR staging_key = ? LIMIT 1`,
+        )
+        .get(body.id, body.id, intentOf(body).staging_key);
+      if (owner === null || owner === undefined) discard(body);
+    } catch {
+      // An inconclusive observation leaves the exact stage available for recovery.
+    }
+  }
+
+  function finish(body: PreparedExchangeBody): Result<void> {
+    return body.inline !== null ? ok(undefined) : complete(intentOf(body));
+  }
+
+  function recover(exchangeId?: string, skipContentId?: string): Result<{ resolved: string[]; failures: AppError[] }> {
+    const resolved: string[] = [];
+    const failures: AppError[] = [];
+    try {
+      const intents = db
+        .prepare<ActivationRow>(
+          `SELECT i.content_id, i.staging_key, c.storage_key, c.size_bytes, c.sha256
+        FROM exchange_activation_intents i LEFT JOIN exchange_working_content c ON c.id = i.content_id
+        WHERE (? IS NULL OR c.exchange_id = ?) AND (? IS NULL OR i.content_id <> ?) ORDER BY i.content_id`,
+        )
+        .all(exchangeId ?? null, exchangeId ?? null, skipContentId ?? null, skipContentId ?? null);
+      for (const intent of intents) {
+        const outcome = complete(intent);
+        if (outcome.ok) resolved.push(intent.content_id);
+        else failures.push(outcome.error);
+      }
+    } catch (error) {
+      return err(databaseFailure(error));
+    }
+    return ok({ resolved, failures });
+  }
+
+  return {
+    prepare,
+    record,
+    discard,
+    discardAfterFailedCommit,
+    finish,
+    recover,
+
+    /** Standalone foundation fixture path. Producers attach record() to their domain transaction. */
+    write(input: ExchangeWorkingBody): Result<ExchangeWorkingIdentity> {
+      const body = prepare(input);
+      if (!body.ok) return body;
+      let commitAttempted = false;
+      const inserted = runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
+          record(body.value);
+          commitAttempted = true;
+          return ok(undefined);
+        },
+        tx,
+      );
+      if (!inserted.ok) {
+        if (!commitAttempted) discard(body.value);
+        return inserted;
+      }
+      const completed = finish(body.value);
+      const { id, sizeBytes, sha256 } = body.value;
+      return completed.ok ? ok({ id, sizeBytes, sha256 }) : completed;
+    },
+
+    /** Read a verified slice on the existing admitted read connection. */
+    planRead(exchangeId: string, id: string, offset: number, limit: number): Result<() => Result<Buffer>> {
+      const body = db
+        .prepare(
+          "SELECT inline_text, storage_key, size_bytes, sha256, materialized FROM exchange_working_content WHERE id = ? AND exchange_id = ?",
+        )
+        .get(id, exchangeId) as
+        | {
+            inline_text: string | null;
+            storage_key: string | null;
+            size_bytes: number;
+            sha256: string;
+            materialized: number;
+          }
+        | undefined;
+      if (!body) return err(appError("CONTENT_CORRUPTED", "The registered Exchange body record is missing."));
+      if (!body.materialized) {
+        return err({
+          ...appError("CONTENT_MATERIALIZING", "The committed Exchange body is awaiting verified activation."),
+          recovery: {
+            suggestedCommand: "Run an authorized Exchange write or join for this Exchange, then retry the read",
+          },
         });
-        return completed.ok ? ok({ id, sizeBytes: length, sha256 }) : completed;
-      } catch (error) {
-        return err(contentFailure(error, id));
-      } finally {
+      }
+      if (offset > body.size_bytes) return err(appError("EXCHANGE_INVALID_INPUT", "The offset is past the body end."));
+      return ok(() => {
         try {
-          if (handle !== undefined) closeSync(handle);
-          if (!recorded && staged !== undefined && root !== undefined) {
-            const pending = managedFile(root, staging);
-            if (pending.stat !== undefined) unlinkSync(pending.path);
+          if (body.inline_text !== null) {
+            const bytes = Buffer.from(body.inline_text, "utf8");
+            if (bytes.length !== body.size_bytes || createHash("sha256").update(bytes).digest("hex") !== body.sha256) {
+              throw new Error("The inline body disagrees with its recorded size or digest");
+            }
+            return ok(bytes.subarray(offset, offset + limit));
+          }
+          if (body.storage_key !== `content/${id}`) throw new Error("Invalid Exchange working-content key");
+          const fd = openManagedFile(workingRoot(options, false), body.storage_key);
+          try {
+            const hash = createHash("sha256");
+            const chunk = Buffer.alloc(65_536);
+            const bytes = Buffer.alloc(Math.min(limit, body.size_bytes - offset));
+            let position = 0;
+            for (;;) {
+              const count = readSync(fd, chunk, 0, chunk.length, position);
+              if (count === 0) break;
+              if (count > body.size_bytes - position) throw new Error("The file exceeds its recorded size");
+              hash.update(chunk.subarray(0, count));
+              const start = Math.max(offset, position);
+              const end = Math.min(offset + bytes.length, position + count);
+              if (end > start) chunk.copy(bytes, start - offset, start - position, end - position);
+              position += count;
+            }
+            if (position !== body.size_bytes || hash.digest("hex") !== body.sha256) {
+              throw new Error("The file disagrees with its recorded size or digest");
+            }
+            return ok(bytes);
+          } finally {
+            closeSync(fd);
           }
         } catch {
-          // Preserve the original failure; never follow a changed stage path.
+          return err({
+            ...appError("CONTENT_CORRUPTED", "The verified Exchange working bytes are missing or corrupt."),
+            recovery: {
+              suggestedCommand:
+                "Ask the owning Project to share new material. Exchange working bytes are outside backup",
+            },
+          });
         }
-      }
+      });
     },
 
     /** Scoped Exchange recovery. Shared backup and Vault operations can proceed without disposable bytes. */
-    drain(): Result<string[]> {
-      const resolved: string[] = [];
-      try {
-        const intents = db
-          .prepare<ActivationRow>(
-            `SELECT i.content_id, i.staging_key, c.storage_key, c.size_bytes, c.sha256
-           FROM exchange_activation_intents i LEFT JOIN exchange_working_content c ON c.id = i.content_id
-           ORDER BY i.content_id`,
-          )
-          .all();
-        for (const intent of intents) {
-          const outcome = complete(intent);
-          if (!outcome.ok) return outcome;
-          resolved.push(intent.content_id);
-        }
-      } catch (error) {
-        return err(databaseFailure(error));
-      }
-      return ok(resolved);
+    drain(exchangeId?: string, skipContentId?: string): Result<string[]> {
+      const result = recover(exchangeId, skipContentId);
+      if (!result.ok) return result;
+      const first = result.value.failures[0];
+      return first ? err(first) : ok(result.value.resolved);
     },
   };
 }

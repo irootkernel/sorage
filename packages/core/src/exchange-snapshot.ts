@@ -1,6 +1,8 @@
 import { canonicalJson, type SnapshotFile, type SnapshotProject } from "./backup-snapshot";
 import { isLowercaseSha256, isUtf8ExactText, sha256OfText, utf8ByteLength } from "./content";
 import { appError, err, ok, type Result } from "./errors";
+import { canonicalExchangeCollaboration, validateExchangeCollaboration } from "./exchange-collaboration-snapshot";
+import type { ExchangeCollaboration } from "./exchanges";
 import { type SnapshotDataV4, snapshotFilesV4 } from "./handoff-reporting-snapshot";
 import { memoObject } from "./memo-protocol";
 import { type ExchangeSnapshotManifest, parseUniqueSnapshotJson } from "./memo-snapshot";
@@ -29,10 +31,12 @@ export interface ExchangeSnapshotRecord {
   members: string[];
   readRanges: ExchangeReadRange[];
   creationOutcomes: ExchangeCreationOutcome[];
+  collaboration?: ExchangeCollaboration;
 }
 
 export interface SnapshotDataV5 extends SnapshotDataV4 {
   exchanges: ExchangeSnapshotRecord[];
+  exchangeRepresentation?: "foundation" | "collaboration";
 }
 
 /** Capability discriminator for the first Exchange record family within global format 5. */
@@ -64,13 +68,14 @@ function canonicalRecords(records: ExchangeSnapshotRecord[]): ExchangeSnapshotRe
       creationOutcomes: [...record.creationOutcomes].sort(
         (a, b) => compare(a.projectId, b.projectId) || compare(a.operationId, b.operationId),
       ),
+      ...(record.collaboration ? { collaboration: canonicalExchangeCollaboration(record.collaboration) } : {}),
     }));
 }
 
-function serialize(records: ExchangeSnapshotRecord[]): string {
+function serialize(records: ExchangeSnapshotRecord[], representation: "foundation" | "collaboration"): string {
   const canonical = canonicalRecords(records);
   return canonicalJson({
-    representation: FOUNDATION_REPRESENTATION,
+    representation,
     recordsSha256: sha256OfText(canonicalJson(canonical)),
     records: canonical,
   });
@@ -81,6 +86,7 @@ export function validateExchangeInventory(
   records: unknown,
   projects: Pick<SnapshotProject, "id">[],
   count: number,
+  representation?: "foundation" | "collaboration",
 ): Result<ExchangeSnapshotRecord[]> {
   if (!Array.isArray(records) || records.length !== count) {
     return corrupt("The manifest's Exchange count disagrees with its retained inventory.");
@@ -90,16 +96,11 @@ export function validateExchangeInventory(
   const outcomeKeys = new Set<string>();
   for (const record of records) {
     if (
-      !memoObject(record, [
-        "id",
-        "openingProjectId",
-        "goal",
-        "criteria",
-        "createdAt",
-        "members",
-        "readRanges",
-        "creationOutcomes",
-      ]) ||
+      !memoObject(
+        record,
+        ["id", "openingProjectId", "goal", "criteria", "createdAt", "members", "readRanges", "creationOutcomes"],
+        ["collaboration"],
+      ) ||
       !isMemoUuid(record.id) ||
       !isMemoUuid(record.openingProjectId) ||
       !isMemoTimestamp(record.createdAt) ||
@@ -114,6 +115,10 @@ export function validateExchangeInventory(
     ) {
       return corrupt("An Exchange foundation record has invalid fields.");
     }
+    const collaboration = Object.hasOwn(record, "collaboration");
+    if (representation !== undefined && collaboration !== (representation === "collaboration")) {
+      return corrupt("An Exchange collaboration record has invalid fields or associations.");
+    }
     if (exchangeIds.has(record.id)) return corrupt("The Exchange inventory repeats an Exchange identity.");
     exchangeIds.add(record.id);
     const members = new Set<string>();
@@ -126,6 +131,9 @@ export function validateExchangeInventory(
     if (members.size < 2 || !members.has(record.openingProjectId)) {
       return corrupt("An Exchange foundation roster must include its opening Project and a peer.");
     }
+    if (collaboration && !validateExchangeCollaboration(record.collaboration, record.id, members)) {
+      return corrupt("An Exchange collaboration record has invalid fields or associations.");
+    }
     const ranges = new Map<string, Array<{ firstSeq: number; lastSeq: number }>>();
     for (const range of record.readRanges) {
       if (
@@ -134,7 +142,8 @@ export function validateExchangeInventory(
         !members.has(range.projectId) ||
         !positiveSequence(range.firstSeq) ||
         !positiveSequence(range.lastSeq) ||
-        range.lastSeq < range.firstSeq
+        range.lastSeq < range.firstSeq ||
+        (collaboration && range.lastSeq > (record.collaboration as ExchangeCollaboration).lastSeq)
       ) {
         return corrupt("An Exchange read range has invalid fields or membership.");
       }
@@ -180,13 +189,14 @@ export function openExchangeSnapshot(raw: string, count: number): Result<Exchang
   if (!memoObject(value, ["representation", "recordsSha256", "records"]) || !nonemptyText(value.representation)) {
     return corrupt("The Exchange snapshot has invalid framing.");
   }
-  if (value.representation !== FOUNDATION_REPRESENTATION) {
+  if (value.representation !== FOUNDATION_REPRESENTATION && value.representation !== "collaboration") {
     return err(appError("VAULT_SCHEMA_UNSUPPORTED", "This Exchange snapshot representation is not supported."));
   }
+  const representation = value.representation;
   return ok((projects) => {
-    const validated = validateExchangeInventory(value.records, projects, count);
+    const validated = validateExchangeInventory(value.records, projects, count, representation);
     if (!validated.ok) return validated;
-    if (serialize(validated.value) !== raw)
+    if (serialize(validated.value, representation) !== raw)
       return corrupt("The Exchange inventory digest or canonical bytes disagree.");
     return validated;
   });
@@ -204,7 +214,8 @@ export function parseExchangeSnapshot(
 export function snapshotFilesV5(
   data: SnapshotDataV5,
 ): Result<{ files: SnapshotFile[]; manifest: ExchangeSnapshotManifest }> {
-  const inventory = validateExchangeInventory(data.exchanges, data.projects, data.exchanges.length);
+  const representation = data.exchangeRepresentation ?? FOUNDATION_REPRESENTATION;
+  const inventory = validateExchangeInventory(data.exchanges, data.projects, data.exchanges.length, representation);
   if (!inventory.ok) return inventory;
   const older = snapshotFilesV4(data);
   if (!older.ok) return older;
@@ -218,7 +229,7 @@ export function snapshotFilesV5(
       ...older.value.files.map((file) =>
         file.path === "manifest.json" ? { ...file, content: canonicalJson(manifest) } : file,
       ),
-      { path: EXCHANGE_SNAPSHOT_FILE, content: serialize(inventory.value) },
+      { path: EXCHANGE_SNAPSHOT_FILE, content: serialize(inventory.value, representation) },
     ],
     manifest,
   });

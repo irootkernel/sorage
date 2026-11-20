@@ -126,6 +126,7 @@ import {
 import * as daemonModule from "@sorage/daemon";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { registerChannelCommands } from "./channel-commands";
+import { registerExchangeCommands } from "./exchange-commands";
 import { buildCompletionScript } from "./completion";
 import { createDaemonRuntimePorts, daemonRestart, daemonStart, daemonStatus, daemonStop } from "./daemon-commands";
 import { expandTilde } from "./expand-tilde";
@@ -562,6 +563,28 @@ export function buildProgram(
     },
     usageExit: () => {
       reportExitCode(2);
+    },
+  });
+
+  registerExchangeCommands(program, {
+    out: ports.out,
+    requestId,
+    fail: (error, json, fresh) =>
+      reportExitCode(
+        renderAppError(
+          error,
+          ports,
+          json,
+          undefined,
+          fresh ? { logMessage: "An admitted Exchange write returned a failure." } : { log: false },
+        ),
+      ),
+    activationWarning: (code, id) => {
+      try {
+        failureLogger()?.warn("exchange.activation_warning", { code, requestId: id });
+      } catch {
+        // A logging failure cannot change the committed result.
+      }
     },
   });
 
@@ -2862,6 +2885,9 @@ const COVERED_READ_OPERANDS: ReadonlyArray<readonly string[]> = [
   ["channel", "messages"],
   ["channel", "list"],
   ["channel", "show"],
+  // A normal Exchange mutation can resolve entirely through receipt inspection.
+  // Its focused dispatcher owns write admission. Parser failures must stay log-free.
+  ["exchange"],
 ];
 
 /**
@@ -3292,6 +3318,8 @@ export interface RenderOptions {
    * guidance, and a property of the log-free render itself).
    */
   log?: boolean;
+  /** Record a fixed message when the user-facing explanation carries scoped context. */
+  logMessage?: string;
 }
 
 /** The log-free `INTERNAL_ERROR` recovery, so no covered-read route can miss it. */
@@ -3312,7 +3340,8 @@ export function renderAppError(
     options.log === false && error.code === "INTERNAL_ERROR" && error.recovery === undefined
       ? { ...error, recovery: { suggestedCommand: logFreeInternalRecovery(id) } }
       : error;
-  if (options.log !== false) logCommandFailure(error, id);
+  if (options.log !== false)
+    logCommandFailure(options.logMessage === undefined ? error : { ...error, message: options.logMessage }, id);
   if (json) {
     ports.err(`${JSON.stringify(errorEnvelope(rendered, id), null, 2)}\n`);
   } else {

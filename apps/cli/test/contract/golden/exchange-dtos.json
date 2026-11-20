@@ -1,0 +1,375 @@
+{
+  "create": {
+    "ok": true,
+    "data": {
+      "kind": "create",
+      "exchangeId": "<uuid>",
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "createReplay": {
+    "ok": true,
+    "data": {
+      "kind": "create",
+      "exchangeId": "<uuid>",
+      "replayed": true
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "join": {
+    "ok": true,
+    "data": {
+      "openingProjectId": "<uuid>",
+      "goal": "Check coverage",
+      "lastSeq": 0,
+      "createdAt": "<time>",
+      "exchangeId": "<uuid>",
+      "criteria": [
+        "Observe all rows"
+      ],
+      "projectId": "<uuid>",
+      "state": "active",
+      "members": [
+        "<uuid>",
+        "<uuid>"
+      ],
+      "requests": [],
+      "reports": [],
+      "acceptances": [],
+      "readRanges": [],
+      "claimId": "<uuid>",
+      "expiresAt": "<time>"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "send": {
+    "ok": true,
+    "data": {
+      "kind": "send",
+      "exchangeId": "<uuid>",
+      "seq": 1,
+      "materialId": "<uuid>",
+      "replayed": false,
+      "availability": "available"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "request": {
+    "ok": true,
+    "data": {
+      "kind": "request",
+      "exchangeId": "<uuid>",
+      "seq": 2,
+      "requestId": "<uuid>",
+      "assignmentVersion": 1,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "materialRegister": {
+    "ok": true,
+    "data": {
+      "kind": "material-register",
+      "exchangeId": "<uuid>",
+      "materialId": "<uuid>",
+      "replayed": false,
+      "availability": "available"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "materialPage": {
+    "ok": true,
+    "data": {
+      "materialId": "<uuid>",
+      "kind": "copy",
+      "encoding": "base64",
+      "bytes": "b2Jz",
+      "offset": 0,
+      "sizeBytes": 8,
+      "sha256": "604cee807f644af47487bf2bbab442b94212ac5119f36f995f78e9e4694dae8c",
+      "end": false,
+      "nextOffset": 3
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "externalRegister": {
+    "ok": true,
+    "data": {
+      "kind": "material-register",
+      "exchangeId": "<uuid>",
+      "materialId": "<uuid>",
+      "replayed": false,
+      "availability": "available"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "externalReference": {
+    "ok": true,
+    "data": {
+      "materialId": "<uuid>",
+      "kind": "external",
+      "descriptor": {
+        "access": "run-id",
+        "value": "checks/qualified-1"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "report": {
+    "ok": true,
+    "data": {
+      "kind": "report",
+      "exchangeId": "<uuid>",
+      "seq": 3,
+      "requestId": "<uuid>",
+      "reportVersion": 1,
+      "materialId": "<uuid>",
+      "replayed": false,
+      "availability": "available"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "accept": {
+    "ok": true,
+    "data": {
+      "kind": "accept",
+      "exchangeId": "<uuid>",
+      "sequences": [
+        4
+      ],
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "inspect": {
+    "ok": true,
+    "data": {
+      "openingProjectId": "<uuid>",
+      "goal": "Check coverage",
+      "lastSeq": 4,
+      "createdAt": "<time>",
+      "exchangeId": "<uuid>",
+      "criteria": [
+        "Observe all rows"
+      ],
+      "projectId": "<uuid>",
+      "state": "active",
+      "members": [
+        "<uuid>",
+        "<uuid>"
+      ],
+      "requests": [
+        {
+          "id": "<uuid>",
+          "requesterId": "<uuid>",
+          "assigneeId": "<uuid>",
+          "assignmentVersion": 1,
+          "condition": "Collect both pages",
+          "criteria": [
+            "Return named evidence"
+          ],
+          "report": {
+            "requestId": "<uuid>",
+            "version": 1,
+            "assignmentVersion": 1,
+            "authorId": "<uuid>",
+            "materialId": "<uuid>",
+            "evidence": [
+              "<uuid>"
+            ]
+          },
+          "acceptance": {
+            "requestId": "<uuid>",
+            "reportVersion": 1,
+            "requesterId": "<uuid>",
+            "acceptedAt": "<time>"
+          },
+          "state": "resolved"
+        }
+      ],
+      "reports": [
+        {
+          "requestId": "<uuid>",
+          "version": 1,
+          "assignmentVersion": 1,
+          "authorId": "<uuid>",
+          "materialId": "<uuid>",
+          "evidence": [
+            "<uuid>"
+          ]
+        }
+      ],
+      "acceptances": [
+        {
+          "requestId": "<uuid>",
+          "reportVersion": 1,
+          "requesterId": "<uuid>",
+          "acceptedAt": "<time>"
+        }
+      ],
+      "readRanges": []
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "history": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "messages": [
+        {
+          "seq": 1,
+          "senderId": "<uuid>",
+          "recipientId": "<uuid>",
+          "kind": "information",
+          "replyTo": null,
+          "materialId": "<uuid>",
+          "requestId": null,
+          "reportVersion": null,
+          "createdAt": "<time>"
+        },
+        {
+          "seq": 2,
+          "senderId": "<uuid>",
+          "recipientId": "<uuid>",
+          "kind": "request",
+          "replyTo": 1,
+          "materialId": null,
+          "requestId": "<uuid>",
+          "reportVersion": null,
+          "createdAt": "<time>"
+        }
+      ],
+      "hasMore": true,
+      "afterSeq": 2,
+      "lastSeq": 4
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "confirmRead": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 1
+        },
+        {
+          "firstSeq": 3,
+          "lastSeq": 3
+        }
+      ],
+      "changed": true
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "repeatRead": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 1
+        },
+        {
+          "firstSeq": 3,
+          "lastSeq": 3
+        }
+      ],
+      "changed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "recover": {
+    "ok": true,
+    "data": {
+      "operations": [
+        {
+          "operationId": "report-1",
+          "outcome": {
+            "kind": "report",
+            "exchangeId": "<uuid>",
+            "seq": 3,
+            "requestId": "<uuid>",
+            "reportVersion": 1,
+            "materialId": "<uuid>"
+          }
+        }
+      ]
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "pendingWarning": {
+    "ok": true,
+    "data": {
+      "kind": "send",
+      "exchangeId": "<uuid>",
+      "seq": 5,
+      "materialId": "<uuid>",
+      "replayed": false,
+      "availability": "pending",
+      "warnings": [
+        {
+          "code": "INTERNAL_ERROR",
+          "message": "Updating Exchange working storage failed.",
+          "recovery": {
+            "suggestedCommand": "Run an authorized Exchange write or join for this Exchange to retry pending material"
+          }
+        }
+      ]
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "pendingRead": {
+    "ok": false,
+    "error": {
+      "code": "CONTENT_MATERIALIZING",
+      "message": "The committed Exchange body is awaiting verified activation.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Run an authorized Exchange write or join for this Exchange, then retry the read"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  }
+}

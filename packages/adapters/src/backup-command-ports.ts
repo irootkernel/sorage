@@ -103,7 +103,11 @@ import {
   validateMemoContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
-import { EXCHANGE_FOUNDATION_TABLES, readExchangeRecords, restoreExchangeRecords } from "./exchange-records";
+import {
+  EXCHANGE_FOUNDATION_TABLES,
+  readExchangeCollaborationRecords,
+  restoreExchangeRecords,
+} from "./exchange-records";
 import { createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
@@ -533,7 +537,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   }
 
   /** Reads the complete snapshot set inside one consistent read transaction (BKP-007). */
-  function readSnapshotData(): Result<SnapshotDataV5, AppError> {
+  function readSnapshotData(redactWorkspacePaths: boolean): Result<SnapshotDataV5, AppError> {
     return withDatabase((db) => {
       try {
         db.exec("BEGIN");
@@ -613,7 +617,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           ...mapSnapshotData({ projects, bindings, handoffs, artifacts, reviewNotes, deletionRequests, events }),
           memos: memosResult.value.memos,
           channels: channelsResult.value.channels,
-          exchanges: readExchangeRecords(db),
+          exchanges: readExchangeCollaborationRecords(db, redactWorkspacePaths),
+          exchangeRepresentation: "collaboration",
         });
       } catch (error) {
         db.exec("ROLLBACK");
@@ -1880,7 +1885,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       return ok({
         vaultPath,
         redactWorkspacePaths: view.value.redactWorkspacePaths,
-        readSnapshotData,
+        readSnapshotData: () => readSnapshotData(view.value.redactWorkspacePaths),
         writeSnapshotTree: writeSnapshotTree(vaultPath),
       });
     },

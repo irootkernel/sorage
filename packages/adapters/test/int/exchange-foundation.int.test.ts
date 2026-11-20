@@ -151,7 +151,7 @@ describe("the real SQLite Exchange storage foundation", () => {
     }
     const reopened = openAndMigrate(path, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(counts(reopened.db, "schema_migrations")).toBe(13);
+      expect(counts(reopened.db, "schema_migrations")).toBe(14);
     } finally {
       reopened.db.close();
     }
@@ -421,7 +421,10 @@ describe("the real SQLite Exchange storage foundation", () => {
     if (defect === "missing") rmSync(path);
     else if (defect === "malformed") writeFileSync(path, clean.replace('"goal":', '"leaseClaims": [], "goal":'));
     else {
-      writeFileSync(path, clean.replace('"foundation"', '"later-required-class"'));
+      writeFileSync(
+        path,
+        clean.replace('"representation": "collaboration"', '"representation": "later-required-class"'),
+      );
       writeFileSync(join(source.snapshots, "events.jsonl"), "not-json\n");
     }
     const refusal = { ok: false, error: { code } };

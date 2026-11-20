@@ -1680,6 +1680,102 @@
     "human": "CHN_CLOSED: rendering probe\nRecovery: Reopen is not offered; use or create another Channel explicitly\n"
   },
   {
+    "code": "EXCHANGE_INVALID_INPUT",
+    "exitCode": 64,
+    "httpStatus": 422,
+    "recovery": {
+      "suggestedCommand": "Check the Exchange operands and recorded limits"
+    },
+    "renderedExitCode": 64,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "EXCHANGE_INVALID_INPUT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Check the Exchange operands and recorded limits"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "EXCHANGE_INVALID_INPUT: rendering probe\nRecovery: Check the Exchange operands and recorded limits\n"
+  },
+  {
+    "code": "EXCHANGE_CLAIM_CONFLICT",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Inspect the current claim and use exchange join with the required authority"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "EXCHANGE_CLAIM_CONFLICT",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Inspect the current claim and use exchange join with the required authority"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "EXCHANGE_CLAIM_CONFLICT: rendering probe\nRecovery: Inspect the current claim and use exchange join with the required authority\n"
+  },
+  {
+    "code": "EXCHANGE_REPLAY_UNAVAILABLE",
+    "exitCode": 75,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Inspect Exchange recovery. Preserve the original operation ID and do not execute automatically"
+    },
+    "renderedExitCode": 75,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "EXCHANGE_REPLAY_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Inspect Exchange recovery. Preserve the original operation ID and do not execute automatically"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "EXCHANGE_REPLAY_UNAVAILABLE: rendering probe\nRecovery: Inspect Exchange recovery. Preserve the original operation ID and do not execute automatically\n"
+  },
+  {
+    "code": "EXCHANGE_MATERIAL_UNAVAILABLE",
+    "exitCode": 66,
+    "httpStatus": 409,
+    "recovery": {
+      "suggestedCommand": "Ask the owning Project to restore access or share the material again"
+    },
+    "renderedExitCode": 66,
+    "json": {
+      "ok": false,
+      "error": {
+        "code": "EXCHANGE_MATERIAL_UNAVAILABLE",
+        "message": "rendering probe",
+        "details": {},
+        "recovery": {
+          "suggestedCommand": "Ask the owning Project to restore access or share the material again"
+        }
+      },
+      "meta": {
+        "requestId": "2f0ac9a0-0000-4000-8000-0000000000aa"
+      }
+    },
+    "human": "EXCHANGE_MATERIAL_UNAVAILABLE: rendering probe\nRecovery: Ask the owning Project to restore access or share the material again\n"
+  },
+  {
     "code": "INTERNAL_ERROR",
     "exitCode": 1,
     "httpStatus": 500,

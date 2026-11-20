@@ -74,6 +74,10 @@ export const ERROR_CODES = [
   "CHN_INVALID_INPUT",
   "CHN_TOO_LARGE",
   "CHN_CLOSED",
+  "EXCHANGE_INVALID_INPUT",
+  "EXCHANGE_CLAIM_CONFLICT",
+  "EXCHANGE_REPLAY_UNAVAILABLE",
+  "EXCHANGE_MATERIAL_UNAVAILABLE",
   "INTERNAL_ERROR",
   "STORAGE_MIGRATION_REQUIRED",
 ] as const;
@@ -187,6 +191,11 @@ const RECOVERY: Partial<Record<ErrorCode, string>> = {
   CHN_INVALID_INPUT: "Check the Channel name, handles, message kind, --to rule and bounds",
   CHN_TOO_LARGE: "Reduce the Channel body or encoded request size",
   CHN_CLOSED: "Reopen is not offered; use or create another Channel explicitly",
+  EXCHANGE_INVALID_INPUT: "Check the Exchange operands and recorded limits",
+  EXCHANGE_CLAIM_CONFLICT: "Inspect the current claim and use exchange join with the required authority",
+  EXCHANGE_REPLAY_UNAVAILABLE:
+    "Inspect Exchange recovery. Preserve the original operation ID and do not execute automatically",
+  EXCHANGE_MATERIAL_UNAVAILABLE: "Ask the owning Project to restore access or share the material again",
   INTERNAL_ERROR:
     "Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis",
   STORAGE_MIGRATION_REQUIRED:
@@ -264,6 +273,10 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   CHN_INVALID_INPUT: 422,
   CHN_TOO_LARGE: 413,
   CHN_CLOSED: 409,
+  EXCHANGE_INVALID_INPUT: 422,
+  EXCHANGE_CLAIM_CONFLICT: 409,
+  EXCHANGE_REPLAY_UNAVAILABLE: 409,
+  EXCHANGE_MATERIAL_UNAVAILABLE: 409,
   INTERNAL_ERROR: 500,
   STORAGE_MIGRATION_REQUIRED: 422,
 };
@@ -285,6 +298,10 @@ const EXIT_CODE: Record<ErrorCode, number> = {
   CHN_INVALID_INPUT: 64,
   CHN_TOO_LARGE: 65,
   CHN_CLOSED: 65,
+  EXCHANGE_INVALID_INPUT: 64,
+  EXCHANGE_CLAIM_CONFLICT: 75,
+  EXCHANGE_REPLAY_UNAVAILABLE: 75,
+  EXCHANGE_MATERIAL_UNAVAILABLE: 66,
   INTERNAL_ERROR: 1,
   STORAGE_MIGRATION_REQUIRED: 78,
   AMBIGUOUS_PROJECT: 64,

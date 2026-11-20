@@ -67,6 +67,46 @@ function inventory(data: SnapshotDataV5): string {
 }
 
 describe("the global format-5 Exchange inventory", () => {
+  it("refuses canonical collaboration progress above its sequence floor while accepting historical foundation ranges", () => {
+    const data = fixture();
+    const base = data.exchanges[0];
+    if (!base) throw new Error("missing fixture Exchange");
+    expect(parseExchangeSnapshot(inventory(data), data.projects, 1).ok).toBe(true);
+    const collaboration = {
+      lastSeq: 5,
+      messages: [],
+      requests: [],
+      reports: [],
+      acceptances: [],
+      materials: [],
+      operations: [],
+    };
+    const records = [
+      {
+        ...base,
+        members: [...base.members].sort(),
+        readRanges: [...base.readRanges].sort((a, b) => a.firstSeq - b.firstSeq),
+        collaboration,
+      },
+    ];
+    const raw = canonicalJson({
+      representation: "collaboration",
+      recordsSha256: sha256OfText(canonicalJson(records)),
+      records,
+    });
+    expect(parseExchangeSnapshot(raw, data.projects, 1)).toMatchObject({
+      ok: false,
+      error: { code: "VAULT_INTEGRITY_ERROR" },
+    });
+    expect(snapshotFilesV5({ ...data, exchangeRepresentation: "collaboration", exchanges: records })).toMatchObject({
+      ok: false,
+      error: { code: "VAULT_INTEGRITY_ERROR" },
+    });
+    collaboration.lastSeq = 6;
+    const matching = inventory({ ...data, exchangeRepresentation: "collaboration", exchanges: records });
+    expect(parseExchangeSnapshot(matching, data.projects, 1).ok).toBe(true);
+  });
+
   it("is deterministic without changing the legacy writer or its manifest framing", () => {
     const data = fixture();
     const before = inventory(data);

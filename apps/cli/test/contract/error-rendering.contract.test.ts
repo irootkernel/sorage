@@ -95,7 +95,7 @@ describe("the symbolic error catalogue contract", () => {
     const inDocsNotCode = [...docs15.keys()].filter((code) => !codes.includes(code));
     expect(inCodeNotDocs, "codes emitted but absent from the table").toEqual([]);
     expect(inDocsNotCode, "documented codes absent from runtime").toEqual([]);
-    expect(codes).toHaveLength(72);
+    expect(codes).toHaveLength(76);
   });
 
   it("maps every code to the HTTP status and recovery the table documents", () => {

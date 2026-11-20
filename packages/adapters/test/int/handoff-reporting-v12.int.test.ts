@@ -89,7 +89,7 @@ describe("schema-12 reporting persistence and current snapshot", () => {
       const backup = join(home, "pre-upgrade.sqlite3");
       copyFileSync(database, backup);
       const current = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
-      expect(current.outcome.appliedVersions).toEqual([12, 13]);
+      expect(current.outcome.appliedVersions).toEqual([12, 13, 14]);
       expect(current.db.prepare("SELECT purpose,active,body FROM review_notes").get()).toEqual({
         purpose: "change_request",
         active: state === "changes_requested" ? 1 : 0,

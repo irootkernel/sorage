@@ -1,4 +1,9 @@
 import type { ExchangeSnapshotRecord } from "@sorage/core";
+import {
+  EXCHANGE_COLLABORATION_TABLES,
+  readExchangeCollaboration,
+  restoreExchangeCollaboration,
+} from "./exchange-collaboration-records";
 import type { SorageSqlite } from "./sqlite/connection";
 
 export const EXCHANGE_FOUNDATION_TABLES = [
@@ -8,6 +13,7 @@ export const EXCHANGE_FOUNDATION_TABLES = [
   "exchange_creation_outcomes",
   "exchange_working_content",
   "exchange_activation_intents",
+  ...EXCHANGE_COLLABORATION_TABLES,
 ] as const;
 
 interface FoundationRow {
@@ -76,6 +82,13 @@ export function readExchangeRecords(db: SorageSqlite): ExchangeSnapshotRecord[] 
   return [...snapshots.values()];
 }
 
+export function readExchangeCollaborationRecords(db: SorageSqlite, redact: boolean): ExchangeSnapshotRecord[] {
+  return readExchangeRecords(db).map((row) => ({
+    ...row,
+    collaboration: readExchangeCollaboration(db, row.id, redact),
+  }));
+}
+
 /** Restore validated compact records in the existing import transaction, after Projects. */
 export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapshotRecord[]): void {
   for (const record of records) {
@@ -95,5 +108,11 @@ export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapsh
         "INSERT INTO exchange_creation_outcomes (project_id, operation_id, exchange_id, fingerprint) VALUES (?, ?, ?, ?)",
       ).run(outcome.projectId, outcome.operationId, record.id, outcome.fingerprint);
     }
+    if (record.collaboration) restoreExchangeCollaboration(db, record.id, record.collaboration);
+    else
+      db.prepare("UPDATE exchanges SET last_seq = ? WHERE id = ?").run(
+        record.readRanges.reduce((maximum, range) => Math.max(maximum, range.lastSeq), 0),
+        record.id,
+      );
   }
 }

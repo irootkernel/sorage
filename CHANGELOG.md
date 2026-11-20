@@ -4,10 +4,14 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.5 - Unreleased
 
+### Added
+
+- Use `sorage exchange` to collaborate between registered Projects, share working material, accept specific report versions, and recover committed operations.
+
 ### Changed
 
 - Pin source-development toolchains and run automatic formatting before the complete test gate; add explicit runtime installation, version synchronization, and dependency-lock commands.
-- **Breaking upgrade:** Advance live storage to schema 13 and backups to format 5. The upgrade is one-way. Use the new executable with migrated storage and for format-5 restores. Before upgrading, verify and retain a backup and its matching executable. For rollback, restore that backup with its matching executable into a separate empty home and Vault. The new reader continues to import formats 1–4.
+- **Breaking storage upgrade:** The one-way upgrade moves live storage to schema 14 and writes the collaboration inventory in global backup format 5. Use the new executable with upgraded storage and collaboration backups. Before upgrading, verify and retain a backup and its matching executable. For rollback, restore that backup with its matching executable into a separate empty home and Vault. The new reader imports older backup formats.
 
 ## v0.1.4 - 2026-11-08
 

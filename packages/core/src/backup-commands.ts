@@ -78,7 +78,13 @@ export function exportSnapshot(ports: BackupExportPorts): Result<BackupExportRep
   };
   const data = ports.redactWorkspacePaths ? redactSnapshotDataV4(current) : current;
   const built =
-    "exchanges" in read.value ? snapshotFilesV5({ ...data, exchanges: read.value.exchanges }) : snapshotFilesV4(data);
+    "exchanges" in read.value
+      ? snapshotFilesV5({
+          ...data,
+          exchanges: read.value.exchanges,
+          exchangeRepresentation: read.value.exchangeRepresentation ?? "foundation",
+        })
+      : snapshotFilesV4(data);
   if (!built.ok) return built;
   const written = ports.writeSnapshotTree(built.value.files);
   if (!written.ok) return err(written.error);
@@ -172,7 +178,12 @@ export function validateSnapshot(
   if (manifest.formatVersion === 5) {
     if (!("exchanges" in input)) return snapshotProblem("A format-5 snapshot must provide an Exchange inventory.");
     const { exchanges, ...previous } = input;
-    const valid = validateExchangeInventory(exchanges, previous.projects, manifest.counts.exchanges);
+    const valid = validateExchangeInventory(
+      exchanges,
+      previous.projects,
+      manifest.counts.exchanges,
+      input.exchangeRepresentation,
+    );
     if (!valid.ok) return valid;
     const { exchanges: _exchangeCount, ...counts } = manifest.counts;
     return validateSnapshot(previous, { ...manifest, counts, formatVersion: 4 });

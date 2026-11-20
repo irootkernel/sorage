@@ -918,6 +918,98 @@ CREATE TABLE exchange_activation_intents (
 `,
 };
 
+export const EXCHANGE_COLLABORATION_MIGRATION: Migration = {
+  version: 14,
+  name: "exchange-collaboration",
+  sql: `
+ALTER TABLE exchanges ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_seq >= 0);
+UPDATE exchanges SET last_seq = COALESCE(
+  (SELECT MAX(last_seq) FROM exchange_read_ranges WHERE exchange_id = exchanges.id), 0
+);
+
+CREATE TABLE exchange_claims (
+  exchange_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (exchange_id, project_id),
+  FOREIGN KEY (exchange_id, project_id) REFERENCES exchange_members(exchange_id, project_id) ON DELETE CASCADE
+);
+CREATE TABLE exchange_materials (
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  id TEXT NOT NULL,
+  owner_project_id TEXT NOT NULL REFERENCES projects(id),
+  kind TEXT NOT NULL CHECK (kind IN ('body', 'copy', 'live', 'versioned', 'external')),
+  content_id TEXT REFERENCES exchange_working_content(id),
+  size_bytes INTEGER CHECK (size_bytes >= 0),
+  sha256 TEXT,
+  scope_json TEXT,
+  available INTEGER NOT NULL CHECK (available IN (0, 1)),
+  PRIMARY KEY (exchange_id, id)
+);
+CREATE TABLE exchange_requests (
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  id TEXT NOT NULL,
+  requester_id TEXT NOT NULL REFERENCES projects(id),
+  assignee_id TEXT NOT NULL REFERENCES projects(id),
+  assignment_version INTEGER NOT NULL CHECK (assignment_version > 0),
+  condition TEXT NOT NULL,
+  criteria_json TEXT NOT NULL CHECK (json_valid(criteria_json) AND json_type(criteria_json) = 'array'),
+  PRIMARY KEY (exchange_id, id)
+);
+CREATE TABLE exchange_reports (
+  exchange_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  assignment_version INTEGER NOT NULL CHECK (assignment_version > 0),
+  author_id TEXT NOT NULL REFERENCES projects(id),
+  material_id TEXT NOT NULL,
+  evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json) AND json_type(evidence_json) = 'array'),
+  PRIMARY KEY (exchange_id, request_id, version),
+  FOREIGN KEY (exchange_id, request_id) REFERENCES exchange_requests(exchange_id, id),
+  FOREIGN KEY (exchange_id, material_id) REFERENCES exchange_materials(exchange_id, id)
+);
+CREATE TABLE exchange_acceptances (
+  exchange_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  report_version INTEGER NOT NULL,
+  requester_id TEXT NOT NULL REFERENCES projects(id),
+  accepted_at TEXT NOT NULL,
+  receipt_operation_id TEXT NOT NULL CHECK (length(receipt_operation_id) > 0),
+  receipt_kind TEXT NOT NULL CHECK (receipt_kind IN ('accept', 'send', 'report')),
+  PRIMARY KEY (exchange_id, request_id, report_version),
+  FOREIGN KEY (exchange_id, request_id, report_version) REFERENCES exchange_reports(exchange_id, request_id, version),
+  FOREIGN KEY (exchange_id, requester_id, receipt_operation_id)
+    REFERENCES exchange_operation_outcomes(exchange_id, project_id, operation_id) DEFERRABLE INITIALLY DEFERRED
+);
+CREATE TABLE exchange_messages (
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  seq INTEGER NOT NULL CHECK (seq > 0),
+  sender_id TEXT NOT NULL REFERENCES projects(id),
+  recipient_id TEXT REFERENCES projects(id),
+  kind TEXT NOT NULL CHECK (kind IN ('information', 'progress', 'clarification', 'blocked', 'request', 'report', 'accept')),
+  reply_to INTEGER CHECK (reply_to < seq),
+  material_id TEXT,
+  request_id TEXT,
+  report_version INTEGER,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (exchange_id, seq),
+  FOREIGN KEY (exchange_id, reply_to) REFERENCES exchange_messages(exchange_id, seq),
+  FOREIGN KEY (exchange_id, material_id) REFERENCES exchange_materials(exchange_id, id),
+  FOREIGN KEY (exchange_id, request_id) REFERENCES exchange_requests(exchange_id, id),
+  FOREIGN KEY (exchange_id, request_id, report_version) REFERENCES exchange_reports(exchange_id, request_id, version)
+);
+CREATE TABLE exchange_operation_outcomes (
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  operation_id TEXT NOT NULL CHECK (length(operation_id) > 0),
+  fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+  outcome_json TEXT NOT NULL CHECK (json_valid(outcome_json) AND json_type(outcome_json) = 'object'),
+  PRIMARY KEY (exchange_id, project_id, operation_id)
+);
+`,
+};
+
 export interface ProductionMigrationPlan {
   migrations: Migration[];
   rebuilds: Migration[];
@@ -928,10 +1020,10 @@ export interface ProductionMigrationPlan {
  * interface section 38.7): the raw `MIGRATIONS` list stays exactly versions 1
  * to 8 — the legacy fixture catalog every historical builder migrates with —
  * while the production accessor appends the Channel migration at version 11
- * and appends Handoff reporting at version 12 and Exchange at version 13 as
- * ordinary steps. It registers versions 9 and 10
+ * and appends Handoff reporting at version 12 and Exchange at versions 13
+ * and 14 as ordinary steps. It registers versions 9 and 10
  * exactly once each as the rebuild-marked steps. The combined runner orders
- * every pending step by version, so ordinary 11 through 13 execute after rebuilds
+ * every pending step by version, so ordinary 11 through 14 execute after rebuilds
  * 9 and 10 inside the one guarded whole-batch path the non-empty rebuild set already
  * selects; no runner branch changes. Every production opener, the migrator's
  * admission catalog, and preflight's reference catalog consume this one
@@ -940,7 +1032,13 @@ export interface ProductionMigrationPlan {
  */
 export function productionMigrationPlan(): ProductionMigrationPlan {
   return {
-    migrations: [...MIGRATIONS, CHANNEL_DOMAIN_MIGRATION, HANDOFF_REPORTING_MIGRATION, EXCHANGE_FOUNDATION_MIGRATION],
+    migrations: [
+      ...MIGRATIONS,
+      CHANNEL_DOMAIN_MIGRATION,
+      HANDOFF_REPORTING_MIGRATION,
+      EXCHANGE_FOUNDATION_MIGRATION,
+      EXCHANGE_COLLABORATION_MIGRATION,
+    ],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };
 }

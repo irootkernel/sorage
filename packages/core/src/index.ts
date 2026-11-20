@@ -15,6 +15,8 @@ export * from "./doctor";
 export * from "./errors";
 export * from "./events";
 export * from "./exchange-snapshot";
+export * from "./exchanges";
+export * from "./exchange-use-cases";
 export * from "./git";
 export * from "./handoff-commands";
 export * from "./handoff-read";

@@ -21,7 +21,7 @@ import {
  */
 
 /** The invoking command family whose wording the refusal carries. */
-export type ContentionSurface = "channel" | "handoff" | "project" | "memo";
+export type ContentionSurface = "channel" | "handoff" | "project" | "memo" | "exchange";
 
 /** A composition-thrown error that already carries its typed public error. */
 export class AppCommandError extends Error {
@@ -133,7 +133,9 @@ const CONDITION: Record<ContentionKind, string> = {
 function refusalMessage(surface: ContentionSurface, kind: ContentionKind): string {
   const head = surface === "channel" ? "Channel command" : "command";
   const state = kind === "readonly" ? "is write-protected" : "is contended";
-  const family = { channel: "Channel", handoff: "Handoff", project: "Project", memo: "Memo" }[surface];
+  const family = { channel: "Channel", handoff: "Handoff", project: "Project", memo: "Memo", exchange: "Exchange" }[
+    surface
+  ];
   return `${family} storage ${state}: ${CONDITION[kind]}, so this ${head} committed none of the changes it was asked to make.`;
 }
 
@@ -169,6 +171,12 @@ const RECOVERY: Record<ContentionSurface, Record<ContentionKind, string>> = {
     open: "Retry the identical Memo command when storage is available, preserving the current mode, original inputs, observed version, Project/Installation and key when present. An earlier unknown outcome still requires replay-only; never switch to execution or replace the key.",
     readonly:
       "Use a permitted writable execution context or the matching Memo tool on an already permitted MCP server, preserving the current mode, original inputs, observed version, Project/Installation and key when present. An earlier unknown outcome still requires replay-only; this refusal does not authorize execution, a replacement key or permission changes.",
+  },
+  exchange: {
+    lock: "Retry the identical Exchange command when storage is available. Inspect any uncertain earlier operation with replay-only.",
+    open: "Retry the identical Exchange command when storage is available. Inspect any uncertain earlier operation with replay-only.",
+    readonly:
+      "Use a permitted writable execution context for a fresh Exchange mutation. Inspect any uncertain earlier operation with replay-only.",
   },
 };
 
