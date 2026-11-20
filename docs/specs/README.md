@@ -17,3 +17,7 @@ This directory defines required Sorage behavior and the contracts implemented by
 ## Handoff reporting entrypoints
 
 [Required Specification section 23](required-specification.md#23-handoff-processing-and-recipient-comment-milestone-m9) and the amended Handoff/Review/Lifecycle/Project rows own the required M9 behavior of ADR-0035. [Interface section 40](interfaces-and-operations.md#40-handoff-processing-and-recipient-comment-milestone-m9) owns the exact report/comment types, transitions, observations, CLI/HTTP/MCP contracts, errors, events and schema-12/format-4 compatibility. The accepted scope includes F1 to F3 and the M9/shared-v0.1.3 gate; AJ-31 to AJ-33 define required observations rather than claiming they have run.
+
+## M10 Exchange entrypoints
+
+[Required Specification section 24](required-specification.md#24-exchange-peer-collaboration-milestone-m10) owns the normative EXC rows. [Interface section 41](interfaces-and-operations.md#41-exchange-peer-collaboration-milestone-m10) defines CLI and MCP, ownership, retention, storage and recovery. [Testing and Acceptance](testing-and-acceptance.md#911-gate-m10-exchange-peer-collaboration-end-of-epic-021) owns AJ-34 through AJ-37 and the M10 gate.

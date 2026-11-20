@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.11.0`
+- **Source of Truth version:** `0.12.0`
 
 ## Role ownership
 
@@ -64,11 +64,11 @@ The [Handoff reporting qualification map](implementation-tips/handoff-reporting-
 
 The unused Web package and obsolete literal transaction scanner are removed without changing the daemon-served assets, real dependency guards or synchronous transaction guarantees. Handoff factories share one owned or borrowed operational connection while preserving read-only admission and caller lifetimes. Standalone integration and ordinary compiled E2E build their current executable; release qualification packages the candidate separately. The full gate packages once and reuses that signed candidate across integration, contract, ordinary E2E and AJ-16 without an intervening build. The canonical owners above define current behavior; installation and publication remain separately authorized, and the roadmap alone records lifecycle and eligibility.
 
-## Exchange planning entrypoints
+## Exchange contract entrypoints
 
-[EPIC-021](roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects) registers Master's 2026-11-19 direction for Exchange: durable peer collaboration between registered Projects with directed requests, versioned results, requester acceptance, unanimous completion, pause and resumption, and cleanup of disposable evidence. [Proposed ADR-0037](architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10) records the material change and its alternatives, and the [Exchange dossier](todo/exchange-dossier.md) holds the detailed requirements, implementation contract and acceptance evidence with their owning Tasks.
+[EPIC-021](roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects) adopts Master's 2026-11-19 direction for Exchange: durable peer collaboration between registered Projects with directed requests, versioned results, requester acceptance, unanimous completion, pause and resumption, and cleanup of disposable evidence. [ADR-0037](architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10) records the adopted design, [pre-adoption qualification](implementation-tips/exchange-qualification.md) and compatibility decisions. The [Exchange dossier](todo/exchange-dossier.md) holds the detailed requirements, implementation contract and acceptance evidence with their owning Tasks.
 
-This is planning registration under [governance section 19](governance/README.md#19-exchange-registration-boundary), not adopted product behavior or release allocation. It adds the new milestone M10 to the documentation checker, which now also reports unsupported milestone values in requirement and reverse-index rows instead of skipping them. TASK-139 owns the pre-adoption qualification, specification adoption including the reserved `EXC` requirements, accepted-decision amendments, the M10 gate and release boundary, and requirement and traceability population before implementation. Product code, shipped skills, normative specifications, Source of Truth version and CHANGELOG are unchanged. The roadmap alone records lifecycle and eligibility.
+The [TASK-139 adoption](governance/README.md#task-139-adoption-2026-11-20) defines EXC-001 to EXC-022, [interface section 41](specs/interfaces-and-operations.md#41-exchange-peer-collaboration-milestone-m10), and [Gate M10](specs/testing-and-acceptance.md#911-gate-m10-exchange-peer-collaboration-end-of-epic-021) with AJ-34 through AJ-37 for intended v0.1.5. This adoption does not implement the product or distribute either skill. The roadmap records lifecycle and eligibility.
 
 ## Source of Truth precedence
 

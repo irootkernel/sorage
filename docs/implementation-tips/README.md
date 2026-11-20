@@ -456,3 +456,7 @@ The exact TASK-131 snapshot delta is additive: four MCP tool entries (31 to 35) 
 ## 26. Assembled Handoff reporting qualification
 
 The [assembled reporting qualification map](handoff-reporting-qualification.md#assembled-qualification-2026-10-28) binds AJ-31 to AJ-33 and the F1 to F3 seams to the current CLI/MCP/HTTP/Web candidate, existing earlier-regression suites and separately attributed copied-skill observations. Its native recovery section records canonical source-built schema-7/schema-11 producers, old matching backup/restore, zero-write preflight, explicit migration to schema 12, deterministic format 4 and current/legacy restore, guarded old-reader/future-schema refusal and fresh alternative rollback. The [operations procedure](../ops/README.md#m9-shared-content-upgrade-and-rollback) remains the procedure owner; this qualification adds no migration, contract, delivery status, installation or publication authority.
+
+## Exchange qualification
+
+[Exchange keeper pre-adoption qualification](exchange-qualification.md) records the observed native mode, keeper and storage-mechanism boundary for TASK-139. The delivered and integrated qualifications belong to TASK-142 and TASK-146.

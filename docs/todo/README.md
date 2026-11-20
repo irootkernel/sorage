@@ -10,7 +10,7 @@ When a registered or adopted Epic closes, move lasting information to its role o
 
 ## Registered Epic dossiers
 
-- [Exchange dossier](exchange-dossier.md) holds the requirements, implementation contract and acceptance evidence for [EPIC-021](../roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects). Its contracts require TASK-139 adoption under [proposed ADR-0037](../architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10); the roadmap alone owns delivery status.
+- [Exchange dossier](exchange-dossier.md) holds the requirements, implementation contract and acceptance evidence for [EPIC-021](../roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects). TASK-139 adopts its product contracts under [ADR-0037](../architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10); the roadmap alone owns delivery status.
 
 ## Adopted design references
 

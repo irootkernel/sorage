@@ -136,4 +136,4 @@ Sorage is a standalone TypeScript document-handoff broker for AI coding sessions
 
 - Development tests and manual product checks must never read, write, or delete the developer's real `~/.sorage`; point `SORAGE_HOME` at a temporary directory. Explicitly authorized broker operations for this registered Project use the native Sorage CLI and its managed home; never edit that home directly.
 - Never run `git add`, `git commit`, or `git push` unless the user explicitly asks for that exact action, and never disturb unrelated staged, unstaged, or untracked changes.
-- Never add a handler, skill, or file to Aquarium or to any other ecosystem repository; Sorage ships its own agent policy at `skills/use-sorage/SKILL.md`.
+- Never add a handler, skill, or file to Aquarium or to any other ecosystem repository; Sorage ships its own agent policies in this repository. `skills/use-sorage/SKILL.md` covers Handoff, Project Memo and Channel. `skills/start-exchange/SKILL.md` and `skills/join-exchange/SKILL.md` are the planned separate M10 entrypoints owned by TASK-145.

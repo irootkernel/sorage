@@ -106,7 +106,7 @@ TASK-061 binds every non-crash-point row to a permanent automated home inside `m
 
 ## 5. Acceptance journeys
 
-Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, AJ-19 for M6, AJ-20 to AJ-23 for M7, AJ-24 to AJ-26 for shared M8, and AJ-27 to AJ-33 for M9. Registration of a journey is a required scenario, not evidence it has run.
+Journeys are numbered per milestone: AJ-01 to AJ-10 for M1, AJ-11 to AJ-13 for M2, AJ-14 to AJ-16 for M3, AJ-17 for M4, AJ-18 for M5, AJ-19 for M6, AJ-20 to AJ-23 for M7, AJ-24 to AJ-26 for shared M8, AJ-27 to AJ-33 for M9, and AJ-34 to AJ-37 for M10. Registration of a journey is a required scenario, not evidence it has run.
 
 `Owner` names the Epic in [../roadmap/README.md](../roadmap/README.md) that delivers the capability the journey accepts; every journey is verified at the release gate of the milestone block it is numbered in, and every M1 journey is executed through the CLI surface completed in `EPIC-006`.
 
@@ -639,6 +639,42 @@ Expected: legacy entrypoints cannot bypass the common observation or engagement 
 
 Expected: exact-candidate upgrade/restore/rollback, behavioral and independent-observation evidence satisfies the expanded shared M9/v0.1.3 gate. No real installation, consumer edit, publication or Epic acceptance is implied by qualification alone. F1 to F3 use existing test infrastructure and applicable evidence reuse, without another harness or mandatory extra full-suite cycle.
 
+### AJ-34: Exchange collaboration and exact recovery
+
+- **Owner:** `EPIC-021` · **Milestone:** M10
+- **Requirements:** EXC-001 to EXC-008, EXC-011 to EXC-013
+
+In one Installation, use a server and two client Projects through CLI and MCP. Create without a claim, join, send, direct a request, report and explicitly accept the checked version. Verify version conflicts and exact replay, lost creation outcome discovery, no execution on replay miss, lossless bounded large-body retrieval, managed copy and live, changed and escaping references. Confirm independent pending-work discovery, gap-preserving read confirmation, restart continuity, zero-write history and exact workflow-text bounds without reducing body capacity.
+
+Expected: Each collaborating Project observes and verifies exact work versions, preserves unread gaps and can recover previously committed outcomes without additional effects.
+
+### AJ-35: Keeper ownership and response notices
+
+- **Owner:** `EPIC-021` · **Milestone:** M10
+- **Requirements:** EXC-013 to EXC-016, EXC-021
+
+Observe actual supported Plan-mode and read-only participation on the delivered MCP path. Compare MCP keeper and CLI owner startup, idle wait, long work, cancellation, surviving connection, shutdown, failure and replacement with the pre-adoption probe. Verify the adopted cadence, contention and log scope at planned concurrency. Exercise graceful release, owner loss with lease expiry, expired claims before replacement, same-pair MCP join ordering, exact-claim removal for delayed renewal or release results, and no silent reclaim or keepers from paused or completed inspection. Require physically zero-write reads and waits, and unchanged retained events, snapshot bytes and backup status for renewal alone. Check notice clock independence, paused suppression, resume boundary, opener ineligibility or priority expiry, atomic reporting claim, expiry, acknowledgement and new incidents after recovery.
+
+Expected: Both owner paths and the two native harness modes are evidenced at the selected timing. Renewal never changes retained state, and each notice has at most one live reporting owner.
+
+### AJ-36: Authority, completion and retention
+
+- **Owner:** `EPIC-021` · **Milestone:** M10
+- **Requirements:** EXC-002 to EXC-004, EXC-007 to EXC-009, EXC-017 to EXC-020
+
+Exercise requester removal and assignee removal separately, including ownership transfer, vacancy, late delivery fences and accurate history. Pause, correct a roster while paused, resume only through join and refuse stale paused operations. Verify an objection and replacement proposal, current unanimous votes, rejection of omitted actionable requests, preservation of votes through routine bookkeeping, and the final-vote races against changed work, roster or stop. Recover interrupted cleanup without deleting originals or shared material. Inspect completed state with zero writes and retain replay provenance after restore and compaction.
+
+Expected: Only exact current unanimous agreement can complete. Completed state is compact, queryable without writes and recoverable after cleanup or restore.
+
+### AJ-37: Exchange integrated, compatibility and distribution
+
+- **Owner:** `EPIC-021` · **Milestone:** M10
+- **Requirements:** EXC-001 to EXC-022
+
+Exercise the supported transports and each independently copied skill. Run the full gate on the assembled candidate and apply earlier Handoff, Memo, Channel, Project and backup regressions. Upgrade the prior schema and verify new-format round trips, untouched legacy backups, old-reader refusal and matching-old-binary rollback into a separate home. Test configured path redaction, absent restored bindings, unavailable local references until rebound and revalidated, and empty lease and notice claims. Preserve exact candidate, checked behavior and actual harness limits in durable qualification records.
+
+Expected: The exact assembled candidate passes the full gate and the compatibility and distribution journeys with their evidence limits recorded.
+
 ## 6. Success-criteria map
 
 Charter criteria are cited by meaning as well as by number, because [../product/README.md](../product/README.md) restates them in v0.4.0 vocabulary; a criterion added or renumbered there MUST gain a row here in the same change.
@@ -840,6 +876,14 @@ The reviewer session that confirms the acceptance gate approves the diff, as def
 - [ ] Applicable Handoff, Memo, HTTP/Web, preflight, send-recovery and backup regressions pass; the compiled binary refuses a newer-than-build database schema with STORAGE_SCHEMA_UNSUPPORTED while offline version and help still work.
 - [ ] Public contract diffs are classified per interface sections 38.8, 38.11 and 40.6 with reviewed snapshots; the catalogue transition (73 → 74 at TASK-122, → 70 at TASK-123) matches the builds that emit it, and the EPIC-019 candidate adds two codes to reach 72 and four tools to reach 35; the migration impact record covers every owning migration, the resolved NFR-009 serialization, the disclosed upgrade-window read changes with the `sorage backup run` migration step, and the backup-plus-matched-executable rollback procedure demonstrated on a real fixture.
 - [ ] The intended v0.1.3 release is shared by M8, M9, EPIC-017, EPIC-018, EPIC-019 and EPIC-020 under ADR-0033, ADR-0034, ADR-0035 and ADR-0033's 2026-10-28 scope amendment; publication of the shared release requires every constituent Epic's completion and keeps its separate commit, installation, consumer activation and publication authorization. No product release, installation, consumer activation, global MCP registration, or publication is implied by this gate; each keeps its separate authorization.
+
+### 9.11 Gate M10, Exchange peer collaboration, end of EPIC-021
+
+- [ ] TASK-139's independently reviewed design and all implementation and qualification Task gates pass. Each contract Task records reviewed snapshots with its compatibility classification and migration impact. No unresolved gate-blocking defect remains.
+- [ ] AJ-34 through AJ-37 pass on the exact integrated candidate, including both native harness modes, both skills and transport paths, zero-write operations, owner loss and recovery, request acceptance and unanimous completion, preservation of original material, and pause, restore and notice behavior.
+- [ ] Applicable earlier Handoff, Memo, Channel, Project, daemon/Web and backup regressions apply at their existing scopes. TASK-146 runs the complete `make test` gate on this candidate. The internal Epic audit reuses applicable evidence while its inputs remain unchanged.
+- [ ] The compiled earlier binary fails closed on the upgraded database and before importing newer or incompatible backup material. The new reader restores verified legacy and current format-5 fixtures. For rollback, restore the verified pre-upgrade backup with its matching prior executable into a separate empty home. Expect guarded prior-reader refusal only from the explicitly identified supported reader.
+- [ ] The release disclosure describes the one-way storage transition and rollback limits. The planned M10 release is v0.1.5. Overall Epic acceptance and any version change, package publication, installation and consumer activation keep their separate authority.
 
 ## 10. Defect severity
 
