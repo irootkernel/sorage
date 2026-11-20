@@ -21,14 +21,37 @@ export const EXCHANGE_COLLABORATION_TABLES = [
   "exchange_operation_outcomes",
 ] as const;
 
+const MESSAGE_FIELDS = `m.seq, m.sender_id senderId, m.recipient_id recipientId, m.kind, m.reply_to replyTo,
+  m.material_id materialId, m.request_id requestId, m.report_version reportVersion, m.created_at createdAt`;
+
 export function exchangeMessages(db: SorageSqlite, exchangeId: string, after = 0, limit = Number.MAX_SAFE_INTEGER) {
   return db
     .prepare<ExchangeMessage>(
-      `SELECT seq, sender_id senderId, recipient_id recipientId, kind, reply_to replyTo,
-      material_id materialId, request_id requestId, report_version reportVersion, created_at createdAt
-      FROM exchange_messages WHERE exchange_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
+      `SELECT ${MESSAGE_FIELDS} FROM exchange_messages m
+      WHERE m.exchange_id = ? AND m.seq > ? ORDER BY m.seq LIMIT ?`,
     )
     .all(exchangeId, after, limit);
+}
+
+export function relevantExchangeMessages(
+  db: SorageSqlite,
+  exchangeId: string,
+  projectId: string,
+  after: number,
+  limit: number,
+) {
+  return db
+    .prepare<ExchangeMessage>(
+      `SELECT ${MESSAGE_FIELDS} FROM exchange_messages m
+    LEFT JOIN exchange_messages previous ON previous.exchange_id = m.exchange_id AND previous.seq = m.reply_to
+    LEFT JOIN exchange_requests request ON request.exchange_id = m.exchange_id AND request.id = m.request_id
+    WHERE m.exchange_id = ? AND m.seq > ? AND m.sender_id <> ?
+      AND (m.recipient_id = ? OR previous.sender_id = ?
+        OR (m.recipient_id IS NULL AND m.kind <> 'accept')
+        OR (m.kind = 'accept' AND request.assignee_id = ?))
+    ORDER BY m.seq LIMIT ?`,
+    )
+    .all(exchangeId, after, projectId, projectId, projectId, projectId, limit);
 }
 
 export function exchangeRequests(db: SorageSqlite, exchangeId: string): ExchangeRequest[] {

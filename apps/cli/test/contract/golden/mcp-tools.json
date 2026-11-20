@@ -1687,6 +1687,759 @@
           "idempotentHint": false,
           "openWorldHint": false
         }
+      },
+      {
+        "name": "exchange_create",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. create an Exchange and return its ID without a claim",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "member": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "goal": {
+              "type": "string"
+            },
+            "criterion": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operationId",
+            "goal",
+            "member",
+            "criterion"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_join",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. acquire an Active Exchange claim and return the current view",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "replaceClaim": {
+              "type": "string"
+            },
+            "confirm": {
+              "type": "boolean"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId"
+          ],
+          "oneOf": [
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "replaceClaim"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "confirm"
+                    ],
+                    "properties": {
+                      "confirm": {
+                        "const": true
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "replaceClaim",
+                "confirm"
+              ],
+              "properties": {
+                "confirm": {
+                  "const": true
+                }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_inspect",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. inspect the Exchange and current obligations without writing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_history",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. read a bounded page of Exchange history without confirming it",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "afterSeq": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0
+            },
+            "historyCursor": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId"
+          ],
+          "not": {
+            "required": [
+              "afterSeq",
+              "historyCursor"
+            ]
+          },
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_wait",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. wait without writes for new relevant Exchange activity",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "historyCursor": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1
+            },
+            "timeout": {
+              "type": "integer",
+              "maximum": 9007199254740,
+              "minimum": 1,
+              "default": 60
+            },
+            "interval": {
+              "type": "integer",
+              "maximum": 9007199254740,
+              "minimum": 1,
+              "default": 2
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_send",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. send an informational Exchange message",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "body": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "information",
+                "progress",
+                "clarification",
+                "blocked"
+              ],
+              "default": "information"
+            },
+            "to": {
+              "type": "string"
+            },
+            "replyTo": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 1
+            },
+            "accept": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "operationId"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "body"
+              ]
+            },
+            {
+              "required": [
+                "file"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_request",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. direct an actionable request to a current Project",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "assignee": {
+              "type": "string"
+            },
+            "condition": {
+              "type": "string"
+            },
+            "criterion": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "replyTo": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "operationId",
+            "assignee",
+            "condition",
+            "criterion"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_report",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. report a versioned result on an assigned request",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "body": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "request": {
+              "type": "string"
+            },
+            "assignmentVersion": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 1
+            },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "accept": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "operationId",
+            "request",
+            "assignmentVersion"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "body"
+              ]
+            },
+            {
+              "required": [
+                "file"
+              ]
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_accept",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. accept exactly the named report versions as requester",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "accept": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "operationId",
+            "accept"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_material_register",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. register a working copy or original reference",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "copy",
+                "live",
+                "versioned",
+                "external"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0
+            },
+            "length": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0
+            },
+            "access": {
+              "type": "string",
+              "enum": [
+                "url",
+                "run-id",
+                "query"
+              ]
+            },
+            "value": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "operationId",
+            "kind"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "copy",
+                    "live",
+                    "versioned"
+                  ]
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "access"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "value"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "external"
+                }
+              },
+              "required": [
+                "access",
+                "value"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "source"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "offset"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "length"
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_material_read",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. read registered material by ID in bounded exact byte ranges",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "materialId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "maximum": 65536,
+              "minimum": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "materialId",
+            "offset",
+            "limit"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_confirm_read",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. explicitly confirm delivered messages without filling unread gaps",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "range": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "claim",
+            "range"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_recover",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. discover the current Project's prior committed operations without writing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
       }
     ]
   }

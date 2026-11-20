@@ -9,6 +9,73 @@ import {
   type SpawnedChild,
 } from "../../src/mcp-server";
 
+it("refuses all Exchange file escapes and recipient paths before spawning a child", async () => {
+  const root = tempDir("sorage-mcp-exchange-file-");
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const outside = join(root, "outside.txt");
+  writeFileSync(outside, "sentinel");
+  symlinkSync(outside, join(workspace, "link"));
+  const exchangeId = "11111111-1111-4111-8111-111111111111";
+  const identity = { exchangeId, operationId: "exchange-scope", claim: "claim" };
+  const forbidSpawn = () => {
+    throw new Error("A refused path launched a child");
+  };
+  const cases = [
+    ["exchange_send", { ...identity, file: outside }],
+    ["exchange_report", { ...identity, request: "request", assignmentVersion: 1, file: "../outside.txt" }],
+    ["exchange_material_register", { ...identity, kind: "copy", source: "link" }],
+  ] as const;
+  for (const [name, args] of cases) {
+    const answer = await handleToolCall(name, args, workspace, forbidSpawn);
+    expect(answer).toMatchObject({
+      result: { isError: true, structuredContent: { ok: false, error: { code: "SOURCE_OUTSIDE_WORKSPACE" } } },
+    });
+  }
+  expect(
+    await handleToolCall(
+      "exchange_material_read",
+      {
+        exchangeId,
+        offset: 0,
+        limit: 1,
+        materialId: "material",
+        path: outside,
+      },
+      workspace,
+      forbidSpawn,
+    ),
+  ).toMatchObject({ error: { code: -32602, message: "unknown property 'path'" } });
+});
+
+it("refuses parser-required Exchange options before missing positionals without spawning", async () => {
+  const workspace = tempDir("sorage-mcp-exchange-parser-");
+  const answer = await handleToolCall("exchange_send", {}, workspace, () => {
+    throw new Error("A parser refusal launched a child");
+  });
+  expect(answer).toMatchObject({
+    error: { code: -32602, message: "required option '--operation-id <id>' not specified" },
+  });
+});
+
+it.each(["exchange_history", "exchange_wait", "exchange_material_read"])(
+  "refuses an invalid global limit before required operands of %s without spawning",
+  async (name) => {
+    const workspace = tempDir("sorage-mcp-exchange-limit-");
+    for (const limit of [-1, Number.MAX_SAFE_INTEGER + 1]) {
+      const answer = await handleToolCall(name, { limit }, workspace, () => {
+        throw new Error("A parser refusal launched a child");
+      });
+      expect(answer).toMatchObject({
+        error: {
+          code: -32602,
+          message: `option '--limit <n>' argument '${limit}' is invalid. expected a non-negative integer`,
+        },
+      });
+    }
+  },
+);
+
 /**
  * The MCP-004 workspace confinement on real paths, through the real call
  * handler: every escape class is refused before any child — the injected

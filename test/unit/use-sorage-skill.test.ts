@@ -94,11 +94,12 @@ interface PublishedTool {
   };
 }
 
-const published = (
+const skillDomains = new Set(["handoff", "memo", "channel", "project"]);
+const publishedSkillTools = (
   JSON.parse(readFileSync(join(checkout, "apps/cli/test/contract/golden/mcp-tools.json"), "utf8")) as {
     toolsResult: { tools: PublishedTool[] };
   }
-).toolsResult.tools;
+).toolsResult.tools.filter(({ name }) => skillDomains.has(name.split("_")[0] as string));
 const errorCodes = new Set(
   (
     JSON.parse(readFileSync(join(checkout, "apps/cli/test/contract/golden/error-renderings.json"), "utf8")) as {
@@ -137,8 +138,8 @@ function properties(cell: string | undefined): Map<string, string> {
 
 function assertCatalogue(files: Map<string, string>) {
   const rows = catalogue(files);
-  expect(rows.map(({ name }) => name).sort()).toEqual(published.map(({ name }) => name).sort());
-  for (const tool of published) {
+  expect(rows.map(({ name }) => name).sort()).toEqual(publishedSkillTools.map(({ name }) => name).sort());
+  for (const tool of publishedSkillTools) {
     const row = rows.find(({ name }) => name === tool.name);
     expect(row, tool.name).toBeDefined();
     const domain = tool.name.split("_")[0];
@@ -197,7 +198,7 @@ function assertWorkedExample(files: Map<string, string>) {
     "channel_ack",
   ]);
   for (const call of calls) {
-    const schema = published.find(({ name }) => name === call.tool)?.inputSchema;
+    const schema = publishedSkillTools.find(({ name }) => name === call.tool)?.inputSchema;
     expect(schema, call.tool).toBeDefined();
     expect(
       Object.keys(call.arguments).every((key) => Object.hasOwn(schema?.properties ?? {}, key)),

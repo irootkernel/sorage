@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { LineSplitter } from "./mcp-line-splitter";
@@ -116,8 +117,8 @@ interface Session {
   close(): Promise<void>;
 }
 
-function startServer(home: string, cwd: string, env: Record<string, string> = {}): Session {
-  const child = spawn("bun", [entry, "mcp"], {
+function startServer(home: string, cwd: string, env: Record<string, string> = {}, preload?: string): Session {
+  const child = spawn("bun", [...(preload ? ["--preload", preload] : []), entry, "mcp"], {
     cwd,
     env: { ...process.env, SORAGE_HOME: home, SORAGE_TEST_REQUEST_ID: undefined, ...env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -362,7 +363,7 @@ describe("the catalogue golden (MCP-005)", () => {
       result: { tools: Array<Record<string, unknown>> };
     };
     await session.close();
-    expect(listing.result.tools).toHaveLength(35);
+    expect(listing.result.tools).toHaveLength(48);
     expect(listing.result.tools.map((tool) => tool.name as string)).not.toContain("init");
     const rendered = `${JSON.stringify({ initializeResult: initialize.result, toolsResult: listing.result }, null, 2)}\n`;
     if (process.env.SORAGE_TEST_REGEN_MCP_GOLDEN === "1") {
@@ -374,6 +375,305 @@ describe("the catalogue golden (MCP-005)", () => {
 });
 
 describe("accepted calls through real children (MCP-002, MCP-006)", () => {
+  it("reports the direct CLI required option before a simultaneously missing Exchange positional", async () => {
+    const { home, workA } = installation();
+    const direct = runCli(["exchange", "send", "--json"], home, workA);
+    expect(direct.status).toBe(2);
+    const firstLine = direct.stderr.split("\n")[0];
+    const session = startServer(home, workA);
+    try {
+      expect(firstLine).toContain("required option '--operation-id <id>' not specified");
+      const refused = await toolCall(session, "exchange_send", {});
+      expect(refused.error).toEqual({ code: -32602, message: firstLine?.replace(/^sorage: (?:error: )?/, "") });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("mirrors the direct CLI global limit error before missing Exchange operands", async () => {
+    const { home, workA } = installation();
+    const session = startServer(home, workA);
+    try {
+      for (const command of ["history", "wait", "material-read"]) {
+        for (const limit of [-1, Number.MAX_SAFE_INTEGER + 1]) {
+          const direct = runCli(["exchange", command, "--limit", String(limit), "--json"], home, workA);
+          expect(direct.status).toBe(2);
+          const firstLine = direct.stderr.split("\n")[0];
+          expect(firstLine).toContain(`option '--limit <n>' argument '${limit}' is invalid`);
+          const refused = await toolCall(session, `exchange_${command.replaceAll("-", "_")}`, { limit });
+          expect(refused.error).toEqual({ code: -32602, message: firstLine?.replace(/^sorage: (?:error: )?/, "") });
+        }
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("reaps an announced same-pair join cancelled before ACK while the predecessor holds its slot", async () => {
+    const { home, workA } = installation("sorage-mcp-join-queue-");
+    const nested = join(workA, "nested");
+    mkdirSync(nested);
+    const created = runCli(
+      [
+        "exchange",
+        "create",
+        "--member",
+        "beta",
+        "--goal",
+        "Check queue fencing",
+        "--criterion",
+        "Verify exact ownership",
+        "--operation-id",
+        "create",
+        "--json",
+      ],
+      home,
+      workA,
+    );
+    expect(created.status).toBe(0);
+    const exchangeId = JSON.parse(created.stdout).data.exchangeId as string;
+    const eventLog = join(home, "join-child-events.jsonl");
+    const preload = join(home, "observe-join-children.ts");
+    writeFileSync(
+      preload,
+      `
+      import { ChildProcess } from "node:child_process";
+      import { appendFileSync } from "node:fs";
+      const emit = ChildProcess.prototype.emit;
+      const note = (kind, child, pair) => appendFileSync(${JSON.stringify(eventLog)},
+        JSON.stringify({ kind, pid: child.pid, pair }) + "\\n");
+      ChildProcess.prototype.emit = function(event, ...args) {
+        if (event === "message" && args[0]?.exchangeId) {
+          note("announced", this, args[0]);
+          const send = this.send;
+          this.send = function(value, ...sendArgs) {
+            if (value === "exchange-join-ack") note("ack", this);
+            return send.call(this, value, ...sendArgs);
+          };
+        }
+        if (event === "close") note("closed", this);
+        return emit.call(this, event, ...args);
+      };
+    `,
+    );
+    const session = startServer(home, workA, {}, preload);
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const claims = () => db.prepare("SELECT claim_id FROM exchange_claims WHERE exchange_id = ?").all(exchangeId);
+    const durable = () => db.prepare("SELECT COUNT(*) count FROM events").get();
+    const before = durable();
+    const observe = <T>(read: () => T | undefined, label: string) =>
+      new Promise<T>((resolve, reject) => {
+        const deadline = Date.now() + 4_000;
+        const tick = () => {
+          const found = read();
+          if (found !== undefined) resolve(found);
+          else if (Date.now() >= deadline) reject(new Error(`No ${label} observed: ${session.stderr}`));
+          else setTimeout(tick, 15);
+        };
+        tick();
+      });
+    const records = (): Array<{ kind: string; pid: number; pair?: { exchangeId: string; projectId: string } }> =>
+      existsSync(eventLog)
+        ? readFileSync(eventLog, "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
+    const responses = (id: number) => session.lines.map((line) => JSON.parse(line)).find((line) => line.id === id);
+    const sendJoin = (id: number, cwd: string, project: string) =>
+      session.send({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name: "exchange_join", arguments: { exchangeId, cwd, project } },
+      });
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      sendJoin(101, workA, "alpha");
+      const first = await observe(() => records().find(({ kind }) => kind === "announced"), "first join identity");
+      await observe(() => records().find(({ kind, pid }) => kind === "ack" && pid === first.pid), "first ACK");
+      expect(first.pair?.exchangeId).toBe(exchangeId);
+      sendJoin(102, nested, String(first.pair?.projectId));
+      const queued = await observe(
+        () => records().find(({ kind, pid }) => kind === "announced" && pid !== first.pid),
+        "queued identity",
+      );
+      expect(queued.pair).toEqual(first.pair);
+      expect(records().some(({ kind, pid }) => kind === "ack" && pid === queued.pid)).toBe(false);
+      session.notify("notifications/cancelled", { requestId: 102 });
+      await observe(
+        () => records().find(({ kind, pid }) => kind === "closed" && pid === queued.pid),
+        "queued child exit",
+      );
+      expect(() => process.kill(queued.pid, 0)).toThrow();
+      expect(claims()).toEqual([]);
+      expect(responses(101)).toBeUndefined();
+      expect(responses(102)).toBeUndefined();
+      db.exec("COMMIT");
+      const firstResponse = await observe(() => responses(101), "first join response");
+      const claim = firstResponse.result.structuredContent.data.claimId;
+      expect(claims()).toEqual([{ claim_id: claim }]);
+      const refused = (await toolCall(session, "exchange_join", { exchangeId, cwd: nested, project: "alpha" })).result;
+      const error = refused?.structuredContent.error as { code: string; details: { observedClaim: string } };
+      expect(error.code).toBe("EXCHANGE_CLAIM_CONFLICT");
+      const replacement = (
+        await toolCall(session, "exchange_join", {
+          exchangeId,
+          cwd: nested,
+          project: first.pair?.projectId,
+          confirm: true,
+          replaceClaim: error.details.observedClaim,
+        })
+      ).result;
+      expect(replacement?.isError).toBe(false);
+      const successor = (replacement?.structuredContent.data as { claimId: string }).claimId;
+      expect(successor).not.toBe(claim);
+      expect(claims()).toEqual([{ claim_id: successor }]);
+      expect(responses(102)).toBeUndefined();
+      expect(records().some(({ kind, pid }) => kind === "ack" && pid === queued.pid)).toBe(false);
+      await session.close();
+      expect(claims()).toEqual([]);
+      expect(durable()).toEqual(before);
+      for (const child of records().filter(({ kind }) => kind === "announced")) {
+        expect(() => process.kill(child.pid, 0)).toThrow();
+      }
+    } finally {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      db.close();
+      await session.close();
+    }
+  }, 20_000);
+
+  it("mirrors every current Exchange operation through a real CLI child", async () => {
+    const { home, workA, workB } = installation("sorage-mcp-exchange-");
+    const requestId = "2f0ac9a0-0000-4000-8000-0000000000bb";
+    const session = startServer(home, workA, { SORAGE_TEST_REQUEST_ID: requestId });
+    const call = async (name: string, args: Record<string, unknown>, cwd = workA) => {
+      const result = (await toolCall(session, `exchange_${name}`, { ...args, cwd })).result;
+      if (!result) throw new Error(`No tool result for ${name}`);
+      expect(result.isError, name).toBe(false);
+      expect(JSON.parse(envelopeText(result)), name).toEqual(result.structuredContent);
+      return result.structuredContent.data as Record<string, unknown>;
+    };
+    try {
+      const { exchangeId } = await call("create", {
+        member: ["beta"],
+        goal: "Verify exact delivery",
+        criterion: ["Observe the source"],
+        operationId: "create",
+      });
+      const pair = { exchangeId };
+      const opener = await call("join", { ...pair, project: "alpha" });
+      const worker = await call("join", pair, workB);
+      const alpha = { ...pair, claim: opener.claimId };
+      const beta = { ...pair, claim: worker.claimId };
+      expect(await call("inspect", pair)).toMatchObject({ state: "active", exchangeId });
+      const sent = await call("send", { ...alpha, operationId: "send", body: "Read the named evidence", to: "beta" });
+      expect((await call("wait", { ...pair, timeout: 1, interval: 1 }, workB)).messages).toMatchObject([
+        { seq: sent.seq },
+      ]);
+      const requested = await call("request", {
+        ...alpha,
+        operationId: "request",
+        assignee: "beta",
+        condition: "Observe it",
+        criterion: ["Return exact bytes"],
+      });
+      const source = join(workB, "result.txt");
+      writeFileSync(source, "observed");
+      const registered = await call(
+        "material_register",
+        {
+          ...beta,
+          operationId: "register",
+          kind: "copy",
+          source: "result.txt",
+        },
+        workB,
+      );
+      const artifact = { ...pair, materialId: registered.materialId, offset: 1, limit: 3 };
+      expect(await call("material_read", artifact)).toMatchObject({ encoding: "base64", bytes: "YnNl", offset: 1 });
+      const report = await call(
+        "report",
+        {
+          ...beta,
+          operationId: "report",
+          request: requested.requestId,
+          assignmentVersion: 1,
+          body: "Read it",
+          evidence: [registered.materialId],
+        },
+        workB,
+      );
+      expect(
+        await call("accept", {
+          ...alpha,
+          operationId: "accept",
+          accept: [`${requested.requestId}:${report.reportVersion}`],
+        }),
+      ).toMatchObject({ kind: "accept", exchangeId });
+      expect(await call("confirm_read", { ...beta, range: [String(sent.seq)] }, workB)).toMatchObject({
+        changed: true,
+      });
+      expect(await call("recover", { ...pair, operationId: "report" }, workB)).toMatchObject({
+        operations: [{ operationId: "report", outcome: { reportVersion: 1 } }],
+      });
+      const path = String(exchangeId);
+      const cli = runCli(["exchange", "history", path, "--json", "--after-seq", "1"], home, workB, {
+        SORAGE_TEST_REQUEST_ID: requestId,
+      });
+      expect(cli.status).toBe(0);
+      const mcp = (await toolCall(session, "exchange_history", { ...pair, cwd: workB, afterSeq: 1 })).result;
+      if (!mcp) throw new Error("Expected the history tool result");
+      expect(envelopeText(mcp)).toBe(cli.stdout);
+      expect(await call("history", { ...pair, afterSeq: 1 }, workB)).toMatchObject({ lastSeq: 4 });
+      const read = runCli(
+        ["exchange", "material-read", path, String(registered.materialId), "--json", "--offset", "1", "--limit", "3"],
+        home,
+        workA,
+        { SORAGE_TEST_REQUEST_ID: requestId },
+      );
+      expect(read.status).toBe(0);
+      const material = (await toolCall(session, "exchange_material_read", { ...artifact, cwd: workA })).result;
+      if (!material) throw new Error("Expected the material tool result");
+      expect(envelopeText(material)).toBe(read.stdout);
+      writeFileSync(join(workA, "flag-like-operation.txt"), "same exact contents");
+      const literal = [
+        "exchange",
+        "send",
+        path,
+        "--claim",
+        String(opener.claimId),
+        "--kind",
+        "progress",
+        "--operation-id",
+        "--file",
+        "--file",
+        "flag-like-operation.txt",
+        "--json",
+      ];
+      expect(runCli(literal, home, workA).status).toBe(0);
+      const directReplay = runCli([...literal, "--replay-only"], home, workA, { SORAGE_TEST_REQUEST_ID: requestId });
+      expect(directReplay.status, directReplay.stderr).toBe(0);
+      const literalReplay = (
+        await toolCall(session, "exchange_send", {
+          ...alpha,
+          cwd: workA,
+          kind: "progress",
+          operationId: "--file",
+          file: "flag-like-operation.txt",
+          replayOnly: true,
+        })
+      ).result;
+      if (!literalReplay) throw new Error("Expected the exact file replay envelope");
+      expect(literalReplay.isError).toBe(false);
+      expect(envelopeText(literalReplay)).toBe(directReplay.stdout);
+    } finally {
+      await session.close();
+    }
+  }, 20_000);
+
   it("pins an accepted call byte-exact with the inherited request id", async () => {
     const { home, workA } = installation();
     const session = startServer(home, workA, { SORAGE_TEST_REQUEST_ID: "2f0ac9a0-0000-4000-8000-0000000000bb" });
@@ -953,44 +1253,57 @@ describe("the lifecycle (plan 4.5)", () => {
     await session.close();
   });
 
-  it("kills the live waiter when stdin closes: the captured child PID exits, separately from the server", async () => {
-    const { home, workA } = installation();
-    for (const args of [
-      ["channel", "create", "eof", "--json"],
-      ["channel", "add", "eof", "w1", "--role", "worker", "--json"],
-    ]) {
-      const created = runCli(args, home, workA);
-      expect(created.status, created.stderr).toBe(0);
-    }
-    const session = startServer(home, workA);
-    await session.request("initialize", { protocolVersion: "2025-06-18" });
-    session.send({
-      jsonrpc: "2.0",
-      id: "eof-wait",
-      method: "tools/call",
-      params: { name: "channel_messages", arguments: { channel: "eof", wait: true, timeout: 30 } },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const liveChildren = childrenOf(session.child.pid);
-    expect(liveChildren).toHaveLength(1);
-    const waiterPid = liveChildren[0] as number;
-    const waiterGone = new Promise<boolean>((resolve) => {
-      const poll = (): void => {
-        try {
-          process.kill(waiterPid, 0);
-          setTimeout(poll, 100);
-        } catch {
-          resolve(true);
-        }
-      };
-      poll();
-    });
-    session.child.stdin?.end();
-    await session.close();
-    expect(await waiterGone).toBe(true);
-    expect(session.pendingRequestCount, "EOF must leave no response waiter").toBe(0);
-    expect(session.child.exitCode).not.toBeNull();
-  });
+  it.each(["EOF", "SIGTERM", "SIGINT"] as const)(
+    "reaps the uncancelled waiter and sends its definitive shutdown response on %s",
+    async (stop) => {
+      const { home, workA } = installation();
+      for (const args of [
+        ["channel", "create", "eof", "--json"],
+        ["channel", "add", "eof", "w1", "--role", "worker", "--json"],
+      ]) {
+        const created = runCli(args, home, workA);
+        expect(created.status, created.stderr).toBe(0);
+      }
+      const session = startServer(home, workA);
+      await session.request("initialize", { protocolVersion: "2025-06-18" });
+      session.send({
+        jsonrpc: "2.0",
+        id: "eof-wait",
+        method: "tools/call",
+        params: { name: "channel_messages", arguments: { channel: "eof", wait: true, timeout: 30 } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const liveChildren = childrenOf(session.child.pid);
+      expect(liveChildren).toHaveLength(1);
+      const waiterPid = liveChildren[0] as number;
+      const waiterGone = new Promise<boolean>((resolve) => {
+        const poll = (): void => {
+          try {
+            process.kill(waiterPid, 0);
+            setTimeout(poll, 100);
+          } catch {
+            resolve(true);
+          }
+        };
+        poll();
+      });
+      if (stop === "EOF") {
+        await session.close();
+      } else {
+        const closed = new Promise<void>((resolve) => session.child.once("close", () => resolve()));
+        session.child.kill(stop);
+        await closed;
+      }
+      expect(await waiterGone).toBe(true);
+      expect(session.pendingRequestCount, "EOF must leave no response waiter").toBe(0);
+      expect(session.child.exitCode).toBe(0);
+      const responses = session.lines.map((line) => JSON.parse(line)).filter((answer) => answer.id === "eof-wait");
+      expect(responses).toHaveLength(1);
+      expect(responses[0]).toMatchObject({
+        result: { isError: true, structuredContent: { ok: false, error: { code: "INTERNAL_ERROR" } } },
+      });
+    },
+  );
 
   it("returns a timed-out wait with isError false and meta.timedOut true", async () => {
     const { home, workA } = installation();

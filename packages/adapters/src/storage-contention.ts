@@ -96,7 +96,7 @@ function kindOfCandidate(value: unknown): ContentionKind | null {
  * excluded by name: a restoration, integrity, or admission outcome never
  * becomes the contention refusal regardless of message text.
  */
-function contentionKindOf(error: unknown): ContentionKind | null {
+export function contentionKindOf(error: unknown): ContentionKind | null {
   const seen: unknown[] = [];
   const visit = (value: unknown, depth: number): ContentionKind | null => {
     if (depth > 4 || typeof value !== "object" || value === null) return null;

@@ -1,11 +1,24 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { appError, errorEnvelope, SORAGE_VERSION } from "@sorage/core";
+import { EXCHANGE_JOIN_ACK, EXCHANGE_JOIN_GATE, ExchangeJoinGate } from "./exchange-join-gate";
+import {
+  ExchangeKeeper,
+  type ExchangePair,
+  exchangePairOf,
+  EXCHANGE_JOIN_TIMEOUT_MS,
+  interruptExchangeChild,
+  ownedLeaseOf,
+  reportExchangeKeeperStop,
+  selfInvocationArgv,
+} from "./exchange-owner";
 import { admitArguments, type McpTool, mcpToolByName, MCP_TOOLS } from "./mcp-catalogue";
 import { expandTilde } from "./expand-tilde";
+
+export { selfInvocationArgv } from "./exchange-owner";
 
 /**
  * The `sorage mcp` STDIO server of interface section 39 (MCP-001 to MCP-006):
@@ -226,9 +239,12 @@ export function fileLikePropertyOf(toolName: string): string | undefined {
     toolName === "handoff_send" ||
     toolName === "handoff_review_set" ||
     toolName === "handoff_revise" ||
-    toolName === "handoff_comment_set"
+    toolName === "handoff_comment_set" ||
+    toolName === "exchange_send" ||
+    toolName === "exchange_report"
   )
     return "file";
+  if (toolName === "exchange_material_register") return "source";
   if (toolName === "memo_add" || toolName === "memo_update" || toolName === "channel_post") return "bodyFile";
   if (toolName === "handoff_processing_start" || toolName === "handoff_processing_complete") return "commentFile";
   return undefined;
@@ -276,11 +292,6 @@ function defaultSpawner(argv: string[], cwd: string): SpawnedChild {
   }) as unknown as SpawnedChild;
 }
 
-/** The self-invocation prefix: the entry argument only when running from source. */
-export function selfInvocationArgv(argv: string[]): string[] {
-  return process.argv[1]?.endsWith("main.ts") === true ? [process.argv[1] as string, ...argv] : argv;
-}
-
 export interface CallAnswer {
   jsonrpc: "2.0";
   id: unknown;
@@ -316,7 +327,13 @@ export async function handleToolCall(
   const cwd = cwdResolution.cwd;
   const fileProperty = fileLikePropertyOf(name);
   const fileFlag =
-    fileProperty === "file" ? "--file" : fileProperty === "commentFile" ? "--comment-file" : "--body-file";
+    fileProperty === "source"
+      ? "--source"
+      : fileProperty === "file"
+        ? "--file"
+        : fileProperty === "commentFile"
+          ? "--comment-file"
+          : "--body-file";
   let argv = selfInvocationArgv(admitted.argv);
   if (fileProperty !== undefined && typeof arguments_[fileProperty] === "string") {
     const confinement = confineFileArgument(cwd, arguments_[fileProperty] as string);
@@ -327,7 +344,9 @@ export async function handleToolCall(
         result: workspaceEscapeEnvelope(confinement.resolvedPath, confinement.workspaceRoot),
       };
     }
-    if (name === "handoff_send" || name === "handoff_revise") {
+    if (name.startsWith("exchange_")) {
+      argv = selfInvocationArgv(callTool.argv({ ...arguments_, [fileProperty]: confinement.tildeExpanded }));
+    } else if (name === "handoff_send" || name === "handoff_revise") {
       argv = selfInvocationArgv(replaceArgvValue(admitted.argv, fileFlag, confinement.tildeExpanded));
     } else {
       argv = selfInvocationArgv(replaceArgvValue(admitted.argv, fileFlag, confinement.realPath));
@@ -433,43 +452,84 @@ interface JsonRpcMessage {
  * termination signal kills every remaining child and ends the process.
  */
 export function serveMcp(): void {
-  const children = new Map<string, SpawnedChild>();
-  const cancelled = new Set<string>();
+  interface ActiveCall {
+    child?: SpawnedChild;
+    cancelled: boolean;
+    escalation?: ReturnType<typeof setTimeout>;
+    gated?: ReturnType<ExchangeJoinGate["add"]>;
+    deadline?: ReturnType<typeof setTimeout>;
+    reaped?: Promise<void>;
+    pair?: ExchangePair;
+    cwd?: string;
+    acknowledged: boolean;
+  }
+  const children = new Map<string, ActiveCall>();
+  const pending = new Set<Promise<void>>();
+  const gate = new ExchangeJoinGate();
+  const keeper = new ExchangeKeeper(undefined, reportExchangeKeeperStop);
   let shuttingDown = false;
+  let outputOpen = true;
   const write = (message: unknown): void => {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    if (outputOpen && !process.stdout.destroyed) process.stdout.write(`${JSON.stringify(message)}\n`);
   };
 
   // Bounded child cleanup (plan r4 section 4.5): ownership is kept until the
   // child exits, SIGTERM escalates to SIGKILL after the grace, and every exit
   // path — cancellation, EOF, SIGTERM, SIGINT, EPIPE — runs the same rule.
-  const KILL_GRACE_MS = 1_500;
-  const killChild = (child: SpawnedChild): void => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // A child that is already gone needs no signal.
-    }
-    const escalate = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Already gone.
-      }
-    }, KILL_GRACE_MS);
-    escalate.unref?.();
+  const abort = (call: ActiveCall): void => {
+    call.gated?.cancel();
+    if (call.child) call.escalation ??= interruptExchangeChild(call.child);
   };
+
+  function launchJoin(argv: string[], cwd: string, exchangeId: string, call: ActiveCall): SpawnedChild {
+    const child: ChildProcess = spawn(process.execPath, argv, {
+      cwd,
+      env: { ...process.env, [EXCHANGE_JOIN_GATE]: "1" },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    call.child = child as unknown as SpawnedChild;
+    call.cwd = cwd;
+    call.reaped = new Promise((resolve) => child.once("close", () => resolve()));
+    const slot = gate.add(exchangeId, () => {
+      if (!child.connected) {
+        abort(call);
+        return;
+      }
+      call.acknowledged = true;
+      clearTimeout(call.deadline);
+      child.send(EXCHANGE_JOIN_ACK, (error) => {
+        if (error) abort(call);
+      });
+    });
+    call.gated = slot;
+    call.deadline = setTimeout(() => abort(call), EXCHANGE_JOIN_TIMEOUT_MS);
+    child.on("message", (message) => {
+      const pair = exchangePairOf(message);
+      if (!pair) {
+        abort(call);
+        return;
+      }
+      call.pair = pair;
+      if (!slot.announce(pair)) abort(call);
+    });
+    return call.child;
+  }
 
   let lines: ReturnType<typeof createInterface> | undefined;
 
   const shutdown = (): void => {
     if (shuttingDown) return;
     shuttingDown = true;
+    gate.close();
+    keeper.quiesce();
     // Stop accepting input: the remaining buffered lines are dropped and the
     // stdin keep-alive ends, so a signal ends the server even with stdin open.
     lines?.close();
     process.stdin.destroy();
-    for (const child of children.values()) killChild(child);
+    for (const call of children.values()) abort(call);
+    void Promise.allSettled([...pending]).then(async () => {
+      if (!(await keeper.shutdown())) process.exitCode = 1;
+    });
     process.exitCode = 0;
   };
 
@@ -483,6 +543,7 @@ export function serveMcp(): void {
   // an unhandled error; the server ends quietly through the same cleanup.
   process.stdout.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EPIPE") {
+      outputOpen = false;
       shutdown();
       return;
     }
@@ -513,12 +574,12 @@ export function serveMcp(): void {
         const cancelledId = (params as { requestId?: unknown } | undefined)?.requestId;
         if (cancelledId === undefined) return;
         const requestKey = keyOf(cancelledId);
-        const child = children.get(requestKey);
+        const call = children.get(requestKey);
         // A late cancellation — the answer already left — finds no child and
         // must not poison the key against a later request that reuses the id.
-        if (child !== undefined) {
-          cancelled.add(requestKey);
-          killChild(child);
+        if (call?.child !== undefined) {
+          call.cancelled = true;
+          abort(call);
         }
       }
       return;
@@ -542,31 +603,53 @@ export function serveMcp(): void {
     if (method === "tools/call") {
       const callParams = (params ?? {}) as { name?: unknown; arguments?: { cwd?: unknown } };
       const requestKey = keyOf(id);
-      void handleToolCall(callParams.name, callParams.arguments, callParams.arguments?.cwd, (argv, cwd) => {
-        const child = defaultSpawner(argv, cwd);
-        children.set(requestKey, child);
-        return child;
-      })
-        .then((answer) => {
-          children.delete(requestKey);
-          if (cancelled.has(requestKey)) {
-            cancelled.delete(requestKey);
-            return;
+      const call: ActiveCall = { cancelled: false, acknowledged: false };
+      const execution = handleToolCall(
+        callParams.name,
+        callParams.arguments,
+        callParams.arguments?.cwd,
+        (argv, cwd) => {
+          children.set(requestKey, call);
+          if (callParams.name === "exchange_join") {
+            return launchJoin(argv, cwd, argv.at(-1) as string, call);
           }
-          write({ ...answer, id });
+          call.child = defaultSpawner(argv, cwd);
+          return call.child;
+        },
+      )
+        .then(async (answer) => {
+          if (call.reaped) await call.reaped;
+          if (call.acknowledged && call.pair && call.cwd && "result" in answer) {
+            const envelope = answer.result?.structuredContent as { ok?: unknown; data?: unknown } | undefined;
+            if (envelope?.ok === true) {
+              const lease = ownedLeaseOf(envelope.data, call.cwd);
+              if (lease?.exchangeId === call.pair.exchangeId && lease.projectId === call.pair.projectId) {
+                keeper.install(lease);
+              }
+            }
+          }
+          if (!call.cancelled) write({ ...answer, id });
         })
         .catch((error: unknown) => {
           // An unexpected dispatch failure settles this one call with the
           // crash row's synthesized envelope — a server fault, so the message
           // names the server — and never ends the server.
-          children.delete(requestKey);
+          if (call.cancelled) return;
           const detail = error instanceof Error ? error.message : String(error);
           write({
             jsonrpc: "2.0",
             id,
             result: synthesizedServerError(`dispatch failed: ${detail}`),
           });
+        })
+        .finally(() => {
+          clearTimeout(call.escalation);
+          clearTimeout(call.deadline);
+          call.gated?.finish();
+          if (children.get(requestKey) === call) children.delete(requestKey);
+          pending.delete(execution);
         });
+      pending.add(execution);
       return;
     }
     answerError(-32601, `method not found: ${method}`);

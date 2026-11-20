@@ -1,4 +1,4 @@
-import { isUtf8ExactText } from "@sorage/core";
+import { EXCHANGE_POLL_SECONDS, EXCHANGE_READ_BYTES, EXCHANGE_WAIT_SECONDS, isUtf8ExactText } from "@sorage/core";
 import {
   ACCEPT_REQUIRES_ROW_VERSION,
   BODY_MUST_NOT_BE_EMPTY,
@@ -1047,8 +1047,312 @@ const PROJECT_TOOLS: McpTool[] = [
   },
 ];
 
-/** The catalogue in section 39's order: 17 Handoff, 7 Memo, 9 Channel, 2 Project. */
-export const MCP_TOOLS: readonly McpTool[] = [...HANDOFF_TOOLS, ...MEMO_TOOLS, ...CHANNEL_TOOLS, ...PROJECT_TOOLS];
+interface ExchangeToolOption extends OptionMapping {
+  type: PropertyType;
+  schema?: Record<string, unknown>;
+  required?: string;
+}
+
+const exchangePair = (
+  property: string,
+  flag: string,
+  required?: string,
+  type: PropertyType = "string",
+  schema?: Record<string, unknown>,
+): ExchangeToolOption => ({
+  property,
+  flag,
+  form: "pair",
+  type,
+  ...(required ? { required } : {}),
+  ...(schema ? { schema } : {}),
+});
+
+const exchangeList = (property: string, flag: string): ExchangeToolOption => ({
+  property,
+  flag,
+  form: "repeat",
+  type: "stringArray",
+  schema: { type: "array", items: { type: "string" }, minItems: 1 },
+});
+
+const exchangeFlag = (property: string, flag: string): ExchangeToolOption => ({
+  property,
+  flag,
+  form: "flag",
+  type: "boolean",
+});
+
+const exchangeId = { property: "exchangeId", argument: "exchange-id" };
+const exchangeProject = exchangePair("project", "--project");
+const exchangeOperationId = exchangePair("operationId", "--operation-id", "id");
+const exchangeBusiness = [exchangeOperationId, exchangeFlag("replayOnly", "--replay-only")];
+const exchangeClaim = exchangePair("claim", "--claim");
+const exchangeParticipant = [exchangeClaim, ...exchangeBusiness];
+const exchangeBody = [exchangePair("body", "--body"), exchangePair("file", "--file")];
+const exchangeAccept = exchangeList("accept", "--accept");
+const exchangeReply = exchangePair("replyTo", "--reply-to", undefined, "integer", { type: "integer", minimum: 1 });
+const exchangeCursor = exchangePair("historyCursor", "--history-cursor");
+const exchangePageLimit = exchangePair("limit", "--limit", undefined, "integer", {
+  type: "integer",
+  minimum: 1,
+  maximum: 200,
+});
+const exchangeBodySchema = { oneOf: [{ required: ["body"] }, { required: ["file"] }] };
+
+function exchangeTool(
+  command: string,
+  description: string,
+  options: ExchangeToolOption[],
+  settings: {
+    positionals?: (typeof exchangeId)[];
+    optionalPositionals?: boolean;
+    idempotent?: boolean;
+    required?: string[];
+    schema?: Record<string, unknown>;
+  } = {},
+): McpTool {
+  const positionals = settings.positionals ?? [exchangeId];
+  const allOptions = [exchangeProject, ...options];
+  const properties: Record<string, PropertySpec> = Object.fromEntries(
+    [...positionals.map(({ property }) => ({ property, type: "string" as const })), ...allOptions].map(
+      ({ property, type }) => [property, { type }],
+    ),
+  );
+  const schema = Object.fromEntries(
+    [...positionals.map(({ property }) => exchangePair(property, "")), ...allOptions].map(
+      ({ property, type, schema }) => [
+        property,
+        {
+          type,
+          ...(type === "integer" ? { maximum: Number.MAX_SAFE_INTEGER } : {}),
+          ...schema,
+        },
+      ],
+    ),
+  );
+  return {
+    name: `exchange_${command.replaceAll("-", "_")}`,
+    description,
+    annotations: settings.idempotent ? IDEMPOTENT_COMMUNICATION : COMMUNICATION,
+    properties,
+    inputSchema: {
+      type: "object",
+      properties: schema,
+      required: [
+        ...(settings.optionalPositionals ? [] : positionals.map(({ property }) => property)),
+        ...allOptions.filter(({ required }) => required !== undefined).map(({ property }) => property),
+        ...(settings.required ?? []),
+      ],
+      ...settings.schema,
+    },
+    mirrorsIntegerBounds: false,
+    argv: optionsArgv(["exchange", command], allOptions, (args) =>
+      positionals.flatMap(({ property }) => (args[property] === undefined ? [] : [String(args[property])])),
+    ),
+    guard: (args) => {
+      // Commander parses the global limit before checking required command operands.
+      if (typeof args.limit === "number" && (!Number.isSafeInteger(args.limit) || args.limit < 0)) {
+        return `option '--limit <n>' argument '${args.limit}' is invalid. ${NON_NEGATIVE_INTEGER}`;
+      }
+      const required = allOptions.find(({ property, required }) => required && args[property] === undefined);
+      if (required) return requiredOptionSentence(`${required.flag} <${required.required}>`);
+      const missing = settings.optionalPositionals
+        ? undefined
+        : positionals.find(({ property }) => args[property] === undefined);
+      if (missing) return requiredArgumentSentence(missing.argument);
+      return undefined;
+    },
+  };
+}
+
+const EXCHANGE_TOOLS: McpTool[] = [
+  exchangeTool(
+    "create",
+    "create an Exchange and return its ID without a claim",
+    [
+      ...exchangeBusiness,
+      exchangeList("member", "--member"),
+      exchangePair("goal", "--goal", "text"),
+      exchangeList("criterion", "--criterion"),
+    ],
+    { positionals: [], required: ["member", "criterion"], idempotent: true },
+  ),
+  exchangeTool(
+    "join",
+    "acquire an Active Exchange claim and return the current view",
+    [exchangePair("replaceClaim", "--replace-claim"), exchangeFlag("confirm", "--confirm")],
+    {
+      schema: {
+        oneOf: [
+          {
+            not: {
+              anyOf: [
+                { required: ["replaceClaim"] },
+                { required: ["confirm"], properties: { confirm: { const: true } } },
+              ],
+            },
+          },
+          {
+            required: ["replaceClaim", "confirm"],
+            properties: { confirm: { const: true } },
+          },
+        ],
+      },
+    },
+  ),
+  exchangeTool("inspect", "inspect the Exchange and current obligations without writing", [], { idempotent: true }),
+  exchangeTool(
+    "history",
+    "read a bounded page of Exchange history without confirming it",
+    [
+      exchangePair("afterSeq", "--after-seq", undefined, "integer", { type: "integer", minimum: 0 }),
+      exchangeCursor,
+      exchangePageLimit,
+    ],
+    { idempotent: true, schema: { not: { required: ["afterSeq", "historyCursor"] } } },
+  ),
+  exchangeTool(
+    "wait",
+    "wait without writes for new relevant Exchange activity",
+    [
+      exchangeCursor,
+      exchangePageLimit,
+      exchangePair("timeout", "--timeout", undefined, "integer", {
+        type: "integer",
+        minimum: 1,
+        maximum: Math.floor(Number.MAX_SAFE_INTEGER / 1_000),
+        default: EXCHANGE_WAIT_SECONDS,
+      }),
+      exchangePair("interval", "--interval", undefined, "integer", {
+        type: "integer",
+        minimum: 1,
+        maximum: Math.floor(Number.MAX_SAFE_INTEGER / 1_000),
+        default: EXCHANGE_POLL_SECONDS,
+      }),
+    ],
+    { idempotent: true },
+  ),
+  exchangeTool(
+    "send",
+    "send an informational Exchange message",
+    [
+      ...exchangeParticipant,
+      ...exchangeBody,
+      exchangePair("kind", "--kind", undefined, "string", {
+        type: "string",
+        enum: ["information", "progress", "clarification", "blocked"],
+        default: "information",
+      }),
+      exchangePair("to", "--to"),
+      exchangeReply,
+      exchangeAccept,
+    ],
+    { idempotent: true, schema: exchangeBodySchema },
+  ),
+  exchangeTool(
+    "request",
+    "direct an actionable request to a current Project",
+    [
+      ...exchangeParticipant,
+      exchangePair("assignee", "--assignee", "project"),
+      exchangePair("condition", "--condition", "text"),
+      exchangeList("criterion", "--criterion"),
+      exchangeReply,
+    ],
+    { idempotent: true, required: ["criterion"] },
+  ),
+  exchangeTool(
+    "report",
+    "report a versioned result on an assigned request",
+    [
+      ...exchangeParticipant,
+      ...exchangeBody,
+      exchangePair("request", "--request", "id"),
+      exchangePair("assignmentVersion", "--assignment-version", "n", "integer", { type: "integer", minimum: 1 }),
+      exchangeList("evidence", "--evidence"),
+      exchangeAccept,
+    ],
+    { idempotent: true, schema: exchangeBodySchema },
+  ),
+  exchangeTool(
+    "accept",
+    "accept exactly the named report versions as requester",
+    [...exchangeParticipant, exchangeAccept],
+    { required: ["accept"], idempotent: true },
+  ),
+  exchangeTool(
+    "material-register",
+    "register a working copy or original reference",
+    [
+      ...exchangeParticipant,
+      exchangePair("kind", "--kind", "kind", "string", {
+        type: "string",
+        enum: ["copy", "live", "versioned", "external"],
+      }),
+      exchangePair("source", "--source"),
+      exchangePair("offset", "--offset", undefined, "integer", { type: "integer", minimum: 0 }),
+      exchangePair("length", "--length", undefined, "integer", { type: "integer", minimum: 0 }),
+      exchangePair("access", "--access", undefined, "string", { type: "string", enum: ["url", "run-id", "query"] }),
+      exchangePair("value", "--value"),
+    ],
+    {
+      idempotent: true,
+      schema: {
+        oneOf: [
+          {
+            properties: { kind: { enum: ["copy", "live", "versioned"] } },
+            required: ["source"],
+            not: { anyOf: [{ required: ["access"] }, { required: ["value"] }] },
+          },
+          {
+            properties: { kind: { const: "external" } },
+            required: ["access", "value"],
+            not: { anyOf: [{ required: ["source"] }, { required: ["offset"] }, { required: ["length"] }] },
+          },
+        ],
+      },
+    },
+  ),
+  exchangeTool(
+    "material-read",
+    "read registered material by ID in bounded exact byte ranges",
+    [
+      exchangePair("offset", "--offset", "n", "integer", { type: "integer", minimum: 0 }),
+      exchangePair("limit", "--limit", undefined, "integer", {
+        type: "integer",
+        minimum: 1,
+        maximum: EXCHANGE_READ_BYTES,
+      }),
+    ],
+    {
+      positionals: [exchangeId, { property: "materialId", argument: "material-id" }],
+      required: ["limit"],
+      idempotent: true,
+    },
+  ),
+  exchangeTool(
+    "confirm-read",
+    "explicitly confirm delivered messages without filling unread gaps",
+    [exchangePair("claim", "--claim", "id"), exchangeList("range", "--range")],
+    { required: ["range"], idempotent: true },
+  ),
+  exchangeTool(
+    "recover",
+    "discover the current Project's prior committed operations without writing",
+    [exchangePair("operationId", "--operation-id")],
+    { optionalPositionals: true, idempotent: true },
+  ),
+];
+
+/** Append the M10 Exchange extension after the unchanged 35 tools of section 39. */
+export const MCP_TOOLS: readonly McpTool[] = [
+  ...HANDOFF_TOOLS,
+  ...MEMO_TOOLS,
+  ...CHANNEL_TOOLS,
+  ...PROJECT_TOOLS,
+  ...EXCHANGE_TOOLS,
+];
 
 export function mcpToolByName(name: string): McpTool | undefined {
   return MCP_TOOLS.find((tool) => tool.name === name);

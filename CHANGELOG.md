@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Use `sorage exchange` to collaborate between registered Projects, share working material, accept specific report versions, and recover committed operations.
+- Keep Exchange claims active through the CLI session owner or MCP connection, wait for relevant activity with a delivery cursor, and use the initial 13 Exchange MCP tools.
 
 ### Changed
 

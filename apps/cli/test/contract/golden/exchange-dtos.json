@@ -266,10 +266,62 @@
       ],
       "hasMore": true,
       "afterSeq": 2,
-      "lastSeq": 4
+      "lastSeq": 4,
+      "cursor": "<history-cursor>"
     },
     "meta": {
       "requestId": "<uuid>"
+    }
+  },
+  "historyContinuation": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "messages": [
+        {
+          "seq": 3,
+          "senderId": "<uuid>",
+          "recipientId": "<uuid>",
+          "kind": "report",
+          "replyTo": null,
+          "materialId": "<uuid>",
+          "requestId": "<uuid>",
+          "reportVersion": 1,
+          "createdAt": "<time>"
+        },
+        {
+          "seq": 4,
+          "senderId": "<uuid>",
+          "recipientId": null,
+          "kind": "accept",
+          "replyTo": null,
+          "materialId": null,
+          "requestId": "<uuid>",
+          "reportVersion": 1,
+          "createdAt": "<time>"
+        }
+      ],
+      "hasMore": false,
+      "afterSeq": 4,
+      "lastSeq": 4,
+      "cursor": "<history-cursor>"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "waitQuiet": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "messages": [],
+      "cursor": "<history-cursor>",
+      "stateChanged": false
+    },
+    "meta": {
+      "requestId": "<uuid>",
+      "timedOut": true
     }
   },
   "confirmRead": {
@@ -367,6 +419,30 @@
       "recovery": {
         "suggestedCommand": "Run an authorized Exchange write or join for this Exchange, then retry the read"
       }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "renew": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "claimId": "<uuid>",
+      "expiresAt": "<time>"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "release": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "claimId": "<uuid>",
+      "expiresAt": "<time>"
     },
     "meta": {
       "requestId": "<uuid>"

@@ -18,7 +18,7 @@ import {
 } from "../../src/usage-sentences";
 
 /**
- * The 35-tool catalogue of interface section 39 against the CLI it mirrors:
+ * The tool catalogue of interface section 39 against the CLI it mirrors:
  * the pinned shape (names, annotations, wait defaults), each tool's argv
  * mapping with the options-first `--` layout, and the two admission layers of
  * section 39's clarification — one case per inventory row, plus the positive
@@ -60,6 +60,19 @@ const COMMAND_PATHS: Record<string, string[]> = {
   channel_show: ["channel", "show"],
   project_list: ["project", "list"],
   project_show: ["project", "show"],
+  exchange_create: ["exchange", "create"],
+  exchange_join: ["exchange", "join"],
+  exchange_inspect: ["exchange", "inspect"],
+  exchange_history: ["exchange", "history"],
+  exchange_wait: ["exchange", "wait"],
+  exchange_send: ["exchange", "send"],
+  exchange_request: ["exchange", "request"],
+  exchange_report: ["exchange", "report"],
+  exchange_accept: ["exchange", "accept"],
+  exchange_material_register: ["exchange", "material-register"],
+  exchange_material_read: ["exchange", "material-read"],
+  exchange_confirm_read: ["exchange", "confirm-read"],
+  exchange_recover: ["exchange", "recover"],
 };
 
 const COMMANDER_PATHS_OF_CLOSED_LIST = [
@@ -81,6 +94,9 @@ const COMMANDER_PATHS_OF_CLOSED_LIST = [
   ["archive"],
   ["unarchive"],
   ["delete"],
+  ["exchange", "session"],
+  ["exchange", "renew"],
+  ["exchange", "release"],
 ];
 
 function commandAt(program: Command, path: string[]): Command | undefined {
@@ -115,7 +131,7 @@ function refusalOf(name: string, arguments_: Record<string, unknown>): string {
 const silent = { out: () => {}, err: () => {} };
 
 describe("the MCP catalogue shape (MCP-005)", () => {
-  it("holds exactly the 35 pinned tools in section 39's order", () => {
+  it("preserves the 35 M9 tools and appends the 13 Exchange operations in order", () => {
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
       ...[
         "send",
@@ -148,8 +164,23 @@ describe("the MCP catalogue shape (MCP-005)", () => {
       ),
       "project_list",
       "project_show",
+      ...[
+        "create",
+        "join",
+        "inspect",
+        "history",
+        "wait",
+        "send",
+        "request",
+        "report",
+        "accept",
+        "material_register",
+        "material_read",
+        "confirm_read",
+        "recover",
+      ].map((name) => `exchange_${name}`),
     ]);
-    expect(MCP_TOOLS).toHaveLength(35);
+    expect(MCP_TOOLS).toHaveLength(48);
   });
 
   it("sets the exact annotation memberships of section 39", () => {
@@ -157,7 +188,27 @@ describe("the MCP catalogue shape (MCP-005)", () => {
     expect(readOnly).toEqual(MCP_TOOLS.map((entry) => entry.name));
     expect(MCP_TOOLS.every((entry) => entry.annotations.destructiveHint === false)).toBe(true);
     const idempotent = MCP_TOOLS.filter((entry) => entry.annotations.idempotentHint).map((entry) => entry.name);
-    expect(idempotent).toEqual(["channel_create", "channel_add", "channel_remove", "channel_ack", "channel_close"]);
+    expect(idempotent).toEqual([
+      "channel_create",
+      "channel_add",
+      "channel_remove",
+      "channel_ack",
+      "channel_close",
+      ...[
+        "create",
+        "inspect",
+        "history",
+        "wait",
+        "send",
+        "request",
+        "report",
+        "accept",
+        "material_register",
+        "material_read",
+        "confirm_read",
+        "recover",
+      ].map((name) => `exchange_${name}`),
+    ]);
     expect(MCP_TOOLS.every((entry) => entry.annotations.openWorldHint === false)).toBe(true);
   });
 
@@ -415,6 +466,33 @@ function sampleArguments(name: string): Record<string, unknown> {
     channel_show: { channel: "c" },
     project_list: {},
     project_show: { project: "p" },
+    exchange_create: { operationId: "create", member: ["beta"], goal: "check", criterion: ["exact"] },
+    exchange_join: { exchangeId: "e" },
+    exchange_inspect: { exchangeId: "e" },
+    exchange_history: { exchangeId: "e", afterSeq: 3, limit: 2 },
+    exchange_wait: { exchangeId: "e", historyCursor: "cursor", timeout: 1 },
+    exchange_send: { exchangeId: "e", claim: "c", operationId: "send", body: "update" },
+    exchange_request: {
+      exchangeId: "e",
+      claim: "c",
+      operationId: "request",
+      assignee: "beta",
+      condition: "check",
+      criterion: ["exact"],
+    },
+    exchange_report: {
+      exchangeId: "e",
+      claim: "c",
+      operationId: "report",
+      request: "q",
+      assignmentVersion: 1,
+      body: "result",
+    },
+    exchange_accept: { exchangeId: "e", claim: "c", operationId: "accept", accept: ["q:1"] },
+    exchange_material_register: { exchangeId: "e", claim: "c", operationId: "material", kind: "copy", source: "file" },
+    exchange_material_read: { exchangeId: "e", materialId: "m", offset: 0, limit: 9 },
+    exchange_confirm_read: { exchangeId: "e", claim: "c", range: ["1", "3-4"] },
+    exchange_recover: { exchangeId: "e", operationId: "send" },
   };
   const sample = samples[name];
   if (sample === undefined) throw new Error(`no sample arguments for ${name}`);

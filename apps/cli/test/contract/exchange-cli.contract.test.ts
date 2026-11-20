@@ -239,7 +239,24 @@ describe("Exchange CLI JSON and read error boundary", () => {
         `${String(report.requestId)}:${String(report.reportVersion)}`,
       ]);
       success("inspect", ["exchange", "inspect", id]);
-      success("history", ["exchange", "history", id, "--limit", "2"]);
+      const history = success("history", ["exchange", "history", id, "--limit", "2"]);
+      expect(JSON.parse(Buffer.from(history.cursor, "base64url").toString())).toMatchObject({
+        version: 1,
+        exchangeId: id,
+        seq: 2,
+      });
+      const delivered = success("historyContinuation", ["exchange", "history", id, "--history-cursor", history.cursor]);
+      success("waitQuiet", [
+        "exchange",
+        "wait",
+        id,
+        "--history-cursor",
+        delivered.cursor,
+        "--timeout",
+        "1",
+        "--interval",
+        "1",
+      ]);
       const progress = [
         "exchange",
         "confirm-read",
@@ -279,8 +296,11 @@ describe("Exchange CLI JSON and read error boundary", () => {
       const read = run(["exchange", "material-read", id, String(queued.materialId), "--offset", "0", "--limit", "1"]);
       expect(read.status).toBe(75);
       output.pendingRead = JSON.parse(read.stderr);
+      success("renew", ["exchange", "renew", id, "--claim", String(worker.claimId)], beta);
+      success("release", ["exchange", "release", id, "--claim", String(worker.claimId)], beta);
 
       const normalized = JSON.stringify(output, null, 2)
+        .replace(/"cursor": "[A-Za-z0-9_-]+"/g, '"cursor": "<history-cursor>"')
         .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
         .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<time>");
       const golden = fileURLToPath(new URL("./golden/exchange-dtos.json", import.meta.url));

@@ -4,6 +4,9 @@ import { appError, err, type ErrorCode, type Result, ok } from "./errors";
 import { isMemoUuid } from "./memos";
 
 export const EXCHANGE_LEASE_SECONDS = 40;
+export const EXCHANGE_RENEW_SECONDS = 10;
+export const EXCHANGE_WAIT_SECONDS = 60;
+export const EXCHANGE_POLL_SECONDS = 2;
 export const EXCHANGE_WORKFLOW_BYTES = 8_192;
 export const EXCHANGE_READ_BYTES = 65_536;
 export const EXCHANGE_INFORMATION_KINDS = ["information", "progress", "clarification", "blocked"] as const;
@@ -67,12 +70,28 @@ export type ExchangeBusinessInput =
 
 export type ExchangeReadInput =
   | { kind: "inspect"; exchangeId: string }
-  | { kind: "history"; exchangeId: string; afterSeq: number; limit?: number | undefined }
+  | {
+      kind: "history";
+      exchangeId: string;
+      afterSeq?: number | undefined;
+      cursor?: string | undefined;
+      limit?: number | undefined;
+    }
+  | {
+      kind: "wait";
+      exchangeId: string;
+      cursor?: string | undefined;
+      limit?: number | undefined;
+      timeout: number;
+      interval: number;
+    }
   | { kind: "material-read"; exchangeId: string; materialId: string; offset: number; limit: number }
   | { kind: "recover"; exchangeId?: string | undefined; operationId?: string | undefined };
 
 export type ExchangeLifecycleInput =
   | { kind: "join"; exchangeId: string; replaceClaim?: string | undefined; confirmed: boolean }
+  | { kind: "renew"; exchangeId: string; claim: string }
+  | { kind: "release"; exchangeId: string; claim: string }
   | { kind: "confirm-read"; exchangeId: string; claim: string | undefined; ranges: ExchangeRange[] };
 
 export type ExchangeInput = ExchangeBusinessInput | ExchangeReadInput | ExchangeLifecycleInput;
@@ -208,6 +227,24 @@ export interface ExchangeHistoryPage {
   hasMore: boolean;
   afterSeq: number;
   lastSeq: number;
+  cursor: string;
+}
+
+export interface ExchangeWaitPage {
+  exchangeId: string;
+  projectId: string;
+  messages: ExchangeMessage[];
+  cursor: string;
+  stateChanged: boolean;
+}
+
+export interface ExchangeWaitResult extends ExchangeWaitPage {
+  timedOut: boolean;
+}
+
+export interface ExchangeLeaseResult extends ExchangeClaim {
+  exchangeId: string;
+  projectId: string;
 }
 
 export interface ExchangeMaterialPage {
@@ -246,6 +283,8 @@ export type ExchangeActionData = (
   | ExchangeView
   | (ExchangeView & ExchangeClaim)
   | ExchangeHistoryPage
+  | ExchangeWaitResult
+  | ExchangeLeaseResult
   | ExchangeMaterialPage
   | ExchangeExternalReference
   | ExchangeRecovery
@@ -256,6 +295,9 @@ type ExchangeOtherResults = {
   join: ExchangeView & ExchangeClaim;
   inspect: ExchangeView;
   history: ExchangeHistoryPage;
+  wait: ExchangeWaitResult;
+  renew: ExchangeLeaseResult;
+  release: ExchangeLeaseResult;
   "material-read": ExchangeMaterialPage | ExchangeExternalReference;
   recover: ExchangeRecovery;
   "confirm-read": ExchangeReadConfirmation;
@@ -277,7 +319,11 @@ export interface ExchangeCommandPorts {
 
 export function isExchangeRead(input: ExchangeInput): input is ExchangeReadInput {
   return (
-    input.kind === "inspect" || input.kind === "history" || input.kind === "material-read" || input.kind === "recover"
+    input.kind === "inspect" ||
+    input.kind === "history" ||
+    input.kind === "wait" ||
+    input.kind === "material-read" ||
+    input.kind === "recover"
   );
 }
 
@@ -314,9 +360,9 @@ export function requireExchangeClaim(
   slot: ExchangeClaim | null,
   supplied: string | undefined,
   now: Date,
-): Result<void> {
+): Result<ExchangeClaim> {
   return slot !== null && slot.claimId === supplied && Date.parse(slot.expiresAt) > now.getTime()
-    ? ok(undefined)
+    ? ok(slot)
     : err(appError("EXCHANGE_CLAIM_CONFLICT", "The Exchange claim is absent, replaced or expired."));
 }
 

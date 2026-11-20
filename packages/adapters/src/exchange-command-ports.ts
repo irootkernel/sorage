@@ -7,14 +7,18 @@ import {
   authorizeExchangeJoin,
   classifyMimeType,
   commitExchangeBusiness,
+  encodeExchangeHistoryCursor,
   type Configuration,
   err,
   EXCHANGE_LEASE_SECONDS,
   EXCHANGE_READ_BYTES,
+  type ExchangeLeaseResult,
   type ExchangeActionData,
   type ExchangeActionFor,
   type ExchangeActivationWarning,
   type ExchangeClaim,
+  type ExchangeHistoryCursor,
+  type ExchangeWaitPage,
   exchangeAccessDenied,
   type ExchangeBodyInput,
   type ExchangeBusinessInput,
@@ -25,6 +29,7 @@ import {
   exchangeCount,
   type ExchangeInput,
   exchangeInvalid,
+  exchangeProjection,
   type ExchangeLifecycleInput,
   type ExchangeMaterialAvailability,
   type ExchangeMaterialPage,
@@ -48,8 +53,10 @@ import {
   planExchangeBusiness,
   resolveWorkspaceActor,
   requireExchangeClaim,
+  readExchangeHistoryCursor,
   runExchangeCommand,
   unconfirmedExchangeRanges,
+  waitForExchangeActivity,
   type Result,
 } from "@sorage/core";
 import { createConfigStore } from "./config-store";
@@ -61,6 +68,7 @@ import {
   exchangeOperations,
   exchangeReports,
   exchangeRequests,
+  relevantExchangeMessages,
 } from "./exchange-collaboration-records";
 import {
   type BoundExchangeSource,
@@ -77,11 +85,14 @@ import { createNodeResolutionBindings } from "./project-command-ports";
 import { createSqliteEventLedger } from "./events";
 import { createSqliteProjectRepository } from "./projects";
 import { openCoveredReadStorage } from "./read-storage";
+import { blockingSleepMs } from "./sleep";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { runInTransaction } from "./sqlite/transaction";
 import { asAppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
+
+export { contentionKindOf } from "./storage-contention";
 
 interface Context {
   cwd: string;
@@ -94,6 +105,8 @@ interface Context {
   asUser?: boolean | undefined;
   now: () => Date;
   onFreshWrite?: (() => void) | undefined;
+  joinAdmission?: ExchangeJoinAdmission | undefined;
+  leaseOwnerAlive?: (() => boolean) | undefined;
 }
 
 export interface ExchangeCommandOptions {
@@ -105,9 +118,16 @@ export interface ExchangeCommandOptions {
   asUser?: boolean | undefined;
   now?: (() => Date) | undefined;
   onFreshWrite?: (() => void) | undefined;
+  joinAdmission?: ExchangeJoinAdmission | undefined;
+  leaseOwnerAlive?: (() => boolean) | undefined;
 }
 
 type Actor = { project: Project; binding: ProjectBinding };
+export interface ExchangeJoinAdmission {
+  exchangeId: string;
+  projectId: string;
+  actor: Actor;
+}
 type Header = {
   id: string;
   openingProjectId: string;
@@ -210,6 +230,16 @@ function createWorkingStore(db: SorageSqlite, context: Context): WorkingStore {
     runDir: context.home.runDir,
     vaultPath: expandConfigurationPath(context.config.vault.path, context.userHome, context.home.home),
   });
+}
+
+function openExchangeWriter(context: Context): SorageSqlite {
+  if (vaultMoveLockHeld(context.home.runDir)) {
+    fail(vaultMovePauseRefusal(context.home.lockFile("vault-move")));
+  }
+  const migrations = productionMigrationPlan();
+  return openAndMigrate(join(context.home.stateDir, "sorage.sqlite3"), migrations.migrations, {
+    rebuilds: migrations.rebuilds,
+  }).db;
 }
 
 class ExchangeStore implements ExchangeBusinessRepository {
@@ -477,18 +507,21 @@ class ExchangeStore implements ExchangeBusinessRepository {
       .all(exchangeId, this.actorId);
   }
 
-  private view(header: Header): ExchangeView {
-    const { id: exchangeId, criteria, ...base } = header;
-    const members = this.db
+  private memberIds(exchangeId: string): string[] {
+    return this.db
       .prepare<{ projectId: string }>(
         "SELECT project_id projectId FROM exchange_members WHERE exchange_id = ? ORDER BY project_id",
       )
       .all(exchangeId)
       .map((entry) => entry.projectId);
+  }
+
+  private view(header: Header): ExchangeView {
+    const { id: exchangeId, criteria, ...base } = header;
     return exchangeView(
       { ...base, exchangeId, criteria: JSON.parse(criteria) },
       this.actorId,
-      members,
+      this.memberIds(exchangeId),
       exchangeRequests(this.db, exchangeId),
       exchangeReports(this.db, exchangeId),
       exchangeAcceptances(this.db, exchangeId),
@@ -500,6 +533,9 @@ class ExchangeStore implements ExchangeBusinessRepository {
     const { exchangeId } = input;
     const header = this.access(exchangeId);
     if (input.kind === "join") {
+      const admitted = this.context.joinAdmission;
+      if (admitted && (admitted.exchangeId !== exchangeId || !sameActor(admitted.actor, this.actor))) return denied();
+      this.requireLiveOwner();
       const now = this.context.now();
       need(authorizeExchangeJoin(this.claim(exchangeId), input.replaceClaim, input.confirmed, now));
       this.context.onFreshWrite?.();
@@ -510,8 +546,11 @@ class ExchangeStore implements ExchangeBusinessRepository {
           "INSERT INTO exchange_claims VALUES (?,?,?,?) ON CONFLICT(exchange_id,project_id) DO UPDATE SET claim_id=excluded.claim_id,expires_at=excluded.expires_at",
         )
         .run(exchangeId, this.actorId, claimId, expiresAt);
-      return { ...this.view(header), claimId, expiresAt };
+      const view = this.view(header);
+      this.requireLiveOwner();
+      return { ...view, claimId, expiresAt };
     }
+    if (input.kind === "renew" || input.kind === "release") return this.maintainLease(input);
     need(requireExchangeClaim(this.claim(exchangeId), input.claim, this.now()));
     if (input.ranges.length === 0) return invalid("Confirm at least one exact delivered sequence or range.");
     const requested = need(normalizeExchangeRanges(input.ranges));
@@ -535,6 +574,66 @@ class ExchangeStore implements ExchangeBusinessRepository {
       for (const range of readRanges) insert.run(exchangeId, this.actorId, range.firstSeq, range.lastSeq);
     }
     return { exchangeId, projectId: this.actorId, readRanges, changed };
+  }
+
+  private requireLiveOwner(): void {
+    if (this.context.leaseOwnerAlive?.() === false)
+      fail(appError("EXCHANGE_CLAIM_CONFLICT", "The Exchange lease owner is no longer live."));
+  }
+
+  private maintainLease(input: Extract<ExchangeLifecycleInput, { kind: "renew" | "release" }>): ExchangeLeaseResult {
+    const { exchangeId, claim: claimId } = input;
+    this.requireLiveOwner();
+    const persisted = this.claim(exchangeId);
+    const now = this.now();
+    const current = need(requireExchangeClaim(persisted, claimId, now));
+    let expiresAt = current.expiresAt;
+    this.context.onFreshWrite?.();
+    if (input.kind === "renew") {
+      expiresAt = new Date(now.getTime() + EXCHANGE_LEASE_SECONDS * 1_000).toISOString();
+      this.db
+        .prepare("UPDATE exchange_claims SET expires_at = ? WHERE exchange_id = ? AND project_id = ? AND claim_id = ?")
+        .run(expiresAt, exchangeId, this.actorId, claimId);
+    } else {
+      this.db
+        .prepare("DELETE FROM exchange_claims WHERE exchange_id = ? AND project_id = ? AND claim_id = ?")
+        .run(exchangeId, this.actorId, claimId);
+    }
+    this.requireLiveOwner();
+    return { exchangeId, projectId: this.actorId, claimId, expiresAt };
+  }
+
+  private historyCursor(header: Header, seq: number): ExchangeHistoryCursor {
+    return {
+      version: 1,
+      exchangeId: header.id,
+      projectId: this.actorId,
+      seq,
+      projection: exchangeProjection("active", this.memberIds(header.id)),
+    };
+  }
+
+  waitPage(exchangeId: string, token?: string, requestedLimit?: number): ExchangeWaitPage {
+    const header = this.access(exchangeId);
+    const current = this.historyCursor(header, 0);
+    const previous =
+      token === undefined ? current : need(readExchangeHistoryCursor(token, exchangeId, this.actorId, header.lastSeq));
+    const limit = requestedLimit ?? this.context.config.ui.defaultPageSize;
+    if (!exchangeCount(limit, 1) || limit > 200) return invalid("Invalid history range.");
+    const messages = relevantExchangeMessages(this.db, exchangeId, this.actorId, previous.seq, limit + 1);
+    if (messages.length > limit) {
+      messages.pop();
+      current.seq = messages.at(-1)?.seq ?? previous.seq;
+    } else {
+      current.seq = header.lastSeq;
+    }
+    return {
+      exchangeId,
+      projectId: this.actorId,
+      messages,
+      cursor: encodeExchangeHistoryCursor(current),
+      stateChanged: current.projection !== previous.projection,
+    };
   }
 
   read(input: ExchangeReadInput): ExchangeActionData | (() => ExchangeActionData) {
@@ -570,19 +669,29 @@ class ExchangeStore implements ExchangeBusinessRepository {
     if (input.kind === "inspect") return this.view(header);
     if (input.kind === "history") {
       const limit = input.limit ?? this.context.config.ui.defaultPageSize;
-      if (!exchangeCount(input.afterSeq) || !exchangeCount(limit, 1) || limit > 200)
-        return invalid("Invalid history range.");
-      const messages = exchangeMessages(this.db, input.exchangeId, input.afterSeq, limit + 1);
+      if (input.cursor !== undefined && input.afterSeq !== undefined)
+        return invalid("Use either a history cursor or an after sequence.");
+      const previous =
+        input.cursor === undefined
+          ? undefined
+          : need(readExchangeHistoryCursor(input.cursor, input.exchangeId, this.actorId, header.lastSeq));
+      const after = previous?.seq ?? input.afterSeq ?? 0;
+      if (!exchangeCount(after) || !exchangeCount(limit, 1) || limit > 200) return invalid("Invalid history range.");
+      const messages = exchangeMessages(this.db, input.exchangeId, after, limit + 1);
       const hasMore = messages.length > limit;
       if (hasMore) messages.pop();
+      const afterSeq = messages.at(-1)?.seq ?? after;
+      const seq = Math.min(afterSeq, header.lastSeq);
       return {
         exchangeId: input.exchangeId,
         messages,
         hasMore,
-        afterSeq: messages.at(-1)?.seq ?? input.afterSeq,
+        afterSeq,
         lastSeq: header.lastSeq,
+        cursor: encodeExchangeHistoryCursor(previous ? { ...previous, seq } : this.historyCursor(header, seq)),
       };
     }
+    if (input.kind === "wait") return invalid("Wait requires the Exchange polling path.");
     if (
       !isMemoUuid(input.materialId) ||
       !exchangeCount(input.offset) ||
@@ -798,6 +907,24 @@ function readCheckpoint(
   input: ExchangeInput,
   preparation: Preparation,
 ): Result<ExchangeReadDecision> {
+  if (input.kind === "wait") {
+    if (
+      !exchangeCount(input.timeout * 1_000, 1) ||
+      !exchangeCount(input.interval * 1_000, 1) ||
+      !exchangeCount(input.timeout, 1) ||
+      !exchangeCount(input.interval, 1)
+    )
+      return err(exchangeInvalid("Wait timeout and interval must be positive whole seconds."));
+    const waited = waitForExchangeActivity({
+      cursor: input.cursor,
+      timeoutSeconds: input.timeout,
+      intervalSeconds: input.interval,
+      now: () => performance.now(),
+      sleep: blockingSleepMs,
+      poll: (cursor) => readSnapshot(context, (store) => store.waitPage(input.exchangeId, cursor, input.limit)),
+    });
+    return waited.ok ? ok({ data: waited.value }) : waited;
+  }
   if (!isExchangeBusiness(input)) {
     const result = readSnapshot(context, (store) => {
       if (isExchangeRead(input)) return store.read(input);
@@ -842,11 +969,7 @@ function writeExchange(
   fingerprint: string | undefined,
   preparation: Preparation,
 ): Result<ExchangeActionData> {
-  if (vaultMoveLockHeld(context.home.runDir)) return err(vaultMovePauseRefusal(context.home.lockFile("vault-move")));
-  const migrations = productionMigrationPlan();
-  const db = openAndMigrate(join(context.home.stateDir, "sorage.sqlite3"), migrations.migrations, {
-    rebuilds: migrations.rebuilds,
-  }).db;
+  const db = openExchangeWriter(context);
   const working = createWorkingStore(db, context);
   let prepared: PreparedExchangeBody | undefined;
   let commitAttempted = false;
@@ -935,6 +1058,29 @@ function activationWarning(error: AppError): ExchangeActivationWarning {
       suggestedCommand: "Run an authorized Exchange write or join for this Exchange to retry pending material",
     },
   };
+}
+
+/** Resolve the gated MCP child's exact authority before it asks to enter the join queue. */
+export function admitExchangeJoin(
+  input: Extract<ExchangeLifecycleInput, { kind: "join" }>,
+  options: ExchangeCommandOptions,
+): Result<ExchangeJoinAdmission> {
+  try {
+    if (options.asUser === true) return err(exchangeAccessDenied());
+    if (!isMemoUuid(input.exchangeId)) return err(exchangeInvalid("Supply an Exchange UUID."));
+    const context = contextOf(options);
+    const resolve = () =>
+      readSnapshot(context, (store) => {
+        store.access(input.exchangeId);
+        return { exchangeId: input.exchangeId, projectId: store.actorId, actor: store.actor };
+      });
+    const first = resolve();
+    if (first.ok || first.error.code !== "STORAGE_MIGRATION_REQUIRED") return first;
+    openExchangeWriter(context).close();
+    return resolve();
+  } catch (error) {
+    return err(storageFailure(error));
+  }
 }
 
 export function executeExchange<Input extends ExchangeInput>(

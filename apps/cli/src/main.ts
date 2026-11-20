@@ -207,6 +207,7 @@ export function buildProgram(
   ports: OutputPorts = defaultPorts,
   reportExitCode: ReportExitCode = () => {},
   input: CommandInput = createStdinPrompt((text) => process.stderr.write(text)),
+  exchangeProcess = false,
 ): Command {
   const program = new Command();
   program
@@ -566,27 +567,33 @@ export function buildProgram(
     },
   });
 
-  registerExchangeCommands(program, {
-    out: ports.out,
-    requestId,
-    fail: (error, json, fresh) =>
-      reportExitCode(
-        renderAppError(
-          error,
-          ports,
-          json,
-          undefined,
-          fresh ? { logMessage: "An admitted Exchange write returned a failure." } : { log: false },
+  registerExchangeCommands(
+    program,
+    {
+      out: ports.out,
+      err: ports.err,
+      exit: reportExitCode,
+      requestId,
+      fail: (error, json, fresh) =>
+        reportExitCode(
+          renderAppError(
+            error,
+            ports,
+            json,
+            undefined,
+            fresh ? { logMessage: "An admitted Exchange write returned a failure." } : { log: false },
+          ),
         ),
-      ),
-    activationWarning: (code, id) => {
-      try {
-        failureLogger()?.warn("exchange.activation_warning", { code, requestId: id });
-      } catch {
-        // A logging failure cannot change the committed result.
-      }
+      activationWarning: (code, id) => {
+        try {
+          failureLogger()?.warn("exchange.activation_warning", { code, requestId: id });
+        } catch {
+          // A logging failure cannot change the committed result.
+        }
+      },
     },
-  });
+    exchangeProcess,
+  );
 
   const project = program.command("project").description("register and inspect Projects and their bindings");
 
@@ -2588,14 +2595,18 @@ export function runCli(
   argv: string[],
   ports: OutputPorts = defaultPorts,
   input: CommandInput = createStdinPrompt((text) => process.stderr.write(text)),
+  exchangeProcess = false,
 ): number {
   let actionExitCode: number | null = null;
+  let parsingDone = false;
   const program = buildProgram(
     ports,
     (code) => {
       actionExitCode = code;
+      if (parsingDone && exchangeProcess) process.exitCode = code;
     },
     input,
+    exchangeProcess,
   );
   program.configureOutput({
     writeOut: (str) => ports.out(str),
@@ -2654,6 +2665,8 @@ export function runCli(
     ports.err(`${program.name()}: ${message}\n`);
     ports.err(`Run '${program.name()} --help' for usage.\n`);
     return 2;
+  } finally {
+    parsingDone = true;
   }
   if (actionExitCode !== null) {
     return actionExitCode;
@@ -3445,7 +3458,7 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     // The daemon owns the process until it stops; the serve promise keeps it alive.
     return -1;
   }
-  return runCli(argv);
+  return runCli(argv, defaultPorts, undefined, true);
 }
 
 function daemonRuntime(): typeof import("@sorage/daemon") {

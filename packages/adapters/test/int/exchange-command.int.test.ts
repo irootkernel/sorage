@@ -26,7 +26,7 @@ import {
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
-import { executeExchange } from "../../src/exchange-command-ports";
+import { admitExchangeJoin, executeExchange } from "../../src/exchange-command-ports";
 import { readExchangeRecords } from "../../src/exchange-records";
 import { createExchangeWorkingStore } from "../../src/exchange-working-store";
 import { createNodeInitPorts } from "../../src/init-ports";
@@ -282,6 +282,151 @@ function collaborationFixture() {
 }
 
 describe("Exchange SQLite and working storage through the application entrypoint", () => {
+  it("resolves one authoritative join pair across aliases and refuses changed binding before writing", () => {
+    const f = fixture();
+    const exchangeId = create(f);
+    const nested = join(f.alpha, "child");
+    mkdirSync(nested);
+    const input = { kind: "join", exchangeId, confirmed: false } as const;
+    const top = unwrap(admitExchangeJoin(input, { ...f.setup, cwd: f.alpha, project: "alpha" }));
+    const alias = unwrap(admitExchangeJoin(input, { ...f.setup, cwd: nested, project: alphaId }));
+    expect(alias).toEqual(top);
+    expect(admitExchangeJoin(input, { ...f.setup, cwd: f.alpha, project: "beta" })).toMatchObject(
+      error("FORBIDDEN_ACTOR"),
+    );
+    f.usingDb((db) =>
+      db
+        .prepare("UPDATE project_bindings SET updated_at = ? WHERE project_id = ?")
+        .run("2026-11-20T01:00:00.000Z", alphaId),
+    );
+    expect(executeExchange(input, { ...f.setup, cwd: nested, joinAdmission: alias })).toMatchObject(
+      error("FORBIDDEN_ACTOR"),
+    );
+    expect(f.usingDb((db) => db.prepare("SELECT * FROM exchange_claims").all())).toEqual([]);
+    expect(executeExchange(input, { ...f.setup, cwd: nested })).toMatchObject({
+      ok: true,
+      value: { exchangeId, projectId: alphaId },
+    });
+  });
+
+  it("renews and releases only the exact current lease without advancing durable work", () => {
+    const f = fixture();
+    const exchangeId = create(f);
+    const opened = unwrap(f.run({ kind: "join", exchangeId, confirmed: false }));
+    const claim = opened.claimId;
+    const stored = () => f.usingDb((db) => db.prepare("SELECT claim_id, expires_at FROM exchange_claims").all());
+    const durable = () =>
+      f.usingDb((db) =>
+        ["events", "exchanges", "exchange_operation_outcomes", "exchange_messages"].map((table) =>
+          db.prepare(`SELECT * FROM ${table}`).all(),
+        ),
+      );
+    const before = durable();
+    f.later(10);
+    const renewed = unwrap(f.run({ kind: "renew", exchangeId, claim }));
+    expect(renewed).toEqual({
+      exchangeId,
+      projectId: alphaId,
+      claimId: claim,
+      expiresAt: new Date(Date.parse(opened.expiresAt) + 10_000).toISOString(),
+    });
+    expect(f.run({ kind: "release", exchangeId, claim }, f.beta)).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
+    const live = f.run({ kind: "join", exchangeId, confirmed: false });
+    if (live.ok) throw new Error("Expected a competing live claim");
+    const successor = unwrap(
+      f.run({ kind: "join", exchangeId, confirmed: true, replaceClaim: String(live.error.details?.observedClaim) }),
+    );
+    for (const kind of ["renew", "release"] as const) {
+      expect(f.run({ kind, exchangeId, claim })).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
+    }
+    let ownerChecks = 0;
+    const lost = executeExchange(
+      { kind: "renew", exchangeId, claim: successor.claimId },
+      {
+        ...f.setup,
+        cwd: f.alpha,
+        now: () => new Date(Date.parse(now) + 11_000),
+        leaseOwnerAlive: () => ownerChecks++ === 0,
+      },
+    );
+    expect(lost).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
+    expect(ownerChecks).toBe(2);
+    expect(stored()).toEqual([{ claim_id: successor.claimId, expires_at: successor.expiresAt }]);
+    f.later(40);
+    for (const kind of ["renew", "release"] as const) {
+      expect(f.run({ kind, exchangeId, claim: successor.claimId })).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
+    }
+    expect(stored()).toEqual([{ claim_id: successor.claimId, expires_at: successor.expiresAt }]);
+    const reclaimed = unwrap(f.run({ kind: "join", exchangeId, confirmed: false }));
+    expect(unwrap(f.run({ kind: "release", exchangeId, claim: reclaimed.claimId }))).toEqual({
+      exchangeId,
+      projectId: alphaId,
+      claimId: reclaimed.claimId,
+      expiresAt: reclaimed.expiresAt,
+    });
+    expect(stored()).toEqual([]);
+    expect(durable()).toEqual(before);
+  });
+
+  it("waits without writes for newly relevant messages and membership changes", () => {
+    const f = fixture();
+    const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+    const claim = joinExchange(f, exchangeId);
+    const ask = unwrap(
+      f.run({
+        kind: "request",
+        exchangeId,
+        claim,
+        operationId: "check",
+        replayOnly: false,
+        assignee: "beta",
+        condition: "Pending condition",
+        criteria: ["Observe it"],
+      }),
+    );
+    unwrap(f.run({ ...send(exchangeId, claim, "private"), recipient: "other" }));
+    const broadcast = unwrap(f.run(send(exchangeId, claim, "broadcast")));
+    const wait = (cursor?: string, cwd = f.beta) =>
+      f.run(
+        {
+          kind: "wait",
+          exchangeId,
+          cursor,
+          limit: 1,
+          timeout: 1,
+          interval: 1,
+        },
+        cwd,
+      );
+    const before = tree(f.home);
+    const first = unwrap(wait());
+    expect(first).toMatchObject({ messages: [{ seq: ask.seq }], timedOut: false, stateChanged: false });
+    const next = unwrap(wait(first.cursor));
+    expect(next).toMatchObject({ messages: [{ seq: broadcast.seq }], timedOut: false, stateChanged: false });
+    expect(unwrap(wait(next.cursor))).toEqual({ ...next, messages: [], timedOut: true });
+    expect(unwrap(f.run({ kind: "inspect", exchangeId }, f.beta)).requests).toHaveLength(1);
+    expect(wait(next.cursor, f.alpha)).toMatchObject(error("EXCHANGE_INVALID_INPUT"));
+    const history = unwrap(f.run({ kind: "history", exchangeId, limit: 1 }, f.beta));
+    const continued = unwrap(f.run({ kind: "history", exchangeId, cursor: history.cursor, limit: 1 }, f.beta));
+    expect(continued.messages).toMatchObject([{ seq: 2 }]);
+    expect(f.run({ kind: "history", exchangeId, cursor: history.cursor, afterSeq: 1 }, f.beta)).toMatchObject(
+      error("EXCHANGE_INVALID_INPUT"),
+    );
+    expect(tree(f.home)).toEqual(before);
+    // TASK-143 owns the durable membership transition. Exercise the projection on an existing row.
+    f.usingDb((db) =>
+      db.prepare("DELETE FROM exchange_members WHERE exchange_id = ? AND project_id = ?").run(exchangeId, otherId),
+    );
+    const afterMembership = tree(f.home);
+    const afterTransition = unwrap(f.run({ kind: "history", exchangeId, cursor: history.cursor, limit: 1 }, f.beta));
+    expect(afterTransition.messages).toMatchObject([{ seq: 2 }]);
+    const changed = unwrap(wait(afterTransition.cursor));
+    expect(changed).toMatchObject({ messages: [{ seq: broadcast.seq }], stateChanged: true, timedOut: false });
+    expect(unwrap(wait(changed.cursor))).toMatchObject({ messages: [], stateChanged: false, timedOut: true });
+    expect(wait(undefined, f.other)).toMatchObject(error("FORBIDDEN_ACTOR"));
+    expect(tree(f.home)).toEqual(afterMembership);
+  });
+
   it("fences claim replacement and performs coherent read-only exact replay, conflict, denial and miss", () => {
     const f = fixture();
     const exchangeId = create(f);
@@ -1395,7 +1540,15 @@ describe("Exchange SQLite and working storage through the application entrypoint
           );
         });
       }
-      const claim = joinExchange(target, exchangeId);
+      const joinInput = { kind: "join", exchangeId, confirmed: false } as const;
+      const actorOptions = { ...target.setup, cwd: target.alpha, now: () => new Date(now) };
+      if (transition === "schema-13 upgrade") {
+        expect(target.run({ kind: "inspect", exchangeId })).toMatchObject(error("STORAGE_MIGRATION_REQUIRED"));
+      }
+      const admission = unwrap(admitExchangeJoin(joinInput, actorOptions));
+      expect(admission).toMatchObject({ exchangeId, projectId: alphaId });
+      expect(target.usingDb((db) => db.prepare("SELECT * FROM exchange_claims").all())).toEqual([]);
+      const claim = unwrap(executeExchange(joinInput, { ...actorOptions, joinAdmission: admission })).claimId;
       expect(unwrap(target.run(send(exchangeId, claim, "first-after-foundation"))).seq).toBe(6);
       const observed = [
         { firstSeq: 1, lastSeq: 2 },

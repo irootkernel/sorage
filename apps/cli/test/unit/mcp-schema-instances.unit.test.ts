@@ -291,22 +291,22 @@ describe("integer bounds hold on every integer property (C4 item 6)", () => {
     return found;
   }
 
-  it("tests the safe maximum, one above it and -1 on every integer property", () => {
+  it("tests each exact maximum, one above it, and -1 on every integer property", () => {
     const properties = integerProperties();
     expect(properties.length).toBeGreaterThan(10);
     for (const [toolName, property] of properties) {
-      // The ack items carry their own minimum; option integers share the parser
-      // bounds. Each instance goes through the same published schema.
-      valid(toolName, sampleWith(toolName, property, MAX));
-      invalid(toolName, sampleWith(toolName, property, MAX + 1));
-      invalid(toolName, sampleWith(toolName, property, -1));
-      // An array-typed integer property (seq) carries the bound on its items,
-      // so the same three instances are tested against the items schema too.
       const tool = toolsListResult().find((entry) => entry.name === toolName);
-      const items = ((tool?.inputSchema as Schema).properties as Record<string, Schema>)[property]?.items;
+      const field = ((tool?.inputSchema as Schema).properties as Record<string, Schema>)[property];
+      const items = field?.items as Schema | undefined;
+      const maximum = (items ?? field)?.maximum as number;
+      expect(Number.isSafeInteger(maximum), `${toolName}.${property}`).toBe(true);
+      expect(maximum).toBeLessThanOrEqual(MAX);
+      valid(toolName, sampleWith(toolName, property, maximum));
+      invalid(toolName, sampleWith(toolName, property, maximum + 1));
+      invalid(toolName, sampleWith(toolName, property, -1));
       if (items !== undefined) {
-        expect(validate(items, MAX, `${toolName}.${property}[]`)).toBeUndefined();
-        expect(validate(items, MAX + 1, `${toolName}.${property}[]`)).toBeDefined();
+        expect(validate(items, maximum, `${toolName}.${property}[]`)).toBeUndefined();
+        expect(validate(items, maximum + 1, `${toolName}.${property}[]`)).toBeDefined();
         expect(validate(items, -1, `${toolName}.${property}[]`)).toBeDefined();
       }
     }
@@ -341,6 +341,12 @@ function sampleWith(toolName: string, property: string, value: number): Record<s
   )
     instance.text = "n";
   if (toolName === "channel_post" && property !== "body" && property !== "bodyFile") instance.body = "b";
+  if (toolName === "exchange_send" || toolName === "exchange_report") instance.body = "b";
+  if (toolName === "exchange_request") instance.criterion = ["criterion"];
+  if (toolName === "exchange_material_register") {
+    instance.kind = "copy";
+    instance.source = "confined.txt";
+  }
   if (
     toolName === "memo_update" &&
     !("title" in instance) &&

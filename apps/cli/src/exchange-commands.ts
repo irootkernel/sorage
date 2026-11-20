@@ -1,19 +1,31 @@
-import { executeExchange } from "@sorage/adapters/src/exchange-command-ports";
 import {
+  admitExchangeJoin,
+  executeExchange,
+  type ExchangeCommandOptions,
+  type ExchangeJoinAdmission,
+} from "@sorage/adapters/src/exchange-command-ports";
+import {
+  appError,
   type AppError,
   type ExchangeAcceptanceInput,
   type ExchangeBodyInput,
   type ExchangeInformationKind,
   type ExchangeInput,
+  EXCHANGE_POLL_SECONDS,
+  EXCHANGE_WAIT_SECONDS,
   exchangeInvalid,
   type ExchangeMaterialInput,
   type ExchangeRange,
   successEnvelope,
 } from "@sorage/core";
 import type { Command } from "commander";
+import { awaitExchangeJoinAck, EXCHANGE_JOIN_GATE } from "./exchange-join-gate";
+import { guardedLeaseOwner, joinOwnedExchange, ownExchangeSession, ownedLeaseOf } from "./exchange-owner";
 
 interface ExchangeOutput {
   out(text: string): void;
+  err(text: string): void;
+  exit(code: number): void;
   fail(error: AppError, json: boolean, fresh?: boolean): void;
   activationWarning(code: string, requestId: string): void;
   requestId(): string;
@@ -113,13 +125,13 @@ function withAcceptance(command: Command): Command {
   return command.option("--accept <request-id:version>", "accept exactly this checked report version", append, []);
 }
 
-export function registerExchangeCommands(program: Command, output: ExchangeOutput): void {
+export function registerExchangeCommands(program: Command, output: ExchangeOutput, processRuntime = false): void {
   const exchange = program
     .command("exchange")
     .description("collaborate between registered Projects")
     .option("--project <id-or-slug>", "assert the acting Project resolved from this workspace");
 
-  function run(command: Command, input: () => ExchangeInput) {
+  function run(command: Command, input: () => ExchangeInput, session?: { stdinLifetime: boolean }) {
     const globals = command.optsWithGlobals();
     const json = globals.json === true;
     let parsed: ExchangeInput;
@@ -144,28 +156,91 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
       return;
     }
     let fresh = false;
-    const result = executeExchange(parsed, {
+    const options: ExchangeCommandOptions = {
       project: typeof globals.project === "string" ? globals.project : undefined,
       asProject: typeof globals.as === "string" ? globals.as : undefined,
       asUser: globals.asUser === true,
+      leaseOwnerAlive: processRuntime ? guardedLeaseOwner() : undefined,
       onFreshWrite: () => {
         fresh = true;
       },
-    });
-    if (!result.ok) {
+    };
+    const reject = (failure: AppError) => {
       const error =
-        !fresh && result.error.code === "INTERNAL_ERROR" && result.error.recovery === undefined
+        !fresh && failure.code === "INTERNAL_ERROR" && failure.recovery === undefined
           ? {
-              ...result.error,
+              ...failure,
               recovery: { suggestedCommand: "Retain this command and its output. Inspect or retry in the same mode." },
             }
-          : result.error;
+          : failure;
       output.fail(error, json, fresh);
+    };
+    const execute = (joinAdmission?: ExchangeJoinAdmission) => {
+      const result = executeExchange(parsed, { ...options, joinAdmission });
+      if (!result.ok) {
+        reject(result.error);
+        return;
+      }
+      const id = output.requestId();
+      for (const warning of result.value.warnings ?? []) output.activationWarning(warning.code, id);
+      if (json && "timedOut" in result.value) {
+        const { timedOut, ...data } = result.value;
+        output.out(`${JSON.stringify(successEnvelope(data, id, timedOut ? { timedOut } : undefined), null, 2)}\n`);
+      } else {
+        output.out(`${JSON.stringify(json ? successEnvelope(result.value, id) : result.value, null, 2)}\n`);
+      }
+    };
+    if (session) {
+      if (!processRuntime || parsed.kind !== "join") {
+        reject(appError("INTERNAL_ERROR", "Start an Exchange session in its own CLI process."));
+        return;
+      }
+      const failure = () =>
+        reject(appError("INTERNAL_ERROR", "The Exchange session could not confirm its initial join."));
+      void joinOwnedExchange({ ...parsed, ...options }).then(({ stdout, stderr, status }) => {
+        try {
+          const envelope = JSON.parse(status === 0 ? stdout : stderr);
+          if (status === 0 && envelope.ok === true) {
+            const lease = ownedLeaseOf(envelope.data, process.cwd());
+            if (envelope.data?.exchangeId !== parsed.exchangeId || (envelope.data?.state === "active" && !lease))
+              return failure();
+            if (lease) ownExchangeSession(lease, session.stdinLifetime);
+            output.out(json ? stdout : `${JSON.stringify(envelope.data, null, 2)}\n`);
+          } else if (
+            status !== null &&
+            status !== 0 &&
+            envelope.ok === false &&
+            typeof envelope.error?.code === "string"
+          ) {
+            if (json) {
+              output.err(stderr);
+              output.exit(status);
+            } else {
+              reject(envelope.error);
+            }
+          } else failure();
+        } catch {
+          failure();
+        }
+      }, failure);
       return;
     }
-    const id = output.requestId();
-    for (const warning of result.value.warnings ?? []) output.activationWarning(warning.code, id);
-    output.out(`${JSON.stringify(json ? successEnvelope(result.value, id) : result.value, null, 2)}\n`);
+    if (processRuntime && parsed.kind === "join" && process.env[EXCHANGE_JOIN_GATE] === "1") {
+      const admitted = admitExchangeJoin(parsed, options);
+      if (!admitted.ok) {
+        reject(admitted.error);
+        return;
+      }
+      const { exchangeId, projectId } = admitted.value;
+      const parent = process.ppid;
+      options.leaseOwnerAlive = () => parent > 1 && process.ppid === parent;
+      void awaitExchangeJoinAck({ exchangeId, projectId }).then((ack) => {
+        if (ack) execute(admitted.value);
+        else reject(appError("INTERNAL_ERROR", "The Exchange join admission ended before it could run."));
+      });
+      return;
+    }
+    execute();
   }
 
   business(exchange.command("create").description("create an Exchange and return its ID without a claim"))
@@ -183,20 +258,38 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
       })),
     );
 
-  exchange
-    .command("join")
-    .description("acquire an Active Exchange claim and return the current view")
-    .argument("<exchange-id>")
-    .option("--replace-claim <id>", "replace the exact observed competing claim")
-    .addHelpText("after", "\nReplacement also requires the global --confirm option.\n")
+  const join = (name: "join" | "session", description: string) =>
+    exchange
+      .command(name)
+      .description(description)
+      .argument("<exchange-id>")
+      .option("--replace-claim <id>", "replace the exact observed competing claim")
+      .addHelpText("after", "\nReplacement also requires the global --confirm option.\n");
+  const joinInput = (exchangeId: string, opts: { replaceClaim?: string }, command: Command) =>
+    ({
+      kind: "join",
+      exchangeId,
+      replaceClaim: opts.replaceClaim,
+      confirmed: command.optsWithGlobals().confirm === true,
+    }) as const;
+  join("join", "acquire an Active Exchange claim and return the current view").action((exchangeId, opts, command) =>
+    run(command, () => joinInput(exchangeId, opts, command)),
+  );
+
+  join("session", "own and renew an Active Exchange claim for this CLI process")
+    .option("--stdin-lifetime", "gracefully release the claim when stdin reaches EOF")
     .action((exchangeId, opts, command) =>
-      run(command, () => ({
-        kind: "join",
-        exchangeId,
-        replaceClaim: opts.replaceClaim,
-        confirmed: command.optsWithGlobals().confirm === true,
-      })),
+      run(command, () => joinInput(exchangeId, opts, command), { stdinLifetime: opts.stdinLifetime === true }),
     );
+
+  for (const kind of ["renew", "release"] as const) {
+    exchange
+      .command(kind)
+      .description(`${kind} the exact current Exchange claim`)
+      .argument("<exchange-id>")
+      .requiredOption("--claim <id>", "current Exchange claim")
+      .action((exchangeId, opts, command) => run(command, () => ({ kind, exchangeId, claim: opts.claim })));
+  }
 
   exchange
     .command("inspect")
@@ -208,14 +301,34 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
     .command("history")
     .description("read a bounded page of Exchange history without confirming it")
     .argument("<exchange-id>")
-    .option("--after-seq <n>", "return messages after this sequence", "0")
+    .option("--after-seq <n>", "return messages after this sequence")
+    .option("--history-cursor <cursor>", "continue from an Exchange delivery cursor")
     .addHelpText("after", "\nUse the global --limit option or the configured ui.defaultPageSize.\n")
     .action((exchangeId, opts, command) =>
       run(command, () => ({
         kind: "history",
         exchangeId,
-        afterSeq: unsigned(opts.afterSeq, "History sequence"),
+        afterSeq: opts.afterSeq === undefined ? undefined : unsigned(opts.afterSeq, "History sequence"),
+        cursor: opts.historyCursor,
         limit: command.optsWithGlobals().limit,
+      })),
+    );
+
+  exchange
+    .command("wait")
+    .description("wait without writes for new relevant Exchange activity")
+    .argument("<exchange-id>")
+    .option("--history-cursor <cursor>", "observe activity after this Exchange delivery cursor")
+    .option("--timeout <s>", "seconds until a quiet wait returns", String(EXCHANGE_WAIT_SECONDS))
+    .option("--interval <s>", "seconds between covered reads", String(EXCHANGE_POLL_SECONDS))
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        kind: "wait",
+        exchangeId,
+        cursor: opts.historyCursor,
+        limit: command.optsWithGlobals().limit,
+        timeout: unsigned(opts.timeout, "Wait timeout"),
+        interval: unsigned(opts.interval, "Wait interval"),
       })),
     );
 
