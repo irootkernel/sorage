@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -85,7 +86,8 @@ function seedProjects(
 }
 
 function fixture(seed = true) {
-  const parent = mkdtempSync(join(tmpdir(), "sorage-exchange-command-"));
+  // Directly seeded bindings must use the same physical paths as actor resolution.
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), "sorage-exchange-command-")));
   homes.push(parent);
   const home = join(parent, "home");
   const vault = join(home, "vault");

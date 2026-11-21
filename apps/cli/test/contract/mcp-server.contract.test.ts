@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   truncateSync,
@@ -840,7 +841,7 @@ describe("accepted calls through real children (MCP-002, MCP-006)", () => {
       expect(refused.isError).toBe(true);
       expect(refused.structuredContent.error).toMatchObject({
         code: "SOURCE_OUTSIDE_WORKSPACE",
-        details: { resolvedSourcePath: outside, workspaceRoot: workA, policy: "mcp-workspace-only" },
+        details: { resolvedSourcePath: outside, workspaceRoot: realpathSync(workA), policy: "mcp-workspace-only" },
       });
       expect(existsSync(launches)).toBe(false);
       await success("material_revalidate", { ...revalidate, source: "inside.txt" });

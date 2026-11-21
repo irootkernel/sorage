@@ -221,7 +221,6 @@ export class ExchangeKeeper {
   quiesce(): void {
     this.quiescing = true;
     for (const entry of this.entries.values()) clearTimeout(entry.timer);
-    for (const child of this.running.values()) child.stop();
   }
 
   async shutdown(): Promise<boolean> {
@@ -229,6 +228,7 @@ export class ExchangeKeeper {
     this.closing = true;
     this.quiesce();
     const running = [...this.running.values()];
+    // Let each renewal close its database connection before releasing. Its child deadline still applies.
     await Promise.allSettled(running.map((child) => child.result));
     const leases = [...this.entries.values()].map(({ lease }) => lease);
     this.entries.clear();

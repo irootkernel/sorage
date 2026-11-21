@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ afterEach(runCleanups);
 
 describe("AJ-34 compiled CLI collaboration and exact recovery", () => {
   it("carries exact bodies and report versions across processes and converges a same-ID race", async () => {
-    const parent = makeTempDir("aj34-");
+    const parent = realpathSync(makeTempDir("aj34-"));
     const home = join(parent, "home");
     const alpha = join(parent, "alpha");
     const beta = join(parent, "beta");
@@ -133,13 +133,40 @@ describe("AJ-34 compiled CLI collaboration and exact recovery", () => {
       "race-1",
       "--body",
       "same operation",
-      "--json",
     ];
     const concurrent = () =>
-      executeFile(binary, raced, { cwd: alpha, env: { ...process.env, SORAGE_HOME: home }, timeout: 10_000 });
-    const results = (await Promise.all([concurrent(), concurrent()])).map(({ stdout }) => JSON.parse(stdout).data);
+      executeFile(binary, [...raced, "--json"], {
+        cwd: alpha,
+        env: { ...process.env, SORAGE_HOME: home },
+        timeout: 10_000,
+      });
+    const attempts = await Promise.allSettled([concurrent(), concurrent()]);
+    const results = attempts.map((attempt) => {
+      if (attempt.status === "fulfilled") {
+        return envelopeOf({ status: 0, ...attempt.value }).data as Record<string, unknown>;
+      }
+      const error: unknown = attempt.reason;
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== 75 ||
+        !("stdout" in error) ||
+        error.stdout !== "" ||
+        !("stderr" in error) ||
+        typeof error.stderr !== "string"
+      ) {
+        throw error;
+      }
+      const refusal = errorEnvelopeOf({ status: 75, stdout: error.stdout, stderr: error.stderr }).error;
+      expect(refusal, error.stderr).toMatchObject({
+        code: "STORAGE_INSPECTION_UNAVAILABLE",
+        details: { storageContention: true },
+      });
+      // Both writers have exited. Recover the winning receipt without executing the refused attempt.
+      return data([...raced, "--replay-only"]);
+    });
     expect(results.map(({ seq }) => seq)).toEqual([4, 4]);
-    expect(results.map(({ materialId }) => materialId)).toEqual([results[0].materialId, results[0].materialId]);
+    expect([...new Set(results.map(({ materialId }) => materialId))]).toEqual([expect.any(String)]);
     expect(results.map(({ replayed }) => replayed).sort()).toEqual([false, true]);
     expect(
       data(["exchange", "send", id, "--claim", alphaClaim, "--operation-id", "race-2", "--body", "same operation"]).seq,

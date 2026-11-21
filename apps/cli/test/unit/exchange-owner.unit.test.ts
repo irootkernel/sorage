@@ -202,6 +202,35 @@ describe("the Exchange keeper", () => {
     ]);
   });
 
+  it("lets an in-flight renewal finish before releasing the exact claim on shutdown", async () => {
+    keeperClock();
+    let finishRenewal: (result: Awaited<ReturnType<MaintainExchangeLease>["result"]>) => void = () => {};
+    const renewal = new Promise<Awaited<ReturnType<MaintainExchangeLease>["result"]>>((resolve) => {
+      finishRenewal = resolve;
+    });
+    const stop = vi.fn();
+    const maintain = vi
+      .fn<MaintainExchangeLease>()
+      .mockReturnValueOnce({ result: renewal, stop })
+      .mockReturnValue({ result: Promise.resolve({ kind: "confirmed", expiresAt }), stop: vi.fn() });
+    const keeper = new ExchangeKeeper(maintain);
+    keeper.install(initial);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const shutdown = keeper.shutdown();
+    await vi.advanceTimersByTimeAsync(11_999);
+    expect(stop).not.toHaveBeenCalled();
+    expect(maintain).toHaveBeenCalledExactlyOnceWith("renew", initial);
+    finishRenewal({ kind: "confirmed", expiresAt });
+    expect(await shutdown).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(maintain.mock.calls).toEqual([
+      ["renew", initial],
+      ["release", initial],
+    ]);
+  });
+
   it("only recognizes a definitive Active join result with complete exact authority", () => {
     expect(ownedLeaseOf({ ...initial, state: "active" }, initial.cwd)).toEqual(initial);
     for (const state of ["paused", "completed", undefined]) {

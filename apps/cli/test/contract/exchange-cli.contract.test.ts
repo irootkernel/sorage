@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -68,7 +68,7 @@ describe("Exchange CLI JSON and read error boundary", () => {
   });
 
   it("pins the closed DTOs of every Exchange command and the pending recovery result", () => {
-    const root = mkdtempSync(join(tmpdir(), "sorage-exchange-dtos-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "sorage-exchange-dtos-")));
     const home = join(root, "home");
     const alpha = join(root, "alpha");
     const beta = join(root, "beta");

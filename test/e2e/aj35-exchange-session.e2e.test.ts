@@ -129,7 +129,7 @@ describe("AJ-35 compiled Exchange owner lifecycle", () => {
       expect(joined.ok, session.stderr()).toBe(true);
       expect(claims()).toEqual([{ claim_id: joined.data.claimId }]);
       session.child.stdin?.end();
-      expect(await session.closed).toEqual({ code: 0, signal: null });
+      expect(await session.closed, session.stderr()).toEqual({ code: 0, signal: null });
       expect(claims()).toEqual([]);
     } finally {
       stop(session.child);
@@ -238,7 +238,7 @@ describe("AJ-35 compiled Exchange owner lifecycle", () => {
           expect(errorEnvelopeOf(paused).error.code).toBe("SERVICE_PAUSED");
           await sleep(1_300);
           function currentClaims() {
-            const read = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"), { readOnly: true });
+            const read = new DatabaseSync(join(f.home, "state", "sorage.sqlite3"), { readOnly: true, timeout: 1_000 });
             try {
               return read
                 .prepare("SELECT project_id, claim_id, expires_at FROM exchange_claims ORDER BY project_id")
@@ -263,8 +263,8 @@ describe("AJ-35 compiled Exchange owner lifecycle", () => {
           );
           direct.child.kill("SIGTERM");
           mcp.child.stdin?.end();
-          expect(await direct.closed).toEqual({ code: 0, signal: null });
-          expect(await mcp.closed).toEqual({ code: 0, signal: null });
+          expect(await direct.closed, direct.stderr()).toEqual({ code: 0, signal: null });
+          expect(await mcp.closed, mcp.stderr()).toEqual({ code: 0, signal: null });
           expect(currentClaims()).toEqual([]);
           return;
         }

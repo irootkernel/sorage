@@ -7,7 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Use `sorage exchange` to collaborate between registered Projects, share working material, accept specific report versions, and recover committed operations.
-- Use the Exchange MCP tools or CLI session owner to keep claims active. Continue from a delivery cursor to see relevant activity, including acceptance of a report from a replacement assignee.
+- Use the Exchange MCP tools or CLI session owner to keep claims active and release them on graceful shutdown. Continue from a delivery cursor to see relevant activity, including acceptance of a report from a replacement assignee.
 - Correct Exchange membership and request ownership, pause and resume collaboration, and record unanimous completion with recoverable cleanup.
 - Discover Exchange connection checks and unread delivery notices, reserve a reporting slot, and acknowledge issuance to the user through CLI or MCP.
 - Start or join an Exchange from either independently copied skill, with bundled guidance for CLI and MCP participation.
