@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import {
   type AppError,
   appError,
+  acceptExchangeReports,
   authorizeExchangeJoin,
   classifyMimeType,
   commitExchangeBusiness,
@@ -27,8 +28,22 @@ import {
   type ExchangeCapturedInput,
   type ExchangeCapturedBody,
   exchangeCount,
+  exchangeAcceptanceChangesWork,
+  type ExchangeControlInput,
+  type ExchangeLifecycleHead,
+  type ExchangeObservedRequest,
+  currentExchangeProposal,
+  exchangeControlOutcome,
+  exchangeFingerprint,
+  exchangeLifecycleHead,
+  exchangeRequiresParticipantClaim,
+  exchangeTransitionChangesWork,
+  initialOwnership,
+  isExchangeControl,
+  planExchangeControl,
   type ExchangeInput,
   exchangeInvalid,
+  exchangeOperationId,
   exchangeProjection,
   type ExchangeLifecycleInput,
   type ExchangeMaterialAvailability,
@@ -36,6 +51,7 @@ import {
   type ExchangeOutcome,
   type ExchangeRange,
   type ExchangeReadInput,
+  type ExchangeTransition,
   type ExchangeView,
   exchangeView,
   type ExchangeReadDecision,
@@ -79,6 +95,7 @@ import {
   withExchangeSource,
 } from "./exchange-sources";
 import { createExchangeWorkingStore, type PreparedExchangeBody } from "./exchange-working-store";
+import { readExchangeLifecycle, recordExchangeTransition } from "./exchange-lifecycle-records";
 import { createHomePaths, type HomeEnvironment, type HomePaths } from "./home";
 import { createNodeLockProbePorts, vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
 import { createNodeResolutionBindings } from "./project-command-ports";
@@ -150,6 +167,21 @@ interface BusinessCapture {
   facts: ExchangeCapturedInput;
   custody?: BoundExchangeSource;
   content?: ContentCapture;
+}
+
+interface RevalidationCapture {
+  actor: Actor;
+  material: NonNullable<ReturnType<typeof exchangeMaterial>>;
+  custody: BoundExchangeSource;
+}
+
+function controlOf(input: ExchangeInput): ExchangeControlInput | undefined {
+  return isExchangeControl(input) ? input : input.kind === "join" ? input.resume : undefined;
+}
+
+function controlFingerprint(input: ExchangeControlInput): string {
+  const { operationId: _id, replayOnly: _replay, claim: _claim, ...intent } = input;
+  return exchangeFingerprint(intent);
 }
 
 function fail(error: AppError): never {
@@ -286,7 +318,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
       .prepare(
         `SELECT e.id, opening_project_id openingProjectId, goal, criteria_json criteria, last_seq lastSeq,
         created_at createdAt FROM exchanges e JOIN exchange_members m ON m.exchange_id = e.id
-        WHERE e.id = ? AND m.project_id = ?`,
+        WHERE e.id = ? AND m.project_id = ? AND m.active = 1`,
       )
       .get(exchangeId, this.actorId) as Header | undefined;
     return header ?? denied();
@@ -302,7 +334,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     return Boolean(
       this.db
         .prepare(`SELECT 1 FROM exchange_members m JOIN projects p ON p.id = m.project_id
-      WHERE m.exchange_id = ? AND m.project_id = ? AND p.status = 'active'`)
+      WHERE m.exchange_id = ? AND m.project_id = ? AND m.active = 1 AND p.status = 'active'`)
         .get(exchangeId, projectId),
     );
   }
@@ -338,7 +370,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     this.db
       .prepare("INSERT INTO exchanges (id,opening_project_id,goal,criteria_json,created_at) VALUES (?,?,?,?,?)")
       .run(id, this.actorId, goal, JSON.stringify(criteria), this.now().toISOString());
-    const member = this.db.prepare("INSERT INTO exchange_members VALUES (?,?)");
+    const member = this.db.prepare("INSERT INTO exchange_members (exchange_id,project_id) VALUES (?,?)");
     for (const projectId of members) member.run(id, projectId);
   }
 
@@ -439,7 +471,20 @@ class ExchangeStore implements ExchangeBusinessRepository {
   }
 
   request(exchangeId: string, requestId: string) {
-    return exchangeRequests(this.db, exchangeId).find((entry) => entry.id === requestId);
+    const request = exchangeRequests(this.db, exchangeId).find((entry) => entry.id === requestId);
+    const ownership = request && this.head(exchangeId).ownership.get(request.id);
+    return request && ownership ? { ...request, ownership } : request;
+  }
+
+  currentReport(exchangeId: string, requestId: string): number {
+    const version = this.request(exchangeId, requestId)?.ownership?.assignmentVersion;
+    if (version === undefined) return this.latestReport(exchangeId, requestId);
+    const row = this.db
+      .prepare<{ version: number | null }>(
+        "SELECT MAX(version) version FROM exchange_reports WHERE exchange_id = ? AND request_id = ? AND assignment_version = ?",
+      )
+      .get(exchangeId, requestId, version) as { version: number | null } | undefined;
+    return row?.version ?? 0;
   }
 
   isAccepted(exchangeId: string, requestId: string, reportVersion: number): boolean {
@@ -450,7 +495,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     );
   }
 
-  currentReceipt(input: ExchangeBusinessInput): Receipt | null {
+  currentReceipt(input: ExchangeBusinessInput | ExchangeControlInput): Receipt | null {
     if (input.kind === "create") {
       const row = this.db
         .prepare(
@@ -477,17 +522,43 @@ class ExchangeStore implements ExchangeBusinessRepository {
         .run(this.actorId, operationId, outcome.exchangeId, fingerprint);
     } else {
       this.db
-        .prepare("INSERT INTO exchange_operation_outcomes VALUES (?,?,?,?,?)")
-        .run(outcome.exchangeId, this.actorId, operationId, fingerprint, JSON.stringify(outcome));
+        .prepare(`INSERT INTO exchange_operation_outcomes
+        (exchange_id, project_id, operation_id, fingerprint, outcome_json, registration_after_seq)
+        VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN (SELECT last_seq FROM exchanges WHERE id = ?) ELSE NULL END)`)
+        .run(
+          outcome.exchangeId,
+          this.actorId,
+          operationId,
+          fingerprint,
+          JSON.stringify(outcome),
+          Number(outcome.kind === "material-register"),
+          outcome.exchangeId,
+        );
     }
   }
 
   outcomeData(outcome: ExchangeOutcome, replayed: boolean): ExchangeBusinessResult {
+    if (outcome.kind === "resume") {
+      const row = this.db
+        .prepare("SELECT transition_json value FROM exchange_transitions WHERE exchange_id = ? AND seq = ?")
+        .get(outcome.exchangeId, outcome.seq) as { value: string } | undefined;
+      const transition = row ? (JSON.parse(row.value) as ExchangeTransition) : undefined;
+      if (
+        transition?.kind !== "resume" ||
+        transition.pauseVersion !== outcome.pauseVersion ||
+        (transition.decision !== null && typeof transition.decision !== "string")
+      )
+        return fail(appError("STORAGE_INTEGRITY_ERROR", "The retained Exchange resumption decision is missing."));
+      return { ...outcome, replayed, decision: transition.decision };
+    }
     const material =
-      "materialId" in outcome ? exchangeMaterial(this.db, outcome.exchangeId, outcome.materialId) : undefined;
+      "materialId" in outcome && outcome.materialId
+        ? exchangeMaterial(this.db, outcome.exchangeId, outcome.materialId)
+        : undefined;
     let availability: ExchangeMaterialAvailability | undefined;
     if (material) {
-      if (!material.available)
+      if (material.retired) availability = "retired";
+      else if (!material.available)
         availability = material.kind === "body" || material.kind === "copy" ? "omitted" : "unavailable";
       else if (material.contentId !== null) {
         const body = this.db
@@ -510,47 +581,268 @@ class ExchangeStore implements ExchangeBusinessRepository {
   private memberIds(exchangeId: string): string[] {
     return this.db
       .prepare<{ projectId: string }>(
-        "SELECT project_id projectId FROM exchange_members WHERE exchange_id = ? ORDER BY project_id",
+        "SELECT project_id projectId FROM exchange_members WHERE exchange_id = ? AND active = 1 ORDER BY project_id",
       )
       .all(exchangeId)
       .map((entry) => entry.projectId);
   }
 
-  private view(header: Header): ExchangeView {
-    const { id: exchangeId, criteria, ...base } = header;
-    return exchangeView(
-      { ...base, exchangeId, criteria: JSON.parse(criteria) },
-      this.actorId,
-      this.memberIds(exchangeId),
-      exchangeRequests(this.db, exchangeId),
-      exchangeReports(this.db, exchangeId),
-      exchangeAcceptances(this.db, exchangeId),
-      this.ranges(exchangeId),
+  head(exchangeId: string): ExchangeLifecycleHead {
+    return exchangeLifecycleHead(readExchangeLifecycle(this.db, exchangeId));
+  }
+
+  requireActive(exchangeId: string): void {
+    if (this.head(exchangeId).state !== "active") conflict("This operation requires an Active Exchange.");
+  }
+
+  advanceWork(exchangeId: string): void {
+    this.db.prepare("UPDATE exchanges SET work_revision = work_revision + 1 WHERE id = ?").run(exchangeId);
+  }
+
+  private observedRequests(exchangeId: string, head: ExchangeLifecycleHead): ExchangeObservedRequest[] {
+    const latest = new Map(exchangeReports(this.db, exchangeId).map((row) => [row.requestId, row]));
+    const accepted = new Set(
+      exchangeAcceptances(this.db, exchangeId).map((row) => `${row.requestId}:${row.reportVersion}`),
+    );
+    return exchangeRequests(this.db, exchangeId).map((request) => {
+      const ownership = head.ownership.get(request.id) ?? initialOwnership(request);
+      const report = latest.get(request.id);
+      const currentReport = report?.assignmentVersion === ownership.assignmentVersion ? report.version : 0;
+      return { request, ownership, currentReport, accepted: accepted.has(`${request.id}:${currentReport}`) };
+    });
+  }
+
+  normalizeControl(input: ExchangeControlInput): ExchangeControlInput {
+    const target = (reference: string | undefined): string | undefined => {
+      if (reference === undefined) return;
+      // Historical fingerprints remain resolvable after a Project is archived.
+      const project = need(this.project(reference));
+      return project?.id ?? invalid("A named Project is not registered.");
+    };
+    const requests = <T extends { requestId: string }>(rows: T[]): T[] =>
+      [...rows].sort((a, b) => a.requestId.localeCompare(b.requestId));
+    switch (input.kind) {
+      case "roster":
+        return {
+          ...input,
+          pauseVersion: input.pauseVersion ?? 0,
+          add: input.add.map((id) => target(id) as string).sort(),
+          remove: input.remove.map((id) => target(id) as string).sort(),
+        };
+      case "owner-correct":
+        return {
+          ...input,
+          pauseVersion: input.pauseVersion ?? 0,
+          acceptanceOwner: target(input.acceptanceOwner),
+          assignee: target(input.assignee),
+        };
+      case "stop":
+        return { ...input, pauseVersion: input.pauseVersion ?? 0 };
+      case "request-disposition":
+        return { ...input, followUp: target(input.followUp) };
+      case "propose":
+        return { ...input, report: requests(input.report), disposition: requests(input.disposition) };
+      case "vote":
+        return { ...input, accept: requests(input.accept) };
+      default:
+        return input;
+    }
+  }
+
+  admitControl(input: ExchangeControlInput): ExchangeTransition {
+    const header = this.access(input.exchangeId);
+    const head = this.head(input.exchangeId);
+    if (exchangeRequiresParticipantClaim(input.kind)) {
+      if (head.state !== "active") conflict("This operation requires an Active Exchange.");
+      need(requireExchangeClaim(this.claim(input.exchangeId), input.claim, this.now()));
+    }
+    const targets =
+      input.kind === "roster"
+        ? input.add
+        : input.kind === "owner-correct"
+          ? [input.acceptanceOwner, input.assignee]
+          : input.kind === "request-disposition"
+            ? [input.followUp]
+            : [];
+    for (const target of targets) {
+      if (target !== undefined && need(this.project(target))?.status !== "active")
+        invalid("A current responsibility must name an active Project.");
+    }
+    return need(
+      planExchangeControl(
+        input,
+        head,
+        this.actorId,
+        JSON.parse(header.criteria),
+        this.observedRequests(input.exchangeId, head),
+      ),
     );
   }
 
-  lifecycle(input: ExchangeLifecycleInput): ExchangeActionData {
+  runControl(input: ExchangeControlInput, fingerprint: string, captured?: RevalidationCapture): ExchangeActionData {
+    const { exchangeId } = input;
+    const transition = this.admitControl(input);
+    const workRevision = this.head(exchangeId).workRevision;
+    if (input.kind === "resume") this.checkJoinOwner(exchangeId);
+    this.context.onFreshWrite?.();
+    if (transition.kind === "vote" && input.kind === "vote") {
+      transition.acceptanceSequences = need(
+        acceptExchangeReports(this, exchangeId, input.accept, { kind: "vote", operationId: input.operationId }),
+      );
+    }
+    if (transition.kind === "roster") {
+      for (const project of transition.remove) {
+        this.db
+          .prepare("DELETE FROM exchange_claims WHERE exchange_id = ? AND project_id = ?")
+          .run(exchangeId, project);
+        this.db
+          .prepare("UPDATE exchange_members SET active = 0 WHERE exchange_id = ? AND project_id = ?")
+          .run(exchangeId, project);
+      }
+      for (const project of transition.add) {
+        this.db
+          .prepare(`INSERT INTO exchange_members (exchange_id,project_id,active,initial) VALUES (?,?,1,0)
+          ON CONFLICT(exchange_id,project_id) DO UPDATE SET active = 1`)
+          .run(exchangeId, project);
+      }
+    }
+    if (
+      transition.kind === "pause" ||
+      transition.kind === "stop" ||
+      (transition.kind === "vote" && transition.completed)
+    ) {
+      this.db.prepare("DELETE FROM exchange_claims WHERE exchange_id = ?").run(exchangeId);
+    }
+    if (transition.kind === "vote" && transition.completed) {
+      this.db.prepare("DELETE FROM exchange_read_ranges WHERE exchange_id = ?").run(exchangeId);
+      this.db
+        .prepare("UPDATE exchange_materials SET retired = 1 WHERE exchange_id = ? AND kind IN ('body','copy')")
+        .run(exchangeId);
+      this.db.prepare("INSERT INTO exchange_cleanup_intents (exchange_id) VALUES (?)").run(exchangeId);
+      this.db
+        .prepare(`INSERT INTO exchange_cleanup_items (exchange_id,content_id)
+        SELECT DISTINCT exchange_id, content_id FROM exchange_materials WHERE exchange_id = ? AND retired = 1 AND content_id IS NOT NULL`)
+        .run(exchangeId);
+    }
+    if (transition.kind === "material-revalidate") {
+      const material = this.revalidationMaterial(exchangeId, transition.materialId);
+      if (
+        !captured ||
+        !sameActor(this.actor, captured.actor) ||
+        JSON.stringify(material) !== JSON.stringify(captured.material)
+      )
+        return conflict("The material custody changed before revalidation.");
+      this.db
+        .prepare("UPDATE exchange_materials SET scope_json = ?, available = 1 WHERE exchange_id = ? AND id = ?")
+        .run(JSON.stringify(captured.custody), exchangeId, transition.materialId);
+    }
+    if (exchangeTransitionChangesWork(transition)) this.advanceWork(exchangeId);
+    const seq = this.seq(exchangeId);
+    recordExchangeTransition(this.db, exchangeId, {
+      seq,
+      workRevision,
+      actorId: this.actorId,
+      operationId: input.operationId,
+      transition,
+    });
+    const outcome = exchangeControlOutcome(exchangeId, seq, transition);
+    this.saveOutcome(outcome, input.operationId, fingerprint);
+    if (transition.kind === "resume") {
+      const claim = this.acquireClaim(exchangeId);
+      this.requireLiveOwner();
+      return { ...this.publicView(exchangeId), ...claim, replayed: false };
+    }
+    return this.outcomeData(outcome, false);
+  }
+
+  revalidationMaterial(exchangeId: string, id: string) {
+    const material = exchangeMaterial(this.db, exchangeId, id);
+    if (
+      !material ||
+      material.ownerProjectId !== this.actorId ||
+      (material.kind !== "live" && material.kind !== "versioned")
+    )
+      return denied();
+    return material;
+  }
+
+  publicView(exchangeId: string): ExchangeView {
+    return this.view(this.access(exchangeId));
+  }
+
+  private view(header: Header): ExchangeView {
+    const { id: exchangeId, criteria, ...base } = header;
+    const head = this.head(exchangeId);
+    const current = exchangeView(
+      { ...base, exchangeId, criteria: JSON.parse(criteria) },
+      this.actorId,
+      this.memberIds(exchangeId),
+      exchangeRequests(this.db, exchangeId).map((request) => ({
+        ...request,
+        ownership: head.ownership.get(request.id) ?? initialOwnership(request),
+      })),
+      exchangeReports(this.db, exchangeId),
+      exchangeAcceptances(this.db, exchangeId),
+      head.state === "completed" ? [] : this.ranges(exchangeId),
+    );
+    const cleanup = this.db
+      .prepare("SELECT failure FROM exchange_cleanup_intents WHERE exchange_id = ?")
+      .get(exchangeId) as { failure: number } | undefined | null;
+    const proposal = currentExchangeProposal(head);
+    return {
+      ...current,
+      state: head.state,
+      rosterVersion: head.rosterVersion,
+      workRevision: head.workRevision,
+      pauseVersion: head.pauseVersion,
+      pause: head.pause,
+      proposal,
+      final: head.final,
+      votes: proposal
+        ? [...head.votes]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([projectId, vote]) => ({ projectId, ...vote }))
+        : [],
+      ...(head.state === "completed"
+        ? { cleanup: !cleanup ? "complete" : cleanup.failure ? "failed" : "pending" }
+        : {}),
+    };
+  }
+
+  private checkJoinOwner(exchangeId: string): void {
+    const admitted = this.context.joinAdmission;
+    if (admitted && (admitted.exchangeId !== exchangeId || !sameActor(admitted.actor, this.actor))) denied();
+    this.requireLiveOwner();
+  }
+
+  private acquireClaim(exchangeId: string): ExchangeClaim {
+    const claimId = randomUUID();
+    const expiresAt = new Date(this.now().getTime() + EXCHANGE_LEASE_SECONDS * 1_000).toISOString();
+    this.db
+      .prepare(
+        "INSERT INTO exchange_claims VALUES (?,?,?,?) ON CONFLICT(exchange_id,project_id) DO UPDATE SET claim_id=excluded.claim_id,expires_at=excluded.expires_at",
+      )
+      .run(exchangeId, this.actorId, claimId, expiresAt);
+    return { claimId, expiresAt };
+  }
+
+  lifecycle(input: Exclude<ExchangeLifecycleInput, { kind: "cleanup" }>): ExchangeActionData {
     const { exchangeId } = input;
     const header = this.access(exchangeId);
     if (input.kind === "join") {
-      const admitted = this.context.joinAdmission;
-      if (admitted && (admitted.exchangeId !== exchangeId || !sameActor(admitted.actor, this.actor))) return denied();
-      this.requireLiveOwner();
+      this.checkJoinOwner(exchangeId);
+      const head = this.head(exchangeId);
+      if (head.state !== "active") return this.view(header);
       const now = this.context.now();
       need(authorizeExchangeJoin(this.claim(exchangeId), input.replaceClaim, input.confirmed, now));
       this.context.onFreshWrite?.();
-      const claimId = randomUUID();
-      const expiresAt = new Date(now.getTime() + EXCHANGE_LEASE_SECONDS * 1_000).toISOString();
-      this.db
-        .prepare(
-          "INSERT INTO exchange_claims VALUES (?,?,?,?) ON CONFLICT(exchange_id,project_id) DO UPDATE SET claim_id=excluded.claim_id,expires_at=excluded.expires_at",
-        )
-        .run(exchangeId, this.actorId, claimId, expiresAt);
+      const claim = this.acquireClaim(exchangeId);
       const view = this.view(header);
       this.requireLiveOwner();
-      return { ...view, claimId, expiresAt };
+      return { ...view, ...claim };
     }
     if (input.kind === "renew" || input.kind === "release") return this.maintainLease(input);
+    this.requireActive(exchangeId);
     need(requireExchangeClaim(this.claim(exchangeId), input.claim, this.now()));
     if (input.ranges.length === 0) return invalid("Confirm at least one exact delivered sequence or range.");
     const requested = need(normalizeExchangeRanges(input.ranges));
@@ -604,12 +896,40 @@ class ExchangeStore implements ExchangeBusinessRepository {
   }
 
   private historyCursor(header: Header, seq: number): ExchangeHistoryCursor {
+    const head = this.head(header.id);
+    const ownership = this.observedRequests(header.id, head)
+      .filter(
+        (row) =>
+          row.ownership.version > 1 &&
+          [
+            row.ownership.acceptanceOwnerId,
+            row.ownership.assignedProjectId,
+            row.request.requesterId,
+            row.request.assigneeId,
+          ].includes(this.actorId),
+      )
+      .map((row) => [row.request.id, row.ownership.version]);
+    const projection =
+      head.state === "active" &&
+      head.rosterVersion === 1 &&
+      head.pauseVersion === 0 &&
+      !head.proposal &&
+      ownership.length === 0
+        ? exchangeProjection("active", [...head.members])
+        : exchangeFingerprint({
+            state: head.state,
+            rosterVersion: head.rosterVersion,
+            pauseVersion: head.pauseVersion,
+            proposal: currentExchangeProposal(head)?.version,
+            ownership,
+            members: [...head.members].sort(),
+          });
     return {
       version: 1,
       exchangeId: header.id,
       projectId: this.actorId,
       seq,
-      projection: exchangeProjection("active", this.memberIds(header.id)),
+      projection,
     };
   }
 
@@ -643,7 +963,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
         .prepare<{ operationId: string; exchangeId: string }>(
           `SELECT o.operation_id operationId, o.exchange_id exchangeId FROM exchange_creation_outcomes o
           JOIN exchange_members m ON m.exchange_id = o.exchange_id AND m.project_id = o.project_id
-          WHERE o.project_id = ? AND (? IS NULL OR o.exchange_id = ?) AND (? IS NULL OR o.operation_id = ?)
+          WHERE o.project_id = ? AND m.active = 1 AND (? IS NULL OR o.exchange_id = ?) AND (? IS NULL OR o.operation_id = ?)
           ORDER BY o.operation_id`,
         )
         .all(
@@ -700,14 +1020,16 @@ class ExchangeStore implements ExchangeBusinessRepository {
     )
       return invalid("Invalid bounded Exchange material range.");
     const material = exchangeMaterial(this.db, input.exchangeId, input.materialId);
-    if (!material || !material.available)
+    if (!material || !material.available || material.retired)
       return fail(
         appError("EXCHANGE_MATERIAL_UNAVAILABLE", "The registered Exchange material is unavailable.", {
-          reason: material
-            ? material.kind === "body" || material.kind === "copy"
-              ? "omitted"
-              : "revalidation-required"
-            : "missing",
+          reason: material?.retired
+            ? "retired"
+            : material
+              ? material.kind === "body" || material.kind === "copy"
+                ? "omitted"
+                : "revalidation-required"
+              : "missing",
         }),
       );
     if (material.kind === "external")
@@ -723,7 +1045,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     const owner = this.db
       .prepare(
         `SELECT 1 FROM exchange_members m JOIN projects p ON p.id = m.project_id
-        WHERE m.exchange_id = ? AND m.project_id = ? AND p.status = 'active'`,
+        WHERE m.exchange_id = ? AND m.project_id = ? AND m.active = 1 AND p.status = 'active'`,
       )
       .get(input.exchangeId, material.ownerProjectId);
     if (!owner)
@@ -900,6 +1222,76 @@ function unavailableReplay(): never {
 
 interface Preparation {
   captured?: BusinessCapture;
+  revalidation?: RevalidationCapture;
+}
+
+function readControlCheckpoint(
+  context: Context,
+  input: ExchangeControlInput,
+  preparation: Preparation,
+): Result<ExchangeReadDecision> {
+  if (input.kind === "material-revalidate") return readRevalidationCheckpoint(context, input, preparation);
+  return readSnapshot(context, (store) => {
+    const receipt = store.currentReceipt(input);
+    if (!receipt && input.replayOnly) return unavailableReplay();
+    const normalized = store.normalizeControl(input);
+    const fingerprint = controlFingerprint(normalized);
+    if (receipt) {
+      need(matchExchangeFingerprint(receipt.fingerprint, fingerprint));
+      return { data: store.outcomeData(receipt.outcome, true), fingerprint };
+    }
+    store.admitControl(normalized);
+    return { fingerprint };
+  });
+}
+
+function readRevalidationCheckpoint(
+  context: Context,
+  input: Extract<ExchangeControlInput, { kind: "material-revalidate" }>,
+  preparation: Preparation,
+): Result<ExchangeReadDecision> {
+  const admitted = readSnapshot(context, (store) => {
+    const receipt = store.currentReceipt(input);
+    if (!receipt && input.replayOnly) return unavailableReplay();
+    if (!receipt) store.admitControl(input);
+    return { actor: store.actor, historical: receipt !== null };
+  });
+  if (!admitted.ok) return admitted;
+  const { actor, historical } = admitted.value;
+  // Resolve the relative identity from the current supplier binding without opening the source.
+  const identity = resolveExchangeSource(actor.binding, context.cwd, input.source, 0, null);
+  const fingerprint = controlFingerprint({ ...input, source: identity.relativePath });
+  const read = readSnapshot(context, (store) => {
+    const receipt = store.currentReceipt(input);
+    if (!sameActor(store.actor, actor)) return denied();
+    if (receipt) {
+      need(matchExchangeFingerprint(receipt.fingerprint, fingerprint));
+      return { data: store.outcomeData(receipt.outcome, true) };
+    }
+    if (input.replayOnly || historical) return unavailableReplay();
+    store.admitControl(input);
+    return { material: store.revalidationMaterial(input.exchangeId, input.materialId) };
+  });
+  if (!read.ok || !read.value.material) return read;
+  const { material } = read.value;
+  const previous = JSON.parse(material.source ?? "null") as BoundExchangeSource | null;
+  if (!previous) return err(appError("CONTENT_CORRUPTED", "The local reference scope is missing."));
+  const custody = { ...identity, offset: previous.offset, length: previous.length };
+  if (previous.relativePath !== undefined && custody.relativePath !== previous.relativePath)
+    return err(
+      appError("EXCHANGE_MATERIAL_UNAVAILABLE", "Use the original confined reference path.", { reason: "changed" }),
+    );
+  withExchangeSource(custody, actor.binding, ({ fd, size }) => {
+    if (material.kind === "live") return;
+    const proof = digestExchangeSource(
+      exchangeSourceChunks(fd, custody.offset, size),
+      context.config.artifact.maxBytes,
+    );
+    if (proof.sizeBytes !== material.sizeBytes || proof.sha256 !== material.sha256)
+      fail(appError("EXCHANGE_MATERIAL_UNAVAILABLE", "The original version no longer matches.", { reason: "changed" }));
+  });
+  preparation.revalidation = { material, actor, custody };
+  return ok({ fingerprint });
 }
 
 function readCheckpoint(
@@ -907,6 +1299,14 @@ function readCheckpoint(
   input: ExchangeInput,
   preparation: Preparation,
 ): Result<ExchangeReadDecision> {
+  const control = controlOf(input);
+  if (control !== undefined) {
+    if (!exchangeOperationId(control.operationId))
+      return err(exchangeInvalid("Supply a bounded operation ID for this Exchange control."));
+    if (input.kind === "join" && input.replaceClaim !== undefined)
+      return err(exchangeInvalid("Resumption and claim replacement are separate joins."));
+    return readControlCheckpoint(context, control, preparation);
+  }
   if (input.kind === "wait") {
     if (
       !exchangeCount(input.timeout * 1_000, 1) ||
@@ -929,6 +1329,10 @@ function readCheckpoint(
     const result = readSnapshot(context, (store) => {
       if (isExchangeRead(input)) return store.read(input);
       store.access(input.exchangeId);
+      if (input.kind === "join") {
+        const state = store.head(input.exchangeId).state;
+        if (state !== "active") return store.publicView(input.exchangeId);
+      }
     });
     if (!result.ok) return result;
     return ok(
@@ -939,8 +1343,10 @@ function readCheckpoint(
   const observed = readSnapshot(context, (store) => {
     const receipt = store.currentReceipt(input);
     if (input.replayOnly && receipt === null) return unavailableReplay();
-    if (receipt === null && input.kind !== "create")
+    if (receipt === null && input.kind !== "create") {
+      store.requireActive(input.exchangeId);
       need(requireExchangeClaim(store.claim(input.exchangeId), input.claim, store.now()));
+    }
     return { actor: store.actor, historical: receipt !== null };
   });
   if (!observed.ok) return observed;
@@ -955,7 +1361,10 @@ function readCheckpoint(
         need(matchExchangeFingerprint(receipt.fingerprint, plan.fingerprint));
         return { data: store.outcomeData(receipt.outcome, true) };
       }
-      if (input.kind !== "create") need(requireExchangeClaim(store.claim(input.exchangeId), input.claim, store.now()));
+      if (input.kind !== "create") {
+        store.requireActive(input.exchangeId);
+        need(requireExchangeClaim(store.claim(input.exchangeId), input.claim, store.now()));
+      }
       preparation.captured = captured;
       return { fingerprint: plan.fingerprint };
     },
@@ -965,7 +1374,7 @@ function readCheckpoint(
 
 function writeExchange(
   context: Context,
-  input: ExchangeBusinessInput | ExchangeLifecycleInput,
+  input: ExchangeBusinessInput | ExchangeLifecycleInput | ExchangeControlInput,
   fingerprint: string | undefined,
   preparation: Preparation,
 ): Result<ExchangeActionData> {
@@ -979,7 +1388,11 @@ function writeExchange(
     fresh = true;
   };
   try {
-    if (isExchangeBusiness(input) && preparation.captured === undefined) {
+    const control = controlOf(input);
+    if (
+      (isExchangeBusiness(input) && preparation.captured === undefined) ||
+      (control !== undefined && fingerprint === undefined)
+    ) {
       // The read admission may have required a known older schema to be migrated first.
       const observed = readCheckpoint(context, input, preparation);
       if (!observed.ok) return observed;
@@ -992,17 +1405,49 @@ function writeExchange(
       prepared = captured.content.prepare(working, input.exchangeId);
     }
     const workspace = observeWorkspace(context);
-    const committed = runInTransaction(
+    const committed = runInTransaction<{
+      data: ExchangeActionData | undefined;
+      exchangeId: string;
+      fresh: boolean;
+      completed?: boolean;
+    }>(
       db,
       "BEGIN IMMEDIATE",
       () => {
         const store = new ExchangeStore(db, context, workspace, captured, prepared);
+        if (control !== undefined) {
+          const receipt = store.currentReceipt(control);
+          let normalized = store.normalizeControl(control);
+          if (normalized.kind === "material-revalidate") {
+            const source = preparation.revalidation;
+            if (!source || !sameActor(store.actor, source.actor)) return denied();
+            normalized = { ...normalized, source: source.custody.relativePath };
+          }
+          const observed = controlFingerprint(normalized);
+          if (receipt) {
+            need(matchExchangeFingerprint(receipt.fingerprint, observed));
+            return ok({ data: store.outcomeData(receipt.outcome, true), exchangeId: control.exchangeId, fresh: false });
+          }
+          if (observed !== fingerprint) return conflict("The normalized Exchange control changed during admission.");
+          const data = store.runControl(normalized, observed, preparation.revalidation);
+          return ok({ data, exchangeId: control.exchangeId, fresh: true });
+        }
+        if (isExchangeControl(input)) return invalid("The Exchange control is unavailable.");
+        if (input.kind === "cleanup") {
+          store.access(input.exchangeId);
+          return ok({
+            data: undefined,
+            exchangeId: input.exchangeId,
+            fresh: false,
+            completed: store.head(input.exchangeId).state === "completed",
+          });
+        }
         if (!isExchangeBusiness(input)) {
           const data = store.lifecycle(input);
           return ok({
             data,
             exchangeId: input.exchangeId,
-            fresh: input.kind === "join" || ("changed" in data && data.changed),
+            fresh: (input.kind === "join" && "claimId" in data) || ("changed" in data && data.changed),
           });
         }
         const receipt = store.currentReceipt(input);
@@ -1017,7 +1462,14 @@ function writeExchange(
         }
         if (fingerprint !== plan.fingerprint)
           return conflict("The normalized Exchange input changed during admission.");
+        if (input.kind !== "create") store.requireActive(input.exchangeId);
+        let changesWork = input.kind === "request" || input.kind === "report" || input.kind === "material-register";
+        if ((input.kind === "accept" || input.kind === "send") && input.accept.length > 0) {
+          const proposed = currentExchangeProposal(store.head(input.exchangeId));
+          changesWork = exchangeAcceptanceChangesWork(input.accept, proposed);
+        }
         const outcome = need(commitExchangeBusiness(store, input, plan, admit));
+        if (changesWork) store.advanceWork(outcome.exchangeId);
         const data = store.outcomeData(outcome, false);
         commitAttempted = true;
         return ok({ data, exchangeId: outcome.exchangeId, fresh: true });
@@ -1029,12 +1481,23 @@ function writeExchange(
       return committed;
     }
     const { data, exchangeId } = committed.value;
+    if (data === undefined) {
+      context.onFreshWrite?.();
+      return working.cleanup(exchangeId, committed.value.completed === true);
+    }
     if (!committed.value.fresh) return ok(data);
     const warnings: ExchangeActivationWarning[] = [];
     const finished = prepared ? working.finish(prepared) : undefined;
     if (finished !== undefined) {
       if (!finished.ok) warnings.push(activationWarning(finished.error));
       else if ("replayed" in data) data.availability = "available";
+    }
+    const completed = "kind" in data && data.kind === "vote" && "state" in data && data.state === "completed";
+    if (completed) {
+      const cleanup = working.cleanup(exchangeId);
+      if (!cleanup.ok) warnings.push(activationWarning(cleanup.error));
+      if (cleanup.ok && cleanup.value.warnings) warnings.push(...cleanup.value.warnings);
+      return ok({ ...data, ...(warnings.length ? { warnings } : {}) });
     }
     const recovered = working.recover(exchangeId, finished?.ok === false ? prepared?.id : undefined);
     for (const failure of recovered.ok ? recovered.value.failures : [recovered.error])
@@ -1075,7 +1538,7 @@ export function admitExchangeJoin(
         return { exchangeId: input.exchangeId, projectId: store.actorId, actor: store.actor };
       });
     const first = resolve();
-    if (first.ok || first.error.code !== "STORAGE_MIGRATION_REQUIRED") return first;
+    if (first.ok || first.error.code !== "STORAGE_MIGRATION_REQUIRED" || input.resume?.replayOnly) return first;
     openExchangeWriter(context).close();
     return resolve();
   } catch (error) {

@@ -3,6 +3,7 @@ import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { contentionKindOf } from "@sorage/adapters/src/exchange-command-ports";
 import { EXCHANGE_RENEW_SECONDS, isMemoUuid } from "@sorage/core";
+import type { ExchangeLifecycleInput } from "@sorage/core";
 
 export interface ExchangePair {
   exchangeId: string;
@@ -174,6 +175,7 @@ export async function joinOwnedExchange(args: {
   project?: string | undefined;
   asProject?: string | undefined;
   asUser?: boolean | undefined;
+  resume?: Extract<ExchangeLifecycleInput, { kind: "join" }>["resume"];
 }): Promise<OwnedCliResult> {
   const argv = ["exchange", "join", "--json"];
   if (args.project !== undefined) argv.push("--project", args.project);
@@ -181,6 +183,11 @@ export async function joinOwnedExchange(args: {
   if (args.asUser) argv.push("--as-user");
   if (args.replaceClaim !== undefined) argv.push("--replace-claim", args.replaceClaim);
   if (args.confirmed) argv.push("--confirm");
+  if (args.resume) {
+    argv.push("--pause-version", String(args.resume.pauseVersion), "--operation-id", args.resume.operationId);
+    if (args.resume.decision !== undefined) argv.push("--decision", args.resume.decision);
+    if (args.resume.replayOnly) argv.push("--replay-only");
+  }
   return launchOwnedCli([...argv, "--", args.exchangeId], process.cwd()).result;
 }
 

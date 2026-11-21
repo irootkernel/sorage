@@ -108,17 +108,18 @@ export interface MaterialRow extends Omit<ExchangeMaterial, "scope"> {
   contentId: string | null;
   source: string | null;
   available: number;
+  retired: number;
 }
 
 const SELECT_MATERIALS = `SELECT id, owner_project_id ownerProjectId, kind, size_bytes sizeBytes,
-  sha256, content_id contentId, scope_json source, available FROM exchange_materials WHERE exchange_id = ?`;
+  sha256, content_id contentId, scope_json source, available, retired FROM exchange_materials WHERE exchange_id = ?`;
 
 export function exchangeMaterial(db: SorageSqlite, exchangeId: string, id: string) {
   return db.prepare(`${SELECT_MATERIALS} AND id = ?`).get(exchangeId, id) as MaterialRow | undefined;
 }
 
 function retainedMaterial(row: MaterialRow, redact: boolean): ExchangeMaterial {
-  const { contentId: _content, available: _available, source, ...metadata } = row;
+  const { contentId: _content, available: _available, retired: _retired, source, ...metadata } = row;
   let scope: ExchangeMaterial["scope"] = null;
   if (source !== null) {
     if (row.kind === "external") scope = JSON.parse(source);
@@ -132,13 +133,24 @@ function retainedMaterial(row: MaterialRow, redact: boolean): ExchangeMaterial {
 
 export function exchangeOperations(db: SorageSqlite, exchangeId: string, projectId?: string) {
   return db
-    .prepare<Omit<RetainedExchangeOperation, "outcome"> & { outcome: string }>(
-      `SELECT project_id projectId, operation_id operationId, fingerprint, outcome_json outcome
+    .prepare<
+      Omit<RetainedExchangeOperation, "outcome" | "registrationAfterSeq"> & {
+        outcome: string;
+        registration: number | null;
+      }
+    >(
+      `SELECT project_id projectId, operation_id operationId, fingerprint, outcome_json outcome, registration_after_seq registration
       FROM exchange_operation_outcomes WHERE exchange_id = ? AND (? IS NULL OR project_id = ?)
       ORDER BY project_id, operation_id`,
     )
     .all(exchangeId, projectId ?? null, projectId ?? null)
-    .map(({ outcome, ...record }): RetainedExchangeOperation => ({ ...record, outcome: JSON.parse(outcome) }));
+    .map(
+      ({ outcome, registration, ...record }): RetainedExchangeOperation => ({
+        ...record,
+        outcome: JSON.parse(outcome),
+        ...(registration === null ? {} : { registrationAfterSeq: registration }),
+      }),
+    );
 }
 
 /** Select only compact typed facts, inside the backup reader's transaction. */
@@ -232,8 +244,16 @@ export function restoreExchangeCollaboration(
       row.createdAt,
     );
   }
-  const operations = db.prepare("INSERT INTO exchange_operation_outcomes VALUES (?,?,?,?,?)");
+  const operations = db.prepare(`INSERT INTO exchange_operation_outcomes
+    (exchange_id, project_id, operation_id, fingerprint, outcome_json, registration_after_seq) VALUES (?,?,?,?,?,?)`);
   for (const row of collaboration.operations) {
-    operations.run(exchangeId, row.projectId, row.operationId, row.fingerprint, JSON.stringify(row.outcome));
+    operations.run(
+      exchangeId,
+      row.projectId,
+      row.operationId,
+      row.fingerprint,
+      JSON.stringify(row.outcome),
+      row.outcome.kind === "material-register" ? (row.registrationAfterSeq ?? 0) : null,
+    );
   }
 }

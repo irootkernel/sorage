@@ -282,6 +282,856 @@ function collaborationFixture() {
 }
 
 describe("Exchange SQLite and working storage through the application entrypoint", () => {
+  it("replays a revalidated source through equivalent supplier paths without reading source bytes", () => {
+    const f = fixture();
+    const exchangeId = create(f);
+    const claim = joinExchange(f, exchangeId);
+    const path = join(f.alpha, "original.txt");
+    writeFileSync(path, "unchanged original");
+    const registered = unwrap(
+      f.run({
+        kind: "material-register",
+        exchangeId,
+        claim,
+        operationId: "register",
+        replayOnly: false,
+        material: { kind: "versioned", path, offset: 0, length: null },
+      }),
+    );
+    const revalidate = {
+      kind: "material-revalidate" as const,
+      exchangeId,
+      claim,
+      operationId: "validate",
+      replayOnly: false,
+      materialId: registered.materialId,
+      source: "original.txt",
+    };
+    const committed = unwrap(f.run(revalidate));
+    rmSync(path);
+    const before = tree(f.home);
+    const replay = { ...revalidate, claim: undefined, replayOnly: true };
+    expect(unwrap(f.run({ ...replay, source: path }))).toEqual({ ...committed, replayed: true });
+    expect(unwrap(f.run({ ...replay, source: "./original.txt" }))).toEqual({ ...committed, replayed: true });
+    expect(f.run({ ...replay, source: "different.txt" })).toMatchObject(error("IDEMPOTENCY_CONFLICT"));
+    expect(f.run({ ...replay, source: "../outside", operationId: "unrecorded" })).toMatchObject(
+      error("EXCHANGE_REPLAY_UNAVAILABLE"),
+    );
+    expect(tree(f.home)).toEqual(before);
+  });
+
+  it.each(["requester", "assignee"] as const)(
+    "transfers a removed %s responsibility without rewriting attribution",
+    (removed) => {
+      const f = fixture();
+      const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+      const alpha = joinExchange(f, exchangeId);
+      const beta = joinExchange(f, exchangeId, f.beta);
+      const other = joinExchange(f, exchangeId, f.other);
+      const identity = { exchangeId, replayOnly: false };
+      const first = unwrap(
+        f.run({
+          ...identity,
+          kind: "request",
+          claim: alpha,
+          operationId: "request",
+          assignee: "beta",
+          condition: "Check the prior result",
+          criteria: ["Evidence"],
+        }),
+      );
+      const report = (claim: string, assignmentVersion: number, operationId: string) => ({
+        ...identity,
+        kind: "report" as const,
+        claim,
+        operationId,
+        requestId: first.requestId,
+        assignmentVersion,
+        body: { text: "Author attribution" },
+        evidence: [],
+        accept: [],
+      });
+      const accept = (claim: string, reportVersion: number) => ({
+        ...identity,
+        kind: "accept" as const,
+        claim,
+        operationId: "accept",
+        accept: [{ requestId: first.requestId, reportVersion }],
+      });
+      unwrap(f.run(report(beta, 1, "first-report"), f.beta));
+      unwrap(
+        f.run(
+          {
+            ...identity,
+            kind: "roster",
+            rosterVersion: 1,
+            add: [],
+            remove: [removed === "requester" ? "alpha" : "beta"],
+            operationId: "remove",
+            reason: "Remove entrusted participant",
+            confirmed: true,
+          },
+          f.other,
+        ),
+      );
+      const pending = unwrap(f.run({ kind: "inspect", exchangeId }, f.other)).requests[0];
+      expect(pending).toMatchObject({
+        requesterId: alphaId,
+        assigneeId: betaId,
+        ownership:
+          removed === "requester"
+            ? { version: 2, acceptanceOwnerId: null, assignedProjectId: betaId }
+            : { version: 2, acceptanceOwnerId: alphaId, assignedProjectId: null },
+      });
+      expect(f.run({ kind: "inspect", exchangeId }, removed === "requester" ? f.alpha : f.beta)).toMatchObject(
+        error("FORBIDDEN_ACTOR"),
+      );
+      const correction = {
+        ...identity,
+        kind: "owner-correct" as const,
+        requestId: first.requestId,
+        ownershipVersion: 2,
+        rosterVersion: 2,
+        operationId: "transfer",
+        reason: "Entrust remaining participant",
+        confirmed: true,
+      };
+      const beforeCorrection = tree(f.home);
+      expect(f.run({ ...correction, acceptanceOwner: "other", assignee: "other" }, f.other)).toMatchObject(
+        error("EXCHANGE_INVALID_INPUT"),
+      );
+      expect(tree(f.home)).toEqual(beforeCorrection);
+      unwrap(
+        f.run(
+          { ...correction, ...(removed === "requester" ? { acceptanceOwner: "other" } : { assignee: "other" }) },
+          f.other,
+        ),
+      );
+      if (removed === "requester") {
+        expect(f.run(accept(alpha, 1), f.alpha)).toMatchObject(error("FORBIDDEN_ACTOR"));
+        expect(unwrap(f.run(accept(other, 1), f.other))).toMatchObject({ kind: "accept" });
+      } else {
+        expect(f.run(report(beta, 1, "late-report"), f.beta)).toMatchObject(error("FORBIDDEN_ACTOR"));
+        expect(f.run(report(other, 1, "stale-assignment"), f.other)).toMatchObject(error("ROW_VERSION_CONFLICT"));
+        expect(f.run(accept(alpha, 1), f.alpha)).toMatchObject(error("ROW_VERSION_CONFLICT"));
+        const newer = unwrap(f.run(report(other, 3, "replacement-report"), f.other));
+        expect(newer.reportVersion).toBe(2);
+        unwrap(f.run(accept(alpha, 2), f.alpha));
+      }
+      const settled = unwrap(f.run({ kind: "inspect", exchangeId }, f.other));
+      expect(settled.reports[0]).toMatchObject({ authorId: betaId, assignmentVersion: 1 });
+      expect(settled.requests[0]).toMatchObject({ requesterId: alphaId, assigneeId: betaId, state: "resolved" });
+      unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+    },
+  );
+
+  it("keeps earlier acceptance through requester departure, reports to the vacancy, and restores current responsibility", () => {
+    const source = fixture();
+    const { exchangeId } = unwrap(
+      source.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }),
+    );
+    const alpha = joinExchange(source, exchangeId);
+    const beta = joinExchange(source, exchangeId, source.beta);
+    const other = joinExchange(source, exchangeId, source.other);
+    const identity = { exchangeId, replayOnly: false };
+    const request = (claim: string, assignee: string, cwd: string) =>
+      unwrap(
+        source.run(
+          {
+            ...identity,
+            kind: "request",
+            claim,
+            assignee,
+            operationId: "request",
+            condition: "Check the result",
+            criteria: ["Supply evidence"],
+          },
+          cwd,
+        ),
+      );
+    const publish = (claim: string, requestId: string, operationId: string) => ({
+      ...identity,
+      kind: "report" as const,
+      claim,
+      requestId,
+      operationId,
+      assignmentVersion: 1,
+      evidence: [],
+      accept: [],
+      body: { text: "Checked result" },
+    });
+    const accept = (claim: string, requestId: string, reportVersion: number, operationId: string) => ({
+      ...identity,
+      kind: "accept" as const,
+      claim,
+      operationId,
+      accept: [{ requestId, reportVersion }],
+    });
+    const departingRequester = request(alpha, "beta", source.alpha);
+    const departingAssignee = request(other, "alpha", source.other);
+    const initial = unwrap(source.run(publish(beta, departingRequester.requestId, "initial"), source.beta));
+    const resolved = unwrap(source.run(publish(alpha, departingAssignee.requestId, "resolved"), source.alpha));
+    unwrap(source.run(accept(alpha, departingRequester.requestId, initial.reportVersion, "accept-initial")));
+    unwrap(
+      source.run(accept(other, departingAssignee.requestId, resolved.reportVersion, "accept-resolved"), source.other),
+    );
+    const pause = unwrap(
+      source.run(
+        {
+          ...identity,
+          kind: "stop",
+          rosterVersion: 1,
+          reason: "Review membership",
+          confirmed: true,
+          operationId: "pause",
+        },
+        source.other,
+      ),
+    );
+    const roster = {
+      ...identity,
+      kind: "roster" as const,
+      rosterVersion: 1,
+      pauseVersion: 1,
+      add: [],
+      remove: ["alpha"],
+      reason: "The original participant is leaving",
+      operationId: "departure",
+      confirmed: true,
+    };
+    expect(source.run({ ...roster, pauseVersion: 0 }, source.other)).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    unwrap(source.run(roster, source.other));
+    const expectedVacancy = { acceptanceOwnerId: null, assignedProjectId: betaId, version: 2, assignmentVersion: 1 };
+    const paused = unwrap(source.run({ kind: "inspect", exchangeId }, source.other));
+    expect(paused).toMatchObject({ state: "paused", rosterVersion: 2 });
+    expect(paused.requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: departingRequester.requestId,
+          requesterId: alphaId,
+          assigneeId: betaId,
+          state: "resolved",
+          ownership: expect.objectContaining(expectedVacancy),
+        }),
+        expect.objectContaining({
+          id: departingAssignee.requestId,
+          requesterId: otherId,
+          assigneeId: alphaId,
+          state: "resolved",
+          ownership: expect.objectContaining({ acceptanceOwnerId: otherId, assignedProjectId: alphaId, version: 1 }),
+        }),
+      ]),
+    );
+    if (pause.kind !== "stop") throw new Error("Expected a stopped Exchange.");
+    const resumed = unwrap(
+      source.run(
+        {
+          kind: "join",
+          exchangeId,
+          confirmed: true,
+          resume: {
+            ...identity,
+            kind: "resume",
+            pauseVersion: pause.pauseVersion,
+            confirmed: true,
+            operationId: "resume",
+          },
+        },
+        source.beta,
+      ),
+    );
+    const followUp = unwrap(
+      source.run(publish(String(resumed.claimId), departingRequester.requestId, "follow-up"), source.beta),
+    );
+    expect(
+      unwrap(source.run({ kind: "history", exchangeId }, source.other)).messages.find(
+        (message) => message.seq === followUp.seq,
+      ),
+    ).toMatchObject({ senderId: betaId, recipientId: null, reportVersion: 2 });
+    expect(followUp.reportVersion).toBe(initial.reportVersion + 1);
+    unwrap(exportSnapshot(unwrap(source.ports.exportPorts())));
+    unwrap(backupVerify(unwrap(source.ports.verifyPorts()), { now: new Date(now) }));
+
+    const restored = fixture(false);
+    const restore = unwrap(
+      createNodeBackupCommandPorts({ ...restored.setup, sourcePath: source.vault }).restorePorts(),
+    );
+    unwrap(backupRestore(restore, { dryRun: false }));
+    bindRestored(restored);
+    const restoredView = unwrap(restored.run({ kind: "inspect", exchangeId }, restored.other));
+    expect(restoredView.requests.find((entry) => entry.id === departingRequester.requestId)).toMatchObject({
+      requesterId: alphaId,
+      state: "completion-reported",
+      ownership: expectedVacancy,
+      report: { version: 2 },
+      acceptance: null,
+    });
+    expect(restoredView.acceptances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requestId: departingRequester.requestId, reportVersion: 1, requesterId: alphaId }),
+        expect.objectContaining({ requestId: departingAssignee.requestId, reportVersion: 1, requesterId: otherId }),
+      ]),
+    );
+    expect(
+      unwrap(restored.run({ kind: "history", exchangeId }, restored.other)).messages.find(
+        (message) => message.seq === followUp.seq,
+      ),
+    ).toMatchObject({ recipientId: null, reportVersion: 2 });
+    unwrap(
+      restored.run(
+        {
+          ...identity,
+          kind: "owner-correct",
+          requestId: departingRequester.requestId,
+          ownershipVersion: 2,
+          rosterVersion: 2,
+          pauseVersion: 1,
+          acceptanceOwner: "other",
+          operationId: "take-over",
+          reason: "Take responsibility for the outstanding acceptance",
+          confirmed: true,
+        },
+        restored.other,
+      ),
+    );
+    const restoredBeta = joinExchange(restored, exchangeId, restored.beta);
+    const newest = unwrap(
+      restored.run(publish(restoredBeta, departingRequester.requestId, "owner-follow-up"), restored.beta),
+    );
+    expect(
+      unwrap(restored.run({ kind: "history", exchangeId }, restored.other)).messages.find(
+        (message) => message.seq === newest.seq,
+      ),
+    ).toMatchObject({ senderId: betaId, recipientId: otherId, reportVersion: 3 });
+    const restoredOther = joinExchange(restored, exchangeId, restored.other);
+    unwrap(
+      restored.run(
+        accept(restoredOther, departingRequester.requestId, newest.reportVersion, "accept-latest"),
+        restored.other,
+      ),
+    );
+    const final = unwrap(restored.run({ kind: "inspect", exchangeId }, restored.other));
+    expect(final.requests.find((entry) => entry.id === departingRequester.requestId)).toMatchObject({
+      requesterId: alphaId,
+      state: "resolved",
+      ownership: { acceptanceOwnerId: otherId, assignmentVersion: 1 },
+      acceptance: { requesterId: otherId, reportVersion: 3 },
+    });
+    expect(final.acceptances).toEqual(expect.arrayContaining(restoredView.acceptances));
+    unwrap(exportSnapshot(unwrap(restored.ports.exportPorts())));
+  });
+
+  it("preserves the exact pause, allows only observed ownership corrections, and replays resumption without a new claim", () => {
+    const f = fixture();
+    const exchangeId = create(f);
+    const alpha = joinExchange(f, exchangeId);
+    const beta = joinExchange(f, exchangeId, f.beta);
+    const identity = { exchangeId, replayOnly: false };
+    const activity = unwrap(f.run(send(exchangeId, alpha, "prior-activity")));
+    const ranges = [{ firstSeq: activity.seq, lastSeq: activity.seq }];
+    unwrap(f.run({ kind: "confirm-read", exchangeId, claim: alpha, ranges }));
+    const stop = {
+      ...identity,
+      kind: "pause" as const,
+      claim: alpha,
+      reason: "Await decision",
+      question: "May work resume?",
+      operationId: "pause",
+    };
+    unwrap(f.run(stop));
+    expect(f.run({ kind: "renew", exchangeId, claim: beta }, f.beta)).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
+    const frozen = tree(f.home);
+    const view = unwrap(f.run({ kind: "join", exchangeId, confirmed: false }));
+    expect(view).toMatchObject({ state: "paused", pause: { version: 1, question: stop.question }, readRanges: ranges });
+    expect(view.claimId).toBeUndefined();
+    expect(tree(f.home)).toEqual(frozen);
+    const correction = {
+      ...identity,
+      kind: "roster" as const,
+      rosterVersion: 1,
+      pauseVersion: 1,
+      add: ["other"],
+      remove: [],
+      confirmed: true,
+      reason: "Include a verifier",
+      operationId: "correction",
+    };
+    expect(f.run({ ...correction, pauseVersion: 0 })).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    unwrap(f.run(correction));
+    const resume = {
+      ...identity,
+      kind: "resume" as const,
+      pauseVersion: 1,
+      confirmed: true,
+      operationId: "resume",
+      decision: "Resume now",
+    };
+    expect(f.run({ kind: "join", exchangeId, confirmed: true, resume: { ...resume, decision: "" } })).toMatchObject(
+      error("EXCHANGE_INVALID_INPUT"),
+    );
+    const reopened = unwrap(f.run({ kind: "join", exchangeId, confirmed: true, resume }));
+    expect(reopened).toMatchObject({ state: "active", replayed: false, claimId: expect.any(String), requests: [] });
+    expect(reopened.claimId).not.toBe(alpha);
+    const after = tree(f.home);
+    const replay = unwrap(f.run({ kind: "join", exchangeId, confirmed: true, resume }));
+    expect(replay).toMatchObject({
+      kind: "resume",
+      replayed: true,
+      state: "active",
+      decision: resume.decision,
+    });
+    expect(replay.claimId).toBeUndefined();
+    expect(tree(f.home)).toEqual(after);
+    expect(f.run({ ...stop, operationId: "stale-agent" })).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
+    if (reopened.claimId === undefined) throw new Error("Resumption didn't acquire the claim.");
+    unwrap(f.run({ ...stop, claim: reopened.claimId, operationId: "second-pause" }));
+    expect(
+      f.run({ kind: "join", exchangeId, confirmed: true, resume: { ...resume, operationId: "stale-resume" } }),
+    ).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+    const restored = fixture(false);
+    const restore = unwrap(createNodeBackupCommandPorts({ ...restored.setup, sourcePath: f.vault }).restorePorts());
+    unwrap(backupRestore(restore, { dryRun: false }));
+    bindRestored(restored);
+    expect(unwrap(restored.run({ kind: "inspect", exchangeId }))).toMatchObject({
+      state: "paused",
+      pause: { version: 2 },
+      readRanges: ranges,
+    });
+    const beforeReplay = tree(restored.home);
+    expect(
+      unwrap(restored.run({ kind: "join", exchangeId, confirmed: true, resume: { ...resume, replayOnly: true } })),
+    ).toEqual(replay);
+    expect(tree(restored.home)).toEqual(beforeReplay);
+  });
+
+  it("preserves explicit objections and earlier votes, rejects incomplete agreement, and resumes exact retirement", () => {
+    const f = fixture();
+    const exchangeId = create(f);
+    const alpha = joinExchange(f, exchangeId);
+    const beta = joinExchange(f, exchangeId, f.beta);
+    const identity = { exchangeId, replayOnly: false };
+    const request = unwrap(
+      f.run({
+        ...identity,
+        kind: "request",
+        claim: alpha,
+        operationId: "request",
+        assignee: "beta",
+        condition: "Verify the large body",
+        criteria: ["Exact bytes"],
+      }),
+    );
+    const bytes = "x".repeat(65_537);
+    const largeReport = (operationId: string) =>
+      unwrap(
+        f.run(
+          {
+            ...identity,
+            kind: "report",
+            claim: beta,
+            operationId,
+            requestId: request.requestId,
+            assignmentVersion: 1,
+            body: { text: bytes },
+            evidence: [],
+            accept: [],
+          },
+          f.beta,
+        ),
+      );
+    largeReport("first-report");
+    const propose = (
+      operationId: string,
+      summary: string,
+      report: { requestId: string; reportVersion: number }[] = [],
+    ) => {
+      const view = unwrap(f.run({ kind: "inspect", exchangeId }));
+      return f.run({
+        ...identity,
+        kind: "propose",
+        claim: alpha,
+        operationId,
+        rosterVersion: view.rosterVersion ?? 0,
+        workRevision: view.workRevision ?? 0,
+        criterion: view.criteria,
+        summary,
+        report,
+        disposition: [],
+      });
+    };
+    const vote = (operationId: string, proposalVersion: number, claim: string, cwd = f.alpha, reportVersion?: number) =>
+      f.run(
+        {
+          ...identity,
+          kind: "vote",
+          claim,
+          operationId,
+          proposalVersion,
+          vote: "approve",
+          accept: reportVersion === undefined ? [] : [{ requestId: request.requestId, reportVersion }],
+        },
+        cwd,
+      );
+    expect(propose("too-long", `${"é".repeat(32_768)}x`)).toMatchObject(error("EXCHANGE_INVALID_INPUT"));
+    expect(unwrap(propose("incomplete", "Omitted evidence"))).toMatchObject({ proposalVersion: 1 });
+    unwrap(vote("initial-approval", 1, alpha));
+    expect(vote("incomplete-attempt", 1, beta, f.beta)).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    const objection = {
+      ...identity,
+      kind: "vote" as const,
+      claim: beta,
+      operationId: "objection",
+      proposalVersion: 1,
+      vote: "object" as const,
+      accept: [],
+    };
+    expect(f.run({ ...objection, objection: "é".repeat(4097) }, f.beta)).toMatchObject(error("EXCHANGE_INVALID_INPUT"));
+    unwrap(f.run({ ...objection, objection: "Need a newer verified result" }, f.beta));
+    const revised = largeReport("revised-report");
+    expect(vote("stale-vote", 1, alpha)).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    const summary = "é".repeat(32_768);
+    expect(
+      unwrap(
+        propose("new-proposal", summary, [{ requestId: request.requestId, reportVersion: revised.reportVersion }]),
+      ),
+    ).toMatchObject({ proposalVersion: 2 });
+    unwrap(vote("approved-beta", 2, beta, f.beta));
+    const routine = unwrap(f.run(send(exchangeId, alpha, "routine")));
+    const ranges = [{ firstSeq: routine.seq, lastSeq: routine.seq }];
+    unwrap(f.run({ kind: "confirm-read", exchangeId, claim: alpha, ranges }));
+    const storedRanges = (installation: ReturnType<typeof fixture>) =>
+      installation.usingDb((db) =>
+        db.prepare("SELECT 1 FROM exchange_read_ranges WHERE exchange_id = ?").all(exchangeId),
+      );
+    expect(storedRanges(f)).toHaveLength(1);
+    const physical = f.usingDb((db) =>
+      db
+        .prepare(
+          `SELECT storage_key key FROM exchange_working_content c JOIN exchange_materials m ON c.id = m.content_id WHERE m.id = ?`,
+        )
+        .get(revised.materialId),
+    ) as { key: string };
+    const managed = join(f.home, "state", "exchange-working", physical.key);
+    writeFileSync(managed, "corrupt placeholder");
+    const finalVote = unwrap(vote("final", 2, alpha, f.alpha, revised.reportVersion));
+    expect(finalVote).toMatchObject({
+      state: "completed",
+      acceptanceSequences: [expect.any(Number)],
+      warnings: [{ code: "STORAGE_INTEGRITY_ERROR" }],
+    });
+    expect(storedRanges(f)).toEqual([]);
+    expect(readFileSync(managed, "utf8")).toBe("corrupt placeholder");
+    const retained = tree(f.home);
+    expect(unwrap(f.run({ kind: "join", exchangeId, confirmed: false }))).toMatchObject({
+      state: "completed",
+      cleanup: "failed",
+      final: { summary },
+    });
+    expect(
+      f.run({ kind: "material-read", exchangeId, materialId: revised.materialId, offset: 0, limit: 1 }),
+    ).toMatchObject({ ok: false, error: { details: { reason: "retired" } } });
+    expect(unwrap(vote("final", 2, alpha, f.alpha, revised.reportVersion))).toMatchObject({
+      replayed: true,
+      state: "completed",
+    });
+    expect(tree(f.home)).toEqual(retained);
+    expect(f.run({ kind: "cleanup", exchangeId }, f.other)).toMatchObject(error("FORBIDDEN_ACTOR"));
+    writeFileSync(managed, bytes);
+    expect(unwrap(f.run({ kind: "cleanup", exchangeId }))).toMatchObject({ cleanup: "complete" });
+    expect(existsSync(managed)).toBe(false);
+    expect(unwrap(f.run({ kind: "cleanup", exchangeId }))).toMatchObject({ cleanup: "complete", reclaimedStages: 0 });
+    unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+    const snapshotPath = join(f.vault, "snapshots", "exchanges.json");
+    const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
+    expect(snapshot.records[0].readRanges).toEqual([]);
+    // Earlier lifecycle backups may still contain valid read ranges for Completed Exchanges.
+    snapshot.records[0].readRanges = ranges.map((range) => ({ ...range, projectId: alphaId }));
+    snapshot.recordsSha256 = createHash("sha256").update(canonicalJson(snapshot.records)).digest("hex");
+    writeFileSync(snapshotPath, canonicalJson(snapshot));
+    const restored = fixture(false);
+    unwrap(
+      backupRestore(unwrap(createNodeBackupCommandPorts({ ...restored.setup, sourcePath: f.vault }).restorePorts()), {
+        dryRun: false,
+      }),
+    );
+    expect(storedRanges(restored)).toEqual([]);
+    bindRestored(restored);
+    expect(unwrap(restored.run({ kind: "join", exchangeId, confirmed: false }))).toMatchObject({
+      state: "completed",
+      final: { summary },
+    });
+    const final = snapshot.records[0].lifecycle.transitions.at(-1);
+    expect(final).toMatchObject({ transition: { kind: "vote", completed: true } });
+    // A freshly recomputed digest cannot legitimize stale observations at the final vote.
+    final.workRevision--;
+    snapshot.recordsSha256 = createHash("sha256").update(canonicalJson(snapshot.records)).digest("hex");
+    writeFileSync(snapshotPath, canonicalJson(snapshot));
+    expect(backupVerify(unwrap(f.ports.verifyPorts()), { now: new Date(now) })).toMatchObject(
+      error("VAULT_INTEGRITY_ERROR"),
+    );
+    const target = fixture(false);
+    const targetBefore = tree(target.home);
+    const restore = unwrap(createNodeBackupCommandPorts({ ...target.setup, sourcePath: f.vault }).restorePorts());
+    expect(backupRestore(restore, { dryRun: false })).toMatchObject(error("VAULT_INTEGRITY_ERROR"));
+    expect(tree(target.home)).toEqual(targetBefore);
+  });
+
+  it("keeps older approvals ineligible after retained material changes and refuses a forged work revision before import", () => {
+    const source = fixture();
+    const exchangeId = create(source);
+    const alpha = joinExchange(source, exchangeId);
+    const beta = joinExchange(source, exchangeId, source.beta);
+    const view = unwrap(source.run({ kind: "inspect", exchangeId }));
+    const identity = { exchangeId, replayOnly: false };
+    const first = unwrap(
+      source.run({
+        ...identity,
+        kind: "propose",
+        claim: alpha,
+        operationId: "original-proposal",
+        rosterVersion: view.rosterVersion ?? 0,
+        workRevision: view.workRevision ?? 0,
+        criterion: view.criteria,
+        summary: "Review agreed by both Projects",
+        report: [],
+        disposition: [],
+      }),
+    );
+    const approve = {
+      ...identity,
+      kind: "vote" as const,
+      vote: "approve" as const,
+      accept: [],
+      proposalVersion: first.kind === "propose" ? first.proposalVersion : 0,
+    };
+    unwrap(source.run({ ...approve, claim: alpha, operationId: "approved-before-evidence" }));
+    for (const name of ["finding", "another-finding"]) {
+      unwrap(
+        source.run(
+          {
+            ...identity,
+            kind: "material-register",
+            claim: beta,
+            operationId: name,
+            material: { kind: "external", access: "run-id", value: name },
+          },
+          source.beta,
+        ),
+      );
+    }
+    expect(unwrap(source.run({ kind: "inspect", exchangeId }))).toMatchObject({
+      workRevision: (view.workRevision ?? 0) + 2,
+      proposal: null,
+      votes: [],
+    });
+    expect(source.run({ ...approve, claim: beta, operationId: "late-approval" }, source.beta)).toMatchObject(
+      error("ROW_VERSION_CONFLICT"),
+    );
+    unwrap(exportSnapshot(unwrap(source.ports.exportPorts())));
+
+    const restoreFromSource = (target: ReturnType<typeof fixture>) =>
+      unwrap(createNodeBackupCommandPorts({ ...target.setup, sourcePath: source.vault }).restorePorts());
+    const restored = fixture(false);
+    unwrap(backupRestore(restoreFromSource(restored), { dryRun: false }));
+    bindRestored(restored);
+    const restoredClaim = joinExchange(restored, exchangeId, restored.beta);
+    const restoredBefore = tree(restored.home);
+    expect(
+      restored.run({ ...approve, claim: restoredClaim, operationId: "late-approval" }, restored.beta),
+    ).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    expect(tree(restored.home)).toEqual(restoredBefore);
+
+    const path = join(source.vault, "snapshots", "exchanges.json");
+    const snapshot = JSON.parse(readFileSync(path, "utf8"));
+    const registrations = (frame: typeof snapshot) =>
+      frame.records[0].collaboration.operations.filter(
+        (row: { outcome: { kind: string } }) => row.outcome.kind === "material-register",
+      );
+    expect(registrations(snapshot)).toMatchObject([{ registrationAfterSeq: 2 }, { registrationAfterSeq: 2 }]);
+    const discovery = unwrap(source.run({ kind: "recover", exchangeId }, source.beta));
+    expect(discovery.operations).toHaveLength(2);
+    expect(discovery.operations.every(({ outcome }) => !Object.hasOwn(outcome, "registrationAfterSeq"))).toBe(true);
+    const empty = fixture(false);
+    const populated = fixture();
+    create(populated, "preserved-target");
+    const targets = [empty, populated].map((target) => ({ target, before: tree(target.home) }));
+    const refused = error("VAULT_INTEGRITY_ERROR");
+    const defects = [
+      (frame: typeof snapshot) => {
+        frame.records[0].lifecycle.workRevision = view.workRevision;
+      },
+      (frame: typeof snapshot) => {
+        delete registrations(frame)[0].registrationAfterSeq;
+      },
+      (frame: typeof snapshot) => {
+        registrations(frame)[0].registrationAfterSeq = 1;
+      },
+      (frame: typeof snapshot) => {
+        registrations(frame)[0].registrationAfterSeq = 3;
+      },
+    ];
+    for (const damage of defects) {
+      const frame = structuredClone(snapshot);
+      damage(frame);
+      frame.recordsSha256 = createHash("sha256").update(canonicalJson(frame.records)).digest("hex");
+      writeFileSync(path, canonicalJson(frame));
+      const result = {
+        verify: backupVerify(unwrap(source.ports.verifyPorts()), { now: new Date(now) }),
+        dryRestore: targets.map(({ target }) => backupRestore(restoreFromSource(target), { dryRun: true })),
+        confirmedRestore: targets.map(({ target }) => backupRestore(restoreFromSource(target), { dryRun: false })),
+      };
+      expect(result).toMatchObject({
+        verify: refused,
+        dryRestore: [refused, refused],
+        confirmedRestore: [refused, refused],
+      });
+      for (const { target, before } of targets) expect(tree(target.home)).toEqual(before);
+    }
+  });
+
+  it.each(["standalone", "bundled"] as const)(
+    "reconstructs %s grouped acceptance once and preserves approvals only for already-covered reports",
+    (kind) => {
+      const f = fixture();
+      const exchangeId = create(f);
+      const alpha = joinExchange(f, exchangeId);
+      const beta = joinExchange(f, exchangeId, f.beta);
+      const identity = { exchangeId, replayOnly: false };
+      const state = () => unwrap(f.run({ kind: "inspect", exchangeId }));
+      const reports = ["A", "B", "C", "D", "E"].map((name) => {
+        const request = unwrap(
+          f.run({
+            ...identity,
+            claim: alpha,
+            kind: "request",
+            operationId: `request-${name}`,
+            assignee: "beta",
+            condition: `Verify ${name}`,
+            criteria: ["exact"],
+          }),
+        );
+        const report = unwrap(
+          f.run(
+            {
+              ...identity,
+              claim: beta,
+              kind: "report",
+              operationId: `report-${name}`,
+              requestId: request.requestId,
+              assignmentVersion: 1,
+              evidence: [],
+              accept: [],
+              body: { text: `Verified ${name}` },
+            },
+            f.beta,
+          ),
+        );
+        return { requestId: report.requestId, reportVersion: report.reportVersion };
+      });
+      const propose = (operationId: string, coverage: typeof reports) => {
+        const head = state();
+        const result = unwrap(
+          f.run({
+            ...identity,
+            claim: alpha,
+            kind: "propose",
+            operationId,
+            rosterVersion: head.rosterVersion ?? 0,
+            workRevision: head.workRevision ?? 0,
+            criterion: head.criteria,
+            summary: "Verified report versions",
+            report: coverage,
+            disposition: [],
+          }),
+        );
+        if (result.kind !== "propose") throw new Error("Expected an Exchange proposal outcome.");
+        return result.proposalVersion;
+      };
+      const vote = (claim: string, proposalVersion: number, operationId: string, cwd = f.alpha) =>
+        f.run({ ...identity, claim, kind: "vote", proposalVersion, vote: "approve", operationId, accept: [] }, cwd);
+      const baseRevision = state().workRevision ?? 0;
+      expect(baseRevision).toBe(11);
+      const old = propose("original", reports.slice(0, 3));
+      unwrap(vote(beta, old, "first-vote", f.beta));
+      unwrap(
+        f.run({ ...identity, claim: alpha, kind: "accept", operationId: "covered-group", accept: reports.slice(0, 2) }),
+      );
+      expect(state()).toMatchObject({ workRevision: baseRevision, votes: [{ projectId: betaId, vote: "approve" }] });
+      if (kind === "bundled")
+        unwrap(f.run({ ...send(exchangeId, alpha, "noncovered-group"), accept: reports.slice(2) }));
+      else
+        unwrap(
+          f.run({
+            ...identity,
+            claim: alpha,
+            kind: "accept",
+            operationId: "noncovered-group",
+            accept: reports.slice(2),
+          }),
+        );
+      expect(state()).toMatchObject({ workRevision: baseRevision + 1, proposal: null, votes: [] });
+      expect(vote(alpha, old, "older-approval")).toMatchObject(error("ROW_VERSION_CONFLICT"));
+      const next = propose("revised", reports);
+      unwrap(vote(beta, next, "revised-first-vote", f.beta));
+      expect(unwrap(vote(alpha, next, "final-vote"))).toMatchObject({ state: "completed" });
+      unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+      const restored = fixture(false);
+      const restore = unwrap(createNodeBackupCommandPorts({ ...restored.setup, sourcePath: f.vault }).restorePorts());
+      unwrap(backupRestore(restore, { dryRun: false }));
+      bindRestored(restored);
+      expect(unwrap(restored.run({ kind: "inspect", exchangeId }))).toMatchObject({
+        state: "completed",
+        workRevision: baseRevision + 1,
+        final: { version: next },
+        acceptances: expect.arrayContaining(reports.map((report) => expect.objectContaining(report))),
+      });
+    },
+  );
+
+  it("imports predecessor collaboration receipts into a reproducible pre-proposal work baseline", () => {
+    const { f, exchangeId, alphaClaim, acceptInput } = collaborationFixture();
+    unwrap(f.run({ ...send(exchangeId, alphaClaim, "legacy-group"), accept: acceptInput.accept }));
+    const live = unwrap(f.run({ kind: "inspect", exchangeId }));
+    expect(live).toMatchObject({ workRevision: 5, proposal: null });
+    unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+    const path = join(f.vault, "snapshots", "exchanges.json");
+    const frame = JSON.parse(readFileSync(path, "utf8"));
+    frame.representation = "collaboration";
+    delete frame.records[0].lifecycle;
+    for (const row of frame.records[0].collaboration.operations) delete row.registrationAfterSeq;
+    frame.recordsSha256 = createHash("sha256").update(canonicalJson(frame.records)).digest("hex");
+    writeFileSync(path, canonicalJson(frame));
+    const restored = fixture(false);
+    const restore = unwrap(createNodeBackupCommandPorts({ ...restored.setup, sourcePath: f.vault }).restorePorts());
+    unwrap(backupRestore(restore, { dryRun: false }));
+    bindRestored(restored);
+    expect(unwrap(restored.run({ kind: "inspect", exchangeId }))).toMatchObject({
+      workRevision: 5,
+      proposal: null,
+      lastSeq: live.lastSeq,
+      acceptances: live.acceptances,
+    });
+    unwrap(exportSnapshot(unwrap(restored.ports.exportPorts())));
+    const upgraded = JSON.parse(readFileSync(join(restored.vault, "snapshots", "exchanges.json"), "utf8"));
+    expect(upgraded).toMatchObject({
+      representation: "lifecycle",
+      records: [
+        {
+          lifecycle: { workRevision: 5, transitions: [] },
+          collaboration: {
+            operations: expect.arrayContaining([
+              expect.objectContaining({
+                registrationAfterSeq: 0,
+                outcome: { kind: "material-register", exchangeId, materialId: expect.any(String) },
+              }),
+            ]),
+          },
+        },
+      ],
+    });
+  });
+
   it("resolves one authoritative join pair across aliases and refuses changed binding before writing", () => {
     const f = fixture();
     const exchangeId = create(f);
@@ -314,6 +1164,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
     const exchangeId = create(f);
     const opened = unwrap(f.run({ kind: "join", exchangeId, confirmed: false }));
     const claim = opened.claimId;
+    if (claim === undefined || opened.expiresAt === undefined) throw new Error("Expected an Active lease");
     const stored = () => f.usingDb((db) => db.prepare("SELECT claim_id, expires_at FROM exchange_claims").all());
     const durable = () =>
       f.usingDb((db) =>
@@ -336,6 +1187,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
     const successor = unwrap(
       f.run({ kind: "join", exchangeId, confirmed: true, replaceClaim: String(live.error.details?.observedClaim) }),
     );
+    if (successor.claimId === undefined) throw new Error("Expected a replacement lease");
     for (const kind of ["renew", "release"] as const) {
       expect(f.run({ kind, exchangeId, claim })).toMatchObject(error("EXCHANGE_CLAIM_CONFLICT"));
     }
@@ -358,6 +1210,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
     }
     expect(stored()).toEqual([{ claim_id: successor.claimId, expires_at: successor.expiresAt }]);
     const reclaimed = unwrap(f.run({ kind: "join", exchangeId, confirmed: false }));
+    if (reclaimed.claimId === undefined) throw new Error("Expected the reclaimed lease");
     expect(unwrap(f.run({ kind: "release", exchangeId, claim: reclaimed.claimId }))).toEqual({
       exchangeId,
       projectId: alphaId,
@@ -413,9 +1266,32 @@ describe("Exchange SQLite and working storage through the application entrypoint
       error("EXCHANGE_INVALID_INPUT"),
     );
     expect(tree(f.home)).toEqual(before);
-    // TASK-143 owns the durable membership transition. Exercise the projection on an existing row.
-    f.usingDb((db) =>
-      db.prepare("DELETE FROM exchange_members WHERE exchange_id = ? AND project_id = ?").run(exchangeId, otherId),
+    unwrap(
+      f.run({
+        kind: "roster",
+        exchangeId,
+        rosterVersion: 1,
+        add: [],
+        remove: [otherId],
+        reason: "Remove the peer",
+        confirmed: true,
+        operationId: "remove",
+        replayOnly: false,
+      }),
+    );
+    expect(wait(undefined, f.other)).toMatchObject(error("FORBIDDEN_ACTOR"));
+    unwrap(
+      f.run({
+        kind: "roster",
+        exchangeId,
+        rosterVersion: 2,
+        add: [otherId],
+        remove: [],
+        reason: "Add the same peer",
+        confirmed: true,
+        operationId: "readd",
+        replayOnly: false,
+      }),
     );
     const afterMembership = tree(f.home);
     const afterTransition = unwrap(f.run({ kind: "history", exchangeId, cursor: history.cursor, limit: 1 }, f.beta));
@@ -423,7 +1299,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
     const changed = unwrap(wait(afterTransition.cursor));
     expect(changed).toMatchObject({ messages: [{ seq: broadcast.seq }], stateChanged: true, timedOut: false });
     expect(unwrap(wait(changed.cursor))).toMatchObject({ messages: [], stateChanged: false, timedOut: true });
-    expect(wait(undefined, f.other)).toMatchObject(error("FORBIDDEN_ACTOR"));
+    expect(unwrap(f.run({ kind: "inspect", exchangeId }, f.other)).members).toContain(otherId);
     expect(tree(f.home)).toEqual(afterMembership);
   });
 
@@ -1264,7 +2140,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
       writeFileSync(config, initial.replace(/redactWorkspacePaths: (true|false)/, `redactWorkspacePaths: ${redact}`));
       unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
       const raw = readFileSync(join(f.vault, "snapshots", "exchanges.json"), "utf8");
-      expect(JSON.parse(raw).representation).toBe("collaboration");
+      expect(JSON.parse(raw).representation).toBe("lifecycle");
       expect(raw.includes("evidence.txt")).toBe(!redact);
       expect(raw.includes(f.alpha)).toBe(!redact);
       expect(raw).not.toContain("PRIVATE_PAYLOAD_ONLY_IN_WORKING_STATE");
@@ -1501,7 +2377,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
             now,
           );
           for (const member of [alphaId, betaId])
-            db.prepare("INSERT INTO exchange_members VALUES (?,?)").run(exchangeId, member);
+            db.prepare("INSERT INTO exchange_members (exchange_id,project_id) VALUES (?,?)").run(exchangeId, member);
           seedProgress(db, exchangeId);
         } finally {
           db.close();

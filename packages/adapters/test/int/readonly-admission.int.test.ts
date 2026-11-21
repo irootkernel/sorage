@@ -232,7 +232,7 @@ describe("readonly admission before operational SQLite settings", () => {
     // rebuild over the orphan-WAL database, not merely that it succeeded.
     const upgraded = nativeOutcome(database);
     expect(upgraded.alreadyUpToDate).toBe(false);
-    expect(upgraded.appliedVersions).toEqual([8, 9, 10, 11, 12, 13, 14]);
+    expect(upgraded.appliedVersions).toEqual([8, 9, 10, 11, 12, 13, 14, 15]);
     const plan = productionMigrationPlan();
     const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
@@ -267,7 +267,7 @@ describe("readonly admission before operational SQLite settings", () => {
     const plan = productionMigrationPlan();
     const result = openAndMigrate(database, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+      expect(result.outcome.appliedVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
       expect(result.db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
     } finally {
       result.db.close();

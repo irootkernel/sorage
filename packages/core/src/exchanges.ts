@@ -1,6 +1,14 @@
 import { canonicalJson } from "./backup-snapshot";
 import { isUtf8ExactText, sha256OfText, utf8ByteLength } from "./content";
 import { appError, err, type ErrorCode, type Result, ok } from "./errors";
+import type {
+  ExchangeControlInput,
+  ExchangeControlOutcome,
+  ExchangePause,
+  ExchangeProposal,
+  ExchangeRequestOwnership,
+  ExchangeState,
+} from "./exchange-lifecycle";
 import { isMemoUuid } from "./memos";
 
 export const EXCHANGE_LEASE_SECONDS = 40;
@@ -89,12 +97,19 @@ export type ExchangeReadInput =
   | { kind: "recover"; exchangeId?: string | undefined; operationId?: string | undefined };
 
 export type ExchangeLifecycleInput =
-  | { kind: "join"; exchangeId: string; replaceClaim?: string | undefined; confirmed: boolean }
+  | {
+      kind: "join";
+      exchangeId: string;
+      replaceClaim?: string | undefined;
+      confirmed: boolean;
+      resume?: Extract<ExchangeControlInput, { kind: "resume" }>;
+    }
   | { kind: "renew"; exchangeId: string; claim: string }
   | { kind: "release"; exchangeId: string; claim: string }
+  | { kind: "cleanup"; exchangeId: string }
   | { kind: "confirm-read"; exchangeId: string; claim: string | undefined; ranges: ExchangeRange[] };
 
-export type ExchangeInput = ExchangeBusinessInput | ExchangeReadInput | ExchangeLifecycleInput;
+export type ExchangeInput = ExchangeBusinessInput | ExchangeReadInput | ExchangeLifecycleInput | ExchangeControlInput;
 
 export type ExchangeOutcome =
   | { kind: "create"; exchangeId: string }
@@ -102,7 +117,8 @@ export type ExchangeOutcome =
   | { kind: "request"; exchangeId: string; seq: number; requestId: string; assignmentVersion: number }
   | { kind: "report"; exchangeId: string; seq: number; requestId: string; reportVersion: number; materialId: string }
   | { kind: "accept"; exchangeId: string; sequences: number[] }
-  | { kind: "material-register"; exchangeId: string; materialId: string };
+  | { kind: "material-register"; exchangeId: string; materialId: string }
+  | ExchangeControlOutcome;
 
 export interface ExchangeMessage {
   seq: number;
@@ -123,6 +139,7 @@ export interface ExchangeRequest {
   assignmentVersion: number;
   condition: string;
   criteria: string[];
+  ownership?: ExchangeRequestOwnership;
 }
 
 export interface ExchangeReport {
@@ -141,7 +158,7 @@ export interface ExchangeAcceptance extends ExchangeAcceptanceInput {
 
 export interface ExchangeAcceptanceReceipt {
   operationId: string;
-  kind: "accept" | "send" | "report";
+  kind: "accept" | "send" | "report" | "vote";
 }
 
 export interface RetainedExchangeAcceptance extends ExchangeAcceptance {
@@ -174,6 +191,8 @@ export interface RetainedExchangeOperation {
   operationId: string;
   fingerprint: string;
   outcome: Exclude<ExchangeOutcome, { kind: "create" }>;
+  /** Private portable ordering for material registrations, which do not publish a message sequence. */
+  registrationAfterSeq?: number;
 }
 
 export interface ExchangeCollaboration {
@@ -186,7 +205,7 @@ export interface ExchangeCollaboration {
   operations: RetainedExchangeOperation[];
 }
 
-export type ExchangeMaterialAvailability = "available" | "pending" | "omitted" | "unavailable";
+export type ExchangeMaterialAvailability = "available" | "pending" | "omitted" | "retired" | "unavailable";
 
 export interface ExchangeActivationWarning {
   code: ErrorCode;
@@ -194,7 +213,10 @@ export interface ExchangeActivationWarning {
   recovery: { suggestedCommand: string };
 }
 
-export type ExchangeBusinessResult = ExchangeOutcome & {
+export type ExchangeBusinessResult = (
+  | Exclude<ExchangeOutcome, { kind: "resume" }>
+  | (Extract<ExchangeOutcome, { kind: "resume" }> & { decision: string | null })
+) & {
   replayed: boolean;
   availability?: ExchangeMaterialAvailability;
 };
@@ -202,7 +224,7 @@ export type ExchangeBusinessResult = ExchangeOutcome & {
 export interface ExchangeRequestView extends ExchangeRequest {
   report: ExchangeReport | null;
   acceptance: ExchangeAcceptance | null;
-  state: "in-progress" | "completion-reported" | "resolved";
+  state: "in-progress" | "completion-reported" | "resolved" | "disposed";
 }
 
 export interface ExchangeView {
@@ -213,7 +235,15 @@ export interface ExchangeView {
   criteria: string[];
   lastSeq: number;
   createdAt: string;
-  state: "active";
+  state: ExchangeState;
+  rosterVersion?: number;
+  workRevision?: number;
+  pauseVersion?: number;
+  pause?: ExchangePause | null;
+  proposal?: ExchangeProposal | null;
+  final?: ExchangeProposal | null;
+  votes?: { projectId: string; vote: "approve" | "object"; objection: string | null }[];
+  cleanup?: "pending" | "complete" | "failed";
   members: string[];
   requests: ExchangeRequestView[];
   reports: ExchangeReport[];
@@ -289,10 +319,17 @@ export type ExchangeActionData = (
   | ExchangeExternalReference
   | ExchangeRecovery
   | ExchangeReadConfirmation
+  | ExchangeCleanupResult
 ) & { warnings?: ExchangeActivationWarning[] };
 
+export interface ExchangeCleanupResult {
+  exchangeId: string;
+  cleanup: "not-completed" | "pending" | "complete" | "failed";
+  reclaimedStages: number;
+}
+
 type ExchangeOtherResults = {
-  join: ExchangeView & ExchangeClaim;
+  join: ExchangeView & Partial<ExchangeClaim> & { replayed?: boolean };
   inspect: ExchangeView;
   history: ExchangeHistoryPage;
   wait: ExchangeWaitResult;
@@ -301,11 +338,14 @@ type ExchangeOtherResults = {
   "material-read": ExchangeMaterialPage | ExchangeExternalReference;
   recover: ExchangeRecovery;
   "confirm-read": ExchangeReadConfirmation;
+  cleanup: ExchangeCleanupResult;
 };
 
 export type ExchangeActionFor<Kind extends ExchangeInput["kind"]> = (Kind extends keyof ExchangeOtherResults
   ? ExchangeOtherResults[Kind]
-  : Extract<ExchangeBusinessResult, { kind: Kind }>) & { warnings?: ExchangeActivationWarning[] };
+  : Kind extends ExchangeControlInput["kind"]
+    ? ExchangeControlOutcome & { replayed: boolean }
+    : Extract<ExchangeBusinessResult, { kind: Kind }>) & { warnings?: ExchangeActivationWarning[] };
 
 export interface ExchangeReadDecision {
   data?: ExchangeActionData;
@@ -314,7 +354,10 @@ export interface ExchangeReadDecision {
 
 export interface ExchangeCommandPorts {
   inspect(input: ExchangeInput): Result<ExchangeReadDecision>;
-  executeFresh(input: ExchangeBusinessInput | ExchangeLifecycleInput, fingerprint?: string): Result<ExchangeActionData>;
+  executeFresh(
+    input: ExchangeBusinessInput | ExchangeLifecycleInput | ExchangeControlInput,
+    fingerprint?: string,
+  ): Result<ExchangeActionData>;
 }
 
 export function isExchangeRead(input: ExchangeInput): input is ExchangeReadInput {
@@ -328,7 +371,18 @@ export function isExchangeRead(input: ExchangeInput): input is ExchangeReadInput
 }
 
 export function isExchangeBusiness(input: ExchangeInput): input is ExchangeBusinessInput {
-  return "replayOnly" in input;
+  return (
+    input.kind === "create" ||
+    input.kind === "send" ||
+    input.kind === "report" ||
+    input.kind === "request" ||
+    input.kind === "accept" ||
+    input.kind === "material-register"
+  );
+}
+
+export function isExchangeControl(input: ExchangeInput): input is ExchangeControlInput {
+  return "replayOnly" in input && !isExchangeBusiness(input);
 }
 
 /** A composed command must inspect coherent current authority and receipts before opening a writer. */
@@ -340,7 +394,11 @@ export function runExchangeCommand(ports: ExchangeCommandPorts, input: ExchangeI
     return err(exchangeInvalid("Supply a bounded operation ID."));
   }
   const inspected = ports.inspect(input);
-  if (isExchangeRead(input) || (isExchangeBusiness(input) && input.replayOnly)) {
+  if (
+    isExchangeRead(input) ||
+    ("replayOnly" in input && input.replayOnly) ||
+    (input.kind === "join" && input.resume?.replayOnly)
+  ) {
     if (!inspected.ok) return inspected;
     return inspected.value.data === undefined
       ? err(appError("INTERNAL_ERROR", "The Exchange read returned no outcome."))
@@ -395,8 +453,12 @@ export function requireExchangeReport(
   actorId: string,
   assignmentVersion: number,
 ): Result<void> {
-  if (request.assigneeId !== actorId) return err(exchangeAccessDenied());
-  return request.assignmentVersion === assignmentVersion
+  if (
+    (request.ownership ? request.ownership.assignedProjectId : request.assigneeId) !== actorId ||
+    request.ownership?.disposition
+  )
+    return err(exchangeAccessDenied());
+  return (request.ownership?.assignmentVersion ?? request.assignmentVersion) === assignmentVersion
     ? ok(undefined)
     : err(appError("ROW_VERSION_CONFLICT", "The request assignment version changed."));
 }
@@ -408,7 +470,11 @@ export function requireExchangeAcceptance(
   currentVersion: number,
   alreadyAccepted: boolean,
 ): Result<void> {
-  if (request.requesterId !== actorId) return err(exchangeAccessDenied());
+  if (
+    (request.ownership ? request.ownership.acceptanceOwnerId : request.requesterId) !== actorId ||
+    request.ownership?.disposition
+  )
+    return err(exchangeAccessDenied());
   if (observedVersion !== currentVersion) {
     return err(appError("ROW_VERSION_CONFLICT", "The named report version is no longer current."));
   }

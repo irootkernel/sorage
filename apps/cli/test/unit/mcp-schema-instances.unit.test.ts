@@ -343,6 +343,13 @@ function sampleWith(toolName: string, property: string, value: number): Record<s
   if (toolName === "channel_post" && property !== "body" && property !== "bodyFile") instance.body = "b";
   if (toolName === "exchange_send" || toolName === "exchange_report") instance.body = "b";
   if (toolName === "exchange_request") instance.criterion = ["criterion"];
+  if (toolName === "exchange_join" && property === "pauseVersion")
+    Object.assign(instance, { confirm: true, operationId: "resume" });
+  if (toolName === "exchange_roster") instance.add = ["beta"];
+  if (toolName === "exchange_owner_correct") instance.assignee = "beta";
+  if (toolName === "exchange_request_disposition") instance.disposition = "cancel";
+  if (toolName === "exchange_propose") instance.criterion = ["criterion"];
+  if (toolName === "exchange_vote") instance.vote = "approve";
   if (toolName === "exchange_material_register") {
     instance.kind = "copy";
     instance.source = "confined.txt";

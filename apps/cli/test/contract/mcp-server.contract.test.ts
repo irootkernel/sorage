@@ -363,7 +363,7 @@ describe("the catalogue golden (MCP-005)", () => {
       result: { tools: Array<Record<string, unknown>> };
     };
     await session.close();
-    expect(listing.result.tools).toHaveLength(48);
+    expect(listing.result.tools).toHaveLength(56);
     expect(listing.result.tools.map((tool) => tool.name as string)).not.toContain("init");
     const rendered = `${JSON.stringify({ initializeResult: initialize.result, toolsResult: listing.result }, null, 2)}\n`;
     if (process.env.SORAGE_TEST_REGEN_MCP_GOLDEN === "1") {
@@ -669,6 +669,202 @@ describe("accepted calls through real children (MCP-002, MCP-006)", () => {
       if (!literalReplay) throw new Error("Expected the exact file replay envelope");
       expect(literalReplay.isError).toBe(false);
       expect(envelopeText(literalReplay)).toBe(directReplay.stdout);
+    } finally {
+      await session.close();
+    }
+  }, 20_000);
+
+  it("matches lifecycle replays and refusals through MCP and admits revalidation sources before launching a tool child", async () => {
+    const { home, workA, workB } = installation("sorage-mcp-exchange-lifecycle-");
+    const requestId = "2f0ac9a0-0000-4000-8000-0000000000bc";
+    const environment = { SORAGE_TEST_REQUEST_ID: requestId };
+    const launches = join(home, "revalidation-launches");
+    const preload = join(home, "observe-revalidation.ts");
+    writeFileSync(
+      preload,
+      `
+      import { ChildProcess } from "node:child_process";
+      import { appendFileSync } from "node:fs";
+      const emit = ChildProcess.prototype.emit;
+      ChildProcess.prototype.emit = function (event, ...args) {
+        if (event === "spawn" && this.spawnargs.includes("material-revalidate"))
+          appendFileSync(${JSON.stringify(launches)}, "spawn\\n");
+        return emit.call(this, event, ...args);
+      };
+    `,
+    );
+    const session = startServer(home, workA, environment, preload);
+    const mcp = async (name: string, args: Record<string, unknown>) => {
+      const result = (await toolCall(session, `exchange_${name}`, { cwd: workA, ...args })).result;
+      if (!result) throw new Error(`No tool result for ${name}`);
+      expect(JSON.parse(envelopeText(result))).toEqual(result.structuredContent);
+      return result;
+    };
+    const success = async (name: string, args: Record<string, unknown>) => {
+      const result = await mcp(name, args);
+      expect(result.isError, name).toBe(false);
+      return result.structuredContent.data as Record<string, unknown>;
+    };
+    const cli = (args: string[]) => runCli(["exchange", ...args, "--json"], home, workA, environment);
+    try {
+      const created = await success("create", {
+        member: ["beta"],
+        goal: "Read the original",
+        criterion: ["Verify the bytes"],
+        operationId: "create",
+      });
+      const exchangeId = String(created.exchangeId);
+      const pair = { exchangeId };
+      const joined = await success("join", pair);
+      const claim = { ...pair, claim: joined.claimId };
+      writeFileSync(join(workA, "inside.txt"), "The confined original");
+      const outside = join(workB, "outside.txt");
+      writeFileSync(outside, "The separate Project's fixture");
+      const registered = await success("material_register", {
+        ...claim,
+        operationId: "source",
+        kind: "live",
+        source: "inside.txt",
+      });
+      const request = await success("request", {
+        ...claim,
+        operationId: "request",
+        assignee: "beta",
+        condition: "Observe the source",
+        criterion: ["Read it"],
+      });
+      const pause = await success("pause", {
+        ...claim,
+        operationId: "pause",
+        reason: "Await confirmation",
+        question: "Continue verification?",
+      });
+      const pauseVersion = Number(pause.pauseVersion);
+      const roster = await success("roster", {
+        ...pair,
+        pauseVersion,
+        rosterVersion: 1,
+        remove: ["beta"],
+        operationId: "roster",
+        confirm: true,
+        reason: "Redirect verification",
+      });
+      const owner = {
+        ...pair,
+        pauseVersion,
+        request: request.requestId,
+        ownershipVersion: 2,
+        rosterVersion: roster.rosterVersion,
+        assignee: "alpha",
+        operationId: "owner",
+        confirm: true,
+        reason: "Fill the vacancy",
+      };
+      const ownerCli = [
+        "owner-correct",
+        exchangeId,
+        "--pause-version",
+        String(pauseVersion),
+        "--request",
+        String(request.requestId),
+        "--roster-version",
+        String(roster.rosterVersion),
+        "--assignee",
+        "alpha",
+        "--operation-id",
+        "owner",
+        "--confirm",
+        "--reason",
+        owner.reason,
+        "--ownership-version",
+      ];
+      const stale = await mcp("owner_correct", { ...owner, ownershipVersion: 1 });
+      const directStale = cli([...ownerCli, "1"]);
+      expect(directStale.status).toBe(75);
+      expect(stale.isError).toBe(true);
+      expect(envelopeText(stale)).toBe(directStale.stderr);
+      const occupied = await mcp("owner_correct", { ...owner, acceptanceOwner: "alpha" });
+      const directOccupied = cli([...ownerCli, "2", "--acceptance-owner", "alpha"]);
+      expect(directOccupied.status).toBe(64);
+      expect(occupied.isError).toBe(true);
+      expect(occupied.structuredContent).toMatchObject({
+        ok: false,
+        error: {
+          code: "EXCHANGE_INVALID_INPUT",
+          message: "Name a current Project for each vacant owner or assignee field being corrected.",
+          details: {},
+        },
+      });
+      expect(envelopeText(occupied)).toBe(directOccupied.stderr);
+      await success("owner_correct", owner);
+      const corrected = await mcp("owner_correct", { ...owner, replayOnly: true });
+      const directCorrection = cli([...ownerCli, "2", "--replay-only"]);
+      expect(directCorrection.status).toBe(0);
+      expect(corrected.isError).toBe(false);
+      expect(envelopeText(corrected)).toBe(directCorrection.stdout);
+
+      const resume = {
+        ...pair,
+        operationId: "resume",
+        pauseVersion,
+        confirm: true,
+        decision: "Proceed with the original",
+      };
+      const reopened = await success("join", resume);
+      const replay = await mcp("join", { ...resume, replayOnly: true });
+      const directResume = cli([
+        "join",
+        exchangeId,
+        "--operation-id",
+        "resume",
+        "--pause-version",
+        String(pauseVersion),
+        "--confirm",
+        "--decision",
+        resume.decision,
+        "--replay-only",
+      ]);
+      expect(directResume.status).toBe(0);
+      expect(replay.isError).toBe(false);
+      expect(envelopeText(replay)).toBe(directResume.stdout);
+      expect(replay.structuredContent.data).toMatchObject({ decision: resume.decision, replayed: true });
+      expect(replay.structuredContent.data).not.toHaveProperty("claimId");
+
+      const revalidate = {
+        ...pair,
+        materialId: registered.materialId,
+        claim: reopened.claimId,
+        operationId: "recheck",
+      };
+      const refused = await mcp("material_revalidate", { ...revalidate, source: outside });
+      expect(refused.isError).toBe(true);
+      expect(refused.structuredContent.error).toMatchObject({
+        code: "SOURCE_OUTSIDE_WORKSPACE",
+        details: { resolvedSourcePath: outside, workspaceRoot: workA, policy: "mcp-workspace-only" },
+      });
+      expect(existsSync(launches)).toBe(false);
+      await success("material_revalidate", { ...revalidate, source: "inside.txt" });
+      expect(readFileSync(launches, "utf8")).toBe("spawn\n");
+      const directMaterial = cli([
+        "material-revalidate",
+        exchangeId,
+        String(registered.materialId),
+        "--operation-id",
+        "recheck",
+        "--source",
+        "inside.txt",
+        "--replay-only",
+      ]);
+      expect(directMaterial.status).toBe(0);
+      const material = await mcp("material_revalidate", {
+        ...pair,
+        materialId: registered.materialId,
+        operationId: "recheck",
+        source: "inside.txt",
+        replayOnly: true,
+      });
+      expect(material.isError).toBe(false);
+      expect(envelopeText(material)).toBe(directMaterial.stdout);
     } finally {
       await session.close();
     }

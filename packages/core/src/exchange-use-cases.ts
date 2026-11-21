@@ -56,6 +56,7 @@ export interface ExchangeBusinessRepository {
   hasMessage(exchangeId: string, seq: number): boolean;
   request(exchangeId: string, requestId: string): ExchangeRequest | undefined;
   latestReport(exchangeId: string, requestId: string): number;
+  currentReport?(exchangeId: string, requestId: string): number;
   isAccepted(exchangeId: string, requestId: string, reportVersion: number): boolean;
   hasMaterial(exchangeId: string, materialId: string): boolean;
   claim(exchangeId: string): ExchangeClaim | null;
@@ -112,7 +113,7 @@ function acceptedSet(choices: ExchangeAcceptanceInput[]): ExchangeAcceptanceInpu
   return [...choices].sort((a, b) => compare(a.requestId, b.requestId) || a.reportVersion - b.reportVersion);
 }
 
-function acceptReports(
+export function acceptExchangeReports(
   repository: ExchangeBusinessRepository,
   exchangeId: string,
   choices: ExchangeAcceptanceInput[],
@@ -125,7 +126,7 @@ function acceptReports(
       request,
       repository.actorId,
       choice.reportVersion,
-      repository.latestReport(exchangeId, choice.requestId),
+      repository.currentReport?.(exchangeId, choice.requestId) ?? repository.latestReport(exchangeId, choice.requestId),
       repository.isAccepted(exchangeId, choice.requestId, choice.reportVersion),
     );
     if (!allowed.ok) return allowed;
@@ -209,7 +210,10 @@ export function planExchangeBusiness(
           return invalid("The addressed Project is not an active member of this Exchange.");
         if (input.replyTo !== undefined && !repository.hasMessage(exchangeId, input.replyTo))
           return invalid("The reply must name an existing message on this Exchange.");
-        const accepted = acceptReports(repository, exchangeId, accept, { kind, operationId: input.operationId });
+        const accepted = acceptExchangeReports(repository, exchangeId, accept, {
+          kind,
+          operationId: input.operationId,
+        });
         if (!accepted.ok) return accepted;
         const materialId = addBody(repository, exchangeId, body);
         const seq = message(repository, exchangeId, input.messageKind, {
@@ -278,7 +282,7 @@ export function planExchangeBusiness(
         return invalid("A report evidence ID is outside this Exchange.");
       const reportVersion = repository.latestReport(exchangeId, requestId) + 1;
       if (!exchangeCount(reportVersion, 1)) return invalid("The report version is exhausted.");
-      const accepted = acceptReports(repository, exchangeId, accept, { kind, operationId: input.operationId });
+      const accepted = acceptExchangeReports(repository, exchangeId, accept, { kind, operationId: input.operationId });
       if (!accepted.ok) return accepted;
       const materialId = addBody(repository, exchangeId, body);
       repository.addReport(exchangeId, {
@@ -290,7 +294,7 @@ export function planExchangeBusiness(
         evidence,
       });
       const seq = message(repository, exchangeId, kind, {
-        recipientId: request.requesterId,
+        recipientId: request.ownership ? request.ownership.acceptanceOwnerId : request.requesterId,
         materialId,
         requestId,
         reportVersion,
@@ -303,7 +307,7 @@ export function planExchangeBusiness(
       return invalid("Name at least one exact request and report version.");
     const accept = acceptedSet(input.accept);
     return plan({ kind, accept }, () => {
-      const accepted = acceptReports(repository, exchangeId, accept, { kind, operationId: input.operationId });
+      const accepted = acceptExchangeReports(repository, exchangeId, accept, { kind, operationId: input.operationId });
       return accepted.ok ? ok({ kind, exchangeId, sequences: accepted.value }) : accepted;
     });
   }
@@ -364,7 +368,11 @@ export function exchangeView(
     state: "active",
     members,
     requests: requests.map((request) => {
-      const report = latest.get(request.id) ?? null;
+      const latestReport = latest.get(request.id) ?? null;
+      const report =
+        latestReport?.assignmentVersion === (request.ownership?.assignmentVersion ?? request.assignmentVersion)
+          ? latestReport
+          : null;
       const acceptance = report
         ? (acceptances.find((row) => row.requestId === request.id && row.reportVersion === report.version) ?? null)
         : null;
@@ -372,7 +380,13 @@ export function exchangeView(
         ...request,
         report,
         acceptance,
-        state: acceptance ? "resolved" : report ? "completion-reported" : "in-progress",
+        state: request.ownership?.disposition
+          ? "disposed"
+          : acceptance
+            ? "resolved"
+            : report
+              ? "completion-reported"
+              : "in-progress",
       };
     }),
     reports,

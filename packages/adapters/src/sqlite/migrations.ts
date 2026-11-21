@@ -1010,6 +1010,72 @@ CREATE TABLE exchange_operation_outcomes (
 `,
 };
 
+// Earlier schemas had no proposals. All historical acceptance operations affected work.
+export const LEGACY_EXCHANGE_WORK_REVISION = `1 + (
+  SELECT count(*) FROM exchange_operation_outcomes o WHERE o.exchange_id = exchanges.id AND (
+    json_extract(o.outcome_json, '$.kind') IN ('request', 'report', 'accept', 'material-register') OR
+    (json_extract(o.outcome_json, '$.kind') = 'send' AND EXISTS (
+      SELECT 1 FROM exchange_acceptances a WHERE a.exchange_id = o.exchange_id AND a.requester_id = o.project_id
+        AND a.receipt_operation_id = o.operation_id AND a.receipt_kind = 'send'
+    ))
+  )
+)`;
+
+export const EXCHANGE_LIFECYCLE_MIGRATION: Migration = {
+  version: 15,
+  name: "exchange-lifecycle",
+  sql: `
+ALTER TABLE exchanges ADD COLUMN work_revision INTEGER NOT NULL DEFAULT 1 CHECK (work_revision >= 1);
+ALTER TABLE exchange_operation_outcomes ADD COLUMN registration_after_seq INTEGER
+  CHECK (registration_after_seq IS NULL OR registration_after_seq >= 0);
+UPDATE exchange_operation_outcomes SET registration_after_seq = 0 WHERE json_extract(outcome_json, '$.kind') = 'material-register';
+UPDATE exchanges SET work_revision = ${LEGACY_EXCHANGE_WORK_REVISION};
+ALTER TABLE exchange_members ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1));
+ALTER TABLE exchange_members ADD COLUMN initial INTEGER NOT NULL DEFAULT 1 CHECK (initial IN (0, 1));
+ALTER TABLE exchange_materials ADD COLUMN retired INTEGER NOT NULL DEFAULT 0 CHECK (retired IN (0, 1));
+
+CREATE TABLE exchange_transitions (
+  exchange_id TEXT NOT NULL REFERENCES exchanges(id),
+  seq INTEGER NOT NULL CHECK (seq > 0),
+  work_revision INTEGER NOT NULL CHECK (work_revision >= 1),
+  actor_id TEXT NOT NULL REFERENCES projects(id),
+  operation_id TEXT NOT NULL CHECK (length(operation_id) > 0),
+  transition_json TEXT NOT NULL CHECK (json_valid(transition_json) AND json_type(transition_json) = 'object'),
+  PRIMARY KEY (exchange_id, seq),
+  UNIQUE (exchange_id, actor_id, operation_id),
+  FOREIGN KEY (exchange_id, actor_id, operation_id)
+    REFERENCES exchange_operation_outcomes(exchange_id, project_id, operation_id) DEFERRABLE INITIALLY DEFERRED
+);
+CREATE TABLE exchange_cleanup_intents (
+  exchange_id TEXT PRIMARY KEY REFERENCES exchanges(id),
+  failure INTEGER NOT NULL DEFAULT 0 CHECK (failure IN (0, 1))
+);
+CREATE TABLE exchange_cleanup_items (
+  exchange_id TEXT NOT NULL REFERENCES exchange_cleanup_intents(exchange_id) ON DELETE CASCADE,
+  content_id TEXT NOT NULL REFERENCES exchange_working_content(id),
+  armed INTEGER NOT NULL DEFAULT 0 CHECK (armed IN (0, 1)),
+  PRIMARY KEY (exchange_id, content_id)
+);
+
+ALTER TABLE exchange_acceptances RENAME TO exchange_acceptances_v14;
+CREATE TABLE exchange_acceptances (
+  exchange_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  report_version INTEGER NOT NULL,
+  requester_id TEXT NOT NULL REFERENCES projects(id),
+  accepted_at TEXT NOT NULL,
+  receipt_operation_id TEXT NOT NULL CHECK (length(receipt_operation_id) > 0),
+  receipt_kind TEXT NOT NULL CHECK (receipt_kind IN ('accept', 'send', 'report', 'vote')),
+  PRIMARY KEY (exchange_id, request_id, report_version),
+  FOREIGN KEY (exchange_id, request_id, report_version) REFERENCES exchange_reports(exchange_id, request_id, version),
+  FOREIGN KEY (exchange_id, requester_id, receipt_operation_id)
+    REFERENCES exchange_operation_outcomes(exchange_id, project_id, operation_id) DEFERRABLE INITIALLY DEFERRED
+);
+INSERT INTO exchange_acceptances SELECT * FROM exchange_acceptances_v14;
+DROP TABLE exchange_acceptances_v14;
+`,
+};
+
 export interface ProductionMigrationPlan {
   migrations: Migration[];
   rebuilds: Migration[];
@@ -1021,9 +1087,9 @@ export interface ProductionMigrationPlan {
  * to 8 — the legacy fixture catalog every historical builder migrates with —
  * while the production accessor appends the Channel migration at version 11
  * and appends Handoff reporting at version 12 and Exchange at versions 13
- * and 14 as ordinary steps. It registers versions 9 and 10
+ * through 15 as ordinary steps. It registers versions 9 and 10
  * exactly once each as the rebuild-marked steps. The combined runner orders
- * every pending step by version, so ordinary 11 through 14 execute after rebuilds
+ * every pending step by version, so ordinary 11 through 15 execute after rebuilds
  * 9 and 10 inside the one guarded whole-batch path the non-empty rebuild set already
  * selects; no runner branch changes. Every production opener, the migrator's
  * admission catalog, and preflight's reference catalog consume this one
@@ -1038,6 +1104,7 @@ export function productionMigrationPlan(): ProductionMigrationPlan {
       HANDOFF_REPORTING_MIGRATION,
       EXCHANGE_FOUNDATION_MIGRATION,
       EXCHANGE_COLLABORATION_MIGRATION,
+      EXCHANGE_LIFECYCLE_MIGRATION,
     ],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };

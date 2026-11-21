@@ -81,6 +81,9 @@ export function withExchangeSource<T>(
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") {
       return unavailable("missing");
     }
+    if ((error as NodeJS.ErrnoException).code === "EACCES" || (error as NodeJS.ErrnoException).code === "EPERM") {
+      return unavailable("permission");
+    }
     throw error;
   }
   try {

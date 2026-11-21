@@ -73,6 +73,14 @@ const COMMAND_PATHS: Record<string, string[]> = {
   exchange_material_read: ["exchange", "material-read"],
   exchange_confirm_read: ["exchange", "confirm-read"],
   exchange_recover: ["exchange", "recover"],
+  exchange_roster: ["exchange", "roster"],
+  exchange_owner_correct: ["exchange", "owner-correct"],
+  exchange_request_disposition: ["exchange", "request-disposition"],
+  exchange_stop: ["exchange", "stop"],
+  exchange_pause: ["exchange", "pause"],
+  exchange_propose: ["exchange", "propose"],
+  exchange_vote: ["exchange", "vote"],
+  exchange_material_revalidate: ["exchange", "material-revalidate"],
 };
 
 const COMMANDER_PATHS_OF_CLOSED_LIST = [
@@ -97,6 +105,7 @@ const COMMANDER_PATHS_OF_CLOSED_LIST = [
   ["exchange", "session"],
   ["exchange", "renew"],
   ["exchange", "release"],
+  ["exchange", "cleanup"],
 ];
 
 function commandAt(program: Command, path: string[]): Command | undefined {
@@ -131,7 +140,7 @@ function refusalOf(name: string, arguments_: Record<string, unknown>): string {
 const silent = { out: () => {}, err: () => {} };
 
 describe("the MCP catalogue shape (MCP-005)", () => {
-  it("preserves the 35 M9 tools and appends the 13 Exchange operations in order", () => {
+  it("preserves the 35 M9 tools and lists the 21 Exchange operations in order", () => {
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
       ...[
         "send",
@@ -178,9 +187,17 @@ describe("the MCP catalogue shape (MCP-005)", () => {
         "material_read",
         "confirm_read",
         "recover",
+        "roster",
+        "owner_correct",
+        "request_disposition",
+        "stop",
+        "pause",
+        "propose",
+        "vote",
+        "material_revalidate",
       ].map((name) => `exchange_${name}`),
     ]);
-    expect(MCP_TOOLS).toHaveLength(48);
+    expect(MCP_TOOLS).toHaveLength(56);
   });
 
   it("sets the exact annotation memberships of section 39", () => {
@@ -207,6 +224,14 @@ describe("the MCP catalogue shape (MCP-005)", () => {
         "material_read",
         "confirm_read",
         "recover",
+        "roster",
+        "owner_correct",
+        "request_disposition",
+        "stop",
+        "pause",
+        "propose",
+        "vote",
+        "material_revalidate",
       ].map((name) => `exchange_${name}`),
     ]);
     expect(MCP_TOOLS.every((entry) => entry.annotations.openWorldHint === false)).toBe(true);
@@ -493,6 +518,58 @@ function sampleArguments(name: string): Record<string, unknown> {
     exchange_material_read: { exchangeId: "e", materialId: "m", offset: 0, limit: 9 },
     exchange_confirm_read: { exchangeId: "e", claim: "c", range: ["1", "3-4"] },
     exchange_recover: { exchangeId: "e", operationId: "send" },
+    exchange_roster: {
+      exchangeId: "e",
+      operationId: "roster",
+      rosterVersion: 1,
+      add: ["beta"],
+      reason: "Add peer",
+      confirm: true,
+    },
+    exchange_owner_correct: {
+      exchangeId: "e",
+      operationId: "owner",
+      request: "q",
+      ownershipVersion: 1,
+      rosterVersion: 1,
+      assignee: "beta",
+      reason: "Correct owner",
+      confirm: true,
+    },
+    exchange_request_disposition: {
+      exchangeId: "e",
+      operationId: "disposition",
+      claim: "c",
+      request: "q",
+      ownershipVersion: 1,
+      disposition: "cancel",
+      reason: "Superseded",
+    },
+    exchange_stop: { exchangeId: "e", operationId: "stop", rosterVersion: 1, reason: "Stop for review", confirm: true },
+    exchange_pause: {
+      exchangeId: "e",
+      operationId: "pause",
+      claim: "c",
+      reason: "Verify",
+      question: "May work resume?",
+    },
+    exchange_propose: {
+      exchangeId: "e",
+      operationId: "propose",
+      claim: "c",
+      rosterVersion: 1,
+      workRevision: 1,
+      criterion: ["Exact"],
+      summary: "Verified",
+    },
+    exchange_vote: { exchangeId: "e", operationId: "vote", claim: "c", proposalVersion: 1, vote: "approve" },
+    exchange_material_revalidate: {
+      exchangeId: "e",
+      operationId: "revalidate",
+      claim: "c",
+      materialId: "m",
+      source: "file",
+    },
   };
   const sample = samples[name];
   if (sample === undefined) throw new Error(`no sample arguments for ${name}`);

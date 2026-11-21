@@ -618,7 +618,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           memos: memosResult.value.memos,
           channels: channelsResult.value.channels,
           exchanges: readExchangeCollaborationRecords(db, redactWorkspacePaths),
-          exchangeRepresentation: "collaboration",
+          exchangeRepresentation: "lifecycle",
         });
       } catch (error) {
         db.exec("ROLLBACK");

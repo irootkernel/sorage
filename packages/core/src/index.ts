@@ -15,6 +15,7 @@ export * from "./doctor";
 export * from "./errors";
 export * from "./events";
 export * from "./exchange-snapshot";
+export * from "./exchange-lifecycle";
 export * from "./exchanges";
 export * from "./exchange-wait";
 export * from "./exchange-use-cases";

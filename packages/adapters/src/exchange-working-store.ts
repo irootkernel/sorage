@@ -6,11 +6,14 @@ import {
   appError,
   CONTENT_INLINE_MAX_UTF8_BYTES,
   decodeStrictUtf8,
+  type ExchangeCleanupResult,
+  type ExchangeActivationWarning,
   err,
   isMemoUuid,
   ok,
   type Result,
 } from "@sorage/core";
+import { reclaimExchangeStages, recordExchangeStageOwner, removeExchangeStageOwner } from "./exchange-stage-owners";
 import { fsyncDirectory } from "./intent-log";
 import { vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
 import {
@@ -151,7 +154,9 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
   function complete(intent: ActivationRow): Result<void> {
     if (paused()) return err(pauseRefusal());
     try {
-      activate(workingRoot(options, false), intent);
+      const root = workingRoot(options, false);
+      activate(root, intent);
+      removeExchangeStageOwner(root, intent.content_id);
     } catch (error) {
       const noted = runInTransaction(
         db,
@@ -188,6 +193,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
     const staging = `staging/${id}`;
     let root: string | undefined;
     let staged: string | undefined;
+    let owned = false;
     let handle: number | undefined;
     let prepared = false;
     try {
@@ -205,6 +211,8 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
       };
       const startFile = (): void => {
         root = workingRoot(options, true);
+        recordExchangeStageOwner(root, id, input.exchangeId);
+        owned = true;
         const path = managedPath(root, staging, true, 0o700);
         handle = openSync(
           path,
@@ -261,6 +269,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
           const pending = managedFile(root, staging);
           if (pending.stat !== undefined) unlinkSync(pending.path);
         }
+        if (!prepared && owned && root !== undefined) removeExchangeStageOwner(root, id);
       } catch {
         // Preserve the original failure; never follow a changed stage path.
       }
@@ -300,6 +309,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
     try {
       const pending = managedFile(workingRoot(options, false), intentOf(body).staging_key);
       if (pending.stat !== undefined) unlinkSync(pending.path);
+      removeExchangeStageOwner(workingRoot(options, false), body.id);
     } catch {
       // Cleanup is best effort and must never follow a changed stage path.
     }
@@ -351,6 +361,181 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
     return ok({ resolved, failures });
   }
 
+  interface CleanupItem {
+    id: string;
+    key: string | null;
+    size: number;
+    digest: string;
+    armed: number;
+  }
+
+  function liveReference(id: string): boolean {
+    return Boolean(db.prepare("SELECT 1 FROM exchange_materials WHERE content_id = ? AND retired = 0 LIMIT 1").get(id));
+  }
+
+  function settleItem(exchangeId: string, item: CleanupItem, preserve: boolean): Result<void> {
+    return runInTransaction(
+      db,
+      "BEGIN IMMEDIATE",
+      () => {
+        db.prepare(
+          "UPDATE exchange_materials SET content_id = NULL, available = 0 WHERE exchange_id = ? AND content_id = ? AND retired = 1",
+        ).run(exchangeId, item.id);
+        db.prepare("DELETE FROM exchange_cleanup_items WHERE exchange_id = ? AND content_id = ?").run(
+          exchangeId,
+          item.id,
+        );
+        if (!preserve && !liveReference(item.id)) {
+          db.prepare(
+            "UPDATE exchange_materials SET content_id = NULL, available = 0 WHERE content_id = ? AND retired = 1",
+          ).run(item.id);
+          db.prepare("DELETE FROM exchange_cleanup_items WHERE content_id = ?").run(item.id);
+          db.prepare("DELETE FROM exchange_working_content WHERE id = ?").run(item.id);
+        }
+        return ok(undefined);
+      },
+      tx,
+    );
+  }
+
+  function retire(exchangeId: string, item: CleanupItem): Result<void> {
+    if (liveReference(item.id)) return settleItem(exchangeId, item, true);
+    try {
+      if (item.key !== null) {
+        if (!isMemoUuid(item.id) || item.key !== `content/${item.id}`)
+          throw new UnsafeManagedPathError("Unexpected Exchange cleanup key");
+        const activation = db
+          .prepare("SELECT staging_key FROM exchange_activation_intents WHERE content_id = ?")
+          .get(item.id) as { staging_key: string } | undefined;
+        if (activation) {
+          const materialized = complete({
+            content_id: item.id,
+            storage_key: item.key,
+            staging_key: activation.staging_key,
+            size_bytes: item.size,
+            sha256: item.digest,
+          });
+          if (!materialized.ok) return materialized;
+        }
+        const root = workingRoot(options, false);
+        const file = managedFile(root, item.key);
+        if (file.stat !== undefined) {
+          const proof = digestManagedFile(root, item.key);
+          if (proof.sizeBytes !== item.size || proof.sha256 !== item.digest)
+            throw new Error("Retiring Exchange content fails its exact byte check.");
+        } else if (!item.armed) {
+          const current = db
+            .prepare("SELECT armed FROM exchange_cleanup_items WHERE exchange_id = ? AND content_id = ?")
+            .get(exchangeId, item.id) as { armed: number } | undefined;
+          if (current && !current.armed)
+            throw new Error("Exchange content disappeared before its retirement was verified.");
+        }
+        const armed = runInTransaction(
+          db,
+          "BEGIN IMMEDIATE",
+          () => {
+            if (liveReference(item.id)) return ok(false);
+            const current = db
+              .prepare("SELECT 1 FROM exchange_cleanup_items WHERE exchange_id = ? AND content_id = ?")
+              .get(exchangeId, item.id);
+            if (!current) return ok(false);
+            db.prepare("UPDATE exchange_cleanup_items SET armed = 1 WHERE exchange_id = ? AND content_id = ?").run(
+              exchangeId,
+              item.id,
+            );
+            return ok(true);
+          },
+          tx,
+        );
+        if (!armed.ok) return armed;
+        if (!armed.value) return settleItem(exchangeId, item, true);
+        if (file.stat !== undefined) {
+          const current = managedFile(root, item.key);
+          if (current.stat !== undefined && (current.stat.ino !== file.stat.ino || current.stat.dev !== file.stat.dev))
+            throw new Error("The retiring Exchange file was replaced.");
+          try {
+            unlinkSync(file.path);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+        }
+        fsyncDirectory(managedDirectory(root, "content") ?? root);
+      }
+      return settleItem(exchangeId, item, false);
+    } catch (error) {
+      return err(contentFailure(error, item.id));
+    }
+  }
+
+  function cleanup(
+    exchangeId: string,
+    completedExchange = true,
+  ): Result<ExchangeCleanupResult & { warnings?: ExchangeActivationWarning[] }> {
+    if (paused()) return err(pauseRefusal());
+    try {
+      let reclaimedStages = 0;
+      const boundary = workingBoundary(options);
+      if (managedDirectory(boundary, "exchange-working") !== undefined) {
+        reclaimedStages = reclaimExchangeStages(
+          workingRoot(options, false),
+          exchangeId,
+          (id) =>
+            !db
+              .prepare(`SELECT 1 FROM exchange_working_content WHERE id = ? OR storage_key = ?
+            UNION ALL SELECT 1 FROM exchange_activation_intents WHERE content_id = ? OR staging_key = ? LIMIT 1`)
+              .get(id, `content/${id}`, id, `staging/${id}`),
+        );
+      }
+      const intent = db.prepare("SELECT 1 FROM exchange_cleanup_intents WHERE exchange_id = ?").get(exchangeId);
+      if (!intent)
+        return ok({ exchangeId, cleanup: completedExchange ? "complete" : "not-completed", reclaimedStages });
+      const rows = db
+        .prepare<CleanupItem>(`SELECT c.id, c.storage_key key, c.size_bytes size, c.sha256 digest, i.armed
+        FROM exchange_cleanup_items i JOIN exchange_working_content c ON c.id = i.content_id
+        WHERE i.exchange_id = ? ORDER BY c.id`)
+        .all(exchangeId);
+      const warnings: ExchangeActivationWarning[] = [];
+      for (const item of rows) {
+        const result = retire(exchangeId, item);
+        if (!result.ok)
+          warnings.push({
+            code: result.error.code,
+            message: result.error.message,
+            recovery: {
+              suggestedCommand:
+                "Retry the authorized Exchange cleanup after resolving the reported working-storage error.",
+            },
+          });
+      }
+      const completed = runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
+          const pending = db
+            .prepare("SELECT 1 FROM exchange_cleanup_items WHERE exchange_id = ? LIMIT 1")
+            .get(exchangeId);
+          if (pending)
+            db.prepare("UPDATE exchange_cleanup_intents SET failure = ? WHERE exchange_id = ?").run(
+              Number(warnings.length > 0),
+              exchangeId,
+            );
+          else db.prepare("DELETE FROM exchange_cleanup_intents WHERE exchange_id = ?").run(exchangeId);
+          return ok(!pending);
+        },
+        tx,
+      );
+      if (!completed.ok) return completed;
+      return ok({
+        exchangeId,
+        cleanup: completed.value ? "complete" : warnings.length ? "failed" : "pending",
+        reclaimedStages,
+        ...(warnings.length ? { warnings } : {}),
+      });
+    } catch (error) {
+      return err(databaseFailure(error));
+    }
+  }
+
   return {
     prepare,
     record,
@@ -358,6 +543,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
     discardAfterFailedCommit,
     finish,
     recover,
+    cleanup,
 
     /** Standalone foundation fixture path. Producers attach record() to their domain transaction. */
     write(input: ExchangeWorkingBody): Result<ExchangeWorkingIdentity> {

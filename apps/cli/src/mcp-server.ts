@@ -244,7 +244,7 @@ export function fileLikePropertyOf(toolName: string): string | undefined {
     toolName === "exchange_report"
   )
     return "file";
-  if (toolName === "exchange_material_register") return "source";
+  if (toolName === "exchange_material_register" || toolName === "exchange_material_revalidate") return "source";
   if (toolName === "memo_add" || toolName === "memo_update" || toolName === "channel_post") return "bodyFile";
   if (toolName === "handoff_processing_start" || toolName === "handoff_processing_complete") return "commentFile";
   return undefined;

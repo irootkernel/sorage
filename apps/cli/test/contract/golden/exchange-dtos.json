@@ -42,6 +42,13 @@
       "reports": [],
       "acceptances": [],
       "readRanges": [],
+      "rosterVersion": 1,
+      "workRevision": 1,
+      "pauseVersion": 0,
+      "pause": null,
+      "proposal": null,
+      "final": null,
+      "votes": [],
       "claimId": "<uuid>",
       "expiresAt": "<time>"
     },
@@ -191,6 +198,14 @@
           "criteria": [
             "Return named evidence"
           ],
+          "ownership": {
+            "requestId": "<uuid>",
+            "version": 1,
+            "acceptanceOwnerId": "<uuid>",
+            "assignedProjectId": "<uuid>",
+            "assignmentVersion": 1,
+            "disposition": null
+          },
           "report": {
             "requestId": "<uuid>",
             "version": 1,
@@ -230,7 +245,14 @@
           "acceptedAt": "<time>"
         }
       ],
-      "readRanges": []
+      "readRanges": [],
+      "rosterVersion": 1,
+      "workRevision": 6,
+      "pauseVersion": 0,
+      "pause": null,
+      "proposal": null,
+      "final": null,
+      "votes": []
     },
     "meta": {
       "requestId": "<uuid>"
@@ -443,6 +465,487 @@
       "projectId": "<uuid>",
       "claimId": "<uuid>",
       "expiresAt": "<time>"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "pause": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 3,
+      "kind": "pause",
+      "state": "paused",
+      "pauseVersion": 1,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "pausedJoin": {
+    "ok": true,
+    "data": {
+      "openingProjectId": "<uuid>",
+      "goal": "Check coverage",
+      "lastSeq": 3,
+      "createdAt": "<time>",
+      "exchangeId": "<uuid>",
+      "criteria": [
+        "Observe all rows"
+      ],
+      "projectId": "<uuid>",
+      "state": "paused",
+      "members": [
+        "<uuid>",
+        "<uuid>"
+      ],
+      "requests": [
+        {
+          "id": "<uuid>",
+          "requesterId": "<uuid>",
+          "assigneeId": "<uuid>",
+          "assignmentVersion": 1,
+          "condition": "Check the file",
+          "criteria": [
+            "Return a brief result"
+          ],
+          "ownership": {
+            "requestId": "<uuid>",
+            "version": 1,
+            "acceptanceOwnerId": "<uuid>",
+            "assignedProjectId": "<uuid>",
+            "assignmentVersion": 1,
+            "disposition": null
+          },
+          "report": null,
+          "acceptance": null,
+          "state": "in-progress"
+        }
+      ],
+      "reports": [],
+      "acceptances": [],
+      "readRanges": [],
+      "rosterVersion": 1,
+      "workRevision": 3,
+      "pauseVersion": 1,
+      "pause": {
+        "version": 1,
+        "reason": "Wait for a decision",
+        "question": "May verification proceed?"
+      },
+      "proposal": null,
+      "final": null,
+      "votes": []
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "roster": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 4,
+      "kind": "roster",
+      "rosterVersion": 2,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "staleOwnerCorrection": {
+    "ok": false,
+    "error": {
+      "code": "ROW_VERSION_CONFLICT",
+      "message": "The observed request ownership version changed.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "occupiedAcceptanceOwner": {
+    "ok": false,
+    "error": {
+      "code": "EXCHANGE_INVALID_INPUT",
+      "message": "Name a current Project for each vacant owner or assignee field being corrected.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Check the Exchange operands and recorded limits"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "ownerCorrect": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 5,
+      "kind": "owner-correct",
+      "ownershipVersion": 3,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "omittedMaterial": {
+    "ok": false,
+    "error": {
+      "code": "EXCHANGE_MATERIAL_UNAVAILABLE",
+      "message": "The registered Exchange material is unavailable.",
+      "details": {
+        "reason": "omitted"
+      },
+      "recovery": {
+        "suggestedCommand": "Ask the owning Project to restore access or share the material again"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "materialNeedsRevalidation": {
+    "ok": false,
+    "error": {
+      "code": "EXCHANGE_MATERIAL_UNAVAILABLE",
+      "message": "The registered Exchange material is unavailable.",
+      "details": {
+        "reason": "revalidation-required"
+      },
+      "recovery": {
+        "suggestedCommand": "Ask the owning Project to restore access or share the material again"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "resumedJoin": {
+    "ok": true,
+    "data": {
+      "openingProjectId": "<uuid>",
+      "goal": "Check coverage",
+      "lastSeq": 6,
+      "createdAt": "<time>",
+      "exchangeId": "<uuid>",
+      "criteria": [
+        "Observe all rows"
+      ],
+      "projectId": "<uuid>",
+      "state": "active",
+      "members": [
+        "<uuid>"
+      ],
+      "requests": [
+        {
+          "id": "<uuid>",
+          "requesterId": "<uuid>",
+          "assigneeId": "<uuid>",
+          "assignmentVersion": 1,
+          "condition": "Check the file",
+          "criteria": [
+            "Return a brief result"
+          ],
+          "ownership": {
+            "requestId": "<uuid>",
+            "version": 3,
+            "acceptanceOwnerId": "<uuid>",
+            "assignedProjectId": "<uuid>",
+            "assignmentVersion": 3,
+            "disposition": null
+          },
+          "report": null,
+          "acceptance": null,
+          "state": "in-progress"
+        }
+      ],
+      "reports": [],
+      "acceptances": [],
+      "readRanges": [],
+      "rosterVersion": 2,
+      "workRevision": 5,
+      "pauseVersion": 1,
+      "pause": null,
+      "proposal": null,
+      "final": null,
+      "votes": [],
+      "claimId": "<uuid>",
+      "expiresAt": "<time>",
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "resumeReplay": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 6,
+      "kind": "resume",
+      "state": "active",
+      "pauseVersion": 1,
+      "replayed": true,
+      "decision": "Proceed with the checked source"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "materialRevalidate": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 7,
+      "kind": "material-revalidate",
+      "materialId": "<uuid>",
+      "replayed": false,
+      "availability": "available"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "requestDisposition": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 8,
+      "kind": "request-disposition",
+      "ownershipVersion": 4,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "stop": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 9,
+      "kind": "stop",
+      "state": "paused",
+      "pauseVersion": 2,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "invalidProposalReport": {
+    "ok": false,
+    "error": {
+      "code": "EXCHANGE_INVALID_INPUT",
+      "message": "Each --report must be a request ID and report version separated by a colon.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Check the Exchange operands and recorded limits"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "invalidProposalDisposition": {
+    "ok": false,
+    "error": {
+      "code": "EXCHANGE_INVALID_INPUT",
+      "message": "Each --disposition must be a request ID and ownership version separated by a colon.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Check the Exchange operands and recorded limits"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "propose": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 11,
+      "kind": "propose",
+      "proposalVersion": 1,
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "staleProposalVote": {
+    "ok": false,
+    "error": {
+      "code": "ROW_VERSION_CONFLICT",
+      "message": "The observed Exchange proposal is no longer current.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "voteWithCleanupWarning": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "seq": 12,
+      "kind": "vote",
+      "proposalVersion": 1,
+      "state": "completed",
+      "acceptanceSequences": [],
+      "replayed": false,
+      "warnings": [
+        {
+          "code": "STORAGE_INTEGRITY_ERROR",
+          "message": "Exchange working storage could not be used safely.",
+          "recovery": {
+            "suggestedCommand": "Retry the authorized Exchange cleanup after resolving the reported working-storage error."
+          }
+        }
+      ]
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "completedJoin": {
+    "ok": true,
+    "data": {
+      "openingProjectId": "<uuid>",
+      "goal": "Check coverage",
+      "lastSeq": 12,
+      "createdAt": "<time>",
+      "exchangeId": "<uuid>",
+      "criteria": [
+        "Observe all rows"
+      ],
+      "projectId": "<uuid>",
+      "state": "completed",
+      "members": [
+        "<uuid>"
+      ],
+      "requests": [
+        {
+          "id": "<uuid>",
+          "requesterId": "<uuid>",
+          "assigneeId": "<uuid>",
+          "assignmentVersion": 1,
+          "condition": "Check the file",
+          "criteria": [
+            "Return a brief result"
+          ],
+          "ownership": {
+            "requestId": "<uuid>",
+            "version": 4,
+            "acceptanceOwnerId": "<uuid>",
+            "assignedProjectId": "<uuid>",
+            "assignmentVersion": 3,
+            "disposition": {
+              "kind": "cancel",
+              "reason": "No work remains",
+              "followUpProjectId": null
+            }
+          },
+          "report": null,
+          "acceptance": null,
+          "state": "disposed"
+        }
+      ],
+      "reports": [],
+      "acceptances": [],
+      "readRanges": [],
+      "rosterVersion": 2,
+      "workRevision": 7,
+      "pauseVersion": 2,
+      "pause": null,
+      "proposal": {
+        "version": 1,
+        "proposerId": "<uuid>",
+        "members": [
+          "<uuid>"
+        ],
+        "rosterVersion": 2,
+        "workRevision": 7,
+        "criterion": [
+          "Observe all rows"
+        ],
+        "summary": "Checked coverage",
+        "report": [],
+        "disposition": [
+          {
+            "requestId": "<uuid>",
+            "version": 4
+          }
+        ]
+      },
+      "final": {
+        "version": 1,
+        "proposerId": "<uuid>",
+        "members": [
+          "<uuid>"
+        ],
+        "rosterVersion": 2,
+        "workRevision": 7,
+        "criterion": [
+          "Observe all rows"
+        ],
+        "summary": "Checked coverage",
+        "report": [],
+        "disposition": [
+          {
+            "requestId": "<uuid>",
+            "version": 4
+          }
+        ]
+      },
+      "votes": [
+        {
+          "projectId": "<uuid>",
+          "vote": "approve",
+          "objection": null
+        }
+      ],
+      "cleanup": "failed"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "retiredMaterial": {
+    "ok": false,
+    "error": {
+      "code": "EXCHANGE_MATERIAL_UNAVAILABLE",
+      "message": "The registered Exchange material is unavailable.",
+      "details": {
+        "reason": "retired"
+      },
+      "recovery": {
+        "suggestedCommand": "Ask the owning Project to restore access or share the material again"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "cleanup": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "cleanup": "complete",
+      "reclaimedStages": 0
     },
     "meta": {
       "requestId": "<uuid>"

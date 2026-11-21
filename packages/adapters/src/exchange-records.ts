@@ -1,10 +1,16 @@
-import type { ExchangeSnapshotRecord } from "@sorage/core";
+import { exchangeLifecycleHead, type ExchangeSnapshotRecord } from "@sorage/core";
 import {
   EXCHANGE_COLLABORATION_TABLES,
   readExchangeCollaboration,
   restoreExchangeCollaboration,
 } from "./exchange-collaboration-records";
+import {
+  EXCHANGE_LIFECYCLE_TABLES,
+  readExchangeLifecycle,
+  restoreExchangeLifecycle,
+} from "./exchange-lifecycle-records";
 import type { SorageSqlite } from "./sqlite/connection";
+import { LEGACY_EXCHANGE_WORK_REVISION } from "./sqlite/migrations";
 
 export const EXCHANGE_FOUNDATION_TABLES = [
   "exchanges",
@@ -14,6 +20,7 @@ export const EXCHANGE_FOUNDATION_TABLES = [
   "exchange_working_content",
   "exchange_activation_intents",
   ...EXCHANGE_COLLABORATION_TABLES,
+  ...EXCHANGE_LIFECYCLE_TABLES,
 ] as const;
 
 interface FoundationRow {
@@ -83,10 +90,15 @@ export function readExchangeRecords(db: SorageSqlite): ExchangeSnapshotRecord[] 
 }
 
 export function readExchangeCollaborationRecords(db: SorageSqlite, redact: boolean): ExchangeSnapshotRecord[] {
-  return readExchangeRecords(db).map((row) => ({
-    ...row,
-    collaboration: readExchangeCollaboration(db, row.id, redact),
-  }));
+  return readExchangeRecords(db).map((row) => {
+    const lifecycle = readExchangeLifecycle(db, row.id);
+    return {
+      ...row,
+      readRanges: exchangeLifecycleHead(lifecycle).state === "completed" ? [] : row.readRanges,
+      collaboration: readExchangeCollaboration(db, row.id, redact),
+      lifecycle,
+    };
+  });
 }
 
 /** Restore validated compact records in the existing import transaction, after Projects. */
@@ -98,10 +110,12 @@ export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapsh
     for (const projectId of record.members) {
       db.prepare("INSERT INTO exchange_members (exchange_id, project_id) VALUES (?, ?)").run(record.id, projectId);
     }
-    for (const range of record.readRanges) {
-      db.prepare(
-        "INSERT INTO exchange_read_ranges (exchange_id, project_id, first_seq, last_seq) VALUES (?, ?, ?, ?)",
-      ).run(record.id, range.projectId, range.firstSeq, range.lastSeq);
+    if (!record.lifecycle || exchangeLifecycleHead(record.lifecycle).state !== "completed") {
+      for (const range of record.readRanges) {
+        db.prepare(
+          "INSERT INTO exchange_read_ranges (exchange_id, project_id, first_seq, last_seq) VALUES (?, ?, ?, ?)",
+        ).run(record.id, range.projectId, range.firstSeq, range.lastSeq);
+      }
     }
     for (const outcome of record.creationOutcomes) {
       db.prepare(
@@ -114,5 +128,8 @@ export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapsh
         record.readRanges.reduce((maximum, range) => Math.max(maximum, range.lastSeq), 0),
         record.id,
       );
+    if (record.lifecycle) restoreExchangeLifecycle(db, record.id, record.lifecycle);
+    else if (record.collaboration)
+      db.prepare(`UPDATE exchanges SET work_revision = ${LEGACY_EXCHANGE_WORK_REVISION} WHERE id = ?`).run(record.id);
   }
 }

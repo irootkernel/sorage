@@ -74,19 +74,25 @@ describe("Exchange CLI JSON and read error boundary", () => {
     const beta = join(root, "beta");
     const output: Record<string, unknown> = {};
     for (const cwd of [alpha, beta]) mkdirSync(cwd);
-    function run(args: string[], cwd = alpha) {
+    function run(args: string[], cwd = alpha, installation = home) {
       return spawnSync("bun", [cli, ...args, "--json"], {
         encoding: "utf8",
         cwd,
-        env: { ...process.env, SORAGE_HOME: home, SORAGE_TEST_REQUEST_ID: requestId },
+        env: { ...process.env, SORAGE_HOME: installation, SORAGE_TEST_REQUEST_ID: requestId },
       });
     }
-    function success(name: string, args: string[], cwd = alpha) {
-      const result = run(args, cwd);
+    function success(name: string, args: string[], cwd = alpha, installation = home) {
+      const result = run(args, cwd, installation);
       expect(result.status, result.stderr).toBe(0);
       const envelope = JSON.parse(result.stdout);
       if (name) output[name] = envelope;
       return envelope.data;
+    }
+    function failure(name: string, args: string[], exit: number, cwd = alpha, installation = home) {
+      const result = run(args, cwd, installation);
+      expect(result.status, result.stderr).toBe(exit);
+      expect(result.stdout).toBe("");
+      output[name] = JSON.parse(result.stderr);
     }
     try {
       success("", ["init", "--non-interactive"]);
@@ -298,6 +304,186 @@ describe("Exchange CLI JSON and read error boundary", () => {
       output.pendingRead = JSON.parse(read.stderr);
       success("renew", ["exchange", "renew", id, "--claim", String(worker.claimId)], beta);
       success("release", ["exchange", "release", id, "--claim", String(worker.claimId)], beta);
+
+      const writable = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        writable.exec("DROP TRIGGER abort_activation");
+      } finally {
+        writable.close();
+      }
+      const lifecycle = success("", [...creation.slice(0, -1), "lifecycle-create"]);
+      const lifecycleId = String(lifecycle.exchangeId);
+      function operation(command: string, id: string): string[] {
+        return ["exchange", command, lifecycleId, "--operation-id", id];
+      }
+      function inspect() {
+        return success("", ["exchange", "inspect", lifecycleId]);
+      }
+      const initialClaim = String(success("", ["exchange", "join", lifecycleId]).claimId);
+      const original = join(alpha, "original.txt");
+      writeFileSync(original, "Retained reference");
+      const live = success("", [
+        ...operation("material-register", "live"),
+        "--claim",
+        initialClaim,
+        "--kind",
+        "live",
+        "--source",
+        original,
+      ]);
+      const request = success("", [
+        ...operation("request", "request"),
+        "--claim",
+        initialClaim,
+        "--assignee",
+        "beta",
+        "--condition",
+        "Check the file",
+        "--criterion",
+        "Return a brief result",
+      ]);
+      const body = success("", [...operation("send", "work"), "--claim", initialClaim, "--file", large]);
+      const materialRead = (materialId: string) => [
+        "exchange",
+        "material-read",
+        lifecycleId,
+        materialId,
+        "--offset",
+        "0",
+        "--limit",
+        "1",
+      ];
+      const pause = success("pause", [
+        ...operation("pause", "pause"),
+        "--claim",
+        initialClaim,
+        "--reason",
+        "Wait for a decision",
+        "--question",
+        "May verification proceed?",
+      ]);
+      success("pausedJoin", ["exchange", "join", lifecycleId]);
+      const pauseFlags = ["--pause-version", String(pause.pauseVersion), "--confirm"];
+      const roster = success("roster", [
+        ...operation("roster", "remove"),
+        ...pauseFlags,
+        "--roster-version",
+        "1",
+        "--remove",
+        "beta",
+        "--reason",
+        "Work was redirected",
+      ]);
+      const correction = [
+        ...operation("owner-correct", "correct"),
+        ...pauseFlags,
+        "--roster-version",
+        String(roster.rosterVersion),
+        "--request",
+        String(request.requestId),
+        "--assignee",
+        "alpha",
+        "--reason",
+        "Fill the vacant assignment",
+        "--ownership-version",
+      ];
+      failure("staleOwnerCorrection", [...correction, "1"], 75);
+      failure("occupiedAcceptanceOwner", [...correction, "2", "--acceptance-owner", "alpha"], 64);
+      const owner = success("ownerCorrect", [...correction, "2"]);
+      const restored = join(root, "restored");
+      const rebound = join(root, "rebound-alpha");
+      mkdirSync(rebound);
+      success("", ["backup", "run", "--as-user"]);
+      success("", ["init", "--non-interactive"], rebound, restored);
+      success("", ["backup", "restore", "--from", join(home, "vault"), "--as-user", "--confirm"], rebound, restored);
+      success("", ["project", "bind", "alpha", "--dir", rebound, "--as-user"], rebound, restored);
+      failure("omittedMaterial", materialRead(String(body.materialId)), 66, rebound, restored);
+      failure("materialNeedsRevalidation", materialRead(String(live.materialId)), 66, rebound, restored);
+      const resume = [...operation("join", "resume"), ...pauseFlags, "--decision", "Proceed with the checked source"];
+      const resumed = success("resumedJoin", resume);
+      success("resumeReplay", [...resume, "--replay-only"]);
+      const activeClaim = String(resumed.claimId);
+      success("materialRevalidate", [
+        "exchange",
+        "material-revalidate",
+        lifecycleId,
+        String(live.materialId),
+        "--claim",
+        activeClaim,
+        "--operation-id",
+        "revalidate",
+        "--source",
+        original,
+      ]);
+      const disposition = success("requestDisposition", [
+        ...operation("request-disposition", "cancel"),
+        "--claim",
+        activeClaim,
+        "--request",
+        String(request.requestId),
+        "--ownership-version",
+        String(owner.ownershipVersion),
+        "--disposition",
+        "cancel",
+        "--reason",
+        "No work remains",
+      ]);
+      const stop = success("stop", [
+        ...operation("stop", "stop"),
+        "--confirm",
+        "--pause-version",
+        String(pause.pauseVersion),
+        "--roster-version",
+        String(roster.rosterVersion),
+        "--reason",
+        "Pause before final approval",
+      ]);
+      const newClaim = String(
+        success("", [...operation("join", "resume-stop"), "--confirm", "--pause-version", String(stop.pauseVersion)])
+          .claimId,
+      );
+      const head = inspect();
+      const proposal = [
+        ...operation("propose", "propose"),
+        "--claim",
+        newClaim,
+        "--roster-version",
+        String(head.rosterVersion),
+        "--work-revision",
+        String(head.workRevision),
+        "--criterion",
+        "Observe all rows",
+        "--summary",
+        "Checked coverage",
+      ];
+      failure("invalidProposalReport", [...proposal, "--report", "invalid"], 64);
+      failure("invalidProposalDisposition", [...proposal, "--disposition", "invalid"], 64);
+      const proposed = success("propose", [
+        ...proposal,
+        "--disposition",
+        `${request.requestId}:${disposition.ownershipVersion}`,
+      ]);
+      const state = new DatabaseSync(join(home, "state", "sorage.sqlite3"), { readOnly: true });
+      let managed: string;
+      try {
+        const record = state
+          .prepare(
+            "SELECT storage_key FROM exchange_working_content c JOIN exchange_materials m ON c.id = m.content_id WHERE m.id = ?",
+          )
+          .get(String(body.materialId)) as { storage_key: string };
+        managed = join(home, "state", "exchange-working", record.storage_key);
+      } finally {
+        state.close();
+      }
+      const originalBody = readFileSync(managed);
+      writeFileSync(managed, "Wrong fixture bytes");
+      const vote = [...operation("vote", "vote"), "--claim", newClaim, "--vote", "approve", "--proposal-version"];
+      failure("staleProposalVote", [...vote, String(Number(proposed.proposalVersion) + 1)], 75);
+      success("voteWithCleanupWarning", [...vote, String(proposed.proposalVersion)]);
+      success("completedJoin", ["exchange", "join", lifecycleId]);
+      failure("retiredMaterial", materialRead(String(body.materialId)), 66);
+      writeFileSync(managed, originalBody);
+      success("cleanup", ["exchange", "cleanup", lifecycleId]);
 
       const normalized = JSON.stringify(output, null, 2)
         .replace(/"cursor": "[A-Za-z0-9_-]+"/g, '"cursor": "<history-cursor>"')

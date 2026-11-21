@@ -1,5 +1,13 @@
 import { isAbsolute } from "node:path";
+import { canonicalJson } from "./backup-snapshot";
 import { isLowercaseSha256 } from "./content";
+import {
+  applyExchangeTransition,
+  type ExchangeLifecycle,
+  type ExchangeTransitionRecord,
+  exchangeControlOutcome,
+  exchangeLifecycleHead,
+} from "./exchange-lifecycle";
 import {
   EXCHANGE_INFORMATION_KINDS,
   type ExchangeAcceptanceReceipt,
@@ -156,7 +164,12 @@ function validOutcome(
   }
 }
 
-export function validateExchangeCollaboration(value: unknown, exchangeId: string, members: Set<string>): boolean {
+export function validateExchangeCollaboration(
+  value: unknown,
+  exchangeId: string,
+  members: Set<string>,
+  lifecycle?: ExchangeLifecycle,
+): boolean {
   if (
     !memoObject(value, ["lastSeq", "messages", "requests", "reports", "acceptances", "materials", "operations"]) ||
     !exchangeCount(value.lastSeq)
@@ -197,7 +210,17 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
     "reportVersion",
     "createdAt",
   ]);
-  const operations = inventory(value.operations, ["projectId", "operationId", "fingerprint", "outcome"]);
+  const operations =
+    Array.isArray(value.operations) &&
+    value.operations.every((row) =>
+      memoObject(
+        row,
+        ["projectId", "operationId", "fingerprint", "outcome"],
+        lifecycle ? ["registrationAfterSeq"] : [],
+      ),
+    )
+      ? value.operations
+      : null;
   if (!materials || !requests || !reports || !acceptances || !messages || !operations) return false;
 
   const materialById = new Map<string, ExchangeMaterial>();
@@ -228,9 +251,9 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
       !request ||
       !exchangeCount(report.version, 1) ||
       !exchangeCount(report.assignmentVersion, 1) ||
-      request.assignmentVersion !== report.assignmentVersion ||
+      (!lifecycle && request.assignmentVersion !== report.assignmentVersion) ||
       !project(report.authorId) ||
-      report.authorId !== request.assigneeId ||
+      (!lifecycle && report.authorId !== request.assigneeId) ||
       material?.kind !== "body" ||
       material.ownerProjectId !== report.authorId ||
       !Array.isArray(report.evidence) ||
@@ -249,11 +272,15 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
       !reportByKey.has(key) ||
       !request ||
       accepted.has(key) ||
-      row.requesterId !== request.requesterId ||
+      (!lifecycle && row.requesterId !== request.requesterId) ||
+      !project(row.requesterId) ||
       !isMemoTimestamp(row.acceptedAt) ||
       !memoObject(row.receipt, ["operationId", "kind"]) ||
       !exchangeOperationId(row.receipt.operationId) ||
-      (row.receipt.kind !== "accept" && row.receipt.kind !== "send" && row.receipt.kind !== "report")
+      (row.receipt.kind !== "accept" &&
+        row.receipt.kind !== "send" &&
+        row.receipt.kind !== "report" &&
+        (!lifecycle || row.receipt.kind !== "vote"))
     ) {
       return false;
     }
@@ -266,6 +293,8 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
   const acceptanceMessages = new Set<string>();
   const acceptanceBatches = new Map<string, AcceptanceBatch>();
   const primaryBodies = new Set<string>();
+  const state = lifecycle ? exchangeLifecycleHead(lifecycle, 0) : undefined;
+  let transitionIndex = 0;
   for (const message of [...messages].sort((a, b) => Number(a.seq) - Number(b.seq))) {
     if (
       !exchangeCount(message.seq, 1) ||
@@ -277,7 +306,22 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
       (message.replyTo !== null && (!exchangeCount(message.replyTo, 1) || !messageBySeq.has(message.replyTo)))
     )
       return false;
+    if (state && lifecycle) {
+      while (transitionIndex < lifecycle.transitions.length) {
+        const record = lifecycle.transitions[transitionIndex];
+        if (!record || record.seq >= message.seq) break;
+        applyExchangeTransition(state, record.actorId, record.transition);
+        transitionIndex++;
+      }
+      if (
+        state.state !== "active" ||
+        !state.members.has(String(message.senderId)) ||
+        (message.recipientId !== null && !state.members.has(String(message.recipientId)))
+      )
+        return false;
+    }
     const request = typeof message.requestId === "string" ? requestById.get(message.requestId) : undefined;
+    const ownership = request ? state?.ownership.get(String(request.id)) : undefined;
     const material = typeof message.materialId === "string" ? materialById.get(message.materialId) : undefined;
     const key = reportKey(message.requestId, message.reportVersion);
     if (EXCHANGE_INFORMATION_KINDS.some((kind) => kind === message.kind)) {
@@ -312,7 +356,10 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
         message.reportVersion <= (currentReportVersions.get(message.requestId) ?? 0) ||
         report.materialId !== message.materialId ||
         report.authorId !== message.senderId ||
-        message.recipientId !== request.requesterId
+        message.recipientId !== (ownership ? ownership.acceptanceOwnerId : request.requesterId) ||
+        report.authorId !== (ownership ? ownership.assignedProjectId : request.assigneeId) ||
+        report.assignmentVersion !== (ownership?.assignmentVersion ?? request.assignmentVersion) ||
+        ownership?.disposition
       )
         return false;
       reportMessages.add(key);
@@ -325,7 +372,11 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
         !receipt ||
         currentReportVersions.get(message.requestId) !== message.reportVersion ||
         acceptanceMessages.has(key) ||
-        message.senderId !== request.requesterId ||
+        message.senderId !== (ownership ? ownership.acceptanceOwnerId : request.requesterId) ||
+        ownership?.disposition ||
+        reportByKey.get(key)?.assignmentVersion !== (ownership?.assignmentVersion ?? request.assignmentVersion) ||
+        acceptances.find((entry) => reportKey(entry.requestId, entry.reportVersion) === key)?.requesterId !==
+          message.senderId ||
         message.recipientId !== null ||
         message.materialId !== null
       )
@@ -365,21 +416,55 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
   const operationIds = new Set<string>();
   const recordedSeqs = new Set<number>();
   const recordedMaterials = new Set<string>();
+  const transitionReceipts = new Map<string, ExchangeTransitionRecord>();
+  for (const record of lifecycle?.transitions ?? []) {
+    const key = JSON.stringify([record.actorId, record.operationId]);
+    if (transitionReceipts.has(key)) return false;
+    transitionReceipts.set(key, record);
+  }
   for (const operation of operations) {
+    const key = JSON.stringify([operation.projectId, operation.operationId]);
+    const record = transitionReceipts.get(key);
     if (
       !project(operation.projectId) ||
       !exchangeOperationId(operation.operationId) ||
       !digest(operation.fingerprint) ||
-      !validOutcome(operation.outcome, exchangeId, operation.projectId, messageBySeq, materialById, requestById)
+      (record
+        ? canonicalJson(operation.outcome) !==
+          canonicalJson(exchangeControlOutcome(exchangeId, record.seq, record.transition))
+        : !validOutcome(operation.outcome, exchangeId, operation.projectId, messageBySeq, materialById, requestById))
     )
       return false;
-    const key = JSON.stringify([operation.projectId, operation.operationId]);
     if (operationIds.has(key)) return false;
     operationIds.add(key);
     // Standalone and bundled effects share the receipt's original actor and operation ID.
     const outcome = operation.outcome as RetainedExchangeOperation["outcome"];
+    if (
+      lifecycle &&
+      (outcome.kind === "material-register"
+        ? !exchangeCount(operation.registrationAfterSeq) || operation.registrationAfterSeq > value.lastSeq
+        : Object.hasOwn(operation, "registrationAfterSeq"))
+    )
+      return false;
     const batch = acceptanceBatches.get(key);
     if (batch && batch.kind !== outcome.kind) return false;
+    if (record) {
+      if (record.transition.kind === "vote") {
+        const sequences = batch?.sequences ?? [];
+        if (
+          canonicalJson(sequences) !== canonicalJson(record.transition.acceptanceSequences) ||
+          (sequences.length > 0 && sequences.at(-1) !== record.seq - 1)
+        )
+          return false;
+        for (const seq of sequences) {
+          if (recordedSeqs.has(seq)) return false;
+          recordedSeqs.add(seq);
+        }
+      } else if (batch) return false;
+      acceptanceBatches.delete(key);
+      transitionReceipts.delete(key);
+      continue;
+    }
     if (outcome.kind === "material-register") {
       if (recordedMaterials.has(outcome.materialId)) return false;
       recordedMaterials.add(outcome.materialId);
@@ -395,6 +480,7 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
         sequences = batch.sequences;
       } else {
         if (batch && batch.sequences.at(-1) !== outcome.seq - 1) return false;
+        if (!("seq" in outcome)) return false;
         sequences = [...(batch?.sequences ?? []), outcome.seq];
       }
       for (const seq of sequences) {
@@ -406,6 +492,7 @@ export function validateExchangeCollaboration(value: unknown, exchangeId: string
   }
   return (
     acceptanceBatches.size === 0 &&
+    transitionReceipts.size === 0 &&
     messageBySeq.size === recordedSeqs.size &&
     [...materialById].every(([id, material]) =>
       material.kind === "body" ? primaryBodies.has(id) : recordedMaterials.has(id),

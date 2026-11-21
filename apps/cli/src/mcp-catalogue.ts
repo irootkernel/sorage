@@ -1099,6 +1099,15 @@ const exchangePageLimit = exchangePair("limit", "--limit", undefined, "integer",
   maximum: 200,
 });
 const exchangeBodySchema = { oneOf: [{ required: ["body"] }, { required: ["file"] }] };
+const exchangeVersion = (property: string, flag: string, required?: string) =>
+  exchangePair(property, flag, required, "integer", { type: "integer", minimum: 1 });
+const rosterVersion = exchangeVersion("rosterVersion", "--roster-version", "n");
+const observedPauseVersion = exchangePair("pauseVersion", "--pause-version", undefined, "integer", { minimum: 0 });
+const ownershipVersion = exchangeVersion("ownershipVersion", "--ownership-version", "n");
+const requestId = exchangePair("request", "--request", "id");
+const controlReason = exchangePair("reason", "--reason", "text");
+const confirmedControl = { properties: { confirm: { const: true } } };
+const confirmControl = exchangeFlag("confirm", "--confirm");
 
 function exchangeTool(
   command: string,
@@ -1180,8 +1189,15 @@ const EXCHANGE_TOOLS: McpTool[] = [
   ),
   exchangeTool(
     "join",
-    "acquire an Active Exchange claim and return the current view",
-    [exchangePair("replaceClaim", "--replace-claim"), exchangeFlag("confirm", "--confirm")],
+    "acquire an Active claim, resume an observed pause, or return the retained Exchange view",
+    [
+      exchangePair("replaceClaim", "--replace-claim"),
+      confirmControl,
+      exchangeVersion("pauseVersion", "--pause-version"),
+      exchangePair("decision", "--decision"),
+      exchangePair("operationId", "--operation-id"),
+      exchangeFlag("replayOnly", "--replay-only"),
+    ],
     {
       schema: {
         oneOf: [
@@ -1189,6 +1205,10 @@ const EXCHANGE_TOOLS: McpTool[] = [
             not: {
               anyOf: [
                 { required: ["replaceClaim"] },
+                { required: ["pauseVersion"] },
+                { required: ["operationId"] },
+                { required: ["decision"] },
+                { required: ["replayOnly"], properties: { replayOnly: { const: true } } },
                 { required: ["confirm"], properties: { confirm: { const: true } } },
               ],
             },
@@ -1196,6 +1216,19 @@ const EXCHANGE_TOOLS: McpTool[] = [
           {
             required: ["replaceClaim", "confirm"],
             properties: { confirm: { const: true } },
+            not: {
+              anyOf: [
+                { required: ["pauseVersion"] },
+                { required: ["operationId"] },
+                { required: ["decision"] },
+                { required: ["replayOnly"], properties: { replayOnly: { const: true } } },
+              ],
+            },
+          },
+          {
+            required: ["pauseVersion", "operationId", "confirm"],
+            properties: { confirm: { const: true } },
+            not: { required: ["replaceClaim"] },
           },
         ],
       },
@@ -1342,6 +1375,117 @@ const EXCHANGE_TOOLS: McpTool[] = [
     "discover the current Project's prior committed operations without writing",
     [exchangePair("operationId", "--operation-id")],
     { optionalPositionals: true, idempotent: true },
+  ),
+  exchangeTool(
+    "roster",
+    "apply an authorized versioned roster correction",
+    [
+      ...exchangeBusiness,
+      controlReason,
+      rosterVersion,
+      observedPauseVersion,
+      exchangeList("add", "--add"),
+      exchangeList("remove", "--remove"),
+      confirmControl,
+    ],
+    {
+      required: ["confirm"],
+      idempotent: true,
+      schema: { allOf: [confirmedControl, { anyOf: [{ required: ["add"] }, { required: ["remove"] }] }] },
+    },
+  ),
+  exchangeTool(
+    "owner-correct",
+    "correct request responsibility with user authorization",
+    [
+      ...exchangeBusiness,
+      controlReason,
+      requestId,
+      ownershipVersion,
+      rosterVersion,
+      observedPauseVersion,
+      exchangePair("acceptanceOwner", "--acceptance-owner"),
+      exchangePair("assignee", "--assignee"),
+      confirmControl,
+    ],
+    {
+      required: ["confirm"],
+      idempotent: true,
+      schema: { allOf: [confirmedControl, { anyOf: [{ required: ["acceptanceOwner"] }, { required: ["assignee"] }] }] },
+    },
+  ),
+  exchangeTool(
+    "request-disposition",
+    "record an accountable cancellation or agreed transfer",
+    [
+      ...exchangeParticipant,
+      controlReason,
+      requestId,
+      ownershipVersion,
+      exchangePair("disposition", "--disposition", "kind", "string", { enum: ["cancel", "transfer"] }),
+      exchangePair("followUp", "--follow-up"),
+    ],
+    {
+      idempotent: true,
+      schema: {
+        oneOf: [
+          { properties: { disposition: { const: "cancel" } }, not: { required: ["followUp"] } },
+          { properties: { disposition: { const: "transfer" } }, required: ["followUp"] },
+        ],
+      },
+    },
+  ),
+  exchangeTool(
+    "stop",
+    "pause by explicit user direction and revoke claims",
+    [...exchangeBusiness, controlReason, rosterVersion, observedPauseVersion, confirmControl],
+    { required: ["confirm"], idempotent: true, schema: { allOf: [confirmedControl] } },
+  ),
+  exchangeTool(
+    "pause",
+    "request an explicit user decision and revoke claims",
+    [...exchangeParticipant, controlReason, exchangePair("question", "--question", "text")],
+    { idempotent: true },
+  ),
+  exchangeTool(
+    "propose",
+    "propose an exact retained completion summary",
+    [
+      ...exchangeParticipant,
+      rosterVersion,
+      exchangeVersion("workRevision", "--work-revision", "n"),
+      exchangePair("summary", "--summary", "text"),
+      exchangeList("criterion", "--criterion"),
+      exchangeList("report", "--report"),
+      exchangeList("disposition", "--disposition"),
+    ],
+    { required: ["criterion"], idempotent: true },
+  ),
+  exchangeTool(
+    "vote",
+    "approve or object to the exact current proposal",
+    [
+      ...exchangeParticipant,
+      exchangeVersion("proposalVersion", "--proposal-version", "n"),
+      exchangePair("vote", "--vote", "kind", "string", { enum: ["approve", "object"] }),
+      exchangePair("objection", "--objection"),
+      exchangeAccept,
+    ],
+    {
+      idempotent: true,
+      schema: {
+        oneOf: [
+          { properties: { vote: { const: "approve" } }, not: { required: ["objection"] } },
+          { properties: { vote: { const: "object" } }, required: ["objection"], not: { required: ["accept"] } },
+        ],
+      },
+    },
+  ),
+  exchangeTool(
+    "material-revalidate",
+    "revalidate a restored original as its supplying Project",
+    [...exchangeParticipant, exchangePair("source", "--source", "path")],
+    { positionals: [exchangeId, { property: "materialId", argument: "material-id" }], idempotent: true },
   ),
 ];
 

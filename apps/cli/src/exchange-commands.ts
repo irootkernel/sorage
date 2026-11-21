@@ -9,6 +9,7 @@ import {
   type AppError,
   type ExchangeAcceptanceInput,
   type ExchangeBodyInput,
+  type ExchangeControlInput,
   type ExchangeInformationKind,
   type ExchangeInput,
   EXCHANGE_POLL_SECONDS,
@@ -48,13 +49,17 @@ function body(options: { body?: string; file?: string }): ExchangeBodyInput {
   return options.body === undefined ? { file: options.file as string } : { text: options.body };
 }
 
-function accept(input: string[]): ExchangeAcceptanceInput[] {
+function accept(input: string[], option: "accept" | "report" | "disposition" = "accept"): ExchangeAcceptanceInput[] {
+  const version = option === "disposition" ? "ownership version" : "report version";
   return input.map((raw) => {
     const match = /^([^:]+):(\d+)$/.exec(raw);
     if (match === null || match[1] === undefined || match[2] === undefined) {
-      throw new InvalidInput("Each --accept must be a request ID and report version separated by a colon.");
+      throw new InvalidInput(`Each --${option} must be a request ID and ${version} separated by a colon.`);
     }
-    return { requestId: match[1], reportVersion: unsigned(match[2], "Report version") };
+    return {
+      requestId: match[1],
+      reportVersion: unsigned(match[2], option === "disposition" ? "Ownership version" : "Report version"),
+    };
   });
 }
 
@@ -145,11 +150,17 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
     if (
       globals.cursor !== undefined ||
       globals.expectedRowVersion !== undefined ||
-      (globals.confirm === true && (parsed.kind !== "join" || parsed.replaceClaim === undefined))
+      (globals.confirm === true &&
+        !(
+          (parsed.kind === "join" && (parsed.replaceClaim !== undefined || parsed.resume !== undefined)) ||
+          parsed.kind === "roster" ||
+          parsed.kind === "owner-correct" ||
+          parsed.kind === "stop"
+        ))
     ) {
       output.fail(
         exchangeInvalid(
-          "Exchange does not use --cursor or --expected-row-version. Use --confirm only for claim replacement.",
+          "Exchange does not use --cursor or --expected-row-version. Use --confirm only for an authorized Exchange control.",
         ),
         json,
       );
@@ -202,7 +213,10 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
           const envelope = JSON.parse(status === 0 ? stdout : stderr);
           if (status === 0 && envelope.ok === true) {
             const lease = ownedLeaseOf(envelope.data, process.cwd());
-            if (envelope.data?.exchangeId !== parsed.exchangeId || (envelope.data?.state === "active" && !lease))
+            if (
+              envelope.data?.exchangeId !== parsed.exchangeId ||
+              (envelope.data?.state === "active" && !lease && !envelope.data?.replayed)
+            )
               return failure();
             if (lease) ownExchangeSession(lease, session.stdinLifetime);
             output.out(json ? stdout : `${JSON.stringify(envelope.data, null, 2)}\n`);
@@ -264,16 +278,52 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
       .description(description)
       .argument("<exchange-id>")
       .option("--replace-claim <id>", "replace the exact observed competing claim")
-      .addHelpText("after", "\nReplacement also requires the global --confirm option.\n");
-  const joinInput = (exchangeId: string, opts: { replaceClaim?: string }, command: Command) =>
-    ({
+      .option("--pause-version <n>", "resume the exact observed pause")
+      .option("--decision <text>", "required user decision for the observed pause")
+      .option("--operation-id <id>", "caller operation ID for durable resumption")
+      .option("--replay-only", "recover an exact recorded resumption without acquiring a claim")
+      .addHelpText("after", "\nReplacement and resumption require the global --confirm option.\n");
+  const joinInput = (
+    exchangeId: string,
+    opts: {
+      replaceClaim?: string;
+      pauseVersion?: string;
+      decision?: string;
+      operationId?: string;
+      replayOnly?: boolean;
+    },
+    command: Command,
+  ): ExchangeInput => {
+    const confirmed = command.optsWithGlobals().confirm === true;
+    let resume: Extract<ExchangeControlInput, { kind: "resume" }> | undefined;
+    if (
+      opts.pauseVersion !== undefined ||
+      opts.decision !== undefined ||
+      opts.operationId !== undefined ||
+      opts.replayOnly
+    ) {
+      if (opts.pauseVersion === undefined || opts.operationId === undefined)
+        throw new InvalidInput("Resumption requires --pause-version and --operation-id.");
+      resume = {
+        kind: "resume",
+        exchangeId,
+        pauseVersion: unsigned(opts.pauseVersion, "Pause version"),
+        decision: opts.decision,
+        operationId: opts.operationId,
+        confirmed,
+        replayOnly: opts.replayOnly === true,
+      };
+    }
+    return {
       kind: "join",
       exchangeId,
       replaceClaim: opts.replaceClaim,
-      confirmed: command.optsWithGlobals().confirm === true,
-    }) as const;
-  join("join", "acquire an Active Exchange claim and return the current view").action((exchangeId, opts, command) =>
-    run(command, () => joinInput(exchangeId, opts, command)),
+      confirmed,
+      ...(resume ? { resume } : {}),
+    };
+  };
+  join("join", "acquire an Active claim, resume an observed pause, or return the retained Exchange view").action(
+    (exchangeId, opts, command) => run(command, () => joinInput(exchangeId, opts, command)),
   );
 
   join("session", "own and renew an Active Exchange claim for this CLI process")
@@ -290,6 +340,156 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
       .requiredOption("--claim <id>", "current Exchange claim")
       .action((exchangeId, opts, command) => run(command, () => ({ kind, exchangeId, claim: opts.claim })));
   }
+
+  const controls = (kind: string, description: string) => {
+    const command = exchange.command(kind).description(description);
+    return kind === "roster" || kind === "owner-correct" || kind === "stop"
+      ? business(command.argument("<exchange-id>"))
+      : participant(command);
+  };
+  const reason = (command: Command) => command.requiredOption("--reason <text>", "bounded Exchange workflow reason");
+  const rosterObservation = (command: Command) =>
+    command.requiredOption("--roster-version <n>", "observed roster version");
+  const stateObservation = (command: Command) =>
+    command.option("--pause-version <n>", "observed pause version, initially zero");
+  const requestObservation = (command: Command) =>
+    command
+      .requiredOption("--request <id>", "retained request ID")
+      .requiredOption("--ownership-version <n>", "observed request ownership version");
+  const identity = (exchangeId: string, opts: { operationId: string; replayOnly?: boolean; claim?: string }) => ({
+    exchangeId,
+    operationId: opts.operationId,
+    replayOnly: opts.replayOnly === true,
+    claim: opts.claim,
+  });
+  const observedRoster = (opts: { rosterVersion: string }) => unsigned(opts.rosterVersion, "Roster version");
+  const observedPause = (opts: { pauseVersion?: string }) => unsigned(opts.pauseVersion ?? "0", "Pause version");
+  const observedOwner = (opts: { ownershipVersion: string }) => unsigned(opts.ownershipVersion, "Ownership version");
+
+  stateObservation(rosterObservation(reason(controls("roster", "apply an authorized versioned roster correction"))))
+    .option("--add <project>", "add the registered Project", append, [])
+    .option("--remove <project>", "remove the current Project", append, [])
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "roster",
+        rosterVersion: observedRoster(opts),
+        pauseVersion: observedPause(opts),
+        add: opts.add,
+        remove: opts.remove,
+        reason: opts.reason,
+        confirmed: command.optsWithGlobals().confirm === true,
+      })),
+    );
+  stateObservation(
+    rosterObservation(
+      requestObservation(reason(controls("owner-correct", "correct request responsibility with user authorization"))),
+    ),
+  )
+    .option("--acceptance-owner <project>", "current accountable requester")
+    .option("--assignee <project>", "current assignee")
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "owner-correct",
+        requestId: opts.request,
+        rosterVersion: observedRoster(opts),
+        pauseVersion: observedPause(opts),
+        ownershipVersion: observedOwner(opts),
+        acceptanceOwner: opts.acceptanceOwner,
+        assignee: opts.assignee,
+        reason: opts.reason,
+        confirmed: command.optsWithGlobals().confirm === true,
+      })),
+    );
+  requestObservation(reason(controls("request-disposition", "record an accountable cancellation or agreed transfer")))
+    .requiredOption("--disposition <kind>", "cancel or transfer")
+    .option("--follow-up <project>", "current Project accountable for the agreed follow-up")
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "request-disposition",
+        requestId: opts.request,
+        ownershipVersion: observedOwner(opts),
+        disposition: opts.disposition,
+        followUp: opts.followUp,
+        reason: opts.reason,
+      })),
+    );
+  stateObservation(
+    rosterObservation(reason(controls("stop", "pause by explicit user direction and revoke claims"))),
+  ).action((exchangeId, opts, command) =>
+    run(command, () => ({
+      ...identity(exchangeId, opts),
+      kind: "stop",
+      rosterVersion: observedRoster(opts),
+      pauseVersion: observedPause(opts),
+      reason: opts.reason,
+      confirmed: command.optsWithGlobals().confirm === true,
+    })),
+  );
+  reason(controls("pause", "request an explicit user decision and revoke claims"))
+    .requiredOption("--question <text>", "specific user decision needed")
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "pause",
+        reason: opts.reason,
+        question: opts.question,
+      })),
+    );
+  rosterObservation(controls("propose", "propose an exact retained completion summary"))
+    .requiredOption("--work-revision <n>", "observed substantive work revision")
+    .requiredOption("--summary <text>", "exact retained candidate summary")
+    .option("--criterion <text>", "exact Exchange criterion", append, [])
+    .option("--report <request-id:version>", "name the observed report", append, [])
+    .option("--disposition <request-id:version>", "name the observed disposition", append, [])
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "propose",
+        rosterVersion: observedRoster(opts),
+        workRevision: unsigned(opts.workRevision, "Work revision"),
+        summary: opts.summary,
+        criterion: opts.criterion,
+        report: accept(opts.report, "report"),
+        disposition: accept(opts.disposition, "disposition").map(({ requestId, reportVersion }) => ({
+          requestId,
+          version: reportVersion,
+        })),
+      })),
+    );
+  controls("vote", "approve or object to the exact current proposal")
+    .requiredOption("--proposal-version <n>", "observed proposal version")
+    .requiredOption("--vote <kind>", "approve or object")
+    .option("--objection <text>", "bounded reason for objecting")
+    .option("--accept <request-id:version>", "explicitly accept a covered checked report", append, [])
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "vote",
+        proposalVersion: unsigned(opts.proposalVersion, "Proposal version"),
+        vote: opts.vote,
+        objection: opts.objection,
+        accept: accept(opts.accept),
+      })),
+    );
+  controls("material-revalidate", "revalidate a restored original as its supplying Project")
+    .argument("<material-id>")
+    .requiredOption("--source <path>", "confined original in the supplying Project workspace")
+    .action((exchangeId, materialId, opts, command) =>
+      run(command, () => ({
+        ...identity(exchangeId, opts),
+        kind: "material-revalidate",
+        materialId,
+        source: opts.source,
+      })),
+    );
+  exchange
+    .command("cleanup")
+    .description("settle exact Exchange retirement and proven abandoned preparations")
+    .argument("<exchange-id>")
+    .action((exchangeId, _opts, command) => run(command, () => ({ kind: "cleanup", exchangeId })));
 
   exchange
     .command("inspect")
