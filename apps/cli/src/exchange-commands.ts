@@ -498,6 +498,40 @@ export function registerExchangeCommands(program: Command, output: ExchangeOutpu
     .action((exchangeId, _opts, command) => run(command, () => ({ kind: "inspect", exchangeId })));
 
   exchange
+    .command("notice-list")
+    .description("inspect eligible response notices without writing")
+    .argument("<exchange-id>")
+    .option("--claim <id>", "current Exchange claim to check reporting eligibility")
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({ kind: "notice-list", exchangeId, claim: opts.claim })),
+    );
+
+  exchange
+    .command("notice-acquire")
+    .description("acquire the finite reporting slot for a current Exchange notice")
+    .argument("<exchange-id>")
+    .requiredOption("--incident <id>", "observed Exchange notice incident")
+    .requiredOption("--claim <id>", "current Exchange claim")
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({ kind: "notice-acquire", exchangeId, incidentId: opts.incident, claim: opts.claim })),
+    );
+
+  participant(exchange.command("notice-ack").description("acknowledge an Exchange notice after issuing it to the user"))
+    .requiredOption("--incident <id>", "observed Exchange notice incident")
+    .option("--reporting-claim <id>", "exact current reporting claim for fresh acknowledgement")
+    .action((exchangeId, opts, command) =>
+      run(command, () => ({
+        kind: "notice-ack",
+        exchangeId,
+        incidentId: opts.incident,
+        claim: opts.claim,
+        reportingClaim: opts.reportingClaim,
+        operationId: opts.operationId,
+        replayOnly: opts.replayOnly === true,
+      })),
+    );
+
+  exchange
     .command("history")
     .description("read a bounded page of Exchange history without confirming it")
     .argument("<exchange-id>")

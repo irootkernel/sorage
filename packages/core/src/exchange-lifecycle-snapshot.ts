@@ -22,7 +22,7 @@ import {
   exchangeText,
 } from "./exchanges";
 import { memoObject } from "./memo-protocol";
-import { isMemoUuid } from "./memos";
+import { isMemoTimestamp, isMemoUuid } from "./memos";
 
 export function canonicalExchangeLifecycle(lifecycle: ExchangeLifecycle): ExchangeLifecycle {
   return {
@@ -187,6 +187,7 @@ export function openExchangeLifecycle(
   historical: Set<string>,
   opener: string,
   lastSeq: unknown,
+  noticeTiming = false,
 ): ExchangeLifecycle | null {
   if (
     !memoObject(value, ["initialMembers", "workRevision", "transitions"]) ||
@@ -201,7 +202,12 @@ export function openExchangeLifecycle(
   let previous = 0;
   for (const record of value.transitions) {
     if (
-      !memoObject(record, ["seq", "workRevision", "actorId", "operationId", "transition"]) ||
+      !memoObject(
+        record,
+        ["seq", "workRevision", "actorId", "operationId", "transition"],
+        noticeTiming ? ["recordedAt"] : [],
+      ) ||
+      (Object.hasOwn(record, "recordedAt") && !isMemoTimestamp(record.recordedAt)) ||
       !exchangeCount(record.seq, previous + 1) ||
       record.seq > lastSeq ||
       !exchangeCount(record.workRevision, 1) ||
@@ -218,7 +224,7 @@ export function openExchangeLifecycle(
 }
 
 /** Identify committed operation boundaries, never an interior sequence of a grouped acceptance. */
-function exchangeWorkTimeline(collaboration: ExchangeCollaboration) {
+export function exchangeWorkTimeline(lifecycle: ExchangeLifecycle, collaboration: ExchangeCollaboration) {
   const acceptanceGroups = new Map<string, ExchangeAcceptanceInput[]>();
   for (const row of collaboration.acceptances) {
     const key = JSON.stringify([row.requesterId, row.receipt.operationId]);
@@ -246,7 +252,9 @@ function exchangeWorkTimeline(collaboration: ExchangeCollaboration) {
     }
   }
   registrations.sort((left, right) => left.seq - right.seq);
-  return { sequenced, registrations };
+  const committedHeads = new Set(sequenced.keys());
+  for (const { seq } of lifecycle.transitions) committedHeads.add(seq);
+  return { sequenced, registrations, committedHeads };
 }
 
 export function validateExchangeLifecycleEffects(
@@ -254,6 +262,7 @@ export function validateExchangeLifecycleEffects(
   collaboration: ExchangeCollaboration,
   historical: Set<string>,
   criteria: unknown,
+  { sequenced, registrations, committedHeads }: ReturnType<typeof exchangeWorkTimeline>,
 ): boolean {
   const { messages, requests, reports, acceptances, materials } = collaboration;
   const head = exchangeLifecycleHead(lifecycle, 0);
@@ -262,15 +271,9 @@ export function validateExchangeLifecycleEffects(
   const messageSeqs = new Set(messages.map((message) => message.seq));
   const byRequest = new Map(requests.map((request) => [request.id, request]));
   const timeline = [...messages].sort((a, b) => a.seq - b.seq);
-  const { sequenced, registrations } = exchangeWorkTimeline(collaboration);
-  const transitionSeqs = new Set(lifecycle.transitions.map((record) => record.seq));
   const firstSequence = Math.min(timeline[0]?.seq ?? Infinity, lifecycle.transitions[0]?.seq ?? Infinity);
   const legacySequenceFloor = Number.isFinite(firstSequence) ? firstSequence - 1 : collaboration.lastSeq;
-  if (
-    registrations.some(
-      ({ seq }) => seq !== 0 && seq !== legacySequenceFloor && !transitionSeqs.has(seq) && !sequenced.has(seq),
-    )
-  )
+  if (registrations.some(({ seq }) => seq !== 0 && seq !== legacySequenceFloor && !committedHeads.has(seq)))
     return false;
   const opened = new Set<string>();
   const currentReports = new Map<string, number>();

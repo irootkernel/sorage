@@ -8,6 +8,8 @@ import {
   exchangeControlOutcome,
   exchangeLifecycleHead,
 } from "./exchange-lifecycle";
+import { validExchangeNoticeOutcome } from "./exchange-notice-snapshot";
+import { exchangeNoticeAckFingerprint } from "./exchange-notices";
 import {
   EXCHANGE_INFORMATION_KINDS,
   type ExchangeAcceptanceReceipt,
@@ -169,6 +171,7 @@ export function validateExchangeCollaboration(
   exchangeId: string,
   members: Set<string>,
   lifecycle?: ExchangeLifecycle,
+  noticeOutcomes = false,
 ): boolean {
   if (
     !memoObject(value, ["lastSeq", "messages", "requests", "reports", "acceptances", "materials", "operations"]) ||
@@ -432,7 +435,13 @@ export function validateExchangeCollaboration(
       (record
         ? canonicalJson(operation.outcome) !==
           canonicalJson(exchangeControlOutcome(exchangeId, record.seq, record.transition))
-        : !validOutcome(operation.outcome, exchangeId, operation.projectId, messageBySeq, materialById, requestById))
+        : validExchangeNoticeOutcome(operation.outcome)
+          ? !noticeOutcomes ||
+            operation.outcome.exchangeId !== exchangeId ||
+            operation.outcome.projectId !== operation.projectId ||
+            !project(operation.outcome.affectedProjectId) ||
+            operation.fingerprint !== exchangeNoticeAckFingerprint(operation.outcome.incidentId)
+          : !validOutcome(operation.outcome, exchangeId, operation.projectId, messageBySeq, materialById, requestById))
     )
       return false;
     if (operationIds.has(key)) return false;
@@ -448,6 +457,7 @@ export function validateExchangeCollaboration(
       return false;
     const batch = acceptanceBatches.get(key);
     if (batch && batch.kind !== outcome.kind) return false;
+    if (outcome.kind === "notice-ack") continue;
     if (record) {
       if (record.transition.kind === "vote") {
         const sequences = batch?.sequences ?? [];

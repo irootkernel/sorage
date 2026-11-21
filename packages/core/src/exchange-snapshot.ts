@@ -5,9 +5,12 @@ import { canonicalExchangeCollaboration, validateExchangeCollaboration } from ".
 import type { ExchangeLifecycle } from "./exchange-lifecycle";
 import {
   canonicalExchangeLifecycle,
+  exchangeWorkTimeline,
   openExchangeLifecycle,
   validateExchangeLifecycleEffects,
 } from "./exchange-lifecycle-snapshot";
+import { validateExchangeNoticeInventory } from "./exchange-notice-snapshot";
+import type { ExchangeNoticeInventory } from "./exchange-notices";
 import type { ExchangeCollaboration } from "./exchanges";
 import { type SnapshotDataV4, snapshotFilesV4 } from "./handoff-reporting-snapshot";
 import { memoObject } from "./memo-protocol";
@@ -39,9 +42,10 @@ export interface ExchangeSnapshotRecord {
   creationOutcomes: ExchangeCreationOutcome[];
   collaboration?: ExchangeCollaboration;
   lifecycle?: ExchangeLifecycle;
+  notices?: ExchangeNoticeInventory;
 }
 
-export type ExchangeSnapshotRepresentation = "foundation" | "collaboration" | "lifecycle";
+export type ExchangeSnapshotRepresentation = "foundation" | "collaboration" | "lifecycle" | "notices";
 
 export interface SnapshotDataV5 extends SnapshotDataV4 {
   exchanges: ExchangeSnapshotRecord[];
@@ -79,6 +83,14 @@ function canonicalRecords(records: ExchangeSnapshotRecord[]): ExchangeSnapshotRe
       ),
       ...(record.collaboration ? { collaboration: canonicalExchangeCollaboration(record.collaboration) } : {}),
       ...(record.lifecycle ? { lifecycle: canonicalExchangeLifecycle(record.lifecycle) } : {}),
+      ...(record.notices
+        ? {
+            notices: {
+              ...record.notices,
+              openConnectionIssues: [...record.notices.openConnectionIssues].sort(compare),
+            },
+          }
+        : {}),
     }));
 }
 
@@ -109,7 +121,7 @@ export function validateExchangeInventory(
       !memoObject(
         record,
         ["id", "openingProjectId", "goal", "criteria", "createdAt", "members", "readRanges", "creationOutcomes"],
-        ["collaboration", "lifecycle"],
+        ["collaboration", "lifecycle", "notices"],
       ) ||
       !isMemoUuid(record.id) ||
       !isMemoUuid(record.openingProjectId) ||
@@ -127,11 +139,14 @@ export function validateExchangeInventory(
     }
     const collaboration = Object.hasOwn(record, "collaboration");
     const lifecyclePresent = Object.hasOwn(record, "lifecycle");
+    const noticesPresent = Object.hasOwn(record, "notices");
     if (
       (representation !== undefined &&
         (collaboration !== (representation !== "foundation") ||
-          lifecyclePresent !== (representation === "lifecycle"))) ||
-      (lifecyclePresent && !collaboration)
+          lifecyclePresent !== (representation === "lifecycle" || representation === "notices") ||
+          noticesPresent !== (representation === "notices"))) ||
+      (lifecyclePresent && !collaboration) ||
+      (noticesPresent && !lifecyclePresent)
     ) {
       return corrupt("An Exchange collaboration record has invalid fields or associations.");
     }
@@ -152,21 +167,36 @@ export function validateExchangeInventory(
       record.collaboration &&
       typeof record.collaboration === "object" &&
       "lastSeq" in record.collaboration
-        ? openExchangeLifecycle(record.lifecycle, members, record.openingProjectId, record.collaboration.lastSeq)
+        ? openExchangeLifecycle(
+            record.lifecycle,
+            members,
+            record.openingProjectId,
+            record.collaboration.lastSeq,
+            noticesPresent,
+          )
         : null;
     if (
       (lifecyclePresent && lifecycle === null) ||
       (collaboration &&
-        !validateExchangeCollaboration(record.collaboration, record.id, members, lifecycle ?? undefined)) ||
-      (lifecycle &&
-        !validateExchangeLifecycleEffects(
-          lifecycle,
-          record.collaboration as ExchangeCollaboration,
+        !validateExchangeCollaboration(
+          record.collaboration,
+          record.id,
           members,
-          record.criteria,
+          lifecycle ?? undefined,
+          noticesPresent,
         ))
     ) {
       return corrupt("An Exchange collaboration record has invalid fields or associations.");
+    }
+    if (lifecycle) {
+      const collaboration = record.collaboration as ExchangeCollaboration;
+      const timeline = exchangeWorkTimeline(lifecycle, collaboration);
+      if (
+        !validateExchangeLifecycleEffects(lifecycle, collaboration, members, record.criteria, timeline) ||
+        (noticesPresent &&
+          !validateExchangeNoticeInventory(record.notices, lifecycle, collaboration, timeline.committedHeads))
+      )
+        return corrupt("An Exchange collaboration record has invalid fields or associations.");
     }
     const ranges = new Map<string, Array<{ firstSeq: number; lastSeq: number }>>();
     for (const range of record.readRanges) {
@@ -226,7 +256,8 @@ export function openExchangeSnapshot(raw: string, count: number): Result<Exchang
   if (
     value.representation !== FOUNDATION_REPRESENTATION &&
     value.representation !== "collaboration" &&
-    value.representation !== "lifecycle"
+    value.representation !== "lifecycle" &&
+    value.representation !== "notices"
   ) {
     return err(appError("VAULT_SCHEMA_UNSUPPORTED", "This Exchange snapshot representation is not supported."));
   }

@@ -139,6 +139,7 @@ export interface ExchangeTransitionRecord {
   actorId: string;
   operationId: string;
   transition: ExchangeTransition;
+  recordedAt?: string;
 }
 
 export interface ExchangeLifecycle {

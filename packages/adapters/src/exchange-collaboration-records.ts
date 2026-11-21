@@ -33,6 +33,15 @@ export function exchangeMessages(db: SorageSqlite, exchangeId: string, after = 0
     .all(exchangeId, after, limit);
 }
 
+export function exchangeResponseMessages(db: SorageSqlite, exchangeId: string) {
+  return db
+    .prepare<ExchangeMessage>(
+      `SELECT ${MESSAGE_FIELDS} FROM exchange_messages m
+      WHERE m.exchange_id = ? AND m.kind IN ('request', 'report') ORDER BY m.seq`,
+    )
+    .all(exchangeId);
+}
+
 export function relevantExchangeMessages(
   db: SorageSqlite,
   exchangeId: string,

@@ -13,6 +13,13 @@ import {
   err,
   EXCHANGE_LEASE_SECONDS,
   EXCHANGE_READ_BYTES,
+  EXCHANGE_REPORTING_CLAIM_MS,
+  type ExchangeNoticeAckInput,
+  type ExchangeNoticeIncident,
+  type ExchangeNoticeList,
+  type ExchangeNoticeOutcome,
+  type ExchangeReportingClaim,
+  exchangeNoticeAckFingerprint,
   type ExchangeLeaseResult,
   type ExchangeActionData,
   type ExchangeActionFor,
@@ -39,6 +46,7 @@ import {
   exchangeRequiresParticipantClaim,
   exchangeTransitionChangesWork,
   initialOwnership,
+  isLowercaseSha256,
   isExchangeControl,
   planExchangeControl,
   type ExchangeInput,
@@ -96,6 +104,7 @@ import {
 } from "./exchange-sources";
 import { createExchangeWorkingStore, type PreparedExchangeBody } from "./exchange-working-store";
 import { readExchangeLifecycle, recordExchangeTransition } from "./exchange-lifecycle-records";
+import { observeExchangeNotices, retainConnectionIssue, type NoticeSlot } from "./exchange-notice-records";
 import { createHomePaths, type HomeEnvironment, type HomePaths } from "./home";
 import { createNodeLockProbePorts, vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
 import { createNodeResolutionBindings } from "./project-command-ports";
@@ -495,7 +504,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     );
   }
 
-  currentReceipt(input: ExchangeBusinessInput | ExchangeControlInput): Receipt | null {
+  currentReceipt(input: ExchangeBusinessInput | ExchangeControlInput | ExchangeNoticeAckInput): Receipt | null {
     if (input.kind === "create") {
       const row = this.db
         .prepare(
@@ -712,6 +721,8 @@ class ExchangeStore implements ExchangeBusinessRepository {
       (transition.kind === "vote" && transition.completed)
     ) {
       this.db.prepare("DELETE FROM exchange_claims WHERE exchange_id = ?").run(exchangeId);
+      this.db.prepare("DELETE FROM exchange_notice_claims WHERE exchange_id = ?").run(exchangeId);
+      this.db.prepare("DELETE FROM exchange_notice_issues WHERE exchange_id = ?").run(exchangeId);
     }
     if (transition.kind === "vote" && transition.completed) {
       this.db.prepare("DELETE FROM exchange_read_ranges WHERE exchange_id = ?").run(exchangeId);
@@ -738,17 +749,21 @@ class ExchangeStore implements ExchangeBusinessRepository {
     }
     if (exchangeTransitionChangesWork(transition)) this.advanceWork(exchangeId);
     const seq = this.seq(exchangeId);
+    const observedAt = this.now();
+    const noticeTiming =
+      transition.kind === "roster" || transition.kind === "owner-correct" || transition.kind === "resume";
     recordExchangeTransition(this.db, exchangeId, {
       seq,
       workRevision,
       actorId: this.actorId,
       operationId: input.operationId,
       transition,
+      ...(noticeTiming ? { recordedAt: observedAt.toISOString() } : {}),
     });
     const outcome = exchangeControlOutcome(exchangeId, seq, transition);
     this.saveOutcome(outcome, input.operationId, fingerprint);
     if (transition.kind === "resume") {
-      const claim = this.acquireClaim(exchangeId);
+      const claim = this.acquireClaim(exchangeId, observedAt);
       this.requireLiveOwner();
       return { ...this.publicView(exchangeId), ...claim, replayed: false };
     }
@@ -815,9 +830,27 @@ class ExchangeStore implements ExchangeBusinessRepository {
     this.requireLiveOwner();
   }
 
-  private acquireClaim(exchangeId: string): ExchangeClaim {
+  private acquireClaim(exchangeId: string, now: Date): ExchangeClaim {
     const claimId = randomUUID();
-    const expiresAt = new Date(this.now().getTime() + EXCHANGE_LEASE_SECONDS * 1_000).toISOString();
+    const expiresAt = new Date(now.getTime() + EXCHANGE_LEASE_SECONDS * 1_000).toISOString();
+    const previous = this.claim(exchangeId);
+    const continuous = previous !== null && Date.parse(previous.expiresAt) > now.getTime();
+    const observedAt = now.toISOString();
+    if (continuous) {
+      this.db
+        .prepare(`UPDATE exchange_notice_presence SET heartbeat_at = ?
+        WHERE exchange_id = ? AND project_id = ?`)
+        .run(observedAt, exchangeId, this.actorId);
+    } else {
+      this.db
+        .prepare(`INSERT INTO exchange_notice_presence VALUES (?,?,?,?,?)
+        ON CONFLICT(exchange_id,project_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at,
+          online_since=excluded.online_since, epoch=excluded.epoch`)
+        .run(exchangeId, this.actorId, observedAt, observedAt, randomUUID());
+      this.db
+        .prepare(`DELETE FROM exchange_notice_issues WHERE exchange_id = ? AND affected_project_id = ?`)
+        .run(exchangeId, this.actorId);
+    }
     this.db
       .prepare(
         "INSERT INTO exchange_claims VALUES (?,?,?,?) ON CONFLICT(exchange_id,project_id) DO UPDATE SET claim_id=excluded.claim_id,expires_at=excluded.expires_at",
@@ -836,12 +869,13 @@ class ExchangeStore implements ExchangeBusinessRepository {
       const now = this.context.now();
       need(authorizeExchangeJoin(this.claim(exchangeId), input.replaceClaim, input.confirmed, now));
       this.context.onFreshWrite?.();
-      const claim = this.acquireClaim(exchangeId);
+      const claim = this.acquireClaim(exchangeId, now);
       const view = this.view(header);
       this.requireLiveOwner();
       return { ...view, ...claim };
     }
     if (input.kind === "renew" || input.kind === "release") return this.maintainLease(input);
+    if (input.kind === "notice-acquire") return this.acquireNotice(input, true);
     this.requireActive(exchangeId);
     need(requireExchangeClaim(this.claim(exchangeId), input.claim, this.now()));
     if (input.ranges.length === 0) return invalid("Confirm at least one exact delivered sequence or range.");
@@ -886,6 +920,9 @@ class ExchangeStore implements ExchangeBusinessRepository {
       this.db
         .prepare("UPDATE exchange_claims SET expires_at = ? WHERE exchange_id = ? AND project_id = ? AND claim_id = ?")
         .run(expiresAt, exchangeId, this.actorId, claimId);
+      this.db
+        .prepare("UPDATE exchange_notice_presence SET heartbeat_at = ? WHERE exchange_id = ? AND project_id = ?")
+        .run(now.toISOString(), exchangeId, this.actorId);
     } else {
       this.db
         .prepare("DELETE FROM exchange_claims WHERE exchange_id = ? AND project_id = ? AND claim_id = ?")
@@ -893,6 +930,132 @@ class ExchangeStore implements ExchangeBusinessRepository {
     }
     this.requireLiveOwner();
     return { exchangeId, projectId: this.actorId, claimId, expiresAt };
+  }
+
+  listNotices(header: Header, claim?: string): ExchangeNoticeList {
+    const now = this.now();
+    const { incidents, live, slots } = observeExchangeNotices(
+      this.db,
+      this.context.config.installationId,
+      header.id,
+      readExchangeLifecycle(this.db, header.id),
+      now,
+    );
+    const callerLive = claim !== undefined && live.get(this.actorId)?.claimId === claim;
+    return {
+      exchangeId: header.id,
+      projectId: this.actorId,
+      notices: incidents.map((incident) => {
+        const slot = slots.get(incident.incidentId);
+        const canAcquire =
+          callerLive &&
+          (slot
+            ? slot.projectId === this.actorId
+            : this.actorId === header.openingProjectId ||
+              !live.has(header.openingProjectId) ||
+              Date.parse(incident.priorityUntil) <= now.getTime());
+        return { ...incident, canAcquire };
+      }),
+    };
+  }
+
+  private noticeAdmission(input: Pick<ExchangeNoticeAckInput, "exchangeId" | "incidentId" | "claim">) {
+    const { exchangeId, incidentId, claim } = input;
+    const header = this.access(exchangeId);
+    if (!isLowercaseSha256(incidentId)) return invalid("Supply a current Exchange notice incident ID.");
+    const now = this.now();
+    const { incidents, live, slots } = observeExchangeNotices(
+      this.db,
+      this.context.config.installationId,
+      exchangeId,
+      readExchangeLifecycle(this.db, exchangeId),
+      now,
+    );
+    const participant = need(requireExchangeClaim(live.get(this.actorId) ?? null, claim, now));
+    const incident = incidents.find((entry) => entry.incidentId === incidentId);
+    if (!incident) return conflict("The Exchange notice incident is no longer current or has already been issued.");
+    return { now, header, incident, participant, live, slot: slots.get(incidentId) };
+  }
+
+  acquireNotice(
+    input: Extract<ExchangeLifecycleInput, { kind: "notice-acquire" }>,
+    write: true,
+  ): ExchangeReportingClaim;
+  acquireNotice(
+    input: Extract<ExchangeLifecycleInput, { kind: "notice-acquire" }>,
+    write: false,
+  ): ExchangeReportingClaim | undefined;
+  acquireNotice(
+    input: Extract<ExchangeLifecycleInput, { kind: "notice-acquire" }>,
+    write: boolean,
+  ): ExchangeReportingClaim | undefined {
+    const { exchangeId, incidentId } = input;
+    const { now, header, incident, participant, live, slot } = this.noticeAdmission(input);
+    const retained = (entry: Pick<NoticeSlot, "reportingClaimId" | "expiresAt">) => ({
+      exchangeId,
+      projectId: this.actorId,
+      incidentId,
+      reportingClaimId: entry.reportingClaimId,
+      expiresAt: entry.expiresAt,
+    });
+    if (slot) {
+      if (slot.projectId !== this.actorId) return conflict("A current reporting claim already owns this notice.");
+      return retained(slot);
+    }
+    if (
+      header.openingProjectId !== this.actorId &&
+      live.has(header.openingProjectId) &&
+      Date.parse(incident.priorityUntil) > now.getTime()
+    )
+      return conflict("The opening Project still has priority for this notice.");
+    if (!write) return;
+    const reportingClaimId = randomUUID();
+    const expiresAt = new Date(now.getTime() + EXCHANGE_REPORTING_CLAIM_MS).toISOString();
+    this.context.onFreshWrite?.();
+    this.db
+      .prepare("DELETE FROM exchange_notice_claims WHERE exchange_id = ? AND expires_at <= ?")
+      .run(exchangeId, now.toISOString());
+    this.db
+      .prepare(`INSERT INTO exchange_notice_claims VALUES (?,?,?,?,?,?)
+      ON CONFLICT(exchange_id,incident_id) DO UPDATE SET reporting_claim_id=excluded.reporting_claim_id,
+        project_id=excluded.project_id, participant_claim_id=excluded.participant_claim_id, expires_at=excluded.expires_at`)
+      .run(exchangeId, incidentId, reportingClaimId, this.actorId, participant.claimId, expiresAt);
+    return retained({ reportingClaimId, expiresAt });
+  }
+
+  admitNoticeAck(input: ExchangeNoticeAckInput): { now: Date; header: Header; incident: ExchangeNoticeIncident } {
+    const { now, header, incident, slot } = this.noticeAdmission(input);
+    if (slot?.projectId !== this.actorId || slot.reportingClaimId !== input.reportingClaim)
+      return conflict("Use the exact live reporting claim for this Exchange notice.");
+    return { now, header, incident };
+  }
+
+  acknowledgeNotice(input: ExchangeNoticeAckInput, fingerprint: string): ExchangeBusinessResult {
+    const { now, header, incident } = this.admitNoticeAck(input);
+    const outcome: ExchangeNoticeOutcome = {
+      kind: "notice-ack",
+      exchangeId: input.exchangeId,
+      incidentId: incident.incidentId,
+      noticeKind: incident.noticeKind,
+      affectedProjectId: incident.affectedProjectId,
+      projectId: this.actorId,
+      obligation: incident.obligation,
+      observedThroughSeq: header.lastSeq,
+      issuedAt: now.toISOString(),
+    };
+    this.context.onFreshWrite?.();
+    this.saveOutcome(outcome, input.operationId, fingerprint);
+    if (incident.noticeKind === "connection-check") {
+      // Admission already established this lease was non-live. It cannot become live after a clock correction.
+      this.db
+        .prepare("DELETE FROM exchange_claims WHERE exchange_id = ? AND project_id = ?")
+        .run(outcome.exchangeId, outcome.affectedProjectId);
+      retainConnectionIssue(this.db, outcome, input.operationId);
+    }
+    this.db
+      .prepare("DELETE FROM exchange_notice_claims WHERE exchange_id = ? AND incident_id = ?")
+      .run(input.exchangeId, incident.incidentId);
+    return this.outcomeData(outcome, false);
   }
 
   private historyCursor(header: Header, seq: number): ExchangeHistoryCursor {
@@ -987,6 +1150,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     }
     const header = this.access(input.exchangeId);
     if (input.kind === "inspect") return this.view(header);
+    if (input.kind === "notice-list") return this.listNotices(header, input.claim);
     if (input.kind === "history") {
       const limit = input.limit ?? this.context.config.ui.defaultPageSize;
       if (input.cursor !== undefined && input.afterSeq !== undefined)
@@ -1299,6 +1463,21 @@ function readCheckpoint(
   input: ExchangeInput,
   preparation: Preparation,
 ): Result<ExchangeReadDecision> {
+  if (input.kind === "notice-ack") {
+    if (!isLowercaseSha256(input.incidentId))
+      return err(exchangeInvalid("Supply a current Exchange notice incident ID."));
+    const fingerprint = exchangeNoticeAckFingerprint(input.incidentId);
+    return readSnapshot(context, (store) => {
+      const receipt = store.currentReceipt(input);
+      if (receipt) {
+        need(matchExchangeFingerprint(receipt.fingerprint, fingerprint));
+        return { data: store.outcomeData(receipt.outcome, true) };
+      }
+      if (input.replayOnly) return unavailableReplay();
+      store.admitNoticeAck(input);
+      return { fingerprint };
+    });
+  }
   const control = controlOf(input);
   if (control !== undefined) {
     if (!exchangeOperationId(control.operationId))
@@ -1328,6 +1507,7 @@ function readCheckpoint(
   if (!isExchangeBusiness(input)) {
     const result = readSnapshot(context, (store) => {
       if (isExchangeRead(input)) return store.read(input);
+      if (input.kind === "notice-acquire") return store.acquireNotice(input, false);
       store.access(input.exchangeId);
       if (input.kind === "join") {
         const state = store.head(input.exchangeId).state;
@@ -1374,7 +1554,7 @@ function readCheckpoint(
 
 function writeExchange(
   context: Context,
-  input: ExchangeBusinessInput | ExchangeLifecycleInput | ExchangeControlInput,
+  input: ExchangeBusinessInput | ExchangeLifecycleInput | ExchangeControlInput | ExchangeNoticeAckInput,
   fingerprint: string | undefined,
   preparation: Preparation,
 ): Result<ExchangeActionData> {
@@ -1391,7 +1571,7 @@ function writeExchange(
     const control = controlOf(input);
     if (
       (isExchangeBusiness(input) && preparation.captured === undefined) ||
-      (control !== undefined && fingerprint === undefined)
+      ((control !== undefined || input.kind === "notice-ack") && fingerprint === undefined)
     ) {
       // The read admission may have required a known older schema to be migrated first.
       const observed = readCheckpoint(context, input, preparation);
@@ -1415,6 +1595,17 @@ function writeExchange(
       "BEGIN IMMEDIATE",
       () => {
         const store = new ExchangeStore(db, context, workspace, captured, prepared);
+        if (input.kind === "notice-ack") {
+          const observed = exchangeNoticeAckFingerprint(input.incidentId);
+          const receipt = store.currentReceipt(input);
+          if (receipt) {
+            need(matchExchangeFingerprint(receipt.fingerprint, observed));
+            return ok({ data: store.outcomeData(receipt.outcome, true), exchangeId: input.exchangeId, fresh: false });
+          }
+          if (observed !== fingerprint) return conflict("The Exchange notice input changed during admission.");
+          const data = store.acknowledgeNotice(input, observed);
+          return ok({ data, exchangeId: input.exchangeId, fresh: false });
+        }
         if (control !== undefined) {
           const receipt = store.currentReceipt(control);
           let normalized = store.normalizeControl(control);

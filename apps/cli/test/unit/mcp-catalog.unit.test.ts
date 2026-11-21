@@ -81,6 +81,9 @@ const COMMAND_PATHS: Record<string, string[]> = {
   exchange_propose: ["exchange", "propose"],
   exchange_vote: ["exchange", "vote"],
   exchange_material_revalidate: ["exchange", "material-revalidate"],
+  exchange_notice_list: ["exchange", "notice-list"],
+  exchange_notice_acquire: ["exchange", "notice-acquire"],
+  exchange_notice_ack: ["exchange", "notice-ack"],
 };
 
 const COMMANDER_PATHS_OF_CLOSED_LIST = [
@@ -140,7 +143,7 @@ function refusalOf(name: string, arguments_: Record<string, unknown>): string {
 const silent = { out: () => {}, err: () => {} };
 
 describe("the MCP catalogue shape (MCP-005)", () => {
-  it("preserves the 35 M9 tools and lists the 21 Exchange operations in order", () => {
+  it("preserves the 35 M9 tools and lists the 24 Exchange operations in order", () => {
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
       ...[
         "send",
@@ -195,9 +198,12 @@ describe("the MCP catalogue shape (MCP-005)", () => {
         "propose",
         "vote",
         "material_revalidate",
+        "notice_list",
+        "notice_acquire",
+        "notice_ack",
       ].map((name) => `exchange_${name}`),
     ]);
-    expect(MCP_TOOLS).toHaveLength(56);
+    expect(MCP_TOOLS).toHaveLength(59);
   });
 
   it("sets the exact annotation memberships of section 39", () => {
@@ -232,6 +238,8 @@ describe("the MCP catalogue shape (MCP-005)", () => {
         "propose",
         "vote",
         "material_revalidate",
+        "notice_list",
+        "notice_ack",
       ].map((name) => `exchange_${name}`),
     ]);
     expect(MCP_TOOLS.every((entry) => entry.annotations.openWorldHint === false)).toBe(true);
@@ -570,6 +578,9 @@ function sampleArguments(name: string): Record<string, unknown> {
       materialId: "m",
       source: "file",
     },
+    exchange_notice_list: { exchangeId: "e", claim: "c" },
+    exchange_notice_acquire: { exchangeId: "e", incidentId: "i", claim: "c" },
+    exchange_notice_ack: { exchangeId: "e", incidentId: "i", operationId: "issued", replayOnly: true },
   };
   const sample = samples[name];
   if (sample === undefined) throw new Error(`no sample arguments for ${name}`);

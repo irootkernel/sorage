@@ -13,8 +13,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  archiveProject,
   backupRestore,
   backupVerify,
+  bindProject,
   canonicalJson,
   type ExchangeActionFor,
   exportSnapshot,
@@ -22,7 +24,11 @@ import {
   type ExchangeInput,
   initializeInstallation,
   type Result,
+  runBackupCommand,
   snapshotFilesV5,
+  unarchiveProject,
+  unbindProject,
+  USER_ACTOR,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
@@ -30,6 +36,7 @@ import { admitExchangeJoin, executeExchange } from "../../src/exchange-command-p
 import { readExchangeRecords } from "../../src/exchange-records";
 import { createExchangeWorkingStore } from "../../src/exchange-working-store";
 import { createNodeInitPorts } from "../../src/init-ports";
+import { createNodeProjectPorts } from "../../src/project-command-ports";
 import { openSorageDatabase, type SorageSqlite } from "../../src/sqlite/connection";
 import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { openAndMigrate } from "../../src/sqlite/migrator";
@@ -621,6 +628,841 @@ describe("Exchange SQLite and working storage through the application entrypoint
     unwrap(exportSnapshot(unwrap(restored.ports.exportPorts())));
   });
 
+  it("retains notice issue receipts, preserves separate clocks and recovers a new episode after reconnect", () => {
+    const f = fixture();
+    const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+    const pair = { exchangeId };
+    const opener = joinExchange(f, exchangeId);
+    const affected = joinExchange(f, exchangeId, f.beta);
+    const issueRequest = (operationId: string) =>
+      unwrap(
+        f.run({
+          ...pair,
+          kind: "request",
+          claim: opener,
+          operationId,
+          replayOnly: false,
+          assignee: "beta",
+          condition: "Check the result",
+          criteria: ["Supply evidence"],
+        }),
+      );
+    const pending = issueRequest("notice-first");
+    const separate = issueRequest("notice-second");
+    unwrap(f.run(send(exchangeId, opener, "information-is-not-work")));
+    const list = (claim?: string, cwd = f.alpha) => unwrap(f.run({ ...pair, kind: "notice-list", claim }, cwd)).notices;
+    f.later(20);
+    unwrap(f.run({ ...pair, kind: "renew", claim: affected }, f.beta));
+    unwrap(f.run({ ...pair, kind: "release", claim: affected }, f.beta));
+    f.later(20);
+    expect(list()).toEqual([]);
+    f.later(279.999);
+    expect(list()).toEqual([]);
+    f.later(0.001);
+    const waiting = joinExchange(f, exchangeId, f.other);
+    const beforeRead = tree(f.home);
+    const due = list(waiting, f.other).find((notice) => notice.obligation.requestId === pending.requestId);
+    expect(due).toMatchObject({
+      noticeKind: "connection-check",
+      canAcquire: true,
+      eligibleAt: "2026-11-20T00:05:20.000Z",
+    });
+    expect(list(waiting, f.other)).toHaveLength(2);
+    expect(tree(f.home)).toEqual(beforeRead);
+    if (!due) throw new Error("Expected the first due notice.");
+    const backup = unwrap(f.ports.runPorts());
+    unwrap(runBackupCommand(backup, {}));
+    const snapshot = join(f.vault, "snapshots", "exchanges.json");
+    const canonical = readFileSync(snapshot, "utf8");
+    const acquire = { ...pair, kind: "notice-acquire" as const, claim: waiting, incidentId: due.incidentId };
+    const slot = unwrap(f.run(acquire, f.other));
+    expect(unwrap(f.run(acquire, f.other))).toEqual(slot);
+    const activeOpener = joinExchange(f, exchangeId);
+    expect(f.run({ ...acquire, claim: activeOpener })).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    f.later(29.999);
+    unwrap(f.run({ ...pair, kind: "renew", claim: activeOpener }));
+    expect(unwrap(runBackupCommand(backup, {}))).toMatchObject({ outcome: "no-change" });
+    expect(readFileSync(snapshot, "utf8")).toBe(canonical);
+    expect(f.run({ ...acquire, claim: activeOpener })).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    f.later(0.001);
+    const successor = unwrap(f.run({ ...acquire, claim: activeOpener }));
+    expect(successor.reportingClaimId).not.toBe(slot.reportingClaimId);
+    const ack = {
+      ...pair,
+      kind: "notice-ack" as const,
+      incidentId: due.incidentId,
+      claim: activeOpener,
+      reportingClaim: successor.reportingClaimId,
+      operationId: "issued",
+      replayOnly: false,
+    };
+    expect(f.run({ ...ack, claim: waiting, reportingClaim: slot.reportingClaimId }, f.other)).toMatchObject(
+      error("ROW_VERSION_CONFLICT"),
+    );
+    const issued = unwrap(f.run(ack));
+    expect(issued).toMatchObject({
+      ...pair,
+      incidentId: due.incidentId,
+      noticeKind: "connection-check",
+      replayed: false,
+    });
+    expect(list(activeOpener).map(({ obligation }) => obligation.requestId)).toEqual([separate.requestId]);
+    const next = list(activeOpener)[0];
+    if (!next) throw new Error("Expected the second obligation.");
+    unwrap(f.run({ ...acquire, claim: activeOpener, incidentId: next.incidentId }));
+    unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+    const retained = readFileSync(snapshot, "utf8");
+    for (const runtime of [activeOpener, waiting, successor.reportingClaimId, slot.reportingClaimId])
+      expect(retained).not.toContain(runtime);
+    unwrap(backupVerify(unwrap(f.ports.verifyPorts()), { now: new Date(now) }));
+
+    const restored = fixture(false);
+    const ports = unwrap(createNodeBackupCommandPorts({ ...restored.setup, sourcePath: f.vault }).restorePorts());
+    unwrap(backupRestore(ports, { dryRun: false }));
+    bindRestored(restored);
+    restored.later(350);
+    expect(
+      restored.usingDb((db) =>
+        ["exchange_claims", "exchange_notice_claims", "exchange_notice_presence"].map((table) =>
+          db.prepare(`SELECT 1 FROM ${table}`).all(),
+        ),
+      ),
+    ).toEqual([[], [], []]);
+    const beforeReplay = tree(restored.home);
+    const replay = { ...ack, claim: undefined, reportingClaim: undefined, replayOnly: true };
+    expect(unwrap(restored.run(replay))).toEqual({ ...issued, replayed: true });
+    expect(restored.run({ ...replay, incidentId: "f".repeat(64) })).toMatchObject(error("IDEMPOTENCY_CONFLICT"));
+    expect(restored.run({ ...replay, operationId: "unknown" })).toMatchObject(error("EXCHANGE_REPLAY_UNAVAILABLE"));
+    expect(tree(restored.home)).toEqual(beforeReplay);
+    expect(
+      unwrap(restored.run({ ...pair, kind: "notice-list" })).notices.map(({ obligation }) => obligation.requestId),
+    ).toEqual([separate.requestId]);
+    const reconnected = joinExchange(restored, exchangeId, restored.beta);
+    const unread = () =>
+      unwrap(restored.run({ ...pair, kind: "notice-list" })).notices.find(
+        ({ obligation }) => obligation.requestId === pending.requestId,
+      );
+    const firstEpoch = unread();
+    expect(firstEpoch).toMatchObject({
+      noticeKind: "unread-delivery",
+      eligibleAt: "2026-11-20T00:05:00.000Z",
+      priorityUntil: "2026-11-20T00:06:50.000Z",
+    });
+    unwrap(restored.run({ ...pair, kind: "release", claim: reconnected }, restored.beta));
+    const renewed = joinExchange(restored, exchangeId, restored.beta);
+    expect(unread()?.incidentId).not.toBe(firstEpoch?.incidentId);
+    unwrap(
+      restored.run(
+        {
+          ...pair,
+          kind: "confirm-read",
+          claim: renewed,
+          ranges: [{ firstSeq: pending.seq, lastSeq: pending.seq }],
+        },
+        restored.beta,
+      ),
+    );
+    expect(unread()).toBeUndefined();
+  });
+
+  it("preserves an archived Project's pending response as a connection check without granting notice authority", () => {
+    const f = fixture();
+    const exchangeId = create(f);
+    const claim = joinExchange(f, exchangeId);
+    const request = unwrap(
+      f.run({
+        kind: "request",
+        exchangeId,
+        claim,
+        operationId: "pending-archive",
+        replayOnly: false,
+        assignee: "beta",
+        condition: "Check the result",
+        criteria: ["Record the exact observation"],
+      }),
+    );
+    const list = { kind: "notice-list", exchangeId } as const;
+    f.later(290);
+    const affected = joinExchange(f, exchangeId, f.beta);
+    f.later(10);
+    const [unread] = unwrap(f.run(list)).notices;
+    expect(unread).toMatchObject({ noticeKind: "unread-delivery", affectedProjectId: betaId });
+    if (!unread) throw new Error("Expected the pending response's unread notice before archive.");
+
+    f.usingDb((database) => {
+      const ports = createNodeProjectPorts({ ...f.setup, database });
+      const archived = unwrap(
+        archiveProject({ ...ports, clock: { now: () => new Date("2026-11-20T00:05:00.000Z") } }, { slug: "beta" }),
+      );
+      expect(archived).toMatchObject({ id: betaId, status: "archived" });
+      expect(database.prepare("SELECT 1 FROM exchange_claims WHERE claim_id = ?").all(affected)).toEqual([]);
+    });
+
+    expect(unwrap(f.run(list)).notices).toEqual([]);
+    expect(f.run({ ...list, claim: affected }, f.beta)).toMatchObject(error("FORBIDDEN_ACTOR"));
+    expect(
+      f.run({ kind: "notice-acquire", exchangeId, incidentId: unread.incidentId, claim: affected }, f.beta),
+    ).toMatchObject(error("FORBIDDEN_ACTOR"));
+    expect(unwrap(f.run({ kind: "inspect", exchangeId }))).toMatchObject({
+      rosterVersion: 1,
+      members: [alphaId, betaId],
+      requests: [{ id: request.requestId, assignmentVersion: 1, state: "in-progress" }],
+    });
+
+    f.later(289.999);
+    const reporter = joinExchange(f, exchangeId);
+    expect(unwrap(f.run({ ...list, claim: reporter })).notices).toEqual([]);
+    f.later(0.001);
+    const notices = unwrap(f.run({ ...list, claim: reporter })).notices;
+    expect(notices).toMatchObject([
+      {
+        noticeKind: "connection-check",
+        affectedProjectId: betaId,
+        availableAt: now,
+        eligibleAt: "2026-11-20T00:09:50.000Z",
+        canAcquire: true,
+        obligation: { response: "report", requestId: request.requestId, version: 1, sourceSeq: request.seq },
+      },
+    ]);
+    const [incident] = notices;
+    if (!incident) throw new Error("Expected the archived Project's connection check.");
+    expect(incident.incidentId).not.toBe(unread.incidentId);
+    expect(
+      unwrap(f.run({ kind: "notice-acquire", exchangeId, incidentId: incident.incidentId, claim: reporter })),
+    ).toMatchObject({ incidentId: incident.incidentId, projectId: alphaId });
+  });
+
+  it.each(["archive", "unbind"] as const)(
+    "starts a distinct unread episode after same-time Project %s and rejoin",
+    (loss) => {
+      const f = fixture();
+      const exchangeId = create(f);
+      const first = joinExchange(f, exchangeId);
+      unwrap(
+        f.run({
+          kind: "request",
+          exchangeId,
+          claim: first,
+          operationId: "pending-rejoin",
+          replayOnly: false,
+          assignee: "beta",
+          condition: "Check the pending result",
+          criteria: ["Record the observation"],
+        }),
+      );
+      f.later(300);
+      const reporter = joinExchange(f, exchangeId);
+      const firstAffected = joinExchange(f, exchangeId, f.beta);
+      const list = () => unwrap(f.run({ kind: "notice-list", exchangeId, claim: reporter })).notices;
+      const [original] = list();
+      if (!original) throw new Error("Expected the first unread episode.");
+      expect(original.noticeKind).toBe("unread-delivery");
+      const competing = f.run({ kind: "join", exchangeId, confirmed: false }, f.beta);
+      if (competing.ok) throw new Error("Expected the still-live affected Project's comparison token.");
+      const { claimId: affected } = unwrap(
+        f.run(
+          {
+            kind: "join",
+            exchangeId,
+            confirmed: true,
+            replaceClaim: String(competing.error.details?.observedClaim),
+          },
+          f.beta,
+        ),
+      );
+      expect(affected).not.toBe(firstAffected);
+      expect(list()).toEqual([original]);
+      const originalSlot = unwrap(
+        f.run({
+          kind: "notice-acquire",
+          exchangeId,
+          incidentId: original.incidentId,
+          claim: reporter,
+        }),
+      );
+
+      const project = { slug: "beta", dir: f.beta, userHome: f.parent, actor: USER_ACTOR, confirm: true };
+      const changeAuthority = (restore: boolean) =>
+        f.usingDb((database) => {
+          const ports = {
+            ...createNodeProjectPorts({ ...f.setup, database }),
+            clock: { now: () => new Date("2026-11-20T00:05:00.000Z") },
+          };
+          if (loss === "archive") unwrap(restore ? unarchiveProject(ports, project) : archiveProject(ports, project));
+          else unwrap(restore ? bindProject(ports, project) : unbindProject(ports, project));
+        });
+      changeAuthority(false);
+      expect(list()).toEqual([]);
+      changeAuthority(true);
+      expect(list()).toEqual([]);
+      const rejoined = joinExchange(f, exchangeId, f.beta);
+      expect(rejoined).not.toBe(affected);
+      const [next] = list();
+      if (!next) throw new Error("Expected the recovered Project's new unread episode.");
+      expect(next).toMatchObject({ noticeKind: "unread-delivery", obligation: original.obligation });
+      expect(next.incidentId).not.toBe(original.incidentId);
+      expect(
+        f.run({
+          kind: "notice-ack",
+          exchangeId,
+          operationId: "outdated-reporting-slot",
+          replayOnly: false,
+          claim: reporter,
+          incidentId: original.incidentId,
+          reportingClaim: originalSlot.reportingClaimId,
+        }),
+      ).toMatchObject(error("ROW_VERSION_CONFLICT"));
+      expect(
+        unwrap(
+          f.run({
+            kind: "notice-acquire",
+            exchangeId,
+            incidentId: next.incidentId,
+            claim: reporter,
+          }),
+        ).reportingClaimId,
+      ).not.toBe(originalSlot.reportingClaimId);
+    },
+  );
+
+  it("keeps priority through a partial unbind and allows fallback immediately on the opener's last unbind", () => {
+    const f = fixture();
+    const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+    const first = joinExchange(f, exchangeId);
+    unwrap(
+      f.run({
+        kind: "request",
+        exchangeId,
+        claim: first,
+        operationId: "pending-opener-unbind",
+        replayOnly: false,
+        assignee: "beta",
+        condition: "Check the result",
+        criteria: ["Record the observation"],
+      }),
+    );
+    const alternate = join(f.parent, "alpha-alternate");
+    mkdirSync(alternate);
+    const project = { slug: "alpha", userHome: f.parent, actor: USER_ACTOR, confirm: true };
+    const bind = (dir: string) =>
+      f.usingDb((database) =>
+        unwrap(bindProject(createNodeProjectPorts({ ...f.setup, database }), { ...project, dir })),
+      );
+    const unbind = (dir: string) =>
+      f.usingDb((database) =>
+        unwrap(unbindProject(createNodeProjectPorts({ ...f.setup, database }), { ...project, dir })),
+      );
+    bind(alternate);
+    f.later(300);
+    const opener = joinExchange(f, exchangeId);
+    const peer = joinExchange(f, exchangeId, f.other);
+    const list = () => unwrap(f.run({ kind: "notice-list", exchangeId, claim: peer }, f.other)).notices;
+    const [incident] = list();
+    if (!incident) throw new Error("Expected a connection check for the absent Project.");
+    expect(incident).toMatchObject({ noticeKind: "connection-check", canAcquire: false });
+    const input = { kind: "notice-acquire", exchangeId, incidentId: incident.incidentId } as const;
+    const openerSlot = unwrap(f.run({ ...input, claim: opener }));
+    unbind(f.alpha);
+    expect(list()[0]).toMatchObject({ canAcquire: false });
+    expect(unwrap(f.run({ ...input, claim: opener }, alternate))).toEqual(openerSlot);
+    unbind(alternate);
+    expect(list()[0]).toMatchObject({ canAcquire: true, priorityUntil: incident.priorityUntil });
+    const peerSlot = unwrap(f.run({ ...input, claim: peer }, f.other));
+    expect(peerSlot.reportingClaimId).not.toBe(openerSlot.reportingClaimId);
+    bind(f.alpha);
+    const rejoined = joinExchange(f, exchangeId);
+    expect(rejoined).not.toBe(opener);
+    expect(unwrap(f.run({ ...input, claim: peer }, f.other))).toEqual(peerSlot);
+    expect(f.run({ ...input, claim: rejoined })).toMatchObject(error("ROW_VERSION_CONFLICT"));
+  });
+
+  it("restores exact notice acknowledgements from committed acceptance batch boundaries", () => {
+    const f = fixture();
+    const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+    const identity = { exchangeId, replayOnly: false };
+    const initial = joinExchange(f, exchangeId);
+    const beta = joinExchange(f, exchangeId, f.beta);
+    const request = (operationId: string, assignee: string) =>
+      unwrap(
+        f.run({
+          ...identity,
+          kind: "request",
+          claim: initial,
+          operationId,
+          assignee,
+          condition: "Verify the result",
+          criteria: ["Record the observation"],
+        }),
+      );
+    const pending = request("pending", "other");
+    const reports = ["a", "b", "c", "d", "e", "f"].map((label) => {
+      const { requestId } = request(`request-${label}`, "beta");
+      const { reportVersion } = unwrap(
+        f.run(
+          {
+            ...identity,
+            kind: "report",
+            claim: beta,
+            operationId: `report-${label}`,
+            requestId,
+            assignmentVersion: 1,
+            body: { text: "Observed" },
+            evidence: [],
+            accept: [],
+          },
+          f.beta,
+        ),
+      );
+      return { requestId, reportVersion };
+    });
+    const inspect = () => unwrap(f.run({ kind: "inspect", exchangeId }));
+    const acknowledge = (operationId: string, claim: string, noticeKind: "connection-check" | "unread-delivery") => {
+      const { notices } = unwrap(f.run({ kind: "notice-list", exchangeId, claim }));
+      const notice = notices.find(({ obligation }) => obligation.requestId === pending.requestId);
+      if (!notice) throw new Error("Expected a notice for the unresolved request.");
+      expect(notice.noticeKind).toBe(noticeKind);
+      const { incidentId } = notice;
+      const slot = unwrap(f.run({ kind: "notice-acquire", exchangeId, claim, incidentId }));
+      const outcome = unwrap(
+        f.run({
+          ...identity,
+          kind: "notice-ack",
+          claim,
+          operationId,
+          incidentId,
+          reportingClaim: slot.reportingClaimId,
+        }),
+      );
+      expect(outcome).toMatchObject({ noticeKind, observedThroughSeq: inspect().lastSeq });
+      return { operationId, incidentId, outcome };
+    };
+    f.later(300);
+    const alpha = joinExchange(f, exchangeId);
+    const accepted = unwrap(
+      f.run({
+        ...identity,
+        kind: "accept",
+        claim: alpha,
+        operationId: "standalone",
+        accept: reports.slice(0, 2),
+      }),
+    );
+    const connection = acknowledge("issue-after-standalone", alpha, "connection-check");
+    expect(connection.outcome.observedThroughSeq).toBe(accepted.sequences.at(-1));
+
+    const sent = unwrap(f.run({ ...send(exchangeId, alpha, "bundled"), accept: reports.slice(2, 4) }));
+    const affected = joinExchange(f, exchangeId, f.other);
+    const unread = acknowledge("issue-after-send", alpha, "unread-delivery");
+    expect(unread.outcome.observedThroughSeq).toBe(sent.seq);
+    expect(sent.seq).toBeGreaterThan(connection.outcome.observedThroughSeq);
+    unwrap(f.run({ kind: "release", exchangeId, claim: affected }, f.other));
+    joinExchange(f, exchangeId, f.other);
+
+    const head = inspect();
+    const proposal = unwrap(
+      f.run({
+        ...identity,
+        kind: "propose",
+        claim: alpha,
+        operationId: "proposal",
+        rosterVersion: head.rosterVersion ?? 0,
+        workRevision: head.workRevision ?? 0,
+        criterion: head.criteria,
+        summary: "Check the reports",
+        report: reports.slice(4),
+        disposition: [],
+      }),
+    );
+    if (proposal.kind !== "propose") throw new Error("Expected a proposal outcome.");
+    expect(
+      unwrap(
+        f.run({
+          ...identity,
+          kind: "vote",
+          claim: alpha,
+          operationId: "vote",
+          proposalVersion: proposal.proposalVersion,
+          vote: "approve",
+          accept: reports.slice(4),
+        }),
+      ),
+    ).toMatchObject({ kind: "vote", state: "active" });
+    const afterVote = acknowledge("issue-after-vote", alpha, "unread-delivery");
+    expect(afterVote.outcome.observedThroughSeq).toBe(sent.seq + 4);
+
+    const exportInventory = () => {
+      unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+      return JSON.parse(readFileSync(join(f.vault, "snapshots", "exchanges.json"), "utf8")).records[0].notices;
+    };
+    expect(exportInventory().openConnectionIssues).toEqual([]);
+    f.later(300);
+    const fresh = acknowledge("issue-after-later-disconnection", joinExchange(f, exchangeId), "connection-check");
+    expect(fresh.outcome.observedThroughSeq).toBe(afterVote.outcome.observedThroughSeq);
+    f.usingDb((db) => {
+      expect(
+        db.prepare("SELECT 1 FROM exchange_claims WHERE exchange_id = ? AND project_id = ?").all(exchangeId, otherId),
+      ).toEqual([]);
+      expect(
+        db
+          .prepare("SELECT heartbeat_at FROM exchange_notice_presence WHERE exchange_id = ? AND project_id = ?")
+          .get(exchangeId, otherId),
+      ).toEqual({ heartbeat_at: "2026-11-20T00:05:00.000Z" });
+    });
+    expect(exportInventory().openConnectionIssues).toEqual([fresh.incidentId]);
+    unwrap(backupVerify(unwrap(f.ports.verifyPorts()), { now: new Date(now) }));
+    const restored = fixture(false);
+    const restore = unwrap(createNodeBackupCommandPorts({ ...restored.setup, sourcePath: f.vault }).restorePorts());
+    unwrap(backupRestore(restore, { dryRun: false }));
+    bindRestored(restored);
+    for (const { operationId, incidentId, outcome } of [connection, unread, afterVote, fresh]) {
+      expect(
+        unwrap(restored.run({ kind: "notice-ack", exchangeId, operationId, incidentId, replayOnly: true })),
+      ).toEqual({ ...outcome, replayed: true });
+    }
+    restored.later(600);
+    expect(unwrap(restored.run({ kind: "notice-list", exchangeId })).notices).toEqual([]);
+  });
+
+  it("starts a new connection incident after a marker-free restore while retaining both acknowledgement identities", () => {
+    const original = fixture();
+    const exchangeId = create(original);
+    const claim = joinExchange(original, exchangeId);
+    const pending = unwrap(
+      original.run({
+        kind: "request",
+        exchangeId,
+        claim,
+        operationId: "no-initial-heartbeat",
+        replayOnly: false,
+        assignee: "beta",
+        condition: "Check the result",
+        criteria: ["Record the observation"],
+      }),
+    );
+    type Fixture = ReturnType<typeof fixture>;
+    const list = (f: Fixture, claim?: string, cwd = f.alpha) =>
+      unwrap(f.run({ kind: "notice-list", exchangeId, claim }, cwd)).notices;
+    const issue = (f: Fixture, operationId: string, claim: string, cwd = f.alpha) => {
+      const notices = list(f, claim, cwd);
+      const [notice] = notices;
+      if (!notice) throw new Error("Expected the pending request's incident.");
+      expect(notices).toHaveLength(1);
+      expect(notice).toMatchObject({ canAcquire: true, obligation: { requestId: pending.requestId } });
+      const { incidentId } = notice;
+      const slot = unwrap(f.run({ kind: "notice-acquire", exchangeId, claim, incidentId }, cwd));
+      const outcome = unwrap(
+        f.run(
+          {
+            kind: "notice-ack",
+            exchangeId,
+            claim,
+            incidentId,
+            operationId,
+            replayOnly: false,
+            reportingClaim: slot.reportingClaimId,
+          },
+          cwd,
+        ),
+      );
+      return { notice, operationId, incidentId, outcome };
+    };
+    const checkpoint = (f: Fixture, openConnectionIssues: string[]) => {
+      unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+      const inventory = JSON.parse(readFileSync(join(f.vault, "snapshots", "exchanges.json"), "utf8"));
+      expect(inventory.records[0].notices.openConnectionIssues).toEqual(openConnectionIssues);
+      unwrap(backupVerify(unwrap(f.ports.verifyPorts()), { now: new Date(now) }));
+    };
+    const restoreFrom = (source: Fixture) => {
+      const target = fixture(false);
+      const ports = unwrap(createNodeBackupCommandPorts({ ...target.setup, sourcePath: source.vault }).restorePorts());
+      unwrap(backupRestore(ports, { dryRun: false }));
+      bindRestored(target);
+      target.later(300);
+      return target;
+    };
+
+    original.later(300);
+    const first = issue(original, "first-connection-issue", joinExchange(original, exchangeId));
+    expect(first.outcome).toMatchObject({
+      noticeKind: "connection-check",
+      observedThroughSeq: pending.seq,
+      projectId: alphaId,
+    });
+    const beta = joinExchange(original, exchangeId, original.beta);
+    const later = unwrap(
+      original.run(send(exchangeId, beta, "affected-present", "I rejoined the Exchange."), original.beta),
+    );
+    expect(later.seq).toBeGreaterThan(first.outcome.observedThroughSeq);
+    checkpoint(original, []);
+
+    const recurrent = restoreFrom(original);
+    const reportAgain = joinExchange(recurrent, exchangeId);
+    const second = issue(recurrent, "second-connection-issue", reportAgain);
+    expect(second.outcome).toMatchObject({
+      noticeKind: "connection-check",
+      observedThroughSeq: later.seq,
+      projectId: alphaId,
+    });
+    expect(second.notice.eligibleAt).toBe(first.notice.eligibleAt);
+    expect(second.incidentId).not.toBe(first.incidentId);
+    checkpoint(recurrent, [second.incidentId]);
+
+    const suppressed = restoreFrom(recurrent);
+    expect(list(suppressed)).toEqual([]);
+    for (const { incidentId, operationId, outcome } of [first, second]) {
+      expect(
+        unwrap(suppressed.run({ kind: "notice-ack", exchangeId, incidentId, operationId, replayOnly: true })),
+      ).toEqual({ ...outcome, replayed: true });
+    }
+    const affected = joinExchange(suppressed, exchangeId, suppressed.beta);
+    const ownUnread = issue(suppressed, "affected-reports-own-unread", affected, suppressed.beta);
+    expect(ownUnread.outcome).toMatchObject({
+      noticeKind: "unread-delivery",
+      affectedProjectId: betaId,
+      projectId: betaId,
+      observedThroughSeq: later.seq,
+    });
+    checkpoint(suppressed, []);
+    const final = restoreFrom(suppressed);
+    expect(
+      unwrap(
+        final.run(
+          {
+            kind: "notice-ack",
+            exchangeId,
+            incidentId: ownUnread.incidentId,
+            operationId: ownUnread.operationId,
+            replayOnly: true,
+          },
+          final.beta,
+        ),
+      ),
+    ).toEqual({ ...ownUnread.outcome, replayed: true });
+    const [again] = list(final);
+    expect(again).toMatchObject({ noticeKind: "connection-check", affectedProjectId: betaId });
+    expect(again?.incidentId).not.toBe(first.incidentId);
+    expect(again?.incidentId).not.toBe(second.incidentId);
+  });
+
+  it("opens fallback at the exact opener boundary and resets notice availability on resumption", () => {
+    const f = fixture();
+    const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+    const pair = { exchangeId };
+    const claim = joinExchange(f, exchangeId);
+    unwrap(
+      f.run({
+        ...pair,
+        kind: "request",
+        operationId: "pending",
+        replayOnly: false,
+        claim,
+        assignee: "beta",
+        condition: "Verify the observed source",
+        criteria: ["Exact result"],
+      }),
+    );
+    f.later(300);
+    const opener = joinExchange(f, exchangeId);
+    const other = joinExchange(f, exchangeId, f.other);
+    const list = () => unwrap(f.run({ ...pair, kind: "notice-list", claim: other }, f.other)).notices;
+    const due = list()[0];
+    expect(due).toMatchObject({ canAcquire: false, priorityUntil: "2026-11-20T00:06:00.000Z" });
+    if (!due) throw new Error("Expected one due notice.");
+    const acquire = { ...pair, kind: "notice-acquire" as const, claim: other, incidentId: due.incidentId };
+    for (const wait of [30, 29.999]) {
+      f.later(wait);
+      unwrap(f.run({ ...pair, kind: "renew", claim: opener }));
+      unwrap(f.run({ ...pair, kind: "renew", claim: other }, f.other));
+    }
+    expect(f.run(acquire, f.other)).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    f.later(0.001);
+    expect(list()[0]).toMatchObject({ canAcquire: true });
+    const slot = unwrap(f.run(acquire, f.other));
+    unwrap(
+      f.run({
+        ...pair,
+        kind: "stop",
+        operationId: "stop",
+        replayOnly: false,
+        confirmed: true,
+        rosterVersion: 1,
+        reason: "Pause verification",
+      }),
+    );
+    expect(list()).toEqual([]);
+    expect(f.usingDb((db) => db.prepare("SELECT 1 FROM exchange_notice_claims").all())).toEqual([]);
+    f.later(80);
+    const resumed = unwrap(
+      f.run({
+        ...pair,
+        kind: "join",
+        confirmed: true,
+        resume: {
+          ...pair,
+          kind: "resume",
+          pauseVersion: 1,
+          operationId: "resume",
+          confirmed: true,
+          replayOnly: false,
+        },
+      }),
+    );
+    const current = String(resumed.claimId);
+    f.later(299.999);
+    expect(list()).toEqual([]);
+    f.later(0.001);
+    const refreshed = list()[0];
+    expect(refreshed).toMatchObject({
+      availableAt: "2026-11-20T00:07:20.000Z",
+      eligibleAt: "2026-11-20T00:12:20.000Z",
+    });
+    expect(refreshed?.incidentId).not.toBe(due.incidentId);
+    const newOpener = joinExchange(f, exchangeId);
+    expect(
+      f.run({
+        ...pair,
+        kind: "notice-ack",
+        replayOnly: false,
+        operationId: "stale",
+        incidentId: due.incidentId,
+        claim: newOpener,
+        reportingClaim: slot.reportingClaimId,
+      }),
+    ).toMatchObject(error("ROW_VERSION_CONFLICT"));
+    expect(newOpener).not.toBe(current);
+  });
+
+  it("tracks the exact unaccepted report through turnover, vacancy and acceptance-owner correction", () => {
+    const f = fixture();
+    const { exchangeId } = unwrap(f.run({ ...creation, peers: ["beta", "other"], criteria: [...creation.criteria] }));
+    const identity = { exchangeId, replayOnly: false };
+    const beta = joinExchange(f, exchangeId, f.beta);
+    const other = joinExchange(f, exchangeId, f.other);
+    const request = unwrap(
+      f.run(
+        {
+          ...identity,
+          kind: "request",
+          claim: beta,
+          operationId: "verify",
+          assignee: "other",
+          condition: "Verify a result",
+          criteria: ["Provide exact observations"],
+        },
+        f.beta,
+      ),
+    );
+    const report = (operationId: string) =>
+      unwrap(
+        f.run(
+          {
+            ...identity,
+            kind: "report",
+            claim: other,
+            operationId,
+            requestId: request.requestId,
+            assignmentVersion: 1,
+            body: { text: "Observed the result" },
+            evidence: [],
+            accept: [],
+          },
+          f.other,
+        ),
+      );
+    report("report-one");
+    f.later(20);
+    const second = report("report-two");
+    const list = () => unwrap(f.run({ kind: "notice-list", exchangeId })).notices;
+    f.later(299.999);
+    expect(list()).toEqual([]);
+    f.later(0.001);
+    const old = list()[0];
+    expect(old).toMatchObject({
+      noticeKind: "connection-check",
+      affectedProjectId: betaId,
+      obligation: { response: "acceptance", requestId: request.requestId, version: 2, sourceSeq: second.seq },
+    });
+    unwrap(
+      f.run({
+        ...identity,
+        kind: "roster",
+        operationId: "owner-departs",
+        rosterVersion: 1,
+        confirmed: true,
+        reason: "Requester leaves",
+        add: [],
+        remove: ["beta"],
+      }),
+    );
+    expect(list()).toEqual([]);
+    unwrap(
+      f.run({
+        ...identity,
+        kind: "owner-correct",
+        operationId: "replace-owner",
+        rosterVersion: 2,
+        requestId: request.requestId,
+        ownershipVersion: 2,
+        acceptanceOwner: "alpha",
+        assignee: undefined,
+        confirmed: true,
+        reason: "Fill the acceptance-owner vacancy",
+      }),
+    );
+    f.later(299.999);
+    expect(list()).toEqual([]);
+    f.later(0.001);
+    const revised = list()[0];
+    expect(revised).toMatchObject({
+      affectedProjectId: alphaId,
+      availableAt: "2026-11-20T00:05:20.000Z",
+      obligation: { response: "acceptance", requestId: request.requestId, version: 2, sourceSeq: second.seq },
+    });
+    expect(revised?.incidentId).not.toBe(old?.incidentId);
+
+    unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
+    const path = join(f.vault, "snapshots", "exchanges.json");
+    const frame = JSON.parse(readFileSync(path, "utf8"));
+    frame.representation = "lifecycle";
+    delete frame.records[0].notices;
+    for (const entry of frame.records[0].lifecycle.transitions) delete entry.recordedAt;
+    frame.recordsSha256 = createHash("sha256").update(canonicalJson(frame.records)).digest("hex");
+    writeFileSync(path, canonicalJson(frame));
+    const restored = fixture(false);
+    const compatibilityAt = "2026-11-20T00:12:00.000Z";
+    const restore = unwrap(
+      createNodeBackupCommandPorts({
+        ...restored.setup,
+        sourcePath: f.vault,
+        clock: { now: () => new Date(compatibilityAt) },
+      }).restorePorts(),
+    );
+    unwrap(backupRestore(restore, { dryRun: false }));
+    bindRestored(restored);
+    const restoredList = () => unwrap(restored.run({ kind: "notice-list", exchangeId })).notices;
+    restored.later(1019.999);
+    expect(restoredList()).toEqual([]);
+    restored.later(0.001);
+    expect(restoredList()[0]).toMatchObject({
+      affectedProjectId: alphaId,
+      availableAt: compatibilityAt,
+      eligibleAt: "2026-11-20T00:17:00.000Z",
+      obligation: revised?.obligation,
+    });
+
+    const owner = joinExchange(f, exchangeId);
+    unwrap(
+      f.run({
+        ...identity,
+        kind: "accept",
+        claim: owner,
+        operationId: "accept-current",
+        accept: [{ requestId: request.requestId, reportVersion: 2 }],
+      }),
+    );
+    expect(list()).toEqual([]);
+  });
+
   it("preserves the exact pause, allows only observed ownership corrections, and replays resumption without a new claim", () => {
     const f = fixture();
     const exchangeId = create(f);
@@ -1099,6 +1941,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
     const frame = JSON.parse(readFileSync(path, "utf8"));
     frame.representation = "collaboration";
     delete frame.records[0].lifecycle;
+    delete frame.records[0].notices;
     for (const row of frame.records[0].collaboration.operations) delete row.registrationAfterSeq;
     frame.recordsSha256 = createHash("sha256").update(canonicalJson(frame.records)).digest("hex");
     writeFileSync(path, canonicalJson(frame));
@@ -1115,7 +1958,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
     unwrap(exportSnapshot(unwrap(restored.ports.exportPorts())));
     const upgraded = JSON.parse(readFileSync(join(restored.vault, "snapshots", "exchanges.json"), "utf8"));
     expect(upgraded).toMatchObject({
-      representation: "lifecycle",
+      representation: "notices",
       records: [
         {
           lifecycle: { workRevision: 5, transitions: [] },
@@ -2140,7 +2983,7 @@ describe("Exchange SQLite and working storage through the application entrypoint
       writeFileSync(config, initial.replace(/redactWorkspacePaths: (true|false)/, `redactWorkspacePaths: ${redact}`));
       unwrap(exportSnapshot(unwrap(f.ports.exportPorts())));
       const raw = readFileSync(join(f.vault, "snapshots", "exchanges.json"), "utf8");
-      expect(JSON.parse(raw).representation).toBe("lifecycle");
+      expect(JSON.parse(raw).representation).toBe("notices");
       expect(raw.includes("evidence.txt")).toBe(!redact);
       expect(raw.includes(f.alpha)).toBe(!redact);
       expect(raw).not.toContain("PRIVATE_PAYLOAD_ONLY_IN_WORKING_STATE");

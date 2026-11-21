@@ -16,6 +16,7 @@ export * from "./errors";
 export * from "./events";
 export * from "./exchange-snapshot";
 export * from "./exchange-lifecycle";
+export * from "./exchange-notices";
 export * from "./exchanges";
 export * from "./exchange-wait";
 export * from "./exchange-use-cases";

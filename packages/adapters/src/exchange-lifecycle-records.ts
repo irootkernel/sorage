@@ -19,23 +19,30 @@ export function readExchangeLifecycle(db: SorageSqlite, exchangeId: string): Exc
     .all(exchangeId)
     .map((row) => row.projectId);
   const transitions = db
-    .prepare<Omit<ExchangeTransitionRecord, "transition"> & { value: string }>(
-      `SELECT seq, work_revision workRevision, actor_id actorId, operation_id operationId, transition_json value
+    .prepare<
+      Omit<ExchangeTransitionRecord, "transition" | "recordedAt"> & { value: string; recordedAt: string | null }
+    >(
+      `SELECT seq, work_revision workRevision, actor_id actorId, operation_id operationId, transition_json value, recorded_at recordedAt
      FROM exchange_transitions WHERE exchange_id = ? ORDER BY seq`,
     )
     .all(exchangeId)
-    .map(({ value, ...row }) => ({ ...row, transition: JSON.parse(value) as ExchangeTransitionRecord["transition"] }));
+    .map(({ value, recordedAt, ...row }) => ({
+      ...row,
+      transition: JSON.parse(value) as ExchangeTransitionRecord["transition"],
+      ...(recordedAt === null ? {} : { recordedAt }),
+    }));
   return { initialMembers, workRevision: revision.workRevision, transitions };
 }
 
 export function recordExchangeTransition(db: SorageSqlite, exchangeId: string, record: ExchangeTransitionRecord): void {
-  db.prepare("INSERT INTO exchange_transitions VALUES (?,?,?,?,?,?)").run(
+  db.prepare("INSERT INTO exchange_transitions VALUES (?,?,?,?,?,?,?)").run(
     exchangeId,
     record.seq,
     record.workRevision,
     record.actorId,
     record.operationId,
     JSON.stringify(record.transition),
+    record.recordedAt ?? null,
   );
 }
 

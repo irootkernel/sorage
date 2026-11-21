@@ -9,6 +9,12 @@ import type {
   ExchangeRequestOwnership,
   ExchangeState,
 } from "./exchange-lifecycle";
+import type {
+  ExchangeNoticeAckInput,
+  ExchangeNoticeList,
+  ExchangeNoticeOutcome,
+  ExchangeReportingClaim,
+} from "./exchange-notices";
 import { isMemoUuid } from "./memos";
 
 export const EXCHANGE_LEASE_SECONDS = 40;
@@ -78,6 +84,7 @@ export type ExchangeBusinessInput =
 
 export type ExchangeReadInput =
   | { kind: "inspect"; exchangeId: string }
+  | { kind: "notice-list"; exchangeId: string; claim?: string | undefined }
   | {
       kind: "history";
       exchangeId: string;
@@ -107,9 +114,15 @@ export type ExchangeLifecycleInput =
   | { kind: "renew"; exchangeId: string; claim: string }
   | { kind: "release"; exchangeId: string; claim: string }
   | { kind: "cleanup"; exchangeId: string }
+  | { kind: "notice-acquire"; exchangeId: string; incidentId: string; claim: string }
   | { kind: "confirm-read"; exchangeId: string; claim: string | undefined; ranges: ExchangeRange[] };
 
-export type ExchangeInput = ExchangeBusinessInput | ExchangeReadInput | ExchangeLifecycleInput | ExchangeControlInput;
+export type ExchangeInput =
+  | ExchangeBusinessInput
+  | ExchangeReadInput
+  | ExchangeLifecycleInput
+  | ExchangeControlInput
+  | ExchangeNoticeAckInput;
 
 export type ExchangeOutcome =
   | { kind: "create"; exchangeId: string }
@@ -118,6 +131,7 @@ export type ExchangeOutcome =
   | { kind: "report"; exchangeId: string; seq: number; requestId: string; reportVersion: number; materialId: string }
   | { kind: "accept"; exchangeId: string; sequences: number[] }
   | { kind: "material-register"; exchangeId: string; materialId: string }
+  | ExchangeNoticeOutcome
   | ExchangeControlOutcome;
 
 export interface ExchangeMessage {
@@ -320,6 +334,8 @@ export type ExchangeActionData = (
   | ExchangeRecovery
   | ExchangeReadConfirmation
   | ExchangeCleanupResult
+  | ExchangeNoticeList
+  | ExchangeReportingClaim
 ) & { warnings?: ExchangeActivationWarning[] };
 
 export interface ExchangeCleanupResult {
@@ -339,6 +355,8 @@ type ExchangeOtherResults = {
   recover: ExchangeRecovery;
   "confirm-read": ExchangeReadConfirmation;
   cleanup: ExchangeCleanupResult;
+  "notice-list": ExchangeNoticeList;
+  "notice-acquire": ExchangeReportingClaim;
 };
 
 export type ExchangeActionFor<Kind extends ExchangeInput["kind"]> = (Kind extends keyof ExchangeOtherResults
@@ -355,7 +373,7 @@ export interface ExchangeReadDecision {
 export interface ExchangeCommandPorts {
   inspect(input: ExchangeInput): Result<ExchangeReadDecision>;
   executeFresh(
-    input: ExchangeBusinessInput | ExchangeLifecycleInput | ExchangeControlInput,
+    input: ExchangeBusinessInput | ExchangeLifecycleInput | ExchangeControlInput | ExchangeNoticeAckInput,
     fingerprint?: string,
   ): Result<ExchangeActionData>;
 }
@@ -363,6 +381,7 @@ export interface ExchangeCommandPorts {
 export function isExchangeRead(input: ExchangeInput): input is ExchangeReadInput {
   return (
     input.kind === "inspect" ||
+    input.kind === "notice-list" ||
     input.kind === "history" ||
     input.kind === "wait" ||
     input.kind === "material-read" ||
@@ -382,7 +401,7 @@ export function isExchangeBusiness(input: ExchangeInput): input is ExchangeBusin
 }
 
 export function isExchangeControl(input: ExchangeInput): input is ExchangeControlInput {
-  return "replayOnly" in input && !isExchangeBusiness(input);
+  return "replayOnly" in input && input.kind !== "notice-ack" && !isExchangeBusiness(input);
 }
 
 /** A composed command must inspect coherent current authority and receipts before opening a writer. */

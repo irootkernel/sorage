@@ -9,11 +9,12 @@ This file records concise shipped outcomes and the planned next stable release.
 - Use `sorage exchange` to collaborate between registered Projects, share working material, accept specific report versions, and recover committed operations.
 - Keep Exchange claims active through the CLI session owner or MCP connection, wait for relevant activity with a delivery cursor, and use the initial 13 Exchange MCP tools.
 - Correct Exchange membership and request ownership, pause and resume collaboration, and record unanimous completion with recoverable cleanup.
+- Discover Exchange connection checks and unread delivery notices, reserve a reporting slot, and acknowledge issuance to the user through CLI or MCP.
 
 ### Changed
 
 - Pin source-development toolchains and run automatic formatting before the complete test gate; add explicit runtime installation, version synchronization, and dependency-lock commands.
-- **Breaking storage upgrade:** The one-way upgrade moves live storage to schema 15 and writes the lifecycle inventory in global backup format 5. Use the new executable with upgraded storage and lifecycle backups. Before upgrading, verify and retain a backup and its matching executable. For rollback, restore that backup with its matching executable into a separate empty home and Vault. The new reader imports older backup formats.
+- **Breaking storage upgrade:** The one-way upgrade moves live storage to schema 16 and writes the `notices` inventory in global backup format 5. Use the new executable with upgraded storage and `notices` backups. Before upgrading, verify and retain a backup and its matching executable. For rollback, restore that backup with its matching executable into a separate empty home and Vault. The new reader imports earlier format-5 inventories and legacy backup formats.
 
 ## v0.1.4 - 2026-11-08
 

@@ -485,8 +485,52 @@ describe("Exchange CLI JSON and read error boundary", () => {
       writeFileSync(managed, originalBody);
       success("cleanup", ["exchange", "cleanup", lifecycleId]);
 
+      const reportingExchange = success("", [...creation.slice(0, -1), "notice-create"]);
+      const reportingId = String(reportingExchange.exchangeId);
+      const reporter = String(success("", ["exchange", "join", reportingId]).claimId);
+      const waiting = success("", [
+        "exchange",
+        "request",
+        reportingId,
+        "--operation-id",
+        "notice-request",
+        "--claim",
+        reporter,
+        "--assignee",
+        "beta",
+        "--condition",
+        "Observe the result",
+        "--criterion",
+        "Check the reply",
+      ]);
+      const noticeFixture = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        noticeFixture
+          .prepare("UPDATE exchange_messages SET created_at = ? WHERE exchange_id = ? AND seq = ?")
+          .run(new Date(Date.now() - 301_000).toISOString(), reportingId, Number(waiting.seq));
+      } finally {
+        noticeFixture.close();
+      }
+      const listing = success("noticeList", ["exchange", "notice-list", reportingId, "--claim", reporter]);
+      const incident = String(listing.notices[0].incidentId);
+      const slot = success("noticeAcquire", [
+        "exchange",
+        "notice-acquire",
+        reportingId,
+        "--incident",
+        incident,
+        "--claim",
+        reporter,
+      ]);
+      const ack = ["exchange", "notice-ack", reportingId, "--incident", incident, "--operation-id", "notice-issued"];
+      failure("noticeAckMissingSlot", [...ack, "--claim", reporter], 75);
+      success("noticeAck", [...ack, "--claim", reporter, "--reporting-claim", String(slot.reportingClaimId)]);
+      success("noticeAckReplay", [...ack, "--replay-only"]);
+      success("noticesAfterAck", ["exchange", "notice-list", reportingId]);
+
       const normalized = JSON.stringify(output, null, 2)
         .replace(/"cursor": "[A-Za-z0-9_-]+"/g, '"cursor": "<history-cursor>"')
+        .replace(/"incidentId": "[a-f0-9]{64}"/g, '"incidentId": "<notice-incident>"')
         .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
         .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, "<time>");
       const golden = fileURLToPath(new URL("./golden/exchange-dtos.json", import.meta.url));

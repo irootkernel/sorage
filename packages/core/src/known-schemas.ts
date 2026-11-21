@@ -43,6 +43,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 13, name: "exchange-foundation" },
   { version: 14, name: "exchange-collaboration" },
   { version: 15, name: "exchange-lifecycle" },
+  { version: 16, name: "exchange-notices" },
 ];
 
 /** The highest database schema version this build knows. */

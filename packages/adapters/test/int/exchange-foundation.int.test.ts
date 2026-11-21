@@ -88,7 +88,7 @@ function seed(db: SorageSqlite): void {
       "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)",
     ).run(id, slug, slug, NOW, NOW);
   }
-  restoreExchangeRecords(db, [compact]);
+  restoreExchangeRecords(db, [compact], NOW);
 }
 
 function counts(db: SorageSqlite, table: string): number {
@@ -151,7 +151,7 @@ describe("the real SQLite Exchange storage foundation", () => {
     }
     const reopened = openAndMigrate(path, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(counts(reopened.db, "schema_migrations")).toBe(15);
+      expect(counts(reopened.db, "schema_migrations")).toBe(16);
     } finally {
       reopened.db.close();
     }
@@ -421,7 +421,7 @@ describe("the real SQLite Exchange storage foundation", () => {
     if (defect === "missing") rmSync(path);
     else if (defect === "malformed") writeFileSync(path, clean.replace('"goal":', '"leaseClaims": [], "goal":'));
     else {
-      writeFileSync(path, clean.replace('"representation": "lifecycle"', '"representation": "later-required-class"'));
+      writeFileSync(path, clean.replace('"representation": "notices"', '"representation": "later-required-class"'));
       writeFileSync(join(source.snapshots, "events.jsonl"), "not-json\n");
     }
     const refusal = { ok: false, error: { code } };
@@ -450,7 +450,7 @@ describe("the real SQLite Exchange storage foundation", () => {
     try {
       seed(db);
       unwrap(exportSnapshot(unwrap(source.ports.exportPorts())));
-      restoreExchangeRecords(db, [{ ...compact, id: STAGED, creationOutcomes: [] }]);
+      restoreExchangeRecords(db, [{ ...compact, id: STAGED, creationOutcomes: [] }], NOW);
       const result = unwrap(backupVerify(unwrap(source.ports.verifyPorts()), { now: new Date(NOW) }));
       expect(result.findings).toContain("The manifest counts 1 Exchange record(s) against the database's 2.");
       expect(result.checked.manifest).not.toHaveProperty("exchanges");

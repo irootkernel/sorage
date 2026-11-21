@@ -1076,6 +1076,62 @@ DROP TABLE exchange_acceptances_v14;
 `,
 };
 
+export const EXCHANGE_NOTICES_MIGRATION: Migration = {
+  version: 16,
+  name: "exchange-notices",
+  sql: `
+ALTER TABLE exchanges ADD COLUMN notice_compatibility_at TEXT;
+UPDATE exchanges SET notice_compatibility_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+ALTER TABLE exchange_transitions ADD COLUMN recorded_at TEXT;
+
+CREATE TABLE exchange_notice_presence (
+  exchange_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  online_since TEXT NOT NULL,
+  epoch TEXT NOT NULL,
+  PRIMARY KEY (exchange_id, project_id),
+  FOREIGN KEY (exchange_id, project_id) REFERENCES exchange_members(exchange_id, project_id) ON DELETE CASCADE
+);
+INSERT INTO exchange_notice_presence
+  SELECT exchange_id, project_id,
+    strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '-40 seconds'),
+    strftime('%Y-%m-%dT%H:%M:%fZ', expires_at, '-40 seconds'),
+    lower(hex(randomblob(16)))
+  FROM exchange_claims;
+
+CREATE TABLE exchange_notice_claims (
+  exchange_id TEXT NOT NULL,
+  incident_id TEXT NOT NULL,
+  reporting_claim_id TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL,
+  participant_claim_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (exchange_id, incident_id),
+  FOREIGN KEY (exchange_id, project_id) REFERENCES exchange_members(exchange_id, project_id) ON DELETE CASCADE
+);
+CREATE TABLE exchange_notice_issues (
+  exchange_id TEXT NOT NULL,
+  basis_key TEXT NOT NULL,
+  incident_id TEXT NOT NULL,
+  affected_project_id TEXT NOT NULL,
+  reporter_project_id TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  PRIMARY KEY (exchange_id, basis_key),
+  FOREIGN KEY (exchange_id, affected_project_id) REFERENCES exchange_members(exchange_id, project_id) ON DELETE CASCADE,
+  FOREIGN KEY (exchange_id, reporter_project_id, operation_id)
+    REFERENCES exchange_operation_outcomes(exchange_id, project_id, operation_id)
+);
+
+-- Backfill the last heartbeat above even when a predecessor lease has already lost authority.
+DELETE FROM exchange_claims
+WHERE NOT EXISTS (
+  SELECT 1 FROM projects p JOIN project_bindings b ON b.project_id = p.id
+  WHERE p.id = exchange_claims.project_id AND p.status = 'active'
+);
+`,
+};
+
 export interface ProductionMigrationPlan {
   migrations: Migration[];
   rebuilds: Migration[];
@@ -1087,9 +1143,9 @@ export interface ProductionMigrationPlan {
  * to 8 — the legacy fixture catalog every historical builder migrates with —
  * while the production accessor appends the Channel migration at version 11
  * and appends Handoff reporting at version 12 and Exchange at versions 13
- * through 15 as ordinary steps. It registers versions 9 and 10
+ * through 16 as ordinary steps. It registers versions 9 and 10
  * exactly once each as the rebuild-marked steps. The combined runner orders
- * every pending step by version, so ordinary 11 through 15 execute after rebuilds
+ * every pending step by version, so ordinary 11 through 16 execute after rebuilds
  * 9 and 10 inside the one guarded whole-batch path the non-empty rebuild set already
  * selects; no runner branch changes. Every production opener, the migrator's
  * admission catalog, and preflight's reference catalog consume this one
@@ -1105,6 +1161,7 @@ export function productionMigrationPlan(): ProductionMigrationPlan {
       EXCHANGE_FOUNDATION_MIGRATION,
       EXCHANGE_COLLABORATION_MIGRATION,
       EXCHANGE_LIFECYCLE_MIGRATION,
+      EXCHANGE_NOTICES_MIGRATION,
     ],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };

@@ -618,7 +618,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           memos: memosResult.value.memos,
           channels: channelsResult.value.channels,
           exchanges: readExchangeCollaborationRecords(db, redactWorkspacePaths),
-          exchangeRepresentation: "lifecycle",
+          exchangeRepresentation: "notices",
         });
       } catch (error) {
         db.exec("ROLLBACK");
@@ -1572,7 +1572,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             project.updatedAt,
           );
         }
-        if ("exchanges" in data) restoreExchangeRecords(db, data.exchanges);
+        if ("exchanges" in data) restoreExchangeRecords(db, data.exchanges, clock.now().toISOString());
         // `supersedes_handoff_id` is a plain foreign key, so the older Handoff
         // rows insert first; both artifact references defer to the commit.
         for (const handoff of [...data.handoffs].sort(byCreatedThenId)) {

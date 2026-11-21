@@ -950,5 +950,122 @@
     "meta": {
       "requestId": "<uuid>"
     }
+  },
+  "noticeList": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "notices": [
+        {
+          "affectedProjectId": "<uuid>",
+          "obligation": {
+            "response": "report",
+            "requestId": "<uuid>",
+            "version": 1,
+            "sourceSeq": 1,
+            "responsibilitySeq": 0,
+            "resumeSeq": 0
+          },
+          "availableAt": "<time>",
+          "incidentId": "<notice-incident>",
+          "noticeKind": "connection-check",
+          "eligibleAt": "<time>",
+          "priorityUntil": "<time>",
+          "canAcquire": true
+        }
+      ]
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "noticeAcquire": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "incidentId": "<notice-incident>",
+      "reportingClaimId": "<uuid>",
+      "expiresAt": "<time>"
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "noticeAckMissingSlot": {
+    "ok": false,
+    "error": {
+      "code": "ROW_VERSION_CONFLICT",
+      "message": "Use the exact live reporting claim for this Exchange notice.",
+      "details": {},
+      "recovery": {
+        "suggestedCommand": "Re-read the Handoff and retry with the new Row Version"
+      }
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "noticeAck": {
+    "ok": true,
+    "data": {
+      "kind": "notice-ack",
+      "exchangeId": "<uuid>",
+      "incidentId": "<notice-incident>",
+      "noticeKind": "connection-check",
+      "affectedProjectId": "<uuid>",
+      "projectId": "<uuid>",
+      "obligation": {
+        "response": "report",
+        "requestId": "<uuid>",
+        "version": 1,
+        "sourceSeq": 1,
+        "responsibilitySeq": 0,
+        "resumeSeq": 0
+      },
+      "observedThroughSeq": 1,
+      "issuedAt": "<time>",
+      "replayed": false
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "noticeAckReplay": {
+    "ok": true,
+    "data": {
+      "kind": "notice-ack",
+      "exchangeId": "<uuid>",
+      "incidentId": "<notice-incident>",
+      "noticeKind": "connection-check",
+      "affectedProjectId": "<uuid>",
+      "projectId": "<uuid>",
+      "obligation": {
+        "response": "report",
+        "requestId": "<uuid>",
+        "version": 1,
+        "sourceSeq": 1,
+        "responsibilitySeq": 0,
+        "resumeSeq": 0
+      },
+      "observedThroughSeq": 1,
+      "issuedAt": "<time>",
+      "replayed": true
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
+  },
+  "noticesAfterAck": {
+    "ok": true,
+    "data": {
+      "exchangeId": "<uuid>",
+      "projectId": "<uuid>",
+      "notices": []
+    },
+    "meta": {
+      "requestId": "<uuid>"
+    }
   }
 }

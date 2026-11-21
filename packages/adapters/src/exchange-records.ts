@@ -9,6 +9,7 @@ import {
   readExchangeLifecycle,
   restoreExchangeLifecycle,
 } from "./exchange-lifecycle-records";
+import { EXCHANGE_NOTICE_TABLES, readNoticeInventory, retainConnectionIssue } from "./exchange-notice-records";
 import type { SorageSqlite } from "./sqlite/connection";
 import { LEGACY_EXCHANGE_WORK_REVISION } from "./sqlite/migrations";
 
@@ -21,6 +22,7 @@ export const EXCHANGE_FOUNDATION_TABLES = [
   "exchange_activation_intents",
   ...EXCHANGE_COLLABORATION_TABLES,
   ...EXCHANGE_LIFECYCLE_TABLES,
+  ...EXCHANGE_NOTICE_TABLES,
 ] as const;
 
 interface FoundationRow {
@@ -92,21 +94,31 @@ export function readExchangeRecords(db: SorageSqlite): ExchangeSnapshotRecord[] 
 export function readExchangeCollaborationRecords(db: SorageSqlite, redact: boolean): ExchangeSnapshotRecord[] {
   return readExchangeRecords(db).map((row) => {
     const lifecycle = readExchangeLifecycle(db, row.id);
+    const collaboration = readExchangeCollaboration(db, row.id, redact);
     return {
       ...row,
       readRanges: exchangeLifecycleHead(lifecycle).state === "completed" ? [] : row.readRanges,
-      collaboration: readExchangeCollaboration(db, row.id, redact),
+      collaboration,
       lifecycle,
+      notices: readNoticeInventory(db, row.id, lifecycle, collaboration),
     };
   });
 }
 
 /** Restore validated compact records in the existing import transaction, after Projects. */
-export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapshotRecord[]): void {
+export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapshotRecord[], restoredAt: string): void {
   for (const record of records) {
     db.prepare(
-      "INSERT INTO exchanges (id, opening_project_id, goal, criteria_json, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(record.id, record.openingProjectId, record.goal, JSON.stringify(record.criteria), record.createdAt);
+      `INSERT INTO exchanges (id, opening_project_id, goal, criteria_json, created_at, notice_compatibility_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      record.id,
+      record.openingProjectId,
+      record.goal,
+      JSON.stringify(record.criteria),
+      record.createdAt,
+      record.notices ? record.notices.compatibilityAt : restoredAt,
+    );
     for (const projectId of record.members) {
       db.prepare("INSERT INTO exchange_members (exchange_id, project_id) VALUES (?, ?)").run(record.id, projectId);
     }
@@ -131,5 +143,12 @@ export function restoreExchangeRecords(db: SorageSqlite, records: ExchangeSnapsh
     if (record.lifecycle) restoreExchangeLifecycle(db, record.id, record.lifecycle);
     else if (record.collaboration)
       db.prepare(`UPDATE exchanges SET work_revision = ${LEGACY_EXCHANGE_WORK_REVISION} WHERE id = ?`).run(record.id);
+    if (record.notices) {
+      const open = new Set(record.notices.openConnectionIssues);
+      for (const { operationId, outcome } of record.collaboration?.operations ?? []) {
+        if (outcome.kind === "notice-ack" && open.has(outcome.incidentId))
+          retainConnectionIssue(db, outcome, operationId);
+      }
+    }
   }
 }

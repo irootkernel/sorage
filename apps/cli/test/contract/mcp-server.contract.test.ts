@@ -363,7 +363,7 @@ describe("the catalogue golden (MCP-005)", () => {
       result: { tools: Array<Record<string, unknown>> };
     };
     await session.close();
-    expect(listing.result.tools).toHaveLength(56);
+    expect(listing.result.tools).toHaveLength(59);
     expect(listing.result.tools.map((tool) => tool.name as string)).not.toContain("init");
     const rendered = `${JSON.stringify({ initializeResult: initialize.result, toolsResult: listing.result }, null, 2)}\n`;
     if (process.env.SORAGE_TEST_REGEN_MCP_GOLDEN === "1") {
@@ -865,6 +865,132 @@ describe("accepted calls through real children (MCP-002, MCP-006)", () => {
       });
       expect(material.isError).toBe(false);
       expect(envelopeText(material)).toBe(directMaterial.stdout);
+    } finally {
+      await session.close();
+    }
+  }, 20_000);
+
+  it("serializes competing notice claims and acknowledges once across real CLI children", async () => {
+    const { home, workA } = installation("sorage-mcp-exchange-notices-");
+    const workC = join(home, "work-c");
+    mkdirSync(workC);
+    expect(runCli(["project", "add", "--name", "Gamma", "--dir", workC], home, workA).status).toBe(0);
+    const requestId = "2f0ac9a0-0000-4000-8000-0000000000bd";
+    const environment = { SORAGE_TEST_REQUEST_ID: requestId };
+    const session = startServer(home, workA, environment);
+    const invoke = async (name: string, args: Record<string, unknown>, cwd = workA) => {
+      const result = (await toolCall(session, `exchange_${name}`, { ...args, cwd })).result;
+      if (!result) throw new Error(`No result for ${name}`);
+      expect(JSON.parse(envelopeText(result))).toEqual(result.structuredContent);
+      return result;
+    };
+    const admitted = async (name: string, args: Record<string, unknown>, cwd = workA) => {
+      const result = await invoke(name, args, cwd);
+      expect(result.isError, envelopeText(result)).toBe(false);
+      return result.structuredContent.data as Record<string, unknown>;
+    };
+    try {
+      const created = await admitted("create", {
+        member: ["beta", "gamma"],
+        goal: "Verify the pending result",
+        criterion: ["Exact result"],
+        operationId: "create",
+      });
+      const exchangeId = String(created.exchangeId);
+      const pair = { exchangeId };
+      const alpha = { claim: String((await admitted("join", pair)).claimId), cwd: workA };
+      const gamma = { claim: String((await admitted("join", pair, workC)).claimId), cwd: workC };
+      const request = await admitted("request", {
+        ...pair,
+        claim: alpha.claim,
+        operationId: "request",
+        assignee: "beta",
+        condition: "Verify",
+        criterion: ["Observe the item"],
+      });
+      const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        db.prepare("UPDATE exchange_messages SET created_at = ? WHERE exchange_id = ? AND seq = ?").run(
+          new Date(Date.now() - 361_000).toISOString(),
+          exchangeId,
+          Number(request.seq),
+        );
+      } finally {
+        db.close();
+      }
+      const list = await invoke("notice_list", { ...pair, claim: gamma.claim }, workC);
+      const direct = runCli(
+        ["exchange", "notice-list", exchangeId, "--claim", gamma.claim, "--json"],
+        home,
+        workC,
+        environment,
+      );
+      expect(envelopeText(list)).toBe(direct.stdout);
+      const [incident] = (list.structuredContent.data as { notices: { incidentId: string; canAcquire: boolean }[] })
+        .notices;
+      expect(incident?.canAcquire).toBe(true);
+      if (!incident) throw new Error("Expected one due item");
+      const target = { ...pair, incidentId: incident.incidentId };
+      const contenders = [alpha, gamma];
+      const outcomes = await Promise.all(
+        contenders.map((reporter) => invoke("notice_acquire", { ...target, claim: reporter.claim }, reporter.cwd)),
+      );
+      expect(outcomes.filter(({ isError }) => !isError)).toHaveLength(1);
+      expect(outcomes.find(({ isError }) => isError)?.structuredContent.error).toMatchObject({
+        code: "ROW_VERSION_CONFLICT",
+      });
+      const winner = outcomes.findIndex(({ isError }) => !isError);
+      const reporter = contenders[winner];
+      const retained = outcomes[winner];
+      if (!reporter || !retained) throw new Error("Expected a reporting claim");
+      const repeat = runCli(
+        [
+          "exchange",
+          "notice-acquire",
+          exchangeId,
+          "--incident",
+          target.incidentId,
+          "--claim",
+          reporter.claim,
+          "--json",
+        ],
+        home,
+        reporter.cwd,
+        environment,
+      );
+      expect(repeat.status, repeat.stderr).toBe(0);
+      expect(envelopeText(retained)).toBe(repeat.stdout);
+      const slot = retained.structuredContent.data as { reportingClaimId: string };
+      const acknowledgement = {
+        ...target,
+        operationId: "issued",
+        claim: reporter.claim,
+        reportingClaim: slot.reportingClaimId,
+      };
+      const acknowledged = await Promise.all([
+        admitted("notice_ack", acknowledgement, reporter.cwd),
+        admitted("notice_ack", acknowledgement, reporter.cwd),
+      ]);
+      expect(acknowledged.map(({ replayed }) => replayed).sort()).toEqual([false, true]);
+      const replay = await invoke("notice_ack", { ...target, operationId: "issued", replayOnly: true }, reporter.cwd);
+      const directReplay = runCli(
+        [
+          "exchange",
+          "notice-ack",
+          exchangeId,
+          "--incident",
+          target.incidentId,
+          "--operation-id",
+          "issued",
+          "--replay-only",
+          "--json",
+        ],
+        home,
+        reporter.cwd,
+        environment,
+      );
+      expect(envelopeText(replay)).toBe(directReplay.stdout);
+      expect((await admitted("notice_list", pair)).notices).toEqual([]);
     } finally {
       await session.close();
     }

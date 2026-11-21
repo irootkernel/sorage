@@ -1487,6 +1487,23 @@ const EXCHANGE_TOOLS: McpTool[] = [
     [...exchangeParticipant, exchangePair("source", "--source", "path")],
     { positionals: [exchangeId, { property: "materialId", argument: "material-id" }], idempotent: true },
   ),
+  exchangeTool("notice-list", "inspect eligible response notices without writing", [exchangeClaim], {
+    idempotent: true,
+  }),
+  exchangeTool("notice-acquire", "acquire the finite reporting slot for a current Exchange notice", [
+    exchangePair("incidentId", "--incident", "id"),
+    exchangePair("claim", "--claim", "id"),
+  ]),
+  exchangeTool(
+    "notice-ack",
+    "acknowledge an Exchange notice after issuing it to the user",
+    [
+      ...exchangeParticipant,
+      exchangePair("incidentId", "--incident", "id"),
+      exchangePair("reportingClaim", "--reporting-claim"),
+    ],
+    { idempotent: true },
+  ),
 ];
 
 /** Append the M10 Exchange extension after the unchanged 35 tools of section 39. */

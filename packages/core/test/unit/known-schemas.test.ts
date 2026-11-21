@@ -23,7 +23,7 @@ describe("the central known-schema inventory", () => {
       ...plan.rebuilds.map((migration) => ({ version: migration.version, name: migration.name })),
     ].sort((a, b) => a.version - b.version);
     expect(combined).toEqual([...KNOWN_SCHEMA_HISTORY]);
-    expect(knownSchemaMaximum()).toBe(15);
+    expect(knownSchemaMaximum()).toBe(16);
   });
 
   it("admits a complete applied prefix", () => {

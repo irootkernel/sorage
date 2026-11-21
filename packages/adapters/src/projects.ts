@@ -62,6 +62,13 @@ export interface SqliteProjectRepositoryOptions {
 
 const defaultEventIds = new UuidGenerator();
 
+function revokeExchangeClaims(db: SorageSqlite, projectId: string): void {
+  // The Project repository can also open historical schemas that predate Exchange notices.
+  if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'exchange_notice_claims'").get()) return;
+  db.prepare("DELETE FROM exchange_notice_claims WHERE project_id = ?").run(projectId);
+  db.prepare("DELETE FROM exchange_claims WHERE project_id = ?").run(projectId);
+}
+
 export function createSqliteProjectRepository(
   db: SorageSqlite,
   options: SqliteProjectRepositoryOptions,
@@ -319,6 +326,7 @@ export function createSqliteProjectRepository(
             db.exec("ROLLBACK");
             return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
           }
+          if (status === "archived") revokeExchangeClaims(db, projectId);
           emit(
             status === "archived" ? "PROJECT_STATUS_ARCHIVED" : "PROJECT_STATUS_ACTIVE",
             actor,
@@ -343,26 +351,32 @@ export function createSqliteProjectRepository(
     },
     removeBinding(bindingId, actor) {
       try {
-        // bun:sqlite returns null for a no-row get and node:sqlite returns undefined;
-        // both mean the binding is already gone.
-        const row = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as
-          | BindingRow
-          | null
-          | undefined;
-        if (!row) {
-          return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`, { bindingId }));
-        }
-        const removedAt = row.updated_at;
         db.exec("BEGIN IMMEDIATE");
         try {
+          const row = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as
+            | BindingRow
+            | null
+            | undefined;
+          if (!row) {
+            db.exec("ROLLBACK");
+            return err(appError("PROJECT_NOT_FOUND", `no binding has the id '${bindingId}'`, { bindingId }));
+          }
           db.prepare("DELETE FROM project_bindings WHERE id = ?").run(bindingId);
+          if (
+            row.installation_id === options.installationId &&
+            !db
+              .prepare("SELECT 1 FROM project_bindings WHERE project_id = ? AND installation_id = ? LIMIT 1")
+              .get(row.project_id, options.installationId)
+          )
+            revokeExchangeClaims(db, row.project_id);
           emit(
             "PROJECT_BINDING_REMOVED",
             actor,
             { projectId: row.project_id, bindingId, directory: row.directory, bindingKind: row.binding_kind },
-            removedAt,
+            row.updated_at,
           );
           db.exec("COMMIT");
+          return ok(toBinding(row));
         } catch (transactionError) {
           try {
             db.exec("ROLLBACK");
@@ -371,7 +385,6 @@ export function createSqliteProjectRepository(
           }
           throw transactionError;
         }
-        return ok(toBinding(row));
       } catch (error) {
         return err(mapRepositoryError(error));
       }

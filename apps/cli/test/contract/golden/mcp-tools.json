@@ -3118,6 +3118,118 @@
           "idempotentHint": true,
           "openWorldHint": false
         }
+      },
+      {
+        "name": "exchange_notice_list",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. inspect eligible response notices without writing",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_notice_acquire",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. acquire the finite reporting slot for a current Exchange notice",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "incidentId": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "incidentId",
+            "claim"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "exchange_notice_ack",
+        "description": "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. acknowledge an Exchange notice after issuing it to the user",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "exchangeId": {
+              "type": "string"
+            },
+            "project": {
+              "type": "string"
+            },
+            "claim": {
+              "type": "string"
+            },
+            "operationId": {
+              "type": "string"
+            },
+            "replayOnly": {
+              "type": "boolean"
+            },
+            "incidentId": {
+              "type": "string"
+            },
+            "reportingClaim": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeId",
+            "operationId",
+            "incidentId"
+          ],
+          "additionalProperties": false
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
       }
     ]
   }
