@@ -6,8 +6,9 @@
 // milestone value, no requirement
 // whose every citing Task belongs to a later milestone than the requirement itself,
 // no requirement that is not Deferred with no citing Task, and a reverse index in
-// traceability.md that matches the roadmap's Requirements column.
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+// traceability.md that matches the roadmap's Requirements column. The two shipped
+// Exchange skills also carry exact copies of their canonical loop reference.
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 const root = process.argv[2] ?? ".";
@@ -69,6 +70,35 @@ function checkLinks(path: string): void {
       const line = text.slice(0, match.index ?? 0).split("\n").length;
       fail(`${path}:${line}`, `unresolvable relative link '${target}'`);
     }
+  }
+}
+
+function readExchangeSkillReference(path: string): Buffer | undefined {
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) {
+    fail(path, "Exchange loop reference must be a regular file");
+    return undefined;
+  }
+  return readFileSync(path);
+}
+
+function checkExchangeSkillReferences(): void {
+  const skills = join(root, "skills");
+  const source = join(skills, "exchange-loop.md");
+  const canonical = readExchangeSkillReference(source);
+  for (const name of ["start-exchange", "join-exchange"]) {
+    const directory = join(skills, name);
+    const references = join(directory, "references");
+    const invalidDirectory = [directory, references].find(
+      (path) => !lstatSync(path, { throwIfNoEntry: false })?.isDirectory(),
+    );
+    if (invalidDirectory) {
+      fail(invalidDirectory, "Exchange skill bundle must use local directories");
+      continue;
+    }
+    const path = join(references, "exchange-loop.md");
+    const bundled = readExchangeSkillReference(path);
+    if (canonical && bundled && !canonical.equals(bundled))
+      fail(path, `Exchange loop reference differs from ${source}`);
   }
 }
 
@@ -445,6 +475,7 @@ for (const topLevel of ["README.md", "AGENTS.md"]) {
 }
 checkIdentifiers();
 checkTraceability();
+checkExchangeSkillReferences();
 
 if (violations.length > 0) {
   console.error("sot-check failed:");

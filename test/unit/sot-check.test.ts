@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 const checker = fileURLToPath(new URL("../../scripts/sot-check.ts", import.meta.url));
+const exchangeLoop = "# Exchange collaboration loop\n";
 const roots: string[] = [];
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -64,6 +65,12 @@ function docFixture(mutate: (root: string) => void): string {
       "",
     ].join("\n"),
   );
+  for (const skill of ["start-exchange", "join-exchange"]) {
+    const references = join(root, "skills", skill, "references");
+    mkdirSync(references, { recursive: true });
+    writeFileSync(join(references, "exchange-loop.md"), exchangeLoop);
+  }
+  writeFileSync(join(root, "skills", "exchange-loop.md"), exchangeLoop);
   mutate(root);
   return root;
 }
@@ -77,6 +84,26 @@ describe("sot-check", () => {
   it("passes against a consistent document set", () => {
     const result = runCheck(docFixture(() => undefined));
     expect(result.status).toBe(0);
+  });
+
+  it.each(["start-exchange", "join-exchange"])("fails on byte drift in the %s bundle", (skill) => {
+    const relative = join("skills", skill, "references", "exchange-loop.md");
+    const root = docFixture((path) => writeFileSync(join(path, relative), `${exchangeLoop}\n`));
+    const result = runCheck(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${relative}: Exchange loop reference differs`);
+    expect(readTheFile(join(root, relative))).toBe(`${exchangeLoop}\n`);
+  });
+
+  it("requires an actual local copy even when a symlink resolves to the canonical reference", () => {
+    const relative = join("skills", "join-exchange", "references", "exchange-loop.md");
+    const root = docFixture((path) => {
+      rmSync(join(path, relative));
+      symlinkSync(join(path, "skills", "exchange-loop.md"), join(path, relative));
+    });
+    const result = runCheck(root);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${relative}: Exchange loop reference must be a regular file`);
   });
 
   it("accepts M7 requirements, Tasks, and their matching reverse index", () => {

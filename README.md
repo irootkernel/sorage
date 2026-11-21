@@ -37,6 +37,12 @@ claude mcp add --scope user sorage -- sorage mcp
 
 For an explicit installation, Codex accepts `--env SORAGE_HOME=/absolute/home` before the server name; Claude Code uses `claude mcp add --scope user sorage -e SORAGE_HOME=/absolute/home -- /absolute/path/to/sorage mcp`. Replace paths with the selected installation and executable. Without an explicit home, the server uses the harness environment's SORAGE_HOME or the default `~/.sorage`. Registration does not authorize a broker operation. [Operations](docs/ops/README.md#mcp-registration-and-per-invocation-attachment) covers configuration scope, verification/removal and session-only attachment.
 
+## Exchange collaboration
+
+Use [start-exchange](skills/start-exchange/SKILL.md) when asking an agent to create an Exchange, report its ID, and join as the opening Project. Use [join-exchange](skills/join-exchange/SKILL.md) to participate in an existing Exchange by its exact ID. Copy the complete directory for either skill, including its `references/` directory. Each copy contains the shared instructions and works independently of this checkout and the other skill.
+
+Pair the copy with an Exchange-capable executable verified by path and revision or digest. Use the exposed compatible MCP tools for supported Plan-mode or read-only participation. Use the native CLI when the acting workspace and harness permit it. Run Exchange operations from an existing registered Project workspace and share the Exchange ID with the intended participants. [Exchange operations](docs/ops/README.md#choose-an-exchange-skill-and-transport)
+
 ## Features
 
 - A CLI that works without a running daemon

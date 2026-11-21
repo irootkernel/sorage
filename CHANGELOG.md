@@ -10,6 +10,7 @@ This file records concise shipped outcomes and the planned next stable release.
 - Keep Exchange claims active through the CLI session owner or MCP connection, wait for relevant activity with a delivery cursor, and use the initial 13 Exchange MCP tools.
 - Correct Exchange membership and request ownership, pause and resume collaboration, and record unanimous completion with recoverable cleanup.
 - Discover Exchange connection checks and unread delivery notices, reserve a reporting slot, and acknowledge issuance to the user through CLI or MCP.
+- Start or join an Exchange from either independently copied skill, with bundled guidance for CLI and MCP participation.
 
 ### Changed
 
