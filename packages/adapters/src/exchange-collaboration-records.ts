@@ -53,11 +53,12 @@ export function relevantExchangeMessages(
     .prepare<ExchangeMessage>(
       `SELECT ${MESSAGE_FIELDS} FROM exchange_messages m
     LEFT JOIN exchange_messages previous ON previous.exchange_id = m.exchange_id AND previous.seq = m.reply_to
-    LEFT JOIN exchange_requests request ON request.exchange_id = m.exchange_id AND request.id = m.request_id
+    LEFT JOIN exchange_reports report ON m.kind = 'accept' AND report.exchange_id = m.exchange_id
+      AND report.request_id = m.request_id AND report.version = m.report_version
     WHERE m.exchange_id = ? AND m.seq > ? AND m.sender_id <> ?
       AND (m.recipient_id = ? OR previous.sender_id = ?
         OR (m.recipient_id IS NULL AND m.kind <> 'accept')
-        OR (m.kind = 'accept' AND request.assignee_id = ?))
+        OR report.author_id = ?)
     ORDER BY m.seq LIMIT ?`,
     )
     .all(exchangeId, after, projectId, projectId, projectId, projectId, limit);

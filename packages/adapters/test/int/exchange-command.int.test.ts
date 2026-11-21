@@ -423,7 +423,34 @@ describe("Exchange SQLite and working storage through the application entrypoint
         expect(f.run(accept(alpha, 1), f.alpha)).toMatchObject(error("ROW_VERSION_CONFLICT"));
         const newer = unwrap(f.run(report(other, 3, "replacement-report"), f.other));
         expect(newer.reportVersion).toBe(2);
-        unwrap(f.run(accept(alpha, 2), f.alpha));
+        unwrap(
+          f.run({
+            ...identity,
+            kind: "roster",
+            rosterVersion: 2,
+            add: ["beta"],
+            remove: [],
+            operationId: "return-original-assignee",
+            reason: "Return the original assignee as a peer",
+            confirmed: true,
+          }),
+        );
+        const cursorFor = (cwd: string) => unwrap(f.run({ kind: "history", exchangeId }, cwd)).cursor;
+        const authorCursor = cursorFor(f.other);
+        const originalCursor = cursorFor(f.beta);
+        const accepted = unwrap(f.run(accept(alpha, 2), f.alpha));
+        const wait = (cwd: string, cursor: string) =>
+          unwrap(f.run({ kind: "wait", exchangeId, cursor, timeout: 1, interval: 1 }, cwd));
+        const beforeWait = tree(f.home);
+        const observed = wait(f.other, authorCursor);
+        expect(observed).toMatchObject({
+          timedOut: false,
+          stateChanged: false,
+          messages: [{ kind: "accept", seq: accepted.sequences[0], requestId: first.requestId, reportVersion: 2 }],
+        });
+        expect(wait(f.other, observed.cursor)).toMatchObject({ messages: [], timedOut: true });
+        expect(wait(f.beta, originalCursor)).toMatchObject({ messages: [], timedOut: true });
+        expect(tree(f.home)).toEqual(beforeWait);
       }
       const settled = unwrap(f.run({ kind: "inspect", exchangeId }, f.other));
       expect(settled.reports[0]).toMatchObject({ authorId: betaId, assignmentVersion: 1 });
