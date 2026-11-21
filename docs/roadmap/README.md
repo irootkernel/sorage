@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-021`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -112,7 +112,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-018` | MCP access, zero-write reads and Channel rebuild | M9 | Completed | `TASK-121` to `TASK-127` |
 | `EPIC-019` | Handoff processing status and recipient comment | M9 | Completed | `TASK-128` to `TASK-134` |
 | `EPIC-020` | Pre-release simplification | M9 | Completed | `TASK-135` to `TASK-138` |
-| `EPIC-021` | Exchange peer collaboration between Projects | M10 | In Progress | `TASK-139` to `TASK-146` |
+| `EPIC-021` | Exchange peer collaboration between Projects | M10 | Completed | `TASK-139` to `TASK-146` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -613,17 +613,17 @@ The reviewed `error-renderings.json` diff changes only the common `INTERNAL_ERRO
 
 ## EPIC-021: Exchange peer collaboration between Projects
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M10
 - **Objective:** Let registered Projects collaborate as peers within one Installation through a durable Exchange: directed requests, versioned results and evidence, requester acceptance after relevant verification, unanimous completion, pause and resumption, and cleanup of disposable evidence after completion. One Exchange identifier survives agent sessions, model changes, upgrades and restarts, and read-only and Plan-mode agents participate through MCP.
-- **Detailed SOT:** [Exchange dossier](../todo/exchange-dossier.md).
+- **Canonical Outcomes:** [ADR-0037](../architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10), [Exchange requirements](../specs/required-specification.md#24-exchange-peer-collaboration-milestone-m10), [Exchange interfaces](../specs/interfaces-and-operations.md#41-exchange-peer-collaboration-milestone-m10), [trust, persistence and cleanup](../specs/security-reliability.md#19-m10-exchange-trust-persistence-and-cleanup), [Gate M10](../specs/testing-and-acceptance.md#911-gate-m10-exchange-peer-collaboration-end-of-epic-021), [assembled qualification](../implementation-tips/exchange-qualification.md#assembled-qualification), and [storage operations](../ops/README.md#m10-exchange-storage-upgrade-and-rollback).
 - **Design basis:** Master's approved Exchange requirements and registration direction of 2026-11-19, recorded by [ADR-0037](../architecture-decision-records/README.md#adr-0037-exchange-as-a-separate-peer-collaboration-domain-in-m10). TASK-139 records pre-adoption mechanisms and resolves the canonical contract before implementation.
 - **Prerequisite:** EPIC-020 is Completed. No prior Task or Epic is reopened. Registration starts no Task and consumes no active implementation or review slot.
 - **Packages touched:** TASK-139 owns isolated qualification probes and canonical design documents; TASK-140 owns core snapshot types and adapter storage, migration, backup and restore; TASK-141 owns the initial core Exchange use cases, CLI group, schema-14 adapters and format-5 collaboration inventory; TASK-142 owns session and wait operations in core, adapters and CLI and the CLI MCP adapter; TASK-143 owns membership, lifecycle, completion and cleanup across core, adapters, CLI and MCP; TASK-144 owns notices across the same layers; TASK-145 owns the two shipped Exchange skills, their canonical reference source and public and operations guidance; TASK-146 owns integrated qualification and lasting evidence. No daemon HTTP route, Web screen or consumer-repository edit is included in the first version.
-- **Execution policy:** Follow TASK-139 through TASK-146 sequentially through the explicitly invoked Epic handler. Each member Task Goal uses the plan-assessed Goal Procedure adaptation recorded in the dossier's [execution design](../todo/exchange-dossier.md#execution-design), which the handler selects and qualifies through its own plan and execution-envelope approval; internal Epic validation uses the managed Validation Procedure unchanged. If the adaptation cannot be qualified, the handler stops before work: running a member Task without the plan assessment is a different execution envelope that needs Master's explicit approval and an edit of this policy. Each Task retains independent review and its applicable Definition of Done. TASK-140 through TASK-145 verify their candidates with focused checks and evidence reuse under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review); an earlier complete gate is required only where a Task's gate names a concrete shared-behavior or cross-boundary risk, and TASK-146 owns the complete `make test` on the final integrated candidate. No Design Gate registry is enrolled, so every row records Not required. The Requirements column and reverse index bind each Task to the adopted EXC and affected shared rows. The dossier assigns every acceptance area to its owning Task, and each bound and each retained or disposable classification is verified by the Task that first writes and exports the record.
-- **Compatibility:** The new Exchange commands, MCP tools and skills are additive. TASK-142 verified the shared keeper and compatibility for existing tools within its compiled checks. TASK-140 qualifies the one-way schema 12 to 13 and global format 4 to 5 foundation transition. TASK-141 qualifies the one-way schema 13 to 14 and incompatible collaboration representation inside format 5. Both check guarded earlier readers and retain exact matching rollback inputs. The release disclosure names the final storage boundary. TASK-145 and TASK-146 maintain and qualify the operating instructions.
+- **Execution record:** TASK-139 through TASK-146 used the plan-assessed Goal Procedure in order, with independent member reviews and managed internal Validation. The Requirements column and reverse index retain the owning Tasks. TASK-146 qualified the assembled candidate through the complete `make test` gate and retained separately scoped native, compatibility and rollback observations.
+- **Compatibility:** Exchange CLI commands, MCP tools and skills are additive. M10 uses schema 16 and global backup format 5. Later format-5 inventories extend the earlier representations through `lifecycle` and `notices`. Use the [qualified one-way upgrade and matched rollback procedure](../ops/README.md#m10-exchange-storage-upgrade-and-rollback).
 - **Release boundary:** The M10 gate is planned for v0.1.5 and covers AJ-34 through AJ-37 and applicable earlier regressions. Version changes, publication and installation retain separate authority.
-- **Qualification:** The [pre-adoption qualification](../implementation-tips/exchange-qualification.md) records actual mechanism observations. TASK-142 requalifies delivered owners and TASK-146 qualifies the exact assembled candidate.
+- **Qualification:** The [Exchange qualification record](../implementation-tips/exchange-qualification.md) preserves pre-adoption, compiled storage and owner observations, independently copied native skill runs and the final assembled rehearsal.
 
 | Task ID | Status | Milestone | Deliverable | Acceptance gate | Dependencies | Requirements | Design Gate impact |
 |---|---|---|---|---|---|---|---|

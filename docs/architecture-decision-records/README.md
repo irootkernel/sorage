@@ -1592,7 +1592,7 @@ The repository can reduce repeated setup, review scope and unused structure whil
 - **Status:** Accepted
 - **Date:** Proposed 2026-11-19; accepted 2026-11-20
 - **Design owner:** TASK-139 under [EPIC-021](../roadmap/README.md#epic-021-exchange-peer-collaboration-between-projects).
-- **Execution detail:** [Exchange dossier](../todo/exchange-dossier.md).
+- **Qualification:** [Exchange qualification](../implementation-tips/exchange-qualification.md) and [Gate M10](../specs/testing-and-acceptance.md#911-gate-m10-exchange-peer-collaboration-end-of-epic-021).
 
 ### Problem
 
@@ -1612,7 +1612,7 @@ Master approved the Exchange requirements and requested registration on 2026-11-
 8. Ship independently invocable `start-exchange` and `join-exchange` skills from one canonical loop-reference source, while `skills/use-sorage/SKILL.md` remains the shipped policy for the existing domains.
 9. Use milestone M10. This is a deliberate choice because Exchange introduces a new domain and substantial new public CLI, storage, backup and migration contracts; it is not derived from the release-freeze rule of governance section 12. Adopt EXC-001 through EXC-022 and allocate M10 to intended v0.1.5 with AJ-34 through AJ-37.
 
-The [Exchange dossier](../todo/exchange-dossier.md) holds the detailed requirements, authority table, retention classes and acceptance evidence. The canonical owners of the adopted rules are [the required specification](../specs/required-specification.md#24-exchange-peer-collaboration-milestone-m10) and [interface section 41](../specs/interfaces-and-operations.md#41-exchange-peer-collaboration-milestone-m10).
+The [required specification](../specs/required-specification.md#24-exchange-peer-collaboration-milestone-m10) and [interface section 41](../specs/interfaces-and-operations.md#41-exchange-peer-collaboration-milestone-m10) own the adopted requirements, authority and retention rules. The [Exchange qualification record](../implementation-tips/exchange-qualification.md) preserves observations and their applicability.
 
 ### Qualification before acceptance
 
