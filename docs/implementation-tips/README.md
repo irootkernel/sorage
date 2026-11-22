@@ -20,6 +20,8 @@ The [copied-skill acceptance record](use-sorage-acceptance.md) records independe
 
 [EPIC-020](../roadmap/README.md#epic-020-pre-release-simplification) simplifies obsolete scaffolding and assertions, Handoff database composition and repeated test preparation. Use [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review) for focused verification and evidence reuse, [architecture section 16](../architecture/README.md#16-core-application-ports) for connection ownership, [the test target table](../specs/testing-and-acceptance.md#1-tooling) for executable preparation, and [interface section 40.3](../specs/interfaces-and-operations.md#403-caller-observation-replay-and-input-validation) for caller observations and replay. The roadmap alone records lifecycle.
 
+The [M11 qualification map](m11-qualification.md) records the reproducible `TASK-147` pre-work baselines captured on unmodified `HEAD` (`f842225`), the `SchemaSurface` `"exchange"` floor-16 rationale, and the before/after verification targets for `EPIC-022` through `EPIC-024`.
+
 ## 2. TypeScript and toolchain
 
 Required TypeScript posture:

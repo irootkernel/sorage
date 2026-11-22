@@ -8,7 +8,7 @@ The repository root [README](../README.md) introduces Sorage to users. The root 
 - **Delivery scope:** Sorage
 - **Canonical roadmap:** [roadmap/README.md](roadmap/README.md)
 - **Language:** English for the root README, changelog, and all Markdown under `docs/`
-- **Source of Truth version:** `0.12.0`
+- **Source of Truth version:** `0.13.0`
 
 ## Role ownership
 
@@ -72,7 +72,7 @@ The [TASK-139 adoption](governance/README.md#task-139-adoption-2026-11-20) defin
 
 ## M11 architecture hardening and modernization entrypoints
 
-[EPIC-022](roadmap/README.md#epic-022-m11-non-breaking-defect-fixes-hot-path-performance-and-v17-indexes), [EPIC-023](roadmap/README.md#epic-023-m11-golden-preserving-internal-architecture-cleanup) and [EPIC-024](roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification) register Master's 2026-11-22 architecture hardening and refactoring program in milestone M11 for intended v0.1.6 under [proposed ADR-0038](architecture-decision-records/README.md#adr-0038-m11-non-breaking-hardening-v17-index-migration-and-internal-architecture-cleanup), [proposed ADR-0039](architecture-decision-records/README.md#adr-0039-daemon-http-idempotency-unification-onto-core-sqlite-receipts) and [proposed ADR-0040](architecture-decision-records/README.md#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding), with execution details in the [M11 dossier](todo/m11-architecture-refactoring-dossier.md) and the governance boundary in [governance section 20](governance/README.md#20-m11-architecture-hardening-and-modernization-registration-boundary). Registration authorizes planning records and M11 checker support only; current specifications and accepted decisions remain authoritative until `TASK-147`, `TASK-161` and `TASK-162` adopt their respective ADRs, and the roadmap alone records lifecycle and eligibility.
+[EPIC-022](roadmap/README.md#epic-022-m11-non-breaking-defect-fixes-hot-path-performance-and-v17-indexes), [EPIC-023](roadmap/README.md#epic-023-m11-golden-preserving-internal-architecture-cleanup) and [EPIC-024](roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification) deliver Master's 2026-11-22 architecture hardening and refactoring program in milestone M11 for intended `v0.1.6`. [TASK-147 adoption](governance/README.md#task-147-adoption-2026-11-22) accepts [ADR-0038](architecture-decision-records/README.md#adr-0038-m11-non-breaking-hardening-v17-index-migration-and-internal-architecture-cleanup), records pre-work baselines in [M11 qualification](implementation-tips/m11-qualification.md), adopts `HND-027`, [interface section 42](specs/interfaces-and-operations.md#42-m11-hardening-schema-v17-and-contract-classification) and [Gate M11](specs/testing-and-acceptance.md#912-gate-m11-architecture-hardening-and-modernization-end-of-epic-022-epic-023-and-epic-024), and populates `EPIC-022` and `EPIC-023` citations and traceability while keeping [proposed ADR-0039](architecture-decision-records/README.md#adr-0039-daemon-http-idempotency-unification-onto-core-sqlite-receipts), [proposed ADR-0040](architecture-decision-records/README.md#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding) and `EPIC-024` staged until `TASK-161` and `TASK-162`. Execution details live in the [M11 dossier](todo/m11-architecture-refactoring-dossier.md); the roadmap alone records lifecycle and eligibility.
 
 ## Source of Truth precedence
 
