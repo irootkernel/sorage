@@ -461,6 +461,7 @@ function assertWritableDatabaseFiles(path: string): void {
       if (code === "ENOENT") continue;
       if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
         throw Object.assign(new Error("attempt to write a readonly database", { cause: error }), {
+          name: "SQLiteError",
           code: "SQLITE_READONLY",
         });
       }
