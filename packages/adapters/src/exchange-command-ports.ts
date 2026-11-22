@@ -1026,7 +1026,13 @@ class ExchangeStore implements ExchangeBusinessRepository {
   admitNoticeAck(input: ExchangeNoticeAckInput): { now: Date; header: Header; incident: ExchangeNoticeIncident } {
     const { now, header, incident, slot } = this.noticeAdmission(input);
     if (slot?.projectId !== this.actorId || slot.reportingClaimId !== input.reportingClaim)
-      return conflict("Use the exact live reporting claim for this Exchange notice.");
+      return fail({
+        ...appError("ROW_VERSION_CONFLICT", "Use the exact live reporting claim for this Exchange notice."),
+        recovery: {
+          suggestedCommand:
+            "Run sorage exchange notice-list <exchange-id> --claim <id> --json or call exchange_notice_list with the current claim. Acknowledge the same incident only after issuing it while its exact reporting slot is live. If the outcome is uncertain, use replay-only with the original incident and operation IDs.",
+        },
+      });
     return { now, header, incident };
   }
 

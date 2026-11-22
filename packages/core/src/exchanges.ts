@@ -479,7 +479,13 @@ export function requireExchangeReport(
     return err(exchangeAccessDenied());
   return (request.ownership?.assignmentVersion ?? request.assignmentVersion) === assignmentVersion
     ? ok(undefined)
-    : err(appError("ROW_VERSION_CONFLICT", "The request assignment version changed."));
+    : err({
+        ...appError("ROW_VERSION_CONFLICT", "The request assignment version changed."),
+        recovery: {
+          suggestedCommand:
+            "Run sorage exchange inspect <exchange-id> --json or call exchange_inspect. Check the effective assignee and assignment version in ownership when present. Report only as the current assignee with a live claim. If the outcome is uncertain, use replay-only with the original operation ID and inputs.",
+        },
+      });
 }
 
 export function requireExchangeAcceptance(

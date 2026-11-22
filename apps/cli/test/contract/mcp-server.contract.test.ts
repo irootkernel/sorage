@@ -968,6 +968,43 @@ describe("accepted calls through real children (MCP-002, MCP-006)", () => {
         claim: reporter.claim,
         reportingClaim: slot.reportingClaimId,
       };
+      const wrongClaim = "wrong-reporting-slot";
+      const refused = await invoke("notice_ack", { ...acknowledgement, reportingClaim: wrongClaim }, reporter.cwd);
+      const directRefusal = runCli(
+        [
+          "exchange",
+          "notice-ack",
+          exchangeId,
+          "--incident",
+          target.incidentId,
+          "--claim",
+          reporter.claim,
+          "--reporting-claim",
+          wrongClaim,
+          "--operation-id",
+          acknowledgement.operationId,
+          "--json",
+        ],
+        home,
+        reporter.cwd,
+        environment,
+      );
+      expect(directRefusal.status, directRefusal.stderr).toBe(75);
+      expect(directRefusal.stdout).toBe("");
+      expect(refused.isError).toBe(true);
+      expect(envelopeText(refused)).toBe(directRefusal.stderr);
+      expect(refused.structuredContent.error).toEqual({
+        code: "ROW_VERSION_CONFLICT",
+        message: "Use the exact live reporting claim for this Exchange notice.",
+        details: {},
+        recovery: {
+          suggestedCommand:
+            "Run sorage exchange notice-list <exchange-id> --claim <id> --json or call exchange_notice_list with the current claim. Acknowledge the same incident only after issuing it while its exact reporting slot is live. If the outcome is uncertain, use replay-only with the original incident and operation IDs.",
+        },
+      });
+      expect(
+        (await admitted("recover", { ...pair, operationId: acknowledgement.operationId }, reporter.cwd)).operations,
+      ).toEqual([]);
       const acknowledged = await Promise.all([
         admitted("notice_ack", acknowledgement, reporter.cwd),
         admitted("notice_ack", acknowledgement, reporter.cwd),

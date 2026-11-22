@@ -403,6 +403,33 @@ describe("Exchange CLI JSON and read error boundary", () => {
       const resumed = success("resumedJoin", resume);
       success("resumeReplay", [...resume, "--replay-only"]);
       const activeClaim = String(resumed.claimId);
+      const staleReport = run([
+        ...operation("report", "stale-assignment"),
+        "--claim",
+        activeClaim,
+        "--request",
+        String(request.requestId),
+        "--assignment-version",
+        String(request.assignmentVersion),
+        "--body",
+        "Observed the material.",
+      ]);
+      expect(staleReport.status, staleReport.stderr).toBe(75);
+      expect(staleReport.stdout).toBe("");
+      expect(JSON.parse(staleReport.stderr)).toEqual({
+        ok: false,
+        error: {
+          code: "ROW_VERSION_CONFLICT",
+          message: "The request assignment version changed.",
+          details: {},
+          recovery: {
+            suggestedCommand:
+              "Run sorage exchange inspect <exchange-id> --json or call exchange_inspect. Check the effective assignee and assignment version in ownership when present. Report only as the current assignee with a live claim. If the outcome is uncertain, use replay-only with the original operation ID and inputs.",
+          },
+        },
+        meta: { requestId },
+      });
+      expect(success("", operation("recover", "stale-assignment")).operations).toEqual([]);
       success("materialRevalidate", [
         "exchange",
         "material-revalidate",

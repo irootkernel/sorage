@@ -23,6 +23,10 @@ This file records concise shipped outcomes and the planned next stable release.
 - Back up compact Exchange outcomes with configurable workspace-path redaction and exclude working bytes, Project bindings, and live claims from the snapshot.
 - Restore formats 1 through 4 or earlier format-5 inventories with the new executable, and rebind the owning Project and revalidate its local references before using them in a restored Installation.
 
+### Fixed
+
+- Clarify how to identify the current Exchange assignee and recover from stale report assignments or notice reporting claims.
+
 ## v0.1.4 - 2026-11-08
 
 ### Fixed
