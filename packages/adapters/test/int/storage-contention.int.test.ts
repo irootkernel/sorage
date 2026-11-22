@@ -214,6 +214,7 @@ function sentHandoffId(db: SorageSqlite, dir: string, senderPath?: string): stri
     body: "b",
     allowExternalSource: false,
     allowUnregistered: false,
+    ...(senderPath === undefined ? { asUser: true } : {}),
     path: senderPath ?? dir,
     userHome: homedir(),
   });
@@ -859,7 +860,7 @@ describe("the Handoff domain transactions under contention (R2)", () => {
       body: "b",
       allowExternalSource: false,
       allowUnregistered: false,
-      path: dir,
+      path: senderPath,
       userHome: homedir(),
     });
     expect(sent.ok).toBe(false);
@@ -906,6 +907,7 @@ describe("the Handoff domain transactions under contention (R2)", () => {
       body: "b",
       allowExternalSource: false,
       allowUnregistered: false,
+      asUser: true,
       path: dir,
       userHome: homedir(),
     });

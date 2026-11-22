@@ -486,4 +486,51 @@ describe("moveVault switch fencing (cold validation round 1)", () => {
     expect(retried.value.artifactsMoved).toBe(2);
     expect(readFileSync(join(target, "artifacts/h-2/a-1/doc.md"), "utf8")).toBe("document two");
   });
+
+  it("writes VAULT_MOVED structured JSON to the injected SORAGE_HOME without touching global env (TASK-149 #3)", () => {
+    const sentinel = mkdtempSync(join(tmpdir(), "sorage-move-sentinel-"));
+    const isolated = mkdtempSync(join(tmpdir(), "sorage-move-isolated-"));
+    homes.push(sentinel, isolated);
+    const vault = join(isolated, "vault");
+    const target = join(isolated, "moved-vault");
+    const init = initializeInstallation(
+      createNodeInitPorts({ env: { SORAGE_HOME: isolated }, userHome: isolated, clock: new FakeClock() }),
+      { vaultPath: vault },
+    );
+    expect(init.ok).toBe(true);
+    seedArtifact(vault, "h-1/a-1/doc.md", "isolated doc");
+
+    // Point global process.env.SORAGE_HOME at a distinct sentinel directory.
+    process.env.SORAGE_HOME = sentinel;
+    const ports = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: isolated },
+      userHome: isolated,
+      targetPath: target,
+    });
+    const movePorts = ports.movePorts();
+    expect(movePorts.ok).toBe(true);
+    if (!movePorts.ok) return;
+    const moved = moveVault(movePorts.value);
+    expect(moved.ok).toBe(true);
+
+    // The structured log lands in the isolated home with redacted paths, never the global sentinel.
+    expect(existsSync(join(sentinel, "logs", "sorage.log"))).toBe(false);
+    const logPath = join(isolated, "logs", "sorage.log");
+    expect(existsSync(logPath)).toBe(true);
+    const lines = readFileSync(logPath, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0] as string) as {
+      ts: string;
+      level: string;
+      event: string;
+      fromPath: string;
+      toPath: string;
+      artifactsMoved: number;
+    };
+    expect(record.level).toBe("warn");
+    expect(record.event).toBe("VAULT_MOVED");
+    expect(record.artifactsMoved).toBe(1);
+    expect(record.fromPath).toBe("<home>/vault");
+    expect(record.toPath).toBe("<home>/moved-vault");
+  });
 });

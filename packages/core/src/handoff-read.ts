@@ -4,7 +4,8 @@ import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { type AppError, appError, err, isRetryableWaitListingFailure, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
 import type { ReviewState } from "./handoffs";
-import { type ProjectCommandPorts, resolveWorkspaceActor } from "./project-commands";
+import { type ProjectCommandPorts, resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
+import type { ProjectBinding } from "./projects";
 import type {
   HandoffProcessingEvidence,
   HandoffReadEvidence,
@@ -528,12 +529,8 @@ export function getHandoff(
   }
   // The participant answer precedes every content-derived outcome: a
   // nonparticipant learns nothing about a live or corrupted Handoff (HND-020).
-  const participant = participantRoleOf(ports, actorInput, loaded.value.view);
-  if (participant === null) {
-    return err(
-      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
-    );
-  }
+  const participant = resolveHandoffParticipantRole(ports, actorInput, loaded.value.view);
+  if (!participant.ok) return err(participant.error);
   // A tombstone keeps its legitimately null current Artifact and its metadata
   // readability; only a living Handoff refuses on a missing record (section 4).
   if (loaded.value.view.deletedAt === null && loaded.value.contentIntegrity === "artifact-record-missing") {
@@ -573,12 +570,8 @@ export function gatedHandoffView(
   if (found.value === null) {
     return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${id}'`, { handoffId: id }));
   }
-  const participant = participantRoleOf(ports, actorInput, found.value);
-  if (participant === null) {
-    return err(
-      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
-    );
-  }
+  const participant = resolveHandoffParticipantRole(ports, actorInput, found.value);
+  if (!participant.ok) return err(participant.error);
   return ok(found.value);
 }
 
@@ -667,12 +660,9 @@ export function prepareHandoffFetch(
     return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${id}'`, { handoffId: id }));
   }
   const handoff = loaded.value.view;
-  const role = participantRoleOf(ports, actorInput, handoff);
-  if (role === null) {
-    return err(
-      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: id }),
-    );
-  }
+  const resolvedRole = resolveHandoffParticipantRole(ports, actorInput, handoff);
+  if (!resolvedRole.ok) return err(resolvedRole.error);
+  const role = resolvedRole.value;
   if (handoff.deletedAt !== null) {
     return err(
       appError(
@@ -813,27 +803,77 @@ export function fetchHandoff(
   });
 }
 
-/** The actor's role relative to the Handoff, or null when it does not participate. */
-function participantRoleOf(
-  ports: HandoffReadPorts,
+export type HandoffParticipantRole = "sender" | "recipient" | "user";
+
+export interface HandoffParticipantTarget {
+  id?: string | undefined;
+  senderKind: string;
+  senderProjectId: string | null;
+  senderWorkspaceKey: string | null;
+  recipientProjectId: string;
+}
+
+function bindingMatchesWorkspaceKey(installationId: string, binding: ProjectBinding, targetKey: string): boolean {
+  const root = workspaceRootOf(binding);
+  if (deriveWorkspaceKey(installationId, root) === targetKey) return true;
+  return root !== binding.directory && deriveWorkspaceKey(installationId, binding.directory) === targetKey;
+}
+
+/**
+ * Resolves the actor's participant role for one Handoff (HND-020, HND-027, PRJ-020).
+ * Calls `resolveWorkspaceActor` once, uses deterministic `recipient`-over-`sender`
+ * fallback for any pre-M11 self-handoff row, and preserves `PRJ-020` inherited-workspace
+ * sender authority when an unregistered Workspace directory is later bound to a Project.
+ */
+export function resolveHandoffParticipantRole(
+  ports: Pick<HandoffReadPorts, "projectPorts">,
   actorInput: ReadActorInput,
-  handoff: HandoffView,
-): "sender" | "recipient" | "user" | "workspace" | null {
-  if (actorInput.asUser === true) return "user";
-  const workspace = resolveWorkspaceKeyOf(ports, actorInput);
-  const key = workspace.ok ? workspace.value.key : null;
-  if (handoff.senderKind === "registered_project" && handoff.senderProjectId !== null) {
-    const registered = resolveRegisteredProjectOrNull(ports, actorInput);
-    if (registered !== null && registered === handoff.senderProjectId) return "sender";
+  handoff: HandoffParticipantTarget,
+): Result<HandoffParticipantRole, AppError> {
+  if (actorInput.asUser === true) return ok("user");
+  const resolved = resolveWorkspaceActor(ports.projectPorts, {
+    path: actorInput.path,
+    userHome: actorInput.userHome,
+    as: actorInput.as,
+  });
+  if (!resolved.ok) return err(resolved.error);
+  const installationId = ports.projectPorts.installationId;
+  if (resolved.value.kind === "registered_project") {
+    const projectId = resolved.value.project.id;
+    // Deterministic fallback for pre-M11 self-handoff rows: recipient takes
+    // precedence over both registered-project sender and inherited-workspace sender.
+    if (projectId === handoff.recipientProjectId) return ok("recipient");
+    if (handoff.senderKind === "registered_project" && handoff.senderProjectId === projectId) {
+      return ok("sender");
+    }
+    if (handoff.senderKind === "unregistered_workspace" && handoff.senderWorkspaceKey !== null) {
+      if (bindingMatchesWorkspaceKey(installationId, resolved.value.binding, handoff.senderWorkspaceKey)) {
+        return ok("sender");
+      }
+      const bindings = ports.projectPorts.projects.listBindingsForProject(projectId);
+      if (!bindings.ok) return err(bindings.error);
+      if (
+        bindings.value.some((binding) =>
+          bindingMatchesWorkspaceKey(installationId, binding, handoff.senderWorkspaceKey as string),
+        )
+      ) {
+        return ok("sender");
+      }
+    }
+  } else if (
+    handoff.senderKind === "unregistered_workspace" &&
+    handoff.senderWorkspaceKey !== null &&
+    handoff.senderWorkspaceKey === deriveWorkspaceKey(installationId, resolved.value.directory)
+  ) {
+    return ok("sender");
   }
-  if (handoff.senderKind === "unregistered_workspace" && key !== null && handoff.senderWorkspaceKey === key) {
-    return "workspace";
-  }
-  const registered2 = resolveRegisteredProjectOrNull(ports, actorInput);
-  if (registered2 !== null && registered2 === handoff.recipientProjectId) {
-    return "recipient";
-  }
-  return null;
+  return err(
+    appError(
+      "HANDOFF_NOT_FOUND",
+      "no Handoff this actor participates in matches the request",
+      handoff.id !== undefined ? { handoffId: handoff.id } : undefined,
+    ),
+  );
 }
 
 function resolveRegisteredProject(ports: HandoffReadPorts, actorInput: ReadActorInput): Result<string, AppError> {

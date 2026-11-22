@@ -76,6 +76,7 @@ beforeAll(() => {
     file: document,
     allowExternalSource: true,
     allowUnregistered: true,
+    asUser: true,
     path: alpha,
     userHome: "/Users/tester",
   });
@@ -86,6 +87,7 @@ beforeAll(() => {
     file: second,
     allowExternalSource: true,
     allowUnregistered: true,
+    asUser: true,
     path: alpha,
     userHome: "/Users/tester",
   });

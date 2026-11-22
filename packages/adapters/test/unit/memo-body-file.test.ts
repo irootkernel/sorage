@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CONTENT_INLINE_MAX_UTF8_BYTES } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureMemoBodyFile, captureMemoBodyText } from "../../src/memo-body-file";
 
@@ -202,5 +203,21 @@ describe("bounded text encoding of in-memory bodies", () => {
       error: { code: "MEMO_TOO_LARGE" },
     });
     expect(spoolEntries()).toEqual([]);
+  });
+
+  it("keeps bodies up to CONTENT_INLINE_MAX_UTF8_BYTES inline and spills strictly above it (TASK-149 #4)", () => {
+    const atLimit = "a".repeat(CONTENT_INLINE_MAX_UTF8_BYTES);
+    const inlineResult = captureMemoBodyText(atLimit, options());
+    expect(inlineResult.ok).toBe(true);
+    if (inlineResult.ok) expect(inlineResult.value.kind).toBe("text");
+    expect(spoolEntries()).toEqual([]);
+
+    const aboveLimit = "a".repeat(CONTENT_INLINE_MAX_UTF8_BYTES + 1);
+    const spillResult = captureMemoBodyText(aboveLimit, options());
+    expect(spillResult.ok).toBe(true);
+    if (spillResult.ok) {
+      expect(spillResult.value.kind).toBe("spool");
+      expect(spillResult.value.sizeBytes).toBe(CONTENT_INLINE_MAX_UTF8_BYTES + 1);
+    }
   });
 });

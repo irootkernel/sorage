@@ -11,7 +11,6 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -27,6 +26,7 @@ import { dirname, join, relative } from "node:path";
 import {
   type AppError,
   appError,
+  type Configuration,
   type DrainReport,
   err,
   expandConfigurationPath,
@@ -63,6 +63,7 @@ import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { asAppCommandError, storageContentionOf } from "./storage-contention";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { appendStructuredLog } from "./structured-log";
 import { createVaultInitializer, openVault } from "./vault";
 
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -100,6 +101,7 @@ interface InstallationView {
   installationId: string;
   etag: string;
   graceHours: number;
+  logging: Configuration["logging"];
 }
 
 /**
@@ -138,6 +140,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
       installationId: config.installationId,
       etag: read.value.etag,
       graceHours: config.gc.graceHours,
+      logging: config.logging,
     });
   }
 
@@ -559,7 +562,11 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             });
           });
           if (!recorded.ok) return recorded;
-          logVaultMoved(fromPath, toPath, artifactsMoved);
+          appendStructuredLog(
+            { level: "warn", event: "VAULT_MOVED", fromPath, toPath, artifactsMoved },
+            home,
+            view.value.logging,
+          );
           return ok(undefined);
         },
         afterStagedCopy: options.afterStagedCopy,
@@ -717,24 +724,6 @@ export function resolvePhysicalPath(path: string): string {
     return tail.length === 0 ? resolved : join(resolved, ...tail);
   } catch {
     return path;
-  }
-}
-
-function logVaultMoved(fromPath: string, toPath: string, artifactsMoved: number): void {
-  try {
-    const home = createHomePaths({ SORAGE_HOME: process.env.SORAGE_HOME }, homedir());
-    mkdirSync(home.logsDir, { recursive: true });
-    const handle = openSync(join(home.logsDir, "sorage.log"), "a");
-    try {
-      writeSync(
-        handle,
-        `${new Date().toISOString()} ${JSON.stringify({ event: "VAULT_MOVED", fromPath, toPath, artifactsMoved })}\n`,
-      );
-    } finally {
-      closeSync(handle);
-    }
-  } catch {
-    // A log write never fails the move.
   }
 }
 

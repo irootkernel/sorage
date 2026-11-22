@@ -1361,17 +1361,21 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         null,
         2,
       )}\n`;
+      const markerPath = join(vaultPath, ".sorage-vault.json");
+      const temporary = join(vaultPath, `.sorage-vault.json.tmp-${process.pid}`);
+      let created = false;
+      let renamed = false;
       try {
-        const markerPath = join(vaultPath, ".sorage-vault.json");
-        const temporary = join(vaultPath, `.sorage-vault.json.tmp-${process.pid}`);
-        writeFileSync(temporary, body, { flag: "wx" });
-        const handle = openSync(temporary, "r");
+        const handle = openSync(temporary, "wx");
+        created = true;
         try {
+          writeSync(handle, body, null, "utf8");
           fsyncSync(handle);
         } finally {
           closeSync(handle);
         }
         renameSync(temporary, markerPath);
+        renamed = true;
         fsyncDirectory(vaultPath);
         return ok(undefined);
       } catch (error) {
@@ -1380,6 +1384,14 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             cause: String(error),
           }),
         );
+      } finally {
+        if (created && !renamed) {
+          try {
+            rmSync(temporary, { force: true });
+          } catch {
+            // Best-effort cleanup on failure path.
+          }
+        }
       }
     };
   }

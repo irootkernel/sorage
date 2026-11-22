@@ -1,10 +1,8 @@
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
-import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { type HandoffReadPorts, type ReadActorInput, resolveHandoffParticipantRole } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
-import { resolveWorkspaceActor } from "./project-commands";
 import { validateHandoffObservations } from "./reporting-commands";
-import { workspaceKey } from "./workspace-identity";
 
 /**
  * The terminal transitions of sections 11 and 12 (HND-014, HND-021, HND-022,
@@ -46,42 +44,6 @@ export interface WithdrawInput extends ReadActorInput {
   expectedRowVersion?: number | undefined;
 }
 
-type TerminalRole = "recipient" | "sender" | "user";
-
-function roleFor(
-  ports: TerminalPorts,
-  input: ReadActorInput,
-  handoff: {
-    senderKind: string;
-    senderProjectId: string | null;
-    senderWorkspaceKey: string | null;
-    recipientProjectId: string;
-  },
-): Result<TerminalRole, AppError> {
-  if (input.asUser === true) return ok("user");
-  const resolved = resolveWorkspaceActor(ports.projectPorts, {
-    path: input.path,
-    userHome: input.userHome,
-    as: input.as,
-  });
-  if (!resolved.ok) return err(resolved.error);
-  if (resolved.value.kind === "registered_project") {
-    if (resolved.value.project.id === handoff.recipientProjectId) return ok("recipient");
-    if (handoff.senderKind === "registered_project" && handoff.senderProjectId === resolved.value.project.id)
-      return ok("sender");
-    return err(notParticipant());
-  }
-  if (handoff.senderKind === "unregistered_workspace") {
-    const key = workspaceKey(ports.projectPorts.installationId, resolved.value.directory);
-    if (handoff.senderWorkspaceKey === key) return ok("sender");
-  }
-  return err(notParticipant());
-}
-
-function notParticipant(): AppError {
-  return appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request");
-}
-
 function factsOf(handoff: {
   reviewState: HandoffFacts["reviewState"];
   deletedAt: string | null;
@@ -119,7 +81,7 @@ export function acceptHandoff(ports: TerminalPorts, input: AcceptInput): Result<
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const { handoff, integrity } = loaded.value;
-  const role = roleFor(ports, input, handoff);
+  const role = resolveHandoffParticipantRole(ports, input, handoff);
   if (!role.ok) return err(role.error);
   const valid = validateHandoffObservations(input, ["expectedRevision", "expectedRowVersion"]);
   if (!valid.ok) return err(valid.error);
@@ -200,7 +162,7 @@ export function declineHandoff(ports: TerminalPorts, input: DeclineInput): Resul
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const { handoff } = loaded.value;
-  const role = roleFor(ports, input, handoff);
+  const role = resolveHandoffParticipantRole(ports, input, handoff);
   if (!role.ok) return err(role.error);
   const valid = validateHandoffObservations(input, ["expectedRowVersion"]);
   if (!valid.ok) return err(valid.error);
@@ -238,7 +200,7 @@ export function withdrawHandoff(ports: TerminalPorts, input: WithdrawInput): Res
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const { handoff } = loaded.value;
-  const role = roleFor(ports, input, handoff);
+  const role = resolveHandoffParticipantRole(ports, input, handoff);
   if (!role.ok) return err(role.error);
   const outcome = evaluateHandoffOperation("withdraw", factsOf(handoff), role.value, {
     participant: true,

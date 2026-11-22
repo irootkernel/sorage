@@ -1,10 +1,15 @@
 import { isUtf8ExactText } from "./content";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "./events";
-import { gatedHandoffView, type HandoffReadPorts, type HandoffView, type ReadActorInput } from "./handoff-read";
-import { resolveWorkspaceActor } from "./project-commands";
+import {
+  gatedHandoffView,
+  type HandoffParticipantRole,
+  type HandoffReadPorts,
+  type HandoffView,
+  type ReadActorInput,
+  resolveHandoffParticipantRole,
+} from "./handoff-read";
 import type { ReviewNoteView, ReviewPorts } from "./review-commands";
-import { workspaceKey } from "./workspace-identity";
 
 export interface HandoffReadEvidence {
   revision: number;
@@ -95,19 +100,8 @@ export function reportingRole(
   ports: HandoffReadPorts,
   input: ReadActorInput,
   handoff: HandoffView,
-): Result<"sender" | "recipient" | "user", AppError> {
-  if (input.asUser === true) return ok("user");
-  const actor = resolveWorkspaceActor(ports.projectPorts, input);
-  if (!actor.ok) return err(actor.error);
-  if (actor.value.kind === "registered_project") {
-    if (actor.value.project.id === handoff.recipientProjectId) return ok("recipient");
-    if (actor.value.project.id === handoff.senderProjectId) return ok("sender");
-  } else if (
-    handoff.senderKind === "unregistered_workspace" &&
-    handoff.senderWorkspaceKey === workspaceKey(ports.projectPorts.installationId, actor.value.directory)
-  )
-    return ok("sender");
-  return err(appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request"));
+): Result<HandoffParticipantRole, AppError> {
+  return resolveHandoffParticipantRole(ports, input, handoff);
 }
 export function readRecipientComment(
   ports: HandoffReadPorts & { reviews: { findComment(id: string): Result<RecipientComment | null, AppError> } },

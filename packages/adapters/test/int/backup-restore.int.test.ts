@@ -421,4 +421,43 @@ describe("backupRestore across two installations", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.code).toBe("VAULT_INTEGRITY_ERROR");
   });
+
+  it("cleans up adoptMarker temp file on rename failure so same-process retry succeeds (TASK-149 #9b)", () => {
+    const target = initializedHome("sorage-restore-marker-retry-");
+    const markerPath = join(target.vault, ".sorage-vault.json");
+    const tempPath = join(target.vault, `.sorage-vault.json.tmp-${process.pid}`);
+    rmSync(markerPath, { force: true });
+    // Obstruct the rename target with a directory so renameSync fails after temp creation.
+    mkdirSync(markerPath);
+
+    const ports = createNodeBackupCommandPorts({
+      env: { SORAGE_HOME: target.home },
+      userHome: target.home,
+      sourcePath: target.vault,
+    });
+    const restorePorts = ports.restorePorts();
+    expect(restorePorts.ok).toBe(true);
+    if (!restorePorts.ok) return;
+
+    const marker = {
+      type: "sorage-vault" as const,
+      schemaVersion: 1,
+      installationId: "11111111-1111-4111-8111-111111111111",
+      createdAt: "2026-11-22T00:00:00.000Z",
+    };
+    const failed = restorePorts.value.adoptMarker(marker);
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.error.code).toBe("INTERNAL_ERROR");
+    expect(existsSync(tempPath)).toBe(false);
+
+    // Removing the obstruction allows the same process to retry without EEXIST.
+    rmSync(markerPath, { recursive: true, force: true });
+    const retried = restorePorts.value.adoptMarker(marker);
+    expect(retried.ok).toBe(true);
+    expect(existsSync(tempPath)).toBe(false);
+    expect(JSON.parse(readFileSync(markerPath, "utf8"))).toMatchObject({
+      type: "sorage-vault",
+      installationId: marker.installationId,
+    });
+  });
 });

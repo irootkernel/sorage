@@ -1384,7 +1384,7 @@ describe("the Gap 2 diagnostic relay (SOT-2)", () => {
     const session = startServer(home, workA);
     await session.request("initialize", { protocolVersion: "2025-06-18" });
     const answer = (await toolCall(session, "handoff_send", {
-      to: ["alpha"],
+      to: ["beta"],
       title: "Large",
       body: "a body far above sixteen bytes",
     })) as unknown as {
@@ -2459,5 +2459,50 @@ describe("reporting through real MCP CLI children (interface section 40)", () =>
     expect(run(["get", id])).toEqual(before);
     expect(run(["events", id])).toEqual(events);
     await session.close();
+  }, 15_000);
+
+  it("refuses self-handoff on handoff_send with HANDOFF_INVALID_INPUT, site-specific recovery, and zero writes (HND-027)", async () => {
+    const { home, workA } = installation("sorage-mcp-self-handoff-");
+    const session = startServer(home, workA);
+    try {
+      const single = await toolCall(session, "handoff_send", {
+        to: ["alpha"],
+        title: "Self MCP",
+        body: "self body",
+        cwd: workA,
+      });
+      expect(single.error).toBeUndefined();
+      expect(single.result?.isError).toBe(true);
+      expect(single.result?.structuredContent).toMatchObject({
+        ok: false,
+        error: {
+          code: "HANDOFF_INVALID_INPUT",
+          details: { recipientSlug: "alpha" },
+          recovery: {
+            suggestedCommand:
+              "Choose a different --to recipient Project, or send with --as <other-project> or --as-user",
+          },
+        },
+      });
+
+      const fanout = await toolCall(session, "handoff_send", {
+        to: ["beta", "ALPHA"],
+        title: "Self fanout MCP",
+        body: "fanout body",
+        cwd: workA,
+      });
+      expect(fanout.error).toBeUndefined();
+      expect(fanout.result?.isError).toBe(true);
+      expect(fanout.result?.structuredContent).toMatchObject({
+        ok: false,
+        error: { code: "HANDOFF_INVALID_INPUT", details: { recipientSlug: "alpha" } },
+      });
+
+      const inbox = runCli(["inbox", "--as", "beta", "--json"], home, workA);
+      expect(inbox.status, inbox.stderr).toBe(0);
+      expect(JSON.parse(inbox.stdout).data.handoffs).toHaveLength(0);
+    } finally {
+      await session.close();
+    }
   }, 15_000);
 });

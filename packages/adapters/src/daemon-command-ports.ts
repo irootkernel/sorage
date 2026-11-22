@@ -19,7 +19,7 @@ import type { Configuration } from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { validateArtifactContentLinks } from "./content-store";
 import { createNodeHomePaths, type HomePaths } from "./home";
-import { acquireLock, createNodeLockProbePorts, isPidAlive, releaseLock } from "./lockfile";
+import { acquireLock, createNodeLockProbePorts, isPidAlive } from "./lockfile";
 import { asAppCommandError } from "./storage-contention";
 import { openSorageDatabase } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
@@ -131,7 +131,7 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
         lock: "daemon",
         ports: createNodeLockProbePorts(),
       });
-      if (acquisition.ok) return { ok: true, release: () => releaseLock(home.lockFile("daemon")) };
+      if (acquisition.ok) return { ok: true, release: acquisition.release };
       return { ok: false, reason: "live-owner" };
     },
     isPidAlive,

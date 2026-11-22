@@ -428,17 +428,37 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
 
   // One recipient Handoff per distinct recipient, in first-seen order; an ineligible
   // recipient creates nothing at all (PRJ-012).
-  const recipients: Array<{ slug: string; projectId: string }> = [];
+  const recipients: Array<{ slug: string; canonicalSlug: string; projectId: string }> = [];
   const seenSlugs = new Set<string>();
   for (const slug of input.to) {
     if (seenSlugs.has(slug)) continue;
     seenSlugs.add(slug);
     const eligible = checkRecipientEligibility(ports.projectPorts, slug);
     if (!eligible.ok) return err(eligible.error);
-    recipients.push({ slug, projectId: eligible.value.id });
+    recipients.push({ slug, canonicalSlug: eligible.value.slug, projectId: eligible.value.id });
   }
   if (recipients.length === 0) {
     return err(appError("CONFIG_INVALID", "send requires at least one --to recipient"));
+  }
+
+  // A resolved registered sender Project must not send a Handoff to itself; in a
+  // multi-recipient fan-out any self-recipient rejects the whole send all-or-nothing
+  // before supersedes checks, staging, or any database write (HND-027, HND-008).
+  if (sender.value.kind === "registered_project") {
+    const senderProjectId = sender.value.project.id;
+    const selfRecipient = recipients.find((recipient) => recipient.projectId === senderProjectId);
+    if (selfRecipient !== undefined) {
+      return err({
+        ...appError(
+          "HANDOFF_INVALID_INPUT",
+          `cannot send a Handoff to the sender Project '${selfRecipient.canonicalSlug}'`,
+          { senderProjectId, recipientSlug: selfRecipient.canonicalSlug },
+        ),
+        recovery: {
+          suggestedCommand: "Choose a different --to recipient Project, or send with --as <other-project> or --as-user",
+        },
+      });
+    }
   }
 
   // The supersedes link: the target must exist and be terminal; a tombstone qualifies

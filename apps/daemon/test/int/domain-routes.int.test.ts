@@ -1977,4 +1977,63 @@ describe("TASK-148 HTTP contract defect fixes (#1, #2, #11)", () => {
     expect(goodRetry.status).toBe(201);
     expect(json(goodRetry).data.handoffs).toHaveLength(1);
   });
+
+  it("refuses self-handoffs all-or-nothing with HTTP 422 HANDOFF_INVALID_INPUT on import-path while allowing asUser (HND-027, TASK-149)", async () => {
+    const countHandoffs = () => {
+      const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        return Number((db.prepare("SELECT COUNT(*) AS n FROM handoffs").get() as { n: number }).n);
+      } finally {
+        db.close();
+      }
+    };
+    const before = countHandoffs();
+
+    const single = await call("/api/v1/handoffs/import-path?as=web-app", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["WEB-APP"], title: "Self HTTP", body: "self body" },
+    });
+    expect(single.status).toBe(422);
+    expect(json(single)).toMatchObject({
+      ok: false,
+      error: {
+        code: "HANDOFF_INVALID_INPUT",
+        details: { recipientSlug: "web-app" },
+        recovery: {
+          suggestedCommand: "Choose a different --to recipient Project, or send with --as <other-project> or --as-user",
+        },
+      },
+    });
+    expect(typeof json(single).error.details.senderProjectId).toBe("string");
+
+    const peerDir = join(home, "self-peer");
+    mkdirSync(peerDir, { recursive: true });
+    const addPeer = await call("/api/v1/projects", {
+      method: "POST",
+      bearer: apiToken,
+      body: { name: "Self Peer", dir: peerDir, asUser: true },
+    });
+    expect(addPeer.status).toBe(201);
+
+    const fanout = await call("/api/v1/handoffs/import-path?as=web-app", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["self-peer", "web-app"], title: "Fanout HTTP", body: "fanout body" },
+    });
+    expect(fanout.status).toBe(422);
+    expect(json(fanout)).toMatchObject({
+      ok: false,
+      error: { code: "HANDOFF_INVALID_INPUT", details: { recipientSlug: "web-app" } },
+    });
+    expect(countHandoffs()).toBe(before);
+
+    const allowedUser = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "User send", body: "allowed user body", asUser: true },
+    });
+    expect(allowedUser.status).toBe(201);
+    expect(countHandoffs()).toBe(before + 1);
+  });
 });

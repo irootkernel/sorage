@@ -4,12 +4,21 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.6 - Unreleased
 
+### Changed
+
+- **Breaking behavior restriction:** Refuse fresh self-handoffs where the resolved registered sender Project equals a recipient Project (`HANDOFF_INVALID_INPUT`, HTTP 422, CLI exit 64, all-or-nothing across single and fan-out sends on CLI, HTTP, and MCP), while preserving User and unregistered-Workspace sends, pre-M11 idempotency replay, and pre-M11 rows with unified role resolution and `PRJ-020` inherited-workspace sender authority.
+
 ### Fixed
 
 - Enforce User-admin context (`asUser: true`) on HTTP Handoff `archive`, `unarchive`, and `deletion-reject` routes and forward optional `reason` on `deletion-reject`.
 - Align the HTTP multipart `revise` replay-spool ceiling with configured `artifact.maxBytes` instead of the 1 MiB JSON default.
 - Restore `--as-user` enforcement, `--expected-revision` forwarding, and human/JSON output parity when `sorage config set` routes through a running daemon.
 - Reject non-empty malformed or non-object JSON request bodies on daemon HTTP routes (`CONFIG_INVALID` 422 on general routes, `UNAUTHENTICATED` 401 on `/api/v1/session`) instead of silently falling back to `{}`.
+- Route `VAULT_MOVED` structured logging through the resolved installation home and configured logger instead of global `process.env.SORAGE_HOME` and `homedir()`.
+- Bind Channel error codes (`CHN_TOO_LARGE` and `CHN_INVALID_INPUT`) in `stageAccepted` text capture and use `CONTENT_INLINE_MAX_UTF8_BYTES` in `memo-body-file.ts`.
+- Fix `sorage config edit` `EDITOR` fallback to `"vi"` when `EDITOR` is unset or blank.
+- Return owner-checked lock release from `acquireDaemonLock` so releasing a superseded lock cannot delete another owner's `daemon.lock`.
+- Clean up temporary `.sorage-vault.json.tmp-<pid>` files on `adoptMarker` failures so same-process retries succeed without `EEXIST`.
 
 ## v0.1.5 - 2026-11-22
 

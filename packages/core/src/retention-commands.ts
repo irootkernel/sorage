@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, SYSTEM_ACTOR, USER_ACTOR } from "./events";
-import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { type HandoffReadPorts, type ReadActorInput, resolveHandoffParticipantRole } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
-import { resolveWorkspaceActor } from "./project-commands";
 import { validateHandoffObservations } from "./reporting-commands";
-import { workspaceKey } from "./workspace-identity";
 
 /**
  * Retention and deletion of sections 5 and 12 (LIFE-007 to LIFE-018, VLT-023,
@@ -108,35 +106,6 @@ function factsOf(handoff: {
     consecutiveNoChangeResolutions: 0,
     pendingDeletionRequest: handoff.pendingDeletionRequest,
   };
-}
-
-function participantOf(
-  ports: RetentionPorts,
-  input: ReadActorInput,
-  handoff: {
-    senderKind: string;
-    senderProjectId: string | null;
-    senderWorkspaceKey: string | null;
-    recipientProjectId: string;
-  },
-): Result<"sender" | "recipient" | "user", AppError> {
-  if (input.asUser === true) return ok("user");
-  const resolved = resolveWorkspaceActor(ports.projectPorts, {
-    path: input.path,
-    userHome: input.userHome,
-    as: input.as,
-  });
-  if (!resolved.ok) return err(resolved.error);
-  if (resolved.value.kind === "registered_project") {
-    if (resolved.value.project.id === handoff.recipientProjectId) return ok("recipient");
-    if (handoff.senderKind === "registered_project" && handoff.senderProjectId === resolved.value.project.id)
-      return ok("sender");
-  }
-  if (resolved.value.kind === "unregistered_workspace" && handoff.senderKind === "unregistered_workspace") {
-    const key = workspaceKey(ports.projectPorts.installationId, resolved.value.directory);
-    if (handoff.senderWorkspaceKey === key) return ok("sender");
-  }
-  return err(appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request"));
 }
 
 function requireUser(input: ReadActorInput): Result<true, AppError> {
@@ -333,7 +302,7 @@ export function requestDeletion(
   const loaded = load(ports, input.handoffId);
   if (!loaded.ok) return err(loaded.error);
   const handoff = loaded.value.handoff;
-  const role = participantOf(ports, input, handoff);
+  const role = resolveHandoffParticipantRole(ports, input, handoff);
   if (!role.ok) return err(role.error);
   const outcome = evaluateHandoffOperation("delete request", factsOf(handoff), role.value, {
     participant: true,

@@ -3,13 +3,12 @@ import { type ArtifactBodyPrepareRequest, isUtf8ExactText, type PreparedArtifact
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, projectActor, SYSTEM_ACTOR, USER_ACTOR, workspaceActor } from "./events";
 import { type NewArtifactRecord, type NewHandoffRecord, sendRequestHash, titleSlug } from "./handoff-commands";
-import type { HandoffReadPorts, ReadActorInput } from "./handoff-read";
+import { type HandoffReadPorts, type ReadActorInput, resolveHandoffParticipantRole } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
 import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
 import { validateHandoffObservations } from "./reporting-commands";
-import { workspaceKey } from "./workspace-identity";
 
 /**
  * Sender revision of sections 9 and 10 (REV-008 to REV-013, REV-017, HND-015, VLT-011,
@@ -129,45 +128,6 @@ export interface ReviseOutcome {
   replayed: boolean;
 }
 
-function roleOf(
-  ports: RevisionPorts,
-  input: ReadActorInput,
-  handoff: {
-    senderKind: string;
-    senderProjectId: string | null;
-    senderWorkspaceKey: string | null;
-    recipientProjectId: string;
-  },
-): Result<"sender" | "recipient" | "user", AppError> {
-  if (input.asUser === true) return ok("user");
-  const resolved = resolveWorkspaceActor(ports.projectPorts, {
-    path: input.path,
-    userHome: input.userHome,
-    as: input.as,
-  });
-  if (!resolved.ok) return err(resolved.error);
-  if (resolved.value.kind === "registered_project") {
-    if (handoff.senderKind === "registered_project" && handoff.senderProjectId === resolved.value.project.id) {
-      return ok("sender");
-    }
-    // The recipient participates: the evaluator answers FORBIDDEN_ACTOR for a living
-    // Handoff and HANDOFF_DELETED for a tombstone before the permission row runs.
-    if (resolved.value.project.id === handoff.recipientProjectId) {
-      return ok("recipient");
-    }
-    return err(
-      appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: "" }),
-    );
-  }
-  if (handoff.senderKind === "unregistered_workspace") {
-    const key = workspaceKey(ports.projectPorts.installationId, resolved.value.directory);
-    if (handoff.senderWorkspaceKey === key) return ok("sender");
-  }
-  return err(
-    appError("HANDOFF_NOT_FOUND", "no Handoff this actor participates in matches the request", { handoffId: "" }),
-  );
-}
-
 function senderActorOf(handoff: {
   senderKind: string;
   senderProjectId: string | null;
@@ -190,7 +150,7 @@ export function reviseHandoff(ports: RevisionPorts, input: ReviseInput): Result<
     );
   }
   const handoff = found.value.view;
-  const role = roleOf(ports, input, handoff);
+  const role = resolveHandoffParticipantRole(ports, input, handoff);
   if (!role.ok) return err(role.error);
   const scalar = validateHandoffObservations(input);
   if (!scalar.ok) return err(scalar.error);

@@ -126,7 +126,7 @@ function installation(prefix: string) {
   mkdirSync(work);
   expect(run(["init", "--non-interactive", "--initialize-git", "--json"]).code).toBe(0);
   expect(run(["project", "add", "--name", "Alpha", "--slug", "alpha", "--dir", work, "--json"]).code).toBe(0);
-  const sent = run(["send", "--to", "alpha", "--title", "Hello", "--body", "body text", "--json"], work);
+  const sent = run(["send", "--as-user", "--to", "alpha", "--title", "Hello", "--body", "body text", "--json"], work);
   expect(sent.code, sent.err).toBe(0);
   const handoffId = (JSON.parse(sent.out) as { data: { handoffs: Array<{ handoffId: string }> } }).data.handoffs[0]
     ?.handoffId as string;

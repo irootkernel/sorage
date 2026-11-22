@@ -35,7 +35,7 @@ export function createNodeConfigCommandPorts(options: NodeConfigCommandPortsOpti
     userHome,
     sorageHome: home.home,
     openEditor(path) {
-      const editor = env.EDITOR?.trim() !== "" ? (env.EDITOR as string) : "vi";
+      const editor = env.EDITOR?.trim() || "vi";
       const result = spawnSync(editor, [path], { stdio: "inherit" });
       if (result.error !== undefined) {
         return err(appError("INTERNAL_ERROR", `the editor '${editor}' could not be started: ${String(result.error)}`));

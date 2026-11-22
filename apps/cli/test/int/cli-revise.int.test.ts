@@ -335,11 +335,14 @@ describe("the round-2 remediation regressions", () => {
     const home = tempHome("sorage-revise-ext-");
     expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
     const work = join(home, "work");
+    const beta = join(home, "beta");
     const outsider = mkdtempSync(join(tmpdir(), "sorage-revise-out-"));
     homes.push(outsider);
     mkdirSync(work, { recursive: true });
+    mkdirSync(beta, { recursive: true });
     mkdirSync(outsider, { recursive: true });
     expect(runCli(["project", "add", "--name", "Alpha", "--dir", work], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", beta], capture().ports)).toBe(0);
     const document = join(home, "brief.md");
     writeFileSync(document, "# Shared\n");
     const send = capture();
@@ -349,7 +352,7 @@ describe("the round-2 remediation regressions", () => {
         "--as",
         "alpha",
         "--to",
-        "alpha",
+        "beta",
         "--title",
         "Brief",
         "--file",
@@ -397,8 +400,11 @@ describe("the round-2 remediation regressions", () => {
     const home = tempHome("sorage-revise-order-");
     expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
     const work = join(home, "work");
+    const beta = join(home, "beta");
     mkdirSync(work, { recursive: true });
+    mkdirSync(beta, { recursive: true });
     expect(runCli(["project", "add", "--name", "Alpha", "--dir", work], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", beta], capture().ports)).toBe(0);
     const document = join(home, "brief.md");
     writeFileSync(document, "# Shared\n");
     const send = capture();
@@ -408,7 +414,7 @@ describe("the round-2 remediation regressions", () => {
         "--as",
         "alpha",
         "--to",
-        "alpha",
+        "beta",
         "--title",
         "Brief",
         "--file",
@@ -469,8 +475,11 @@ describe("the round-2 remediation regressions", () => {
     const home = tempHome("sorage-revise-replay-");
     expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
     const work = join(home, "work");
+    const beta = join(home, "beta");
     mkdirSync(work, { recursive: true });
+    mkdirSync(beta, { recursive: true });
     expect(runCli(["project", "add", "--name", "Alpha", "--dir", work], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", beta], capture().ports)).toBe(0);
     const document = join(home, "brief.md");
     writeFileSync(document, "# Shared\n");
     const send = capture();
@@ -480,7 +489,7 @@ describe("the round-2 remediation regressions", () => {
         "--as",
         "alpha",
         "--to",
-        "alpha",
+        "beta",
         "--title",
         "Brief",
         "--file",

@@ -460,6 +460,45 @@ describe("sorage send", () => {
       expect(row.supersedes_handoff_id).toBe("h-old-accepted");
     }
   });
+
+  it("rejects single and fan-out self-handoffs all-or-nothing with zero DB or staging writes (HND-027, TASK-149)", () => {
+    const fixture = makeFixture();
+    seedProject(fixture, "p-1", "alpha");
+    seedProject(fixture, "p-2", "beta");
+
+    const single = sendHandoffs(
+      fixture.ports,
+      baseInput(fixture, { to: ["ALPHA"], path: "/workspaces/alpha", allowUnregistered: false }),
+    );
+    expect(single.ok).toBe(false);
+    if (!single.ok) {
+      expect(single.error.code).toBe("HANDOFF_INVALID_INPUT");
+      expect(single.error.details).toEqual({ senderProjectId: "p-1", recipientSlug: "alpha" });
+      expect(single.error.recovery?.suggestedCommand).toBe(
+        "Choose a different --to recipient Project, or send with --as <other-project> or --as-user",
+      );
+    }
+
+    const fanout = sendHandoffs(
+      fixture.ports,
+      baseInput(fixture, {
+        to: ["beta", "alpha"],
+        path: "/workspaces/alpha",
+        allowUnregistered: false,
+        idempotencyKey: "k-fanout-self",
+      }),
+    );
+    expect(fanout.ok).toBe(false);
+    if (!fanout.ok) {
+      expect(fanout.error.code).toBe("HANDOFF_INVALID_INPUT");
+      expect(fanout.error.details).toEqual({ senderProjectId: "p-1", recipientSlug: "alpha" });
+    }
+
+    for (const table of ["handoffs", "artifacts", "content_records", "pending_fs_ops", "events", "idempotency_keys"]) {
+      expect(fixture.db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get(), table).toEqual({ c: 0 });
+    }
+    expect(stagingEntries(join(fixture.vaultPath, "staging"))).toEqual([]);
+  });
 });
 
 function stagingEntries(stagingDir: string): string[] {

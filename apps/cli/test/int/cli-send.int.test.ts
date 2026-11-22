@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { runCli } from "../../src/main";
 
@@ -108,5 +109,54 @@ describe("sorage send", () => {
     const send = capture();
     expect(runCli(["send", "--to", "alpha", "--title", "T", "--file", "/tmp/x", "--body", "text"], send.ports)).toBe(2);
     expect(send.errText()).toContain("exactly one of --file or --body");
+  });
+
+  it("refuses single and fan-out self-handoffs at exit 64 with site-specific recovery and zero DB writes (HND-027)", () => {
+    const home = tempHome("sorage-send-self-cli-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const workA = join(home, "work-a");
+    const workB = join(home, "work-b");
+    mkdirSync(workA, { recursive: true });
+    mkdirSync(workB, { recursive: true });
+    const addA = capture();
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", workA, "--json"], addA.ports)).toBe(0);
+    const alphaId = (JSON.parse(addA.outText()) as { data: { project: { id: string } } }).data.project.id;
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", workB], capture().ports)).toBe(0);
+
+    const single = capture();
+    expect(
+      runCli(["send", "--as", "alpha", "--to", "ALPHA", "--title", "Self", "--body", "# Self", "--json"], single.ports),
+    ).toBe(64);
+    expect(JSON.parse(single.errText())).toMatchObject({
+      ok: false,
+      error: {
+        code: "HANDOFF_INVALID_INPUT",
+        details: { senderProjectId: alphaId, recipientSlug: "alpha" },
+        recovery: {
+          suggestedCommand: "Choose a different --to recipient Project, or send with --as <other-project> or --as-user",
+        },
+      },
+    });
+
+    const fanout = capture();
+    expect(
+      runCli(
+        ["send", "--as", "alpha", "--to", "beta", "--to", "alpha", "--title", "Fanout", "--body", "# Fanout", "--json"],
+        fanout.ports,
+      ),
+    ).toBe(64);
+    expect(JSON.parse(fanout.errText())).toMatchObject({
+      ok: false,
+      error: { code: "HANDOFF_INVALID_INPUT", details: { senderProjectId: alphaId, recipientSlug: "alpha" } },
+    });
+
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      for (const table of ["handoffs", "artifacts", "content_records", "pending_fs_ops"]) {
+        expect(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get(), table).toEqual({ n: 0 });
+      }
+    } finally {
+      db.close();
+    }
   });
 });

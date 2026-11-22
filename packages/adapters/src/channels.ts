@@ -691,6 +691,7 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
             maxBytes: config.artifact.maxBytes,
             stateDir: home.stateDir,
             spoolId,
+            codes: CHANNEL_BODY_CAPTURE_CODES,
           });
           if (!captured.ok) return captured;
           if (captured.value.kind !== "spool") {

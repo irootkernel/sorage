@@ -10,7 +10,16 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { appError, err, ok, validateMemoBody, type AcceptedMemoBody, type AppError, type Result } from "@sorage/core";
+import {
+  appError,
+  CONTENT_INLINE_MAX_UTF8_BYTES,
+  err,
+  ok,
+  validateMemoBody,
+  type AcceptedMemoBody,
+  type AppError,
+  type Result,
+} from "@sorage/core";
 import {
   closeDescriptor,
   ensureMemoInputDirectory,
@@ -168,7 +177,7 @@ export function createAcceptedBodyCapture(options: MemoBodyCaptureOptions): Acce
         };
       }
       hash.update(chunk);
-      if (total > 65_536) {
+      if (total > CONTENT_INLINE_MAX_UTF8_BYTES) {
         if (!spilled) {
           const refusal = spill();
           if (refusal !== null) return refusal;

@@ -552,4 +552,24 @@ describe("identity and persistence over the real engine", () => {
       db.close();
     }
   });
+
+  it("binds CHN_TOO_LARGE and CHN_INVALID_INPUT when stageAccepted captures in-memory text (TASK-149 #4)", () => {
+    const ports = initializedPorts("sorage-channels-stage-codes-");
+    const binding = unwrap(ports.staging.freshBinding());
+    const oversized = "x".repeat(ports.maxBytes + 1);
+    const tooLarge = ports.staging.stageAccepted(
+      { kind: "text", text: oversized, sizeBytes: oversized.length, sha256: "0".repeat(64) },
+      binding,
+    );
+    expect(tooLarge.ok).toBe(false);
+    if (!tooLarge.ok) expect(tooLarge.error.code).toBe("CHN_TOO_LARGE");
+
+    const nulBody = `hello\u0000${"y".repeat(70_000)}`;
+    const invalid = ports.staging.stageAccepted(
+      { kind: "text", text: nulBody, sizeBytes: nulBody.length, sha256: "0".repeat(64) },
+      binding,
+    );
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.error.code).toBe("CHN_INVALID_INPUT");
+  });
 });
