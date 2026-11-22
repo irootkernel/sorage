@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -267,6 +267,66 @@ describe("upload cleanup isolation", () => {
       expect(readdirSync(spoolDir)).toHaveLength(0);
     } finally {
       rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up the active push-sink spool on premature disconnect and stream error", async () => {
+    const spoolDir = mkdtempSync(join(tmpdir(), "sorage-upload-abort-"));
+    try {
+      const disconnected = new FakeMultipartRequest();
+      const disconnectPromise = consumeMultipartUpload(disconnected as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      disconnected.emit(
+        "data",
+        Buffer.from('--b\r\nContent-Disposition: form-data; name="file"; filename="drop.md"\r\n\r\npartial payload'),
+      );
+      expect(readdirSync(spoolDir)).toHaveLength(1);
+      disconnected.emit("close");
+      const disconnectResult = await disconnectPromise;
+      expect(disconnectResult.ok).toBe(false);
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+
+      const errored = new FakeMultipartRequest();
+      const errorPromise = consumeMultipartUpload(errored as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir,
+      });
+      errored.emit("data", Buffer.from('--b\r\nContent-Disposition: form-data; name="body"\r\n\r\npartial body'));
+      expect(readdirSync(spoolDir)).toHaveLength(1);
+      errored.emit("error", new Error("ECONNRESET"));
+      const errorResult = await errorPromise;
+      expect(errorResult.ok).toBe(false);
+      expect(readdirSync(spoolDir)).toHaveLength(0);
+    } finally {
+      rmSync(spoolDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns INTERNAL_ERROR without throwing when opening the upload spool fails", async () => {
+    const temp = mkdtempSync(join(tmpdir(), "sorage-upload-badspool-"));
+    const blockingFile = join(temp, "not-a-directory");
+    writeFileSync(blockingFile, "blocker");
+    try {
+      const request = new FakeMultipartRequest();
+      const promise = consumeMultipartUpload(request as unknown as IncomingMessage, {
+        maxBytes: 1_000_000,
+        spoolDir: blockingFile,
+      });
+      // Must return a typed INTERNAL_ERROR rather than throwing synchronously out of EventEmitter.
+      expect(() => {
+        request.emit("data", part("file", "a.md", "# hello\n"));
+        request.emit("data", closing);
+        request.emit("end");
+      }).not.toThrow();
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("INTERNAL_ERROR");
+      expect(result.error.message).toContain("spool");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
     }
   });
 });

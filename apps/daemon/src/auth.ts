@@ -1,3 +1,4 @@
+import { type BigIntStats, statSync } from "node:fs";
 import { appError, tokensEqual, type AppError } from "@sorage/core";
 import type { ApiTokenStorePort, TokenEntropyPort, WebSecretPort } from "@sorage/core";
 
@@ -25,6 +26,10 @@ export interface SessionService {
   exchange(secret: string): AuthResult & { token?: string };
   /** Evaluates a presented bearer token against the API token and live sessions. */
   authenticate(presented: string): AuthResult;
+  /** Clears cached token state and prunes every live browser session immediately. */
+  invalidate?(): void;
+  /** Returns the count of currently retained browser sessions. */
+  activeSessionCount?(): number;
 }
 
 export interface SessionServiceOptions {
@@ -33,14 +38,78 @@ export interface SessionServiceOptions {
   entropy: TokenEntropyPort;
 }
 
+interface CachedTokenStat {
+  dev: bigint;
+  ino: bigint;
+  mode: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+  value: string;
+}
+
 export function createSessionService(options: SessionServiceOptions): SessionService {
   // Sessions carry the API-token material they were issued under; a rotation writes a
-  // different token file and thereby invalidates every session at once.
+  // different token file and immediately prunes every stale session entry.
   const sessions = new Map<string, string>();
+  let cachedStat: CachedTokenStat | null = null;
+  let lastToken: string | null = null;
 
-  const apiTokenMatches = (presented: string): boolean => {
-    const current = options.token.read();
-    return current !== null && tokensEqual(current, presented);
+  const updateObservedToken = (next: string | null): string | null => {
+    if (next === null) {
+      sessions.clear();
+      lastToken = null;
+      return null;
+    }
+    if (lastToken !== null && !tokensEqual(lastToken, next)) {
+      sessions.clear();
+    }
+    lastToken = next;
+    return next;
+  };
+
+  const readCurrentToken = (): string | null => {
+    let st: BigIntStats | null = null;
+    try {
+      st = statSync(options.token.path, { bigint: true });
+    } catch {
+      // File missing, unreadable, or synthetic path in an in-memory test store:
+      // never serve a stale cached value; fall back to the port's own read().
+      cachedStat = null;
+      return updateObservedToken(options.token.read());
+    }
+    if (!st.isFile()) {
+      cachedStat = null;
+      return updateObservedToken(null);
+    }
+    if (
+      cachedStat !== null &&
+      cachedStat.dev === st.dev &&
+      cachedStat.ino === st.ino &&
+      cachedStat.mode === st.mode &&
+      cachedStat.size === st.size &&
+      cachedStat.mtimeNs === st.mtimeNs &&
+      cachedStat.ctimeNs === st.ctimeNs
+    ) {
+      return cachedStat.value;
+    }
+    const fresh = updateObservedToken(options.token.read());
+    if (fresh === null) {
+      // Never negatively cache null so transient read errors or same-tick permission
+      // recovery do not latch authentication closed.
+      cachedStat = null;
+      return null;
+    }
+    cachedStat = {
+      dev: st.dev,
+      ino: st.ino,
+      mode: st.mode,
+      size: st.size,
+      mtimeNs: st.mtimeNs,
+      ctimeNs: st.ctimeNs,
+      value: fresh,
+    };
+    return fresh;
   };
 
   return {
@@ -52,7 +121,7 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         };
       }
       const token = options.entropy.next();
-      const current = options.token.read();
+      const current = readCurrentToken();
       if (current === null) {
         return {
           ok: false,
@@ -63,13 +132,28 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
       return { ok: true, context: { kind: "session" }, token };
     },
     authenticate: (presented: string) => {
-      if (apiTokenMatches(presented)) return { ok: true, context: { kind: "api-token" } };
+      const current = readCurrentToken();
+      if (current === null) {
+        return { ok: false, error: appError("TOKEN_INVALID", "the presented token is unknown, rotated, or expired") };
+      }
+      if (tokensEqual(current, presented)) {
+        return { ok: true, context: { kind: "api-token" } };
+      }
       const anchored = sessions.get(presented);
-      if (anchored !== undefined && apiTokenMatches(anchored)) {
-        return { ok: true, context: { kind: "session" } };
+      if (anchored !== undefined) {
+        if (tokensEqual(current, anchored)) {
+          return { ok: true, context: { kind: "session" } };
+        }
+        sessions.delete(presented);
       }
       return { ok: false, error: appError("TOKEN_INVALID", "the presented token is unknown, rotated, or expired") };
     },
+    invalidate: () => {
+      cachedStat = null;
+      lastToken = null;
+      sessions.clear();
+    },
+    activeSessionCount: () => sessions.size,
   };
 }
 

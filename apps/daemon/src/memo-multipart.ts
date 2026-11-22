@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { decodeStrictUtf8, type AcceptedMemoBody, type AppError, appError } from "@sorage/core";
 import { createAcceptedBodyCapture, releaseAcceptedMemoBody } from "@sorage/adapters/src/memo-command-ports";
 import type { IncomingMessage } from "node:http";
@@ -91,7 +90,6 @@ export function consumeMemoMultipart(
     partTooLargeError: (sizeBytes: number) =>
       tooLarge(`The Memo body part exceeded artifact.maxBytes ${String(options.maxBytes)} bytes.`, sizeBytes),
     resolveAtTerminator: false,
-    spoolDir: join(options.stateDir, "uploads"),
     decideHeader(header) {
       // A filename attribute on any part — even an empty one — makes it a
       // file part, and the Memo surface carries no file part.
@@ -142,9 +140,6 @@ export function consumeMemoMultipart(
         return invalid("The meta part excludes the body field; the body part carries the body.");
       }
       meta = parsed;
-      return null;
-    },
-    onSpoolEnd() {
       return null;
     },
     onComplete() {

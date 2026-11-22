@@ -1,16 +1,24 @@
-import { openSync, readSync, closeSync, rmSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, mkdirSync, openSync, readSync, rmSync, statSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { appError, type AppError } from "@sorage/core";
 import type { IncomingMessage } from "node:http";
-import { streamMultipart, type MultipartPartHeader, type MultipartEnginePolicy } from "./multipart-engine";
+import {
+  streamMultipart,
+  type MultipartEnginePolicy,
+  type MultipartPartHeader,
+  type MultipartPushSink,
+} from "./multipart-engine";
 
 /**
  * The browser streaming upload of TASK-047 and TASK-084 (API-003, API-013,
- * NFR-005), now a thin Handoff policy over the shared multipart engine: a file
- * part and a `body` field are mutually exclusive by presence, every streamed
- * part is spooled under `state/uploads` with the mid-stream `artifact.maxBytes`
- * abort, and the closing validation keeps the original empty-after-trim body
- * check and error wording. The engine owns all framing mechanics; this wrapper
- * preserves the Handoff domain rules and existing error categories.
+ * NFR-005), a thin Handoff policy over the shared multipart engine using
+ * `push-sink`: a file part and a `body` field are mutually exclusive by
+ * presence, every streamed part is spooled under `state/uploads` with the
+ * mid-stream `artifact.maxBytes` abort, and the closing validation keeps the
+ * original empty-after-trim body check and error wording. The engine owns all
+ * framing mechanics; this wrapper owns spool persistence, cleanup, Handoff
+ * domain rules, and existing error categories.
  */
 
 export interface UploadedPart {
@@ -43,7 +51,91 @@ export function consumeMultipartUpload(
   let file: UploadedPart | null = null;
   let body: UploadedPart | null = null;
   let bodyPresent = false;
+  let activeSink: MultipartPushSink | null = null;
   let cleaned = false;
+
+  const tryCreateSpoolSink = (
+    header: MultipartPartHeader,
+  ): { ok: true; sink: MultipartPushSink } | { ok: false; error: AppError } => {
+    let spoolPath: string;
+    let fd: number | null;
+    try {
+      mkdirSync(options.spoolDir, { recursive: true });
+      spoolPath = join(options.spoolDir, randomUUID());
+      fd = openSync(spoolPath, "w");
+    } catch (error) {
+      return {
+        ok: false,
+        error: appError("INTERNAL_ERROR", "opening the uploaded spool failed", { cause: String(error) }),
+      };
+    }
+    let sinkError: AppError | null = null;
+    let removed = false;
+
+    const closeFd = (): void => {
+      if (fd !== null) {
+        try {
+          closeSync(fd);
+        } catch {
+          // Best-effort close.
+        }
+        fd = null;
+      }
+    };
+
+    const removeSpool = (): void => {
+      if (removed) return;
+      removed = true;
+      try {
+        rmSync(spoolPath, { force: true });
+      } catch {
+        // Best-effort cleanup of this upload's own spool file only.
+      }
+    };
+
+    const sink: MultipartPushSink = {
+      write(chunk: Buffer) {
+        if (sinkError !== null || fd === null || chunk.length === 0) return;
+        try {
+          let offset = 0;
+          while (offset < chunk.length) {
+            const writtenBytes = writeSync(fd, chunk, offset, chunk.length - offset);
+            if (writtenBytes <= 0) throw new Error("short write to upload spool");
+            offset += writtenBytes;
+          }
+        } catch (error) {
+          closeFd();
+          removeSpool();
+          sinkError = appError("INTERNAL_ERROR", "writing the uploaded spool failed", { cause: String(error) });
+        }
+      },
+      finish(totalBytes: number, sha256: string) {
+        closeFd();
+        if (activeSink === sink) activeSink = null;
+        if (sinkError !== null) {
+          removeSpool();
+          return sinkError;
+        }
+        const uploaded: UploadedPart = {
+          field: header.name,
+          filename: header.filename ?? (header.name === "body" ? "body.md" : "upload"),
+          path: spoolPath,
+          bytes: totalBytes,
+          sha256,
+        };
+        if (header.name === "body") body = uploaded;
+        else file = uploaded;
+        return null;
+      },
+      abort() {
+        closeFd();
+        removeSpool();
+        if (activeSink === sink) activeSink = null;
+      },
+    };
+    activeSink = sink;
+    return { ok: true, sink };
+  };
 
   const policy: MultipartEnginePolicy<MultipartUploadResult> = {
     boundaryError: appError("CONFIG_INVALID", "the upload must be multipart/form-data with a boundary"),
@@ -65,7 +157,6 @@ export function consumeMultipartUpload(
         `the upload crossed artifact.maxBytes (${String(options.maxBytes)} bytes) and was aborted mid-stream`,
       ),
     resolveAtTerminator: true,
-    spoolDir: options.spoolDir,
     decideHeader(header: MultipartPartHeader) {
       if (header.name === "body") {
         if (bodyPresent || body !== null) {
@@ -77,8 +168,10 @@ export function consumeMultipartUpload(
             error: appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
           };
         }
+        const created = tryCreateSpoolSink(header);
+        if (!created.ok) return { kind: "reject", error: created.error };
         bodyPresent = true;
-        return { kind: "engine-spool" };
+        return { kind: "push-sink", sink: created.sink };
       }
       if (header.filename !== null) {
         if (file !== null) {
@@ -90,7 +183,9 @@ export function consumeMultipartUpload(
             error: appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
           };
         }
-        return { kind: "engine-spool" };
+        const created = tryCreateSpoolSink(header);
+        if (!created.ok) return { kind: "reject", error: created.error };
+        return { kind: "push-sink", sink: created.sink };
       }
       return { kind: "text" };
     },
@@ -99,18 +194,6 @@ export function consumeMultipartUpload(
         fields[part.header.name] = fields[part.header.name] ?? [];
         (fields[part.header.name] as string[]).push(part.value);
       }
-      return null;
-    },
-    onSpoolEnd(part) {
-      const uploaded: UploadedPart = {
-        field: part.header.name,
-        filename: part.header.filename ?? (part.header.name === "body" ? "body.md" : "upload"),
-        path: part.path,
-        bytes: part.bytes,
-        sha256: part.sha256,
-      };
-      if (part.header.name === "body") body = uploaded;
-      else file = uploaded;
       return null;
     },
     onComplete(totalRawBytes: number, payloadBytes: number) {
@@ -151,8 +234,13 @@ export function consumeMultipartUpload(
   function cleanup(): void {
     if (cleaned) return;
     cleaned = true;
-    // Only this upload's own spool file: the shared state/uploads directory
-    // holds the spools of every concurrent upload and must survive (TASK-047).
+    // Close and unlink any in-progress sink as well as finished spool files:
+    // only this upload's own spool file is removed so sibling uploads in
+    // state/uploads survive (TASK-047).
+    if (activeSink !== null) {
+      activeSink.abort();
+      activeSink = null;
+    }
     try {
       if (file !== null) rmSync(file.path, { force: true });
       if (body !== null) rmSync(body.path, { force: true });

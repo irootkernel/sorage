@@ -27,6 +27,11 @@ export interface GitClient {
   run(request: GitRunRequest): Result<GitRunOutcome, AppError>;
 }
 
+/** Asynchronous Git client used by the daemon runtime so `git` never blocks the HTTP event loop. */
+export interface AsyncGitClient {
+  run(request: GitRunRequest): Promise<Result<GitRunOutcome, AppError>>;
+}
+
 /** The per-invocation timeout every Git call runs under (BKP-025). */
 export const GIT_TIMEOUT_MS = 60_000;
 

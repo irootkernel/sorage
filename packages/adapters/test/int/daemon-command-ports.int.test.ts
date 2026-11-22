@@ -141,15 +141,34 @@ describe("the bounded checksum batch", () => {
     const first = ports.nextArtifactBatch(null, 10);
     expect(first.records).toHaveLength(1);
     expect(first.nextCursor).toBe(key2);
+    expect(first.vaultPath).toBe(vault);
     const second = ports.nextArtifactBatch(first.nextCursor, 10);
     expect(second.records).toHaveLength(1);
     expect(second.nextCursor).toBeNull();
-    // Hashing resolves the vault-relative key itself, so the digest is the real
-    // SHA-256 of the planted bytes; the doubled artifacts/ prefix would miss the
-    // file and return null, which the equality below would catch.
+    // Reusing a borrowed daemon database handle keeps that handle open for subsequent queries.
+    const borrowed = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
+      rebuilds: plan.rebuilds,
+    }).db;
+    try {
+      const reused = ports.nextArtifactBatch(null, 100, { database: borrowed, vaultPath: vault });
+      expect(reused.records).toHaveLength(2);
+      expect(reused.vaultPath).toBe(vault);
+      expect(borrowed.prepare("SELECT COUNT(*) AS n FROM artifacts").get()).toEqual({ n: 2 });
+    } finally {
+      borrowed.close();
+    }
+    // Hashing resolves the vault-relative key itself asynchronously via streaming,
+    // so the digest is the real SHA-256 of the planted bytes.
     const digestOf = (text: string) => createHash("sha256").update(text).digest("hex");
-    expect(ports.hashArtifact(key1)).toBe(digestOf("a".repeat(10)));
-    expect(ports.hashArtifact(key2)).toBe(digestOf("b".repeat(10)));
-    expect(ports.hashArtifact(`artifacts/${handoff}/a/missing.md`)).toBeNull();
+    expect(await ports.hashArtifact(key1, { vaultPath: first.vaultPath })).toBe(digestOf("a".repeat(10)));
+    expect(await ports.hashArtifact(key2)).toBe(digestOf("b".repeat(10)));
+    expect(await ports.hashArtifact(`artifacts/${handoff}/a/missing.md`)).toBeNull();
+    // Pre-aborted signal returns null immediately without reading.
+    const abortedSignal = {
+      aborted: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    expect(await ports.hashArtifact(key1, { vaultPath: vault, signal: abortedSignal })).toBeNull();
   });
 });

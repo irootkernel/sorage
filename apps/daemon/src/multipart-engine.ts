@@ -1,5 +1,4 @@
-import { closeSync, mkdirSync, openSync, rmSync, writeSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { appError, type AppError } from "@sorage/core";
 import type { IncomingMessage } from "node:http";
 
@@ -13,16 +12,16 @@ import type { IncomingMessage } from "node:http";
  * as content, an incomplete boundary or suffix split across arbitrary chunks
  * is awaited before anything is consumed, and the exact CRLF before a real
  * boundary is stripped while a lone CR or LF stays part bytes. Text parts are
- * buffered whole under their bound — enforced on both the progressive and the
- * found-boundary paths — headers are parsed under their bound the same way,
- * header parameters accept case, whitespace, and quoted or bare charset and
- * filename values, every streamed body byte is counted exactly once as
- * payload, and every delivered raw byte — preamble, payloads, framing, and
- * epilogue — is counted before any stage gating so no early success or
- * done-stage return bypasses the whole-request or aggregate framing bounds.
- * The policy decides every domain question; no Handoff or Memo domain rule
- * lives here and no raw-body replay cache is involved (ADR-0032 plan, W1
- * pins, corrections #1-#7).
+ * accumulated linearly via safe prefix chunks under their bound — enforced on
+ * both the progressive and the found-boundary paths — headers are parsed
+ * linearly under their bound the same way, header parameters accept case,
+ * whitespace, and quoted or bare charset and filename values, every streamed
+ * body byte is counted exactly once as payload, and every delivered raw byte —
+ * preamble, payloads, framing, and epilogue — is counted before any stage
+ * gating so no early success or done-stage return bypasses the whole-request or
+ * aggregate framing bounds. The policy decides every domain question and owns
+ * all persistence through `push-sink`; no filesystem I/O, Handoff or Memo
+ * domain rule, or raw-body replay cache lives here.
  */
 
 export interface MultipartPartHeader {
@@ -43,16 +42,8 @@ export interface MultipartPushSink {
 
 export type MultipartPartTarget =
   | { kind: "text" }
-  | { kind: "engine-spool" }
   | { kind: "push-sink"; sink: MultipartPushSink }
   | { kind: "reject"; error: AppError };
-
-export interface MultipartSpooledPart {
-  header: MultipartPartHeader;
-  path: string;
-  bytes: number;
-  sha256: string;
-}
 
 export interface MultipartTextPart {
   header: MultipartPartHeader;
@@ -98,16 +89,12 @@ export interface MultipartEnginePolicy<T> {
   partTooLargeError: (sizeBytes: number) => AppError;
   /** True to resolve at the closing boundary (the legacy upload behavior); false waits for end-of-stream so the epilogue is counted. */
   resolveAtTerminator: boolean;
-  /** The directory the engine's own spool files live under. */
-  spoolDir: string;
   decideHeader(header: MultipartPartHeader): MultipartPartTarget;
   /** A text part closed at its boundary; the policy validates the whole value. */
   onTextEnd(part: MultipartTextPart): AppError | null;
-  /** An engine-spooled part closed at its boundary; the policy records or refuses it. */
-  onSpoolEnd(part: MultipartSpooledPart): AppError | null;
   /** The closing validation after the terminator (and, without resolveAtTerminator, after end-of-stream). */
   onComplete(totalRawBytes: number, payloadBytes: number): { ok: true; value: T } | { ok: false; error: AppError };
-  /** The policy's cleanup hook on every failed or aborted exit; engine spools are always removed by the engine itself. */
+  /** The policy's cleanup hook on every failed or aborted exit. */
   onAbort(): void;
 }
 
@@ -167,8 +154,6 @@ export function streamMultipart<T>(
     return Promise.resolve({ ok: false, error: policy.boundaryError });
   }
   const delimiter = Buffer.from(`--${boundary}`);
-  mkdirSync(policy.spoolDir, { recursive: true });
-  const spoolPath = `${policy.spoolDir}/${randomUUID()}`;
 
   return new Promise((resolve) => {
     let settled = false;
@@ -178,15 +163,28 @@ export function streamMultipart<T>(
     let stage: "preamble" | "headers" | "body" | "done" = "preamble";
     let currentHeader: MultipartPartHeader = { name: "", filename: null, contentType: null, charset: null };
     let target: MultipartPartTarget = { kind: "text" };
-    let spool: number | null = null;
     let hasher: ReturnType<typeof createHash> | null = null;
     let written = 0;
     let terminatorSeen = false;
+    let preambleDiscarded = 0;
+    let headerChunks: Buffer[] = [];
+    let headerCommittedBytes = 0;
+    let textChunks: Buffer[] = [];
+    let textCommittedBytes = 0;
+
+    const resetAccumulators = (): void => {
+      preambleDiscarded = 0;
+      headerChunks = [];
+      headerCommittedBytes = 0;
+      textChunks = [];
+      textCommittedBytes = 0;
+    };
 
     const settleWith = (outcome: { ok: true; value: T } | { ok: false; error: AppError }): void => {
       if (settled) return;
       settled = true;
       stage = "done";
+      resetAccumulators();
       resolve(outcome);
     };
 
@@ -200,8 +198,6 @@ export function streamMultipart<T>(
       const outcome = policy.onComplete(totalRawBytes, payloadBytes);
       if (!outcome.ok) {
         policy.onAbort();
-        releaseSpool();
-        rmSync(spoolPath, { force: true });
         request.resume();
       }
       settleWith(outcome);
@@ -209,27 +205,16 @@ export function streamMultipart<T>(
 
     const fail = (error: AppError): void => {
       if (settled) return;
+      resetAccumulators();
       policy.onAbort();
-      releaseSpool();
-      rmSync(spoolPath, { force: true });
       settleWith({ ok: false, error });
       request.resume();
-    };
-
-    const releaseSpool = (): void => {
-      if (spool !== null) {
-        try {
-          closeSync(spool);
-        } catch {
-          // Best-effort; the file removal below is the durable cleanup.
-        }
-        spool = null;
-      }
     };
 
     const atTerminator = (): void => {
       structuralFramingBytes += buffer.length;
       buffer = Buffer.alloc(0);
+      resetAccumulators();
       if (!checkStreamBounds()) return;
       terminatorSeen = true;
       stage = "done";
@@ -311,12 +296,13 @@ export function streamMultipart<T>(
         if (stage === "preamble" || stage === "body") {
           const found = findDelimiter(0);
           if (found.status !== "match") {
-            // No complete boundary in sight: a text part stays buffered whole
-            // and a streaming part emits past a tail guard sized for a full
-            // CRLF + delimiter + two-byte suffix, so a boundary split across
-            // chunks is never falsely consumed or lost.
+            // No complete boundary in sight: emit/commit safe prefix bytes past
+            // the tail guard sized for a full delimiter + suffix (plus leading
+            // CRLF in body), keeping buffer length O(delimiter + chunk) so text,
+            // preamble, and streaming stages all run in O(N) time.
             const keep = delimiter.length + 4;
             if (stage === "preamble") {
+              const keepPreamble = delimiter.length + 2;
               if (
                 policy.framingBoundBytes !== undefined &&
                 structuralFramingBytes + buffer.length > policy.framingBoundBytes
@@ -324,23 +310,34 @@ export function streamMultipart<T>(
                 fail(policy.framingTooLargeError(structuralFramingBytes + buffer.length));
                 return;
               }
-              if (buffer.length - keep > policy.preambleBoundBytes) {
+              if (buffer.length > keepPreamble) {
+                const discardLen = buffer.length - keepPreamble;
+                preambleDiscarded += discardLen;
+                structuralFramingBytes += discardLen;
+                buffer = Buffer.from(buffer.subarray(discardLen));
+              }
+              const preambleSeen = preambleDiscarded + Math.max(0, buffer.length - keep);
+              if (preambleSeen > policy.preambleBoundBytes) {
                 fail(policy.preambleTooLargeError);
                 return;
               }
               return;
             }
             if (target.kind === "text") {
-              // Only the delimiter lookahead (CRLF + delimiter + two-byte
-              // suffix) may exceed the text bound without refusal: the whole
-              // buffered value minus that derived allowance is the text part's
-              // own bytes so far, and a boundary-split trailing framing never
-              // triggers a false overflow on a part at exactly its bound.
-              const lookahead = delimiter.length + 4;
-              const textBytes = Math.max(0, buffer.length - lookahead);
+              // Enforce the progressive text bound BEFORE copying oversized
+              // chunks into `textChunks`, then shift verified non-boundary
+              // prefix bytes so repeated small chunks run in O(N) time while
+              // preserving the delimiter lookahead (`keep = delimiter.length + 4`).
+              const textBytes = textCommittedBytes + Math.max(0, buffer.length - keep);
               if (textBytes > policy.textFieldBoundBytes) {
                 fail(policy.textFieldTooLargeError);
                 return;
+              }
+              if (buffer.length > keep) {
+                const emit = Buffer.from(buffer.subarray(0, buffer.length - keep));
+                textChunks.push(emit);
+                textCommittedBytes += emit.length;
+                buffer = Buffer.from(buffer.subarray(buffer.length - keep));
               }
               return;
             }
@@ -353,57 +350,60 @@ export function streamMultipart<T>(
                 return;
               }
               if (hasher !== null) hasher.update(emit);
-              if (target.kind === "engine-spool" && spool !== null) writeSync(spool, emit);
-              else if (target.kind === "push-sink") target.sink.write(emit);
-              buffer = buffer.subarray(emit.length);
+              if (target.kind === "push-sink") target.sink.write(emit);
+              buffer = Buffer.from(buffer.subarray(emit.length));
             }
             return;
           }
           const index = found.index;
-          if (stage === "preamble" && index > policy.preambleBoundBytes) {
-            fail(policy.preambleTooLargeError);
-            return;
-          }
-          // The exact CRLF a real boundary requires is stripped; a lone CR or
-          // LF inside the part never reaches this path.
-          const bodyEnd = stage === "body" ? index - 2 : 0;
-          const raw = Buffer.from(buffer.subarray(0, bodyEnd));
-          payloadBytes += raw.length;
-          if (stage === "body") {
+          if (stage === "preamble") {
+            const totalPreamble = preambleDiscarded + index;
+            if (totalPreamble > policy.preambleBoundBytes) {
+              fail(policy.preambleTooLargeError);
+              return;
+            }
+            // The preamble's remaining bytes plus delimiter and suffix are structural framing.
+            structuralFramingBytes += index + delimiter.length + 2;
+            preambleDiscarded = 0;
+          } else {
+            // The exact CRLF a real boundary requires is stripped; a lone CR or
+            // LF inside the part never reaches this path.
+            const bodyEnd = index - 2;
             if (target.kind === "text") {
-              // The found-boundary path enforces the text bound too: a single
-              // large chunk whose boundary arrives with it is bounded here
-              // before the policy ever sees the value (correction #4).
-              if (raw.length > policy.textFieldBoundBytes) {
+              // The found-boundary path enforces the text bound before assembling
+              // the final Buffer; payloadBytes is counted once at part end.
+              const totalTextBytes = textCommittedBytes + bodyEnd;
+              if (totalTextBytes > policy.textFieldBoundBytes) {
                 fail(policy.textFieldTooLargeError);
                 return;
               }
+              const tail = buffer.subarray(0, bodyEnd);
+              const raw =
+                textChunks.length === 0
+                  ? Buffer.from(tail)
+                  : Buffer.concat(tail.length > 0 ? [...textChunks, tail] : textChunks, totalTextBytes);
+              textChunks = [];
+              textCommittedBytes = 0;
+              payloadBytes += raw.length;
               const refusal = policy.onTextEnd({ header: currentHeader, raw, value: raw.toString("utf8") });
               if (refusal !== null) {
                 fail(refusal);
                 return;
               }
             } else {
+              const raw = Buffer.from(buffer.subarray(0, bodyEnd));
+              payloadBytes += raw.length;
               written += raw.length;
               if (written > policy.partMaxBytes) {
                 fail(policy.partTooLargeError(written));
                 return;
               }
               if (hasher !== null) hasher.update(raw);
-              if (target.kind === "engine-spool" && spool !== null) {
-                writeSync(spool, raw);
-                closeSync(spool);
-                spool = null;
-              } else if (target.kind === "push-sink") {
+              if (target.kind === "push-sink") {
                 target.sink.write(raw);
               }
               const digest = hasher !== null ? hasher.digest("hex") : "";
-              const refusal =
-                target.kind === "engine-spool"
-                  ? policy.onSpoolEnd({ header: currentHeader, path: spoolPath, bytes: written, sha256: digest })
-                  : target.kind === "push-sink"
-                    ? target.sink.finish(written, digest)
-                    : null;
+              const refusal = target.kind === "push-sink" ? target.sink.finish(written, digest) : null;
               if (refusal !== null) {
                 fail(refusal);
                 return;
@@ -411,9 +411,6 @@ export function streamMultipart<T>(
               written = 0;
               hasher = null;
             }
-          } else {
-            // The preamble's own bytes are structural framing, counted as consumed.
-            structuralFramingBytes += index + delimiter.length + 2;
           }
           buffer = buffer.subarray(index + delimiter.length + 2);
           if (stage === "body") {
@@ -429,7 +426,8 @@ export function streamMultipart<T>(
         if (stage === "headers") {
           const terminator = buffer.indexOf("\r\n\r\n");
           if (terminator === -1) {
-            if (buffer.length > policy.headerBoundBytes) {
+            const bufferedHeaderBytes = headerCommittedBytes + buffer.length;
+            if (bufferedHeaderBytes > policy.headerBoundBytes) {
               fail(policy.headerTooLargeError);
               return;
             }
@@ -437,23 +435,38 @@ export function streamMultipart<T>(
             // aggregate bound immediately instead of waiting for \r\n\r\n.
             if (
               policy.framingBoundBytes !== undefined &&
-              structuralFramingBytes + buffer.length > policy.framingBoundBytes
+              structuralFramingBytes + bufferedHeaderBytes > policy.framingBoundBytes
             ) {
-              fail(policy.framingTooLargeError(structuralFramingBytes + buffer.length));
+              fail(policy.framingTooLargeError(structuralFramingBytes + bufferedHeaderBytes));
               return;
+            }
+            // Keep only the 3-byte tail guard for a split `\r\n\r\n` terminator.
+            if (buffer.length > 3) {
+              const emit = Buffer.from(buffer.subarray(0, buffer.length - 3));
+              headerChunks.push(emit);
+              headerCommittedBytes += emit.length;
+              buffer = Buffer.from(buffer.subarray(buffer.length - 3));
             }
             return;
           }
           // The found path enforces the header bound too (correction #5).
-          if (terminator > policy.headerBoundBytes) {
+          const totalHeaderBytes = headerCommittedBytes + terminator;
+          if (totalHeaderBytes > policy.headerBoundBytes) {
             fail(policy.headerTooLargeError);
             return;
           }
-          const headerBlock = buffer.subarray(0, terminator).toString("utf8");
+          const headerTail = buffer.subarray(0, terminator);
+          const headerBlock = (
+            headerChunks.length === 0
+              ? headerTail
+              : Buffer.concat(headerTail.length > 0 ? [...headerChunks, headerTail] : headerChunks, totalHeaderBytes)
+          ).toString("utf8");
+          headerChunks = [];
+          headerCommittedBytes = 0;
           buffer = buffer.subarray(terminator + 4);
           // Headers are structural framing: the block plus its CRLFCRLF
           // terminator count as consumed framing immediately.
-          structuralFramingBytes += terminator + 4;
+          structuralFramingBytes += totalHeaderBytes + 4;
           if (policy.framingBoundBytes !== undefined && structuralFramingBytes > policy.framingBoundBytes) {
             fail(policy.framingTooLargeError(structuralFramingBytes));
             return;
@@ -484,15 +497,14 @@ export function streamMultipart<T>(
             fail(target.error);
             return;
           }
-          if (target.kind === "engine-spool") {
-            spool = openSync(spoolPath, "w");
-          }
           // A fresh hasher per streamed part: exactly one streamed part exists
           // per policy in both surfaces, and a per-part hash never leaks state.
-          if (target.kind === "engine-spool" || target.kind === "push-sink") {
+          if (target.kind === "push-sink") {
             hasher = createHash("sha256");
           }
           written = 0;
+          textChunks = [];
+          textCommittedBytes = 0;
           stage = "body";
           continue;
         }

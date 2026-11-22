@@ -97,7 +97,7 @@ function rowsOf(atHome: string): Array<Record<string, unknown>> {
 }
 
 async function startScheduledDaemon(times: Date[]): Promise<{
-  tick: () => unknown;
+  tick: () => Promise<unknown>;
   stop: () => Promise<void>;
 }> {
   const port = await freePort();
@@ -106,12 +106,12 @@ async function startScheduledDaemon(times: Date[]): Promise<{
   if (!config.ok || config.value === null) throw new Error("config read failed");
   config.value.config.server.port = port;
   if (!store.write(config.value.config, { revision: config.value.revision }).ok) throw new Error("port write failed");
-  let tick: () => unknown = () => undefined;
+  let tick: () => Promise<unknown> = async () => undefined;
   const running = await serveDaemon({
     serverFactory: createDaemonServer,
     scheduleSweep: () => () => {},
     scheduleBackup: (run) => {
-      tick = run as () => unknown;
+      tick = run as () => Promise<unknown>;
       return () => {};
     },
     now: () => times[times.length - 1] as Date,
@@ -128,11 +128,11 @@ describe("the daemon backup scheduler tick", () => {
     const times = [new Date("2026-08-30T09:00:00.000Z"), new Date("2026-08-30T09:01:00.000Z")];
     const daemon = await startScheduledDaemon(times);
     try {
-      const first = daemon.tick() as { action: string; triggeredBy?: string };
+      const first = (await daemon.tick()) as { action: string; triggeredBy?: string };
       expect(first.action).toBe("ran");
       expect(first.triggeredBy).toBe("catch-up");
       times.pop();
-      const second = daemon.tick() as { action: string };
+      const second = (await daemon.tick()) as { action: string };
       expect(second.action).toBe("none");
       const rows = rowsOf(atHome);
       expect(rows).toHaveLength(1);
@@ -148,7 +148,7 @@ describe("the daemon backup scheduler tick", () => {
     const times = [new Date("2026-08-30T03:00:30.000Z")];
     const daemon = await startScheduledDaemon(times);
     try {
-      const decision = daemon.tick() as { action: string; triggeredBy?: string };
+      const decision = (await daemon.tick()) as { action: string; triggeredBy?: string };
       expect(decision.action).toBe("ran");
       expect(decision.triggeredBy).toBe("scheduled");
       expect(rowsOf(atHome)).toHaveLength(1);
@@ -167,7 +167,7 @@ describe("the daemon backup scheduler tick", () => {
     const times = [new Date("2026-08-30T09:00:00.000Z")];
     const daemon = await startScheduledDaemon(times);
     try {
-      const decision = daemon.tick() as { action: string; nextDueAt: string | null };
+      const decision = (await daemon.tick()) as { action: string; nextDueAt: string | null };
       expect(decision.action).toBe("none");
       expect(decision.nextDueAt).toBeNull();
       expect(rowsOf(atHome)).toHaveLength(0);
@@ -181,7 +181,7 @@ describe("the daemon backup scheduler tick", () => {
     const times = [new Date("2026-08-30T09:00:00.000Z")];
     const daemon = await startScheduledDaemon(times);
     try {
-      const decision = daemon.tick() as { action: string; nextDueAt: string | null };
+      const decision = (await daemon.tick()) as { action: string; nextDueAt: string | null };
       expect(decision.action).toBe("none");
       expect(decision.nextDueAt).toBe("2026-08-31T03:00:00.000Z");
       expect(rowsOf(atHome)).toHaveLength(0);
@@ -200,7 +200,7 @@ describe("the daemon backup scheduler tick", () => {
     const times = [new Date("2026-08-30T09:00:00.000Z")];
     const daemon = await startScheduledDaemon(times);
     try {
-      const decision = daemon.tick() as { action: string };
+      const decision = (await daemon.tick()) as { action: string };
       expect(decision.action).toBe("failed");
       expect(rowsOf(atHome)).toHaveLength(0);
     } finally {
@@ -230,7 +230,7 @@ describe("the daemon backup scheduler tick", () => {
     const times = [new Date("2026-03-07T12:00:05.000Z")];
     const daemon = await startScheduledDaemon(times);
     try {
-      const decision = daemon.tick() as { action: string; nextDueAt: string | null };
+      const decision = (await daemon.tick()) as { action: string; nextDueAt: string | null };
       expect(decision.action).toBe("none");
       // 02:30 does not exist on 2026-03-08 in New York; the next valid instant is 03:00 EDT.
       expect(decision.nextDueAt).toBe("2026-03-08T07:00:00.000Z");

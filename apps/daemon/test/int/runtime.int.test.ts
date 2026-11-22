@@ -143,7 +143,7 @@ describe("the daemon runtime", () => {
     db.exec("COMMIT");
     db.close();
 
-    let tick: (() => void) | null = null;
+    let tick: (() => Promise<unknown>) | null = null;
     // The first test's "lock is free" probe re-acquired daemon.lock and left it
     // held by this same process; clear our own leftover record before serving.
     rmSync(join(home, "run", "daemon.lock"), { force: true });
@@ -163,7 +163,7 @@ describe("the daemon runtime", () => {
       armSignals: () => {},
     });
 
-    const first = (tick as unknown as () => { checked: number; mismatches: string[] })();
+    const first = await (tick as unknown as () => Promise<{ checked: number; mismatches: string[] }>)();
     // The vault-relative key resolves to the planted bytes, so a healthy artifact
     // is not reported: this is exactly the false positive the doubled artifacts/
     // prefix used to produce on every tick.
@@ -171,7 +171,7 @@ describe("the daemon runtime", () => {
     expect(first.mismatches).toEqual([]);
 
     writeFileSync(join(home, "vault", storageKey), "corrupted");
-    const second = (tick as unknown as () => { checked: number; mismatches: string[] })();
+    const second = await (tick as unknown as () => Promise<{ checked: number; mismatches: string[] }>)();
     expect(second.checked).toBe(1);
     expect(second.mismatches).toEqual([storageKey]);
 
@@ -225,13 +225,13 @@ describe("the daemon runtime", () => {
       armSignals: () => {},
     });
 
-    const failed = (
-      tick as unknown as () => {
+    const failed = await (
+      tick as unknown as () => Promise<{
         checked: number;
         mismatches: string[];
         bytes: number;
         failure?: { code: string; message: string };
-      }
+      }>
     )();
     // The explicit failure field, a zero read budget, and nothing hashed: the
     // tick reports the unprovable relationship instead of a silently shortened
@@ -284,13 +284,13 @@ describe("the daemon runtime", () => {
       );
     repair.close();
     writeFileSync(join(home, "vault", storageKey), "sweep me");
-    const resumed = (
-      tick as unknown as () => {
+    const resumed = await (
+      tick as unknown as () => Promise<{
         checked: number;
         mismatches: string[];
         bytes: number;
         failure?: { code: string; message: string };
-      }
+      }>
     )();
     expect(resumed.checked).toBe(1);
     expect(resumed.mismatches).toEqual([]);
@@ -333,5 +333,44 @@ describe("the daemon runtime", () => {
     });
     expect(gone).toBe(true);
     await running.drain();
+  }, 15000);
+
+  it("does not arm background intervals and releases daemon.lock when bind fails with PORT_IN_USE", async () => {
+    rmSync(join(home, "run", "daemon.lock"), { force: true });
+    const blocker = createNetServer();
+    await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+    const occupiedPort = (blocker.address() as AddressInfo).port;
+    try {
+      const write = createNodeConfigCommandPorts().store;
+      const config = write.read();
+      expect(config.ok && config.value !== null).toBe(true);
+      if (!config.ok || config.value === null) return;
+      config.value.config.server.port = occupiedPort;
+      expect(write.write(config.value.config, { revision: config.value.revision }).ok).toBe(true);
+
+      let sweepArmed = 0;
+      let backupArmed = 0;
+      await expect(
+        serveDaemon({
+          serverFactory: createDaemonServer,
+          scheduleSweep: () => {
+            sweepArmed += 1;
+            return () => {};
+          },
+          scheduleBackup: () => {
+            backupArmed += 1;
+            return () => {};
+          },
+          armSignals: () => {},
+        }),
+      ).rejects.toMatchObject({ code: "PORT_IN_USE" });
+      expect(sweepArmed).toBe(0);
+      expect(backupArmed).toBe(0);
+      const lockCheck = ports.acquireDaemonLock();
+      expect(lockCheck.ok).toBe(true);
+      lockCheck.release?.();
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
   }, 15000);
 });

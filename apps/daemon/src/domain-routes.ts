@@ -60,7 +60,7 @@ import {
   requestDeletion,
   resolveWorkspaceActor,
   reviseHandoff,
-  runBackupCommand,
+  runBackupCommandAsync,
   runDoctor,
   sendHandoffs,
   setReviewNote,
@@ -597,50 +597,51 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const maxBytes = current.value.config.artifact.maxBytes;
       const upload = await consumeMultipartUpload(request, { maxBytes, spoolDir: join(homeOf(), "state", "uploads") });
       if (!upload.ok) return void respondError(response, context, upload.error);
-      const file = upload.value.file;
-      const bodyPart = upload.value.body;
-      if (file !== null && bodyPart !== null) {
-        upload.value.cleanup();
-        return void respondError(
-          response,
-          context,
-          appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
+      try {
+        const file = upload.value.file;
+        const bodyPart = upload.value.body;
+        if (file !== null && bodyPart !== null) {
+          return void respondError(
+            response,
+            context,
+            appError("CONFIG_INVALID", "the upload carries both a file part and a body field"),
+          );
+        }
+        if (file === null && bodyPart === null) {
+          return void respondError(
+            response,
+            context,
+            appError("CONFIG_INVALID", "the upload must carry a file part or a body field"),
+          );
+        }
+        const to = upload.value.fields.to ?? [];
+        const title = (upload.value.fields.title ?? (file !== null ? [file.filename] : []))[0] ?? file?.filename ?? "";
+        const result = withPorts(createNodeSendPorts(), (ports) =>
+          sendHandoffs(ports, {
+            to,
+            title,
+            ...(file !== null
+              ? {
+                  file: file.path,
+                  // The spool path is an opaque UUID, so the browser's filename is the
+                  // original name the Artifact must record (VLT-007), and the source is
+                  // an authenticated upload rather than a workspace path import (API-003).
+                  originalName: file.filename,
+                  fileSourceKind: "authenticated-spool" as const,
+                }
+              : { bodyFile: bodyPart?.path }),
+            allowExternalSource: true, // the browser upload is already the authenticated source
+            allowUnregistered: false,
+            ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+            path: "",
+            userHome,
+            asUser: true,
+          }),
         );
-      }
-      if (file === null && bodyPart === null) {
+        return void respond(response, context, result, 201);
+      } finally {
         upload.value.cleanup();
-        return void respondError(
-          response,
-          context,
-          appError("CONFIG_INVALID", "the upload must carry a file part or a body field"),
-        );
       }
-      const to = upload.value.fields.to ?? [];
-      const title = (upload.value.fields.title ?? (file !== null ? [file.filename] : []))[0] ?? file?.filename ?? "";
-      const result = withPorts(createNodeSendPorts(), (ports) =>
-        sendHandoffs(ports, {
-          to,
-          title,
-          ...(file !== null
-            ? {
-                file: file.path,
-                // The spool path is an opaque UUID, so the browser's filename is the
-                // original name the Artifact must record (VLT-007), and the source is
-                // an authenticated upload rather than a workspace path import (API-003).
-                originalName: file.filename,
-                fileSourceKind: "authenticated-spool" as const,
-              }
-            : { bodyFile: bodyPart?.path }),
-          allowExternalSource: true, // the browser upload is already the authenticated source
-          allowUnregistered: false,
-          ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
-          path: "",
-          userHome,
-          asUser: true,
-        }),
-      );
-      upload.value.cleanup();
-      return void respond(response, context, result, 201);
     },
   });
 
@@ -816,45 +817,47 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           spoolDir: join(homeOf(), "state", "uploads"),
         });
         if (!upload.ok) return void respondError(response, context, upload.error);
-        const file = upload.value.file;
-        if (file === null) {
-          return void respondError(
-            response,
-            context,
-            appError("CONFIG_INVALID", "the revise upload carried no file part"),
+        try {
+          const file = upload.value.file;
+          if (file === null) {
+            return void respondError(
+              response,
+              context,
+              appError("CONFIG_INVALID", "the revise upload carried no file part"),
+            );
+          }
+          const fields = upload.value.fields;
+          const query = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
+          const asField = fields.as?.[0];
+          const asUserField = fields.asUser?.[0] === "true";
+          const actor = actorInputOf(query, {
+            ...(typeof asField === "string" ? { as: asField } : {}),
+            ...(asUserField ? { asUser: true } : {}),
+          });
+          if (!actor.ok) {
+            return void respondError(response, context, actor.error);
+          }
+          const rowVersionField = fields.expectedRowVersion?.[0];
+          const result = withPorts(createNodeRevisionPorts(), (ports) =>
+            reviseHandoff(ports, {
+              ...actor.value,
+              handoffId: (context.params?.id ?? "") as string,
+              file: file.path,
+              // The spool path is an opaque UUID, so the browser's filename is the
+              // original name the replacement Artifact must record (VLT-007).
+              originalName: file.filename,
+              fileSourceKind: "authenticated-spool",
+              allowExternalSource: true, // the browser upload is already the authenticated source
+              ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
+              ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
+              ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+              ...(rowVersionField !== undefined ? { expectedRowVersion: Number(rowVersionField) } : {}),
+            }),
           );
-        }
-        const fields = upload.value.fields;
-        const query = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
-        const asField = fields.as?.[0];
-        const asUserField = fields.asUser?.[0] === "true";
-        const actor = actorInputOf(query, {
-          ...(typeof asField === "string" ? { as: asField } : {}),
-          ...(asUserField ? { asUser: true } : {}),
-        });
-        if (!actor.ok) {
+          return void respond(response, context, result);
+        } finally {
           upload.value.cleanup();
-          return void respondError(response, context, actor.error);
         }
-        const rowVersionField = fields.expectedRowVersion?.[0];
-        const result = withPorts(createNodeRevisionPorts(), (ports) =>
-          reviseHandoff(ports, {
-            ...actor.value,
-            handoffId: (context.params?.id ?? "") as string,
-            file: file.path,
-            // The spool path is an opaque UUID, so the browser's filename is the
-            // original name the replacement Artifact must record (VLT-007).
-            originalName: file.filename,
-            fileSourceKind: "authenticated-spool",
-            allowExternalSource: true, // the browser upload is already the authenticated source
-            ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
-            ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
-            ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
-            ...(rowVersionField !== undefined ? { expectedRowVersion: Number(rowVersionField) } : {}),
-          }),
-        );
-        upload.value.cleanup();
-        return void respond(response, context, result);
       }
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
@@ -1048,9 +1051,9 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const ports = createNodeBackupCommandPorts();
       const drained = ports.drainAtStart();
       if (!drained.ok) return void respondError(response, context, drained.error);
-      const opened = ports.runPorts();
+      const opened = ports.asyncRunPorts();
       if (!opened.ok) return void respondError(response, context, opened.error);
-      const result = runBackupCommand(opened.value, {
+      const result = await runBackupCommandAsync(opened.value, {
         ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
       });
       return void respond(response, context, result);

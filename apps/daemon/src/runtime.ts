@@ -1,6 +1,12 @@
 import type { Server } from "node:http";
 import { join } from "node:path";
-import { appError, backupTickDecision, runBackupOnce, setConfigurationValue, showConfiguration } from "@sorage/core";
+import {
+  appError,
+  backupTickDecision,
+  runBackupOnceAsync,
+  setConfigurationValue,
+  showConfiguration,
+} from "@sorage/core";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import type { Configuration } from "@sorage/core";
@@ -36,13 +42,27 @@ export const SWEEP_TICK_MS = 60_000;
 /** The byte budget one sweep tick may read (domain-and-architecture section 14.2). */
 export const SWEEP_BYTE_BUDGET = 64 * 1024 * 1024;
 
+export interface SweepTickResult {
+  checked: number;
+  mismatches: string[];
+  bytes: number;
+  failure?: { code: string; message: string };
+}
+
+export interface BackupTickResult {
+  action: string;
+  triggeredBy?: string;
+  nextDueAt: string | null;
+  run?: unknown;
+}
+
 export interface ServeDaemonOptions {
   /** Wired automatically from the process when absent; tests inject a prepared server. */
   serverFactory?: (options: DaemonServerOptions) => Server;
   /** The tick driver; production uses a timer, tests drive ticks by hand. */
-  scheduleSweep?: (run: () => void) => () => void;
+  scheduleSweep?: (run: () => Promise<SweepTickResult>) => () => void;
   /** The backup tick driver; production uses a 60-second timer, tests drive it by hand. */
-  scheduleBackup?: (run: () => void) => () => void;
+  scheduleBackup?: (run: () => Promise<BackupTickResult>) => () => void;
   /** The clock the backup tick decides against; tests drive it across DST days and sleep gaps. */
   now?: () => Date;
   /** The drain signal to arm; production arms SIGTERM and SIGINT. */
@@ -56,10 +76,10 @@ export interface RunningDaemon {
   port: number;
   record: DaemonRunRecord;
   /** Performs one bounded sweep tick immediately. */
-  runSweepTick(): { checked: number; mismatches: string[]; bytes: number; failure?: { code: string; message: string } };
+  runSweepTick(): Promise<SweepTickResult>;
   /** Performs one backup scheduler tick immediately and reports what it decided. */
-  runBackupTick(): { action: string; triggeredBy?: string; nextDueAt: string | null; run?: unknown };
-  /** Drains: refuses mutations, waits for in-flight requests, then closes storage. */
+  runBackupTick(): Promise<BackupTickResult>;
+  /** Drains: refuses mutations, waits for in-flight requests and background ticks, then closes storage. */
   drain(): Promise<void>;
 }
 
@@ -150,87 +170,159 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
     },
   });
 
+  const logger = createInstanceLogger(ports.home);
+
   let sweepCursor: string | null = null;
-  const runSweepTick = () => {
-    const batch = ports.nextArtifactBatch(sweepCursor, SWEEP_BYTE_BUDGET);
-    if (batch.failure !== undefined) {
-      // An unverifiable Artifact-record relationship is reported honestly: the
-      // tick hashes nothing, keeps its cursor so a repaired installation
-      // resumes at the same position, and stays alive — the timer keeps
-      // running and never surfaces this as an uncaught exception.
-      sweepLogger().warn("daemon.artifact_sweep_unverified", {
-        code: batch.failure.code,
-        message: batch.failure.message,
-      });
-      return { checked: 0, mismatches: [], bytes: 0, failure: batch.failure };
-    }
-    sweepCursor = batch.nextCursor;
-    const mismatches: string[] = [];
-    let bytes = 0;
-    for (const record of batch.records) {
-      bytes += record.bytes;
-      const digest = ports.hashArtifact(record.storageKey);
-      if (digest !== record.sha256) mismatches.push(record.storageKey);
-    }
-    if (mismatches.length > 0) {
-      sweepLogger().warn("daemon.artifact_corrupted", {
-        code: "ARTIFACT_CORRUPTED",
-        count: mismatches.length,
-        storageKeys: mismatches,
-      });
-    }
-    return { checked: batch.records.length, mismatches, bytes };
+  let sweepRunning = false;
+  let sweepInFlight: Promise<SweepTickResult> | null = null;
+  let sweepAbort: {
+    readonly signal: {
+      readonly aborted: boolean;
+      addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+      removeEventListener(type: "abort", listener: () => void): void;
+    };
+    abort(): void;
+  } | null = null;
+
+  const createAbortController = () => {
+    const Ctor = AbortController as unknown as new () => {
+      readonly signal: {
+        readonly aborted: boolean;
+        addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+        removeEventListener(type: "abort", listener: () => void): void;
+      };
+      abort(): void;
+    };
+    return new Ctor();
   };
 
-  const stopSweep =
-    options.scheduleSweep === undefined ? scheduleTimer(runSweepTick) : options.scheduleSweep(runSweepTick);
+  const runSweepTick = (): Promise<SweepTickResult> => {
+    if (draining || sweepRunning) {
+      return Promise.resolve({ checked: 0, mismatches: [], bytes: 0 });
+    }
+    sweepRunning = true;
+    const controller = createAbortController();
+    sweepAbort = controller;
+    const task = (async (): Promise<SweepTickResult> => {
+      try {
+        if (draining || controller.signal.aborted) {
+          return { checked: 0, mismatches: [], bytes: 0 };
+        }
+        const batch = ports.nextArtifactBatch(sweepCursor, SWEEP_BYTE_BUDGET, { database });
+        if (batch.failure !== undefined) {
+          // An unverifiable Artifact-record relationship is reported honestly: the
+          // tick hashes nothing, keeps its cursor so a repaired installation
+          // resumes at the same position, and stays alive — the timer keeps
+          // running and never surfaces this as an uncaught exception.
+          logger.warn("daemon.artifact_sweep_unverified", {
+            code: batch.failure.code,
+            message: batch.failure.message,
+          });
+          return { checked: 0, mismatches: [], bytes: 0, failure: batch.failure };
+        }
+        const mismatches: string[] = [];
+        let bytes = 0;
+        let checked = 0;
+        for (const record of batch.records) {
+          if (draining || controller.signal.aborted) {
+            // Aborting mid-sweep during drain must not record false mismatches,
+            // log corruption, or skip unchecked records on the cursor.
+            return { checked, mismatches, bytes };
+          }
+          const digest = await ports.hashArtifact(record.storageKey, {
+            vaultPath: batch.vaultPath,
+            signal: controller.signal,
+          });
+          if (draining || controller.signal.aborted) {
+            return { checked, mismatches, bytes };
+          }
+          checked += 1;
+          bytes += record.bytes;
+          if (digest !== record.sha256) mismatches.push(record.storageKey);
+        }
+        sweepCursor = batch.nextCursor;
+        if (mismatches.length > 0) {
+          logger.warn("daemon.artifact_corrupted", {
+            code: "ARTIFACT_CORRUPTED",
+            count: mismatches.length,
+            storageKeys: mismatches,
+          });
+        }
+        return { checked, mismatches, bytes };
+      } finally {
+        if (sweepAbort === controller) sweepAbort = null;
+        sweepRunning = false;
+        sweepInFlight = null;
+      }
+    })();
+    if (sweepRunning) sweepInFlight = task;
+    return task;
+  };
+
+  let stopSweep = () => {};
+  let stopBackup = () => {};
 
   // The backup scheduler of section 29 (RUN-002): only the daemon schedules.
   // Every tick re-reads the configuration so a reloaded gitBackup.* key takes
   // effect on the next tick, and every run it triggers goes through the same
-  // engine and backup.lock a manual run uses.
-  const runBackupTick = () => {
-    const current = showConfiguration(createNodeConfigCommandPorts());
-    if (!current.ok) return { action: "none", nextDueAt: null };
-    const spec = {
-      enabled: current.value.gitBackup.enabled,
-      at: current.value.gitBackup.schedule.at,
-      timezone: current.value.gitBackup.schedule.timezone,
-      catchUpAfterMissedRun: current.value.gitBackup.schedule.catchUpAfterMissedRun,
-    };
-    const backupPorts = createNodeBackupCommandPorts();
-    const statusPorts = backupPorts.statusPorts();
-    const lastRunAt = statusPorts.ok ? statusPorts.value.lastRunAt() : { ok: false as const };
-    const decision = backupTickDecision(
-      spec,
-      (options.now ?? (() => new Date()))(),
-      lastRunAt.ok ? lastRunAt.value : null,
-    );
-    if (decision.action !== "run") {
-      return { action: "none", nextDueAt: decision.nextDueAt };
-    }
-    const runPorts = backupPorts.runPorts(decision.triggeredBy);
-    if (!runPorts.ok) {
-      sweepLogger().warn("daemon.backup_run_refused", { code: runPorts.error.code });
-      return { action: "refused", triggeredBy: decision.triggeredBy, nextDueAt: decision.nextDueAt };
-    }
-    const run = runBackupOnce(runPorts.value);
-    if (!run.ok) {
-      // BACKUP_IN_PROGRESS from a concurrent holder is an expected refusal;
-      // the next tick re-evaluates coverage once that run finishes.
-      sweepLogger().warn("daemon.backup_run_failed", { code: run.error.code, triggeredBy: decision.triggeredBy });
-      return { action: "failed", triggeredBy: decision.triggeredBy, nextDueAt: decision.nextDueAt };
-    }
-    return {
-      action: "ran",
-      triggeredBy: decision.triggeredBy,
-      nextDueAt: decision.nextDueAt,
-      run: run.value,
-    };
-  };
+  // engine and backup.lock a manual run uses — asynchronously so slow Git
+  // operations never stall the HTTP event loop.
+  let backupTickRunning = false;
+  let backupTickInFlight: Promise<BackupTickResult> | null = null;
 
-  const stopBackup =
-    options.scheduleBackup === undefined ? scheduleTimer(runBackupTick) : options.scheduleBackup(runBackupTick);
+  const runBackupTick = (): Promise<BackupTickResult> => {
+    if (draining || backupTickRunning) {
+      return Promise.resolve({ action: "none", nextDueAt: null });
+    }
+    backupTickRunning = true;
+    const task = (async (): Promise<BackupTickResult> => {
+      try {
+        if (draining) return { action: "none", nextDueAt: null };
+        const current = showConfiguration(createNodeConfigCommandPorts());
+        if (!current.ok) return { action: "none", nextDueAt: null };
+        const spec = {
+          enabled: current.value.gitBackup.enabled,
+          at: current.value.gitBackup.schedule.at,
+          timezone: current.value.gitBackup.schedule.timezone,
+          catchUpAfterMissedRun: current.value.gitBackup.schedule.catchUpAfterMissedRun,
+        };
+        const backupPorts = createNodeBackupCommandPorts();
+        const statusPorts = backupPorts.statusPorts();
+        const lastRunAt = statusPorts.ok ? statusPorts.value.lastRunAt() : { ok: false as const };
+        const decision = backupTickDecision(
+          spec,
+          (options.now ?? (() => new Date()))(),
+          lastRunAt.ok ? lastRunAt.value : null,
+        );
+        if (decision.action !== "run") {
+          return { action: "none", nextDueAt: decision.nextDueAt };
+        }
+        const runPorts = backupPorts.asyncRunPorts(decision.triggeredBy);
+        if (!runPorts.ok) {
+          logger.warn("daemon.backup_run_refused", { code: runPorts.error.code });
+          return { action: "refused", triggeredBy: decision.triggeredBy, nextDueAt: decision.nextDueAt };
+        }
+        const run = await runBackupOnceAsync(runPorts.value);
+        if (!run.ok) {
+          // BACKUP_IN_PROGRESS from a concurrent holder is an expected refusal;
+          // the next tick re-evaluates coverage once that run finishes.
+          logger.warn("daemon.backup_run_failed", { code: run.error.code, triggeredBy: decision.triggeredBy });
+          return { action: "failed", triggeredBy: decision.triggeredBy, nextDueAt: decision.nextDueAt };
+        }
+        return {
+          action: "ran",
+          triggeredBy: decision.triggeredBy,
+          nextDueAt: decision.nextDueAt,
+          run: run.value,
+        };
+      } finally {
+        backupTickRunning = false;
+        backupTickInFlight = null;
+      }
+    })();
+    if (backupTickRunning) backupTickInFlight = task;
+    return task;
+  };
 
   return new Promise((resolve, reject) => {
     server.once("error", (error: Error) => {
@@ -239,6 +331,12 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
       reject(appError("PORT_IN_USE", `the configured port is already bound: ${error.message}`));
     });
     server.listen(port, host, () => {
+      // Arm background intervals only after bind succeeds so a PORT_IN_USE
+      // failure never leaves timers running against a closed database.
+      stopSweep =
+        options.scheduleSweep === undefined ? scheduleTimer(runSweepTick) : options.scheduleSweep(runSweepTick);
+      stopBackup =
+        options.scheduleBackup === undefined ? scheduleTimer(runBackupTick) : options.scheduleBackup(runBackupTick);
       const record: DaemonRunRecord = {
         pid: process.pid,
         host,
@@ -250,15 +348,35 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
       // The record is the bind marker: written atomically only after listen succeeded.
       ports.writeDaemonRecord(record);
       drain = async () => {
-        // Refuse new mutations first; the requests already in flight finish, and
-        // only then do the listener and the storage close (SEC-015).
+        // Refuse new mutations first and abort any in-progress sweep; wait for
+        // in-flight HTTP requests and active background ticks within the drain
+        // budget before closing the listener, database, record, and lock (SEC-015).
         draining = true;
         stopSweep();
         stopBackup();
+        sweepAbort?.abort();
         // Yield once so requests already queued in the event loop are admitted and
         // answered with SERVICE_PAUSED rather than losing their connection.
         await new Promise((wake) => setImmediate(wake));
         const deadline = Date.now() + 10_000;
+        const background: Array<Promise<unknown>> = [];
+        if (sweepInFlight !== null) background.push(sweepInFlight);
+        if (backupTickInFlight !== null) background.push(backupTickInFlight);
+        if (background.length > 0) {
+          const remaining = Math.max(0, deadline - Date.now());
+          let drainTimer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              Promise.allSettled(background),
+              new Promise<void>((wake) => {
+                drainTimer = setTimeout(wake, remaining);
+                drainTimer.unref?.();
+              }),
+            ]);
+          } finally {
+            if (drainTimer !== undefined) clearTimeout(drainTimer);
+          }
+        }
         while (inFlight > 0 && Date.now() < deadline) {
           await new Promise((wake) => setTimeout(wake, 50));
         }
@@ -405,27 +523,27 @@ export function createDaemonConfigService(running: {
   };
 }
 
-function scheduleTimer(run: () => void): () => void {
-  const timer = setInterval(run, SWEEP_TICK_MS);
+function scheduleTimer(run: () => Promise<unknown>): () => void {
+  const timer = setInterval(() => {
+    void Promise.resolve()
+      .then(() => run())
+      .catch(() => {
+        // Scheduled ticks log their own failures; never surface an unhandled rejection.
+      });
+  }, SWEEP_TICK_MS);
   return () => clearInterval(timer);
 }
 
-let daemonLogger: ReturnType<typeof createLogger> | null | undefined;
-function sweepLogger(): Pick<ReturnType<typeof createLogger>, "warn"> {
-  if (daemonLogger !== undefined) {
-    return daemonLogger ?? silentLogger;
-  }
+function createInstanceLogger(home: { logsDir: string; home: string }): Pick<ReturnType<typeof createLogger>, "warn"> {
   try {
-    const ports = createNodeDaemonPorts();
-    daemonLogger = createLogger({
-      file: join(ports.home.logsDir, "sorage.log"),
+    return createLogger({
+      file: join(home.logsDir, "sorage.log"),
       level: "info",
-      homePath: ports.home.home,
+      homePath: home.home,
     });
   } catch {
-    daemonLogger = null;
+    return silentLogger;
   }
-  return daemonLogger ?? silentLogger;
 }
 
 const silentLogger = { warn: (_event: string, _fields?: Record<string, unknown>) => {} };

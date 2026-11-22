@@ -1,7 +1,10 @@
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDaemonServer } from "../../src/server";
+import { createDaemonServer, readJsonBody } from "../../src/server";
 
 interface TestResponse {
   status: number;
@@ -159,6 +162,93 @@ describe("idempotent body replay lifecycle (API-012)", () => {
     const response = await fetch(`http://127.0.0.1:${retryPort}/api/v1/body-ignored`, { method: "POST", headers });
 
     expect(response.status).toBe(204);
+  });
+
+  it("skips spoolRequestBody when Idempotency-Key is absent while preserving keyed replay and cleanup", async () => {
+    const spoolRoot = mkdtempSync(join(tmpdir(), "sorage-idem-skip-"));
+    cleanup.push(() => rmSync(spoolRoot, { recursive: true, force: true }));
+    const observedSpoolsDuringHandler: number[] = [];
+    let executions = 0;
+    const testPort = await freePort();
+    const server = createDaemonServer({
+      host: "127.0.0.1",
+      port: testPort,
+      endpoints: { installationId, version },
+      idempotencySpoolRoot: spoolRoot,
+      auth: {
+        exchange: () => ({ ok: true, context: { kind: "session" }, token: "unused" }),
+        authenticate: () => ({ ok: true, context: { kind: "api-token" } }),
+      },
+      domainRoutes: [
+        {
+          method: "POST",
+          pattern: "/api/v1/spool-probe",
+          idempotent: true,
+          handler: async (req, response) => {
+            observedSpoolsDuringHandler.push(readdirSync(spoolRoot).length);
+            const parsed = await readJsonBody(req);
+            executions += 1;
+            response.statusCode = 201;
+            response.setHeader("Content-Type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({ ok: true, data: { executions, payload: parsed } }));
+          },
+        },
+      ],
+    });
+    await new Promise<void>((resolve) => server.listen(testPort, "127.0.0.1", resolve));
+    cleanup.push(() => server.close());
+
+    // Without Idempotency-Key: zero spools created even while handler executes.
+    const unkeyed = await fetch(`http://127.0.0.1:${testPort}/api/v1/spool-probe`, {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "application/json" },
+      body: JSON.stringify({ kind: "unkeyed" }),
+    });
+    expect(unkeyed.status).toBe(201);
+    expect(await unkeyed.json()).toMatchObject({ ok: true, data: { executions: 1, payload: { kind: "unkeyed" } } });
+    expect(observedSpoolsDuringHandler[0]).toBe(0);
+    expect(readdirSync(spoolRoot)).toEqual([]);
+
+    // Malformed JSON without Idempotency-Key still fails cleanly via readJsonBody (TASK-148 #11).
+    const malformed = await fetch(`http://127.0.0.1:${testPort}/api/v1/spool-probe`, {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "application/json" },
+      body: "{bad",
+    });
+    expect(malformed.status).toBe(422);
+    expect(await malformed.json()).toMatchObject({ ok: false, error: { code: "CONFIG_INVALID" } });
+    expect(readdirSync(spoolRoot)).toEqual([]);
+
+    // With Idempotency-Key: spool is created during execution, cleaned up after, replays identically, and conflicts on mismatch.
+    const key = "aaaaaaaa-0000-4000-8000-000000000099";
+    const keyedFirst = await fetch(`http://127.0.0.1:${testPort}/api/v1/spool-probe`, {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "application/json", "idempotency-key": key },
+      body: JSON.stringify({ kind: "keyed" }),
+    });
+    expect(keyedFirst.status).toBe(201);
+    expect(await keyedFirst.json()).toMatchObject({ ok: true, data: { executions: 2, payload: { kind: "keyed" } } });
+    expect(observedSpoolsDuringHandler[2]).toBe(1);
+    expect(readdirSync(spoolRoot)).toEqual([]);
+
+    const keyedReplay = await fetch(`http://127.0.0.1:${testPort}/api/v1/spool-probe`, {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "application/json", "idempotency-key": key },
+      body: JSON.stringify({ kind: "keyed" }),
+    });
+    expect(keyedReplay.status).toBe(201);
+    expect(await keyedReplay.json()).toMatchObject({ ok: true, data: { executions: 2, payload: { kind: "keyed" } } });
+    expect(executions).toBe(2);
+    expect(readdirSync(spoolRoot)).toEqual([]);
+
+    const keyedConflict = await fetch(`http://127.0.0.1:${testPort}/api/v1/spool-probe`, {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "application/json", "idempotency-key": key },
+      body: JSON.stringify({ kind: "different" }),
+    });
+    expect(keyedConflict.status).toBe(409);
+    expect(await keyedConflict.json()).toMatchObject({ ok: false, error: { code: "IDEMPOTENCY_CONFLICT" } });
+    expect(readdirSync(spoolRoot)).toEqual([]);
   });
 });
 

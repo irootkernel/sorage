@@ -60,7 +60,7 @@ interface MemoPolicyHarness {
 
 /** A minimal policy: one text `meta` part, one push-sink `body` part, Memo contract bounds. */
 function memoPolicy(
-  spoolDir: string,
+  _spoolDir: string,
   options: { total?: number; framing?: number; meta?: number; body?: number } = {},
 ): MemoPolicyHarness {
   const total = options.total ?? 1_048_576 + 589_824;
@@ -95,7 +95,6 @@ function memoPolicy(
     partMaxBytes: bodyBound,
     partTooLargeError: (n) => ({ code: "MEMO_TOO_LARGE", message: `body ${String(n)}` }) as never,
     resolveAtTerminator: false,
-    spoolDir,
     decideHeader(header) {
       if (header.filename !== null) {
         return { kind: "reject", error: { code: "MEMO_INVALID_INPUT", message: "filename" } as never };
@@ -114,9 +113,6 @@ function memoPolicy(
     },
     onTextEnd(part) {
       state.meta = part.value;
-      return null;
-    },
-    onSpoolEnd() {
       return null;
     },
     onComplete(totalRaw, payload) {
@@ -445,6 +441,51 @@ describe("multipart engine framing corrections", () => {
     const result = await promise;
     expect(result.ok).toBe(true);
     expect(state.meta).toBe(`{"projectId":"p","title":"t"}`);
+  });
+
+  it("accumulates a 512 KiB chunked text part with embedded lookalikes in linear time with exact framing", async () => {
+    const dir = tempDir();
+    const { policy, state } = memoPolicy(join(dir, "spool"), { meta: 524_288 });
+    const request = new FakeRequest("b");
+    const promise = streamMultipart(request as unknown as IncomingMessage, policy);
+    const lookalike = "prefix--bXX\r\n--bYY";
+    const repeat = Math.floor(524_288 / lookalike.length);
+    const largeMeta = lookalike.repeat(repeat);
+    expect(Buffer.byteLength(largeMeta)).toBeLessThanOrEqual(524_288);
+    expect(Buffer.byteLength(largeMeta)).toBeGreaterThan(500_000);
+    const bytes = multipartBytes("b", [
+      { name: "meta", content: Buffer.from(largeMeta) },
+      { name: "body", content: Buffer.from("ok") },
+    ]);
+    const started = performance.now();
+    // 256-byte chunks (>2,000 chunks) would copy/rescan >500 MiB under O(N^2).
+    for (let offset = 0; offset < bytes.byteLength; offset += 256) {
+      request.emit("data", bytes.subarray(offset, Math.min(offset + 256, bytes.byteLength)));
+    }
+    request.emit("end");
+    const result = await promise;
+    const elapsedMs = performance.now() - started;
+    expect(result.ok).toBe(true);
+    expect(state.meta).toBe(largeMeta);
+    expect(state.completed?.payload).toBe(Buffer.byteLength(largeMeta) + 2);
+    expect(state.completed?.total).toBe(bytes.byteLength);
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
+
+  it("handles chunk-split header terminators across 3-byte tail boundaries accurately", async () => {
+    const dir = tempDir();
+    const { policy, state } = memoPolicy(join(dir, "spool"));
+    const request = new FakeRequest("b");
+    const promise = streamMultipart(request as unknown as IncomingMessage, policy);
+    const bytes = multipartBytes("b", [
+      { name: "meta", content: Buffer.from(`{"projectId":"p","title":"t"}`) },
+      { name: "body", content: Buffer.from("z") },
+    ]);
+    await emit(request, bytes, 1);
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(state.meta).toBe(`{"projectId":"p","title":"t"}`);
+    expect(state.completed?.payload).toBe(Buffer.byteLength(`{"projectId":"p","title":"t"}`) + 1);
   });
 });
 

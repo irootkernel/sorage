@@ -22,6 +22,7 @@ import {
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { snapshotFilesV5, type SnapshotDataV5, validateExchangeInventory } from "./exchange-snapshot";
 import {
+  type AsyncGitClient,
   classifyPushFailure,
   GIT_ARGS,
   type GitClient,
@@ -513,6 +514,33 @@ export function ensureVaultGitRepository(ports: VaultGitPorts): Result<VaultGitO
   if (!init.ok) return err(init.error);
   if (init.value.exitCode !== 0) return gitStateConflict("init", init.value);
   const autocrlf = ports.git.run({
+    cwd: ports.vaultPath,
+    args: GIT_ARGS.configSet("core.autocrlf", "false"),
+  });
+  if (!autocrlf.ok) return err(autocrlf.error);
+  if (autocrlf.value.exitCode !== 0) return gitStateConflict("config core.autocrlf=false", autocrlf.value);
+  const reasserted = ports.reassertPolicyFiles();
+  if (!reasserted.ok) return err(reasserted.error);
+  return ok({ initialized: true, existingReported: false });
+}
+
+export interface AsyncVaultGitPorts extends Omit<VaultGitPorts, "git"> {
+  git: AsyncGitClient;
+}
+
+/** Asynchronous counterpart of `ensureVaultGitRepository` for daemon backup runs. */
+export async function ensureVaultGitRepositoryAsync(
+  ports: AsyncVaultGitPorts,
+): Promise<Result<VaultGitOutcome, AppError>> {
+  const existing = ports.repositoryExists();
+  if (!existing.ok) return err(existing.error);
+  if (existing.value) {
+    return ok({ initialized: false, existingReported: true });
+  }
+  const init = await ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.init(ports.configuredBranch) });
+  if (!init.ok) return err(init.error);
+  if (init.value.exitCode !== 0) return gitStateConflict("init", init.value);
+  const autocrlf = await ports.git.run({
     cwd: ports.vaultPath,
     args: GIT_ARGS.configSet("core.autocrlf", "false"),
   });
@@ -1026,6 +1054,223 @@ export function runBackupCommand(
     }
   }
   const run = runBackupOnce(ports);
+  if (!run.ok) return err(run.error);
+  if (options.idempotencyKey !== undefined) {
+    const recorded = ports.idempotency.record({
+      key: options.idempotencyKey,
+      scope: "backup-run",
+      requestHash,
+      responseJson: JSON.stringify(run.value),
+      expiresAt: new Date(ports.now().getTime() + 24 * 3_600_000).toISOString(),
+    });
+    if (!recorded.ok) return err(recorded.error);
+  }
+  return ok({ ...run.value, replayed: false });
+}
+
+export interface AsyncBackupRunPorts
+  extends Omit<BackupRunPorts, "exportSnapshot" | "verifyCurrentArtifacts" | "ensureRepository" | "git"> {
+  exportSnapshot(): Result<BackupExportReport, AppError> | Promise<Result<BackupExportReport, AppError>>;
+  verifyCurrentArtifacts(): Promise<Result<{ verified: number }, AppError>>;
+  ensureRepository(): Promise<Result<VaultGitOutcome, AppError>>;
+  git: AsyncGitClient;
+}
+
+export interface AsyncBackupRunCommandPorts extends AsyncBackupRunPorts {
+  idempotency: BackupIdempotencyPort;
+}
+
+/** Asynchronous counterpart of `runBackupOnce` for daemon HTTP and scheduler backup runs (RUN-005, BKP-006). */
+export async function runBackupOnceAsync(ports: AsyncBackupRunPorts): Promise<Result<BackupRunReport, AppError>> {
+  const lock = ports.lock.acquire();
+  if (!lock.ok) return err(lock.error);
+  try {
+    const id = ports.nextRunId();
+    const startedAt = ports.now();
+    const progress: { snapshotDone: boolean; commitSha: string | null } = { snapshotDone: false, commitSha: null };
+    let result: Result<Omit<BackupRunReport, "runId">, AppError>;
+    try {
+      result = await runUnderBackupLockAsync(ports, progress);
+    } catch (error) {
+      result = err(
+        appError("INTERNAL_ERROR", `The backup run failed unexpectedly: ${messageOf(error)}.`, {
+          cause: String(error),
+        }),
+      );
+    }
+    const finishedAt = ports.now();
+    const row: BackupRunRow = result.ok
+      ? {
+          id,
+          triggeredBy: ports.triggeredBy,
+          startedAt: startedAt.toISOString(),
+          finishedAt: finishedAt.toISOString(),
+          outcome: result.value.outcome,
+          snapshotOutcome: result.value.snapshot,
+          commitOutcome: result.value.commit,
+          pushOutcome: result.value.push,
+          commitSha: result.value.commitSha,
+          failureCode: null,
+          failureMessage: null,
+        }
+      : {
+          id,
+          triggeredBy: ports.triggeredBy,
+          startedAt: startedAt.toISOString(),
+          finishedAt: finishedAt.toISOString(),
+          outcome: "failure",
+          snapshotOutcome: progress.snapshotDone ? "success" : "failure",
+          commitOutcome: progress.commitSha !== null ? "committed" : "failure",
+          pushOutcome: "failure",
+          commitSha: progress.commitSha,
+          failureCode: result.error.code,
+          failureMessage: result.error.message,
+        };
+    const recorded = ports.recordRun(row);
+    if (!recorded.ok) return err(recorded.error);
+    if (!result.ok) return err(result.error);
+    return ok({
+      runId: id,
+      outcome: result.value.outcome,
+      snapshot: result.value.snapshot,
+      commit: result.value.commit,
+      push: result.value.push,
+      commitSha: result.value.commitSha,
+    });
+  } finally {
+    lock.value.release();
+  }
+}
+
+async function runUnderBackupLockAsync(
+  ports: AsyncBackupRunPorts,
+  progress: { snapshotDone: boolean; commitSha: string | null },
+): Promise<Result<Omit<BackupRunReport, "runId">, AppError>> {
+  const repository = await ports.ensureRepository();
+  if (!repository.ok) return err(repository.error);
+
+  const exported = await ports.exportSnapshot();
+  if (!exported.ok) return err(exported.error);
+  progress.snapshotDone = true;
+
+  const verified = await ports.verifyCurrentArtifacts();
+  if (!verified.ok) return err(verified.error);
+
+  const branch = await ports.git.run({ cwd: ports.vaultPath, args: ["symbolic-ref", "--short", "HEAD"] });
+  if (!branch.ok) return err(branch.error);
+  const branchName = branch.value.exitCode === 0 ? branch.value.stdout.trim() : "";
+  if (branchName !== ports.configuredBranch) {
+    return err(
+      appError(
+        "GIT_BACKUP_CONFLICT",
+        `The Vault repository is on '${branchName === "" ? "a detached HEAD" : branchName}', not the configured branch '${ports.configuredBranch}'; resolve the repository state manually.`,
+        { branch: branchName, configuredBranch: ports.configuredBranch },
+      ),
+    );
+  }
+  const signals = ports.gitState();
+  if (!signals.ok) return err(signals.error);
+  if (signals.value.mergeInProgress || signals.value.rebaseInProgress) {
+    return err(
+      appError(
+        "GIT_BACKUP_CONFLICT",
+        "The Vault repository has a merge or rebase in progress; Sorage never resolves it.",
+        {},
+      ),
+    );
+  }
+  const staged = await ports.git.run({ cwd: ports.vaultPath, args: ["diff", "--cached", "--name-only"] });
+  if (!staged.ok) return err(staged.error);
+  const unmanaged = unmanagedStagedPaths(staged.value.stdout.split("\n").filter((line) => line !== ""));
+  if (unmanaged.length > 0) {
+    return err(
+      appError(
+        "GIT_BACKUP_CONFLICT",
+        `The index holds staged work outside the managed pathspecs: ${unmanaged.join(", ")}.`,
+        {
+          unmanaged,
+        },
+      ),
+    );
+  }
+
+  const preparedContent = ports.prepareWritableContent();
+  if (!preparedContent.ok) return err(preparedContent.error);
+
+  const added = await ports.git.run({ cwd: ports.vaultPath, args: ["add", "--", ...MANAGED_PATHSPECS] });
+  if (!added.ok) return err(added.error);
+  if (added.value.exitCode !== 0) return gitStateConflict("add", added.value);
+
+  const changeTest = await ports.git.run({
+    cwd: ports.vaultPath,
+    args: ["diff", "--cached", "--quiet", "--", ...MANAGED_PATHSPECS],
+  });
+  if (!changeTest.ok) return err(changeTest.error);
+  if (changeTest.value.exitCode === 0) {
+    if (!ports.pushEnabled) {
+      return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "disabled", commitSha: null });
+    }
+    const pushed = await pushToRemoteAsync(ports);
+    if (!pushed.ok) return err(pushed.error);
+    return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "pushed", commitSha: null });
+  }
+  if (changeTest.value.exitCode !== 1) return gitStateConflict("diff --cached --quiet", changeTest.value);
+
+  const message = renderBackupCommitMessage(ports.messageTemplate, ports.now());
+  const committed = await ports.git.run({
+    cwd: ports.vaultPath,
+    args: ["-c", "user.name=Sorage Backup", "-c", "user.email=sorage@localhost", "commit", "-m", message],
+  });
+  if (!committed.ok) return err(committed.error);
+  if (committed.value.exitCode !== 0) return gitStateConflict("commit", committed.value);
+  const sha = await ports.git.run({ cwd: ports.vaultPath, args: ["rev-parse", "HEAD"] });
+  if (!sha.ok) return err(sha.error);
+  const commitSha = sha.value.exitCode === 0 ? sha.value.stdout.trim() : null;
+  progress.commitSha = commitSha;
+  if (!ports.pushEnabled) {
+    return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "disabled", commitSha });
+  }
+  const pushed = await pushToRemoteAsync(ports);
+  if (!pushed.ok) return err(pushed.error);
+  return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "pushed", commitSha });
+}
+
+async function pushToRemoteAsync(ports: AsyncBackupRunPorts): Promise<Result<"pushed", AppError>> {
+  const pushed = await ports.git.run({
+    cwd: ports.vaultPath,
+    args: ["push", "--atomic", ports.pushTarget.remote, ports.pushTarget.branch],
+  });
+  if (!pushed.ok) return err(pushed.error);
+  if (pushed.value.exitCode !== 0) return err(classifyPushFailure(pushed.value));
+  return ok("pushed");
+}
+
+/** Asynchronous counterpart of `runBackupCommand` for `POST /api/v1/backup/run`. */
+export async function runBackupCommandAsync(
+  ports: AsyncBackupRunCommandPorts,
+  options: { idempotencyKey?: string | undefined },
+): Promise<Result<BackupRunCommandOutcome, AppError>> {
+  const requestHash = hashOf(JSON.stringify({ command: "backup run", vaultPath: ports.vaultPath }));
+  if (options.idempotencyKey !== undefined) {
+    const seen = ports.idempotency.lookup(options.idempotencyKey, "backup-run");
+    if (!seen.ok) return err(seen.error);
+    if (seen.value !== null) {
+      if (seen.value.requestHash !== requestHash) {
+        return err(
+          appError(
+            "IDEMPOTENCY_CONFLICT",
+            "this idempotency key was used with a different request; use a new key or replay the identical request",
+            {
+              idempotencyKey: options.idempotencyKey,
+            },
+          ),
+        );
+      }
+      const replayed = JSON.parse(seen.value.responseJson) as BackupRunReport;
+      return ok({ ...replayed, replayed: true });
+    }
+  }
+  const run = await runBackupOnceAsync(ports);
   if (!run.ok) return err(run.error);
   if (options.idempotencyKey !== undefined) {
     const recorded = ports.idempotency.record({

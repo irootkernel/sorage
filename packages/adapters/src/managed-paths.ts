@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   constants,
+  createReadStream,
   fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
+  type ReadStream,
   readSync,
   realpathSync,
   type Stats,
@@ -131,5 +133,76 @@ export function digestManagedFile(root: string, key: string): { sha256: string; 
     return { sha256: digest.digest("hex"), sizeBytes };
   } finally {
     closeSync(handle);
+  }
+}
+
+const ASYNC_DIGEST_CHUNK_BYTES = 64 * 1024;
+const ASYNC_DIGEST_YIELD_CHUNKS = 16;
+
+/** Structural abort signal compatible with runtime `AbortSignal` under non-DOM tsconfig libs. */
+export interface ManagedAbortSignal {
+  readonly aborted: boolean;
+  addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(type: "abort", listener: () => void): void;
+}
+
+/**
+ * Asynchronous streaming SHA-256 over one managed file (VLT-020, RUN-005):
+ * validates the managed path and opens with `O_NOFOLLOW | O_NONBLOCK` + regular
+ * file identity verification, then streams 64 KiB chunks while yielding to the
+ * event loop and honoring an optional `AbortSignal` without leaking descriptors.
+ */
+export async function digestManagedFileAsync(
+  root: string,
+  key: string,
+  options: { signal?: ManagedAbortSignal | undefined } = {},
+): Promise<{ sha256: string; sizeBytes: number }> {
+  if (options.signal?.aborted) {
+    throw new Error("managed file digest aborted");
+  }
+  const handle = openManagedFile(root, key);
+  let stream: ReadStream;
+  try {
+    stream = createReadStream("", {
+      fd: handle,
+      autoClose: true,
+      highWaterMark: ASYNC_DIGEST_CHUNK_BYTES,
+    });
+  } catch (error) {
+    try {
+      closeSync(handle);
+    } catch {
+      // Best-effort close when stream creation fails before taking ownership.
+    }
+    throw error;
+  }
+  const onAbort = () => {
+    stream.destroy(new Error("managed file digest aborted"));
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const digest = createHash("sha256");
+    let sizeBytes = 0;
+    let chunksSinceYield = 0;
+    for await (const chunk of stream) {
+      if (options.signal?.aborted) {
+        throw new Error("managed file digest aborted");
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      digest.update(buffer);
+      sizeBytes += buffer.byteLength;
+      chunksSinceYield += 1;
+      if (chunksSinceYield >= ASYNC_DIGEST_YIELD_CHUNKS) {
+        chunksSinceYield = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+    if (options.signal?.aborted) {
+      throw new Error("managed file digest aborted");
+    }
+    return { sha256: digest.digest("hex"), sizeBytes };
+  } finally {
+    options.signal?.removeEventListener("abort", onAbort);
+    stream.destroy();
   }
 }

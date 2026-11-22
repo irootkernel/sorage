@@ -606,6 +606,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
           sendError(response, requestId, rotated.error);
           return;
         }
+        options.auth.invalidate?.();
         sendJson(response, 200, requestId, successEnvelope({ rotated: true }, requestId));
         return;
       }
@@ -631,7 +632,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
             typeof request.headers["idempotency-key"] === "string"
               ? (request.headers["idempotency-key"] as string)
               : undefined;
-          if (matched.route.idempotent === true) {
+          if (matched.route.idempotent === true && idempotencyKey !== undefined) {
             // The body is spooled to disk and hashed in flight, so an idempotent
             // upload never sits whole in memory and the identity covers the bytes.
             const spool = spoolRequestBody(
@@ -752,10 +753,18 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
 const idempotencyStore = new Map<string, ReplayRecord>();
 
 /** Spools one request body to disk, hashing it in flight; memory stays bounded. */
-function spoolRequestBody(
+export function spoolRequestBody(
   request: IncomingMessage,
   maxBytes: number,
   spoolRoot?: string,
+  createStream?: (path: string) => {
+    write(chunk: Buffer): boolean;
+    end(cb?: () => void): unknown;
+    destroy(): unknown;
+    destroyed?: boolean;
+    on(event: string, listener: (...args: unknown[]) => void): unknown;
+    once(event: string, listener: (...args: unknown[]) => void): unknown;
+  },
 ): {
   finished: Promise<void>;
   path: string;
@@ -771,11 +780,39 @@ function spoolRequestBody(
   const path = join(dir, "body");
   const digest = createHash("sha256");
   const spoolState: { error?: AppError } = {};
-  const stream = createWriteStream(path);
+  const stream = createStream ? createStream(path) : createWriteStream(path);
   let size = 0;
+  let requestEnded = false;
+  let closing = false;
+  let cachedHash: string | null = null;
   const finished = new Promise<void>((resolve) => {
+    let resolved = false;
+    const resolveOnce = () => {
+      if (resolved) return;
+      resolved = true;
+      resolve();
+    };
+    const shutdown = (closeMode: "end" | "destroy") => {
+      if (closing) return;
+      closing = true;
+      if (closeMode === "destroy") {
+        stream.destroy();
+        resolveOnce();
+        return;
+      }
+      stream.end(() => resolveOnce());
+    };
+    stream.on("error", () => {
+      if (spoolState.error === undefined) {
+        spoolState.error = appError("INTERNAL_ERROR", "writing the idempotency request spool failed");
+      }
+      closing = true;
+      stream.destroy();
+      resolveOnce();
+    });
+    stream.once("close", resolveOnce);
     request.on("data", (chunk: Buffer) => {
-      if (spoolState.error !== undefined) return;
+      if (closing || spoolState.error !== undefined) return;
       size += chunk.length;
       if (size > maxBytes) {
         spoolState.error = appError("CONFIG_INVALID", `the request body exceeds the ${maxBytes}-byte replay bound`);
@@ -784,22 +821,41 @@ function spoolRequestBody(
       digest.update(chunk);
       stream.write(chunk);
     });
-    request.on("end", () => stream.end(() => resolve()));
+    request.on("end", () => {
+      requestEnded = true;
+      shutdown("end");
+    });
     request.on("error", () => {
-      spoolState.error = appError("INTERNAL_ERROR", "the request stream failed");
-      stream.end(() => resolve());
+      if (spoolState.error === undefined) {
+        spoolState.error = appError("INTERNAL_ERROR", "the request stream failed");
+      }
+      shutdown("destroy");
+    });
+    request.on("close", () => {
+      if (!requestEnded && !closing) {
+        if (spoolState.error === undefined) {
+          spoolState.error = appError("INTERNAL_ERROR", "the request stream closed before completion");
+        }
+        shutdown("destroy");
+      }
     });
   });
   return {
     finished,
     path,
     get hash() {
-      return digest.digest("hex");
+      if (cachedHash === null) cachedHash = digest.digest("hex");
+      return cachedHash;
     },
     get error() {
       return spoolState.error;
     },
     discard() {
+      try {
+        if (!stream.destroyed) stream.destroy();
+      } catch {
+        // Best effort.
+      }
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {

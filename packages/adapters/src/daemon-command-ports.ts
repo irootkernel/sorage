@@ -13,13 +13,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
-import { appError, ok, type AppError, type Result } from "@sorage/core";
+import {
+  appError,
+  isManagedContentStorageKey,
+  isManagedStorageKey,
+  ok,
+  type AppError,
+  type Result,
+} from "@sorage/core";
 import type { Configuration } from "@sorage/core";
 import { createConfigStore } from "./config-store";
 import { validateArtifactContentLinks } from "./content-store";
 import { createNodeHomePaths, type HomePaths } from "./home";
 import { acquireLock, createNodeLockProbePorts, isPidAlive } from "./lockfile";
+import { digestManagedFileAsync, type ManagedAbortSignal } from "./managed-paths";
 import { asAppCommandError } from "./storage-contention";
 import { openSorageDatabase } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
@@ -54,6 +61,8 @@ export interface ArtifactSweepBatch {
   nextCursor: string | null;
   /** The bytes this batch plans to read, bounded by the tick budget. */
   plannedBytes: number;
+  /** The resolved Vault root used to plan this batch, reused by the tick's hash pass. */
+  vaultPath?: string;
   /**
    * Present when the Artifact-record relationship could not be verified: the
    * tick reports the failure honestly, hashes nothing, and keeps its cursor so
@@ -61,6 +70,20 @@ export interface ArtifactSweepBatch {
    * exception — the daemon's sweep timer must stay alive.
    */
   failure?: Pick<AppError, "code" | "message">;
+}
+
+export interface ArtifactBatchOptions {
+  /** Optional daemon-owned SQLite connection to reuse without reopening the database. */
+  database?: NodeDaemonDatabase | undefined;
+  /** Optional pre-resolved Vault path to avoid re-reading config.yaml. */
+  vaultPath?: string | undefined;
+}
+
+export interface HashArtifactOptions {
+  /** Optional pre-resolved Vault path from the batch to avoid re-reading config.yaml per file. */
+  vaultPath?: string | undefined;
+  /** Optional abort signal triggered during daemon drain. */
+  signal?: ManagedAbortSignal | undefined;
 }
 
 export interface NodeDaemonPorts {
@@ -73,9 +96,9 @@ export interface NodeDaemonPorts {
   acquireDaemonLock(): DaemonLockAcquisition;
   isPidAlive(pid: number): boolean;
   /** One bounded batch of materialized Artifact records ordered by storage key. */
-  nextArtifactBatch(fromKey: string | null, byteBudget: number): ArtifactSweepBatch;
-  /** Recomputes the SHA-256 of one stored Artifact file; null when the file is unreadable. */
-  hashArtifact(storageKey: string): string | null;
+  nextArtifactBatch(fromKey: string | null, byteBudget: number, options?: ArtifactBatchOptions): ArtifactSweepBatch;
+  /** Recomputes the SHA-256 of one stored Artifact file asynchronously via streaming; null when unreadable or aborted. */
+  hashArtifact(storageKey: string, options?: HashArtifactOptions): Promise<string | null>;
   /** The resolved Vault path of the current configuration, or null. */
   vaultPath(): string | null;
 }
@@ -135,13 +158,16 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
       return { ok: false, reason: "live-owner" };
     },
     isPidAlive,
-    nextArtifactBatch: (fromKey, byteBudget) => {
+    nextArtifactBatch: (fromKey, byteBudget, batchOptions) => {
       const databasePath = join(home.stateDir, "sorage.sqlite3");
-      if (!existsSync(databasePath)) return { records: [], nextCursor: null, plannedBytes: 0 };
-      const vault = vaultPathOf(store);
+      if (batchOptions?.database === undefined && !existsSync(databasePath)) {
+        return { records: [], nextCursor: null, plannedBytes: 0 };
+      }
+      const vault = batchOptions?.vaultPath ?? vaultPathOf(store);
       if (vault === null) return { records: [], nextCursor: null, plannedBytes: 0 };
 
-      const db = openSorageDatabase(databasePath);
+      const borrowedDb = batchOptions?.database;
+      const db = borrowedDb ?? openSorageDatabase(databasePath);
       try {
         // The shared content-link guard runs before the cursor and materialized
         // filters: an Artifact whose authoritative record row is missing must
@@ -153,6 +179,7 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
             records: [],
             nextCursor: fromKey,
             plannedBytes: 0,
+            vaultPath: vault,
             failure: { code: links.error.code, message: links.error.message },
           };
         }
@@ -182,26 +209,24 @@ export function createNodeDaemonPorts(options: NodeDaemonPortsOptions = {}): Nod
           }
           if (planned > 0 && planned + size > byteBudget) {
             // Keep the batch within the tick budget; resume here next tick.
-            return { records, nextCursor: row.storage_key, plannedBytes: planned };
+            return { records, nextCursor: row.storage_key, plannedBytes: planned, vaultPath: vault };
           }
           records.push({ storageKey: row.storage_key, sha256: row.sha256, bytes: size });
           planned += size;
         }
-        return { records, nextCursor: null, plannedBytes: planned };
+        return { records, nextCursor: null, plannedBytes: planned, vaultPath: vault };
       } finally {
-        db.close();
+        if (borrowedDb === undefined) db.close();
       }
     },
-    hashArtifact: (storageKey) => {
-      const vault = vaultPathOf(store);
+    hashArtifact: async (storageKey, hashOptions) => {
+      if (hashOptions?.signal?.aborted) return null;
+      const vault = hashOptions?.vaultPath ?? vaultPathOf(store);
       if (vault === null) return null;
+      if (!isManagedStorageKey(storageKey) && !isManagedContentStorageKey(storageKey)) return null;
       try {
-        // A storage key is vault-relative and already carries its artifacts/ segment,
-        // the same resolution rule artifactSize applies below.
-        const digest = createHash("sha256")
-          .update(readFileSync(join(vault, storageKey)))
-          .digest("hex");
-        return digest;
+        const { sha256 } = await digestManagedFileAsync(vault, storageKey, { signal: hashOptions?.signal });
+        return sha256;
       } catch {
         return null;
       }

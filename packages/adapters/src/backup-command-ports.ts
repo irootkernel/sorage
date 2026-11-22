@@ -31,6 +31,8 @@ import type {
 import {
   type AppError,
   appError,
+  type AsyncBackupRunCommandPorts,
+  type AsyncGitClient,
   type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
@@ -43,6 +45,7 @@ import {
   channelIdFromSnapshotPath,
   type DrainReport,
   ensureVaultGitRepository,
+  ensureVaultGitRepositoryAsync,
   EXCHANGE_SNAPSHOT_FILE,
   type ExchangeSnapshotValidator,
   err,
@@ -50,6 +53,7 @@ import {
   exportSnapshot,
   type GitClient,
   isManagedContentStorageKey,
+  isManagedStorageKey,
   isMemoUuid,
   legacyReportingEvidence,
   type Memo,
@@ -108,11 +112,19 @@ import {
   readExchangeCollaborationRecords,
   restoreExchangeRecords,
 } from "./exchange-records";
-import { createNodeGitClient } from "./git-client";
+import { createNodeAsyncGitClient, createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
-import { digestManagedFile, managedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
+import {
+  digestManagedFile,
+  digestManagedFileAsync,
+  managedFile,
+  managedPath,
+  managedRoot,
+  openManagedFile,
+  UnsafeManagedPathError,
+} from "./managed-paths";
 import { readMemoSnapshotFiles, readSnapshotBytes } from "./memo-snapshot-files";
 import {
   insertMemoWithFileRecordRows,
@@ -212,6 +224,8 @@ export interface NodeBackupCommandPortsOptions {
   clock?: { now(): Date } | undefined;
   /** Test seam for the fault-injection Git adapter the backup tests wrap (BKP-013). */
   gitClient?: GitClient | undefined;
+  /** Optional asynchronous Git client override for daemon backup runs. */
+  asyncGitClient?: AsyncGitClient | undefined;
 }
 
 export interface NodeBackupCommandPorts {
@@ -221,6 +235,7 @@ export interface NodeBackupCommandPorts {
   runPorts(
     triggeredBy?: "manual" | "scheduled" | "catch-up",
   ): Result<import("@sorage/core").BackupRunCommandPorts, AppError>;
+  asyncRunPorts(triggeredBy?: "manual" | "scheduled" | "catch-up"): Result<AsyncBackupRunCommandPorts, AppError>;
   statusPorts(): Result<import("@sorage/core").BackupStatusPorts, AppError>;
   /** The RUN-002 process-start obligation every backup command runs first. */
   drainAtStart(): Result<DrainReport, AppError>;
@@ -256,6 +271,12 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
   const clock = options.clock ?? { now: () => new Date() };
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const gitClient = options.gitClient ?? createNodeGitClient();
+  const injectedSyncGit = options.gitClient;
+  const asyncGitClient: AsyncGitClient =
+    options.asyncGitClient ??
+    (injectedSyncGit !== undefined
+      ? { run: async (request) => injectedSyncGit.run(request) }
+      : createNodeAsyncGitClient());
   const store: ConfigStore = createConfigStore({
     home,
     lockPorts: createNodeLockProbePorts(clock),
@@ -2113,6 +2134,99 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       });
     },
 
+    asyncRunPorts(
+      triggeredBy: "manual" | "scheduled" | "catch-up" = "manual",
+    ): Result<AsyncBackupRunCommandPorts, AppError> {
+      const base = this.runPorts(triggeredBy);
+      if (!base.ok) return err(base.error);
+      const view = installation();
+      if (!view.ok) return err(view.error);
+      const vaultPath = view.value.vaultPath;
+      const installationId = view.value.installationId;
+      const backupBranch = view.value.backupBranch;
+      return ok({
+        ...base.value,
+        exportSnapshot: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          const result = base.value.exportSnapshot();
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          return result;
+        },
+        verifyCurrentArtifacts: async () => {
+          const recorded = recordedArtifactPairs();
+          if (!recorded.ok) return err(recorded.error);
+          const findings: string[] = [];
+          for (const record of recorded.value) {
+            if (!isManagedStorageKey(record.storageKey)) {
+              return err(
+                appError("INTERNAL_ERROR", `The storage key is not a managed artifacts/ key: ${record.storageKey}.`, {
+                  storageKey: record.storageKey,
+                }),
+              );
+            }
+            let present: boolean;
+            try {
+              present = managedFile(vaultPath, record.storageKey).stat !== undefined;
+            } catch (error) {
+              if (error instanceof UnsafeManagedPathError) {
+                return err(
+                  appError("INTERNAL_ERROR", `The managed path ${record.storageKey} is unsafe.`, {
+                    storageKey: record.storageKey,
+                  }),
+                );
+              }
+              return err(
+                appError("INTERNAL_ERROR", `Inspecting ${record.storageKey} failed: ${messageOf(error)}.`, {
+                  storageKey: record.storageKey,
+                  cause: String(error),
+                }),
+              );
+            }
+            if (!present) {
+              findings.push(`The current Artifact ${record.storageKey} is missing from its storageKey.`);
+              continue;
+            }
+            let actual: { sha256: string; sizeBytes: number };
+            try {
+              actual = await digestManagedFileAsync(vaultPath, record.storageKey);
+            } catch (error) {
+              if (error instanceof UnsafeManagedPathError) {
+                return err(
+                  appError("INTERNAL_ERROR", `The managed path ${record.storageKey} is unsafe and was not read.`, {
+                    storageKey: record.storageKey,
+                  }),
+                );
+              }
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                findings.push(`The current Artifact ${record.storageKey} is missing from its storageKey.`);
+                continue;
+              }
+              return err(
+                appError(
+                  "INTERNAL_ERROR",
+                  `Reading ${record.storageKey} for verification failed: ${messageOf(error)}.`,
+                  { storageKey: record.storageKey, cause: String(error) },
+                ),
+              );
+            }
+            if (actual.sha256.toLowerCase() !== record.sha256.toLowerCase()) {
+              findings.push(`The current Artifact ${record.storageKey} does not match its recorded SHA-256.`);
+            }
+          }
+          if (findings.length > 0) {
+            return err(
+              appError("ARTIFACT_CORRUPTED", findings.join(" "), {
+                affected: findings.length,
+              }),
+            );
+          }
+          return ok({ verified: recorded.value.length });
+        },
+        ensureRepository: () => nodeEnsureVaultGitAsync(vaultPath, installationId, clock, backupBranch, asyncGitClient),
+        git: asyncGitClient,
+      });
+    },
+
     statusPorts(): Result<import("@sorage/core").BackupStatusPorts, AppError> {
       const view = installation();
       if (!view.ok) return err(view.error);
@@ -2653,5 +2767,26 @@ export function nodeEnsureVaultGit(
       return ok(undefined);
     },
     git: createNodeGitClient(),
+  });
+}
+
+/** Asynchronous counterpart of `nodeEnsureVaultGit` for daemon backup runs. */
+export function nodeEnsureVaultGitAsync(
+  vaultPath: string,
+  installationId: string,
+  clock: { now(): Date },
+  backupBranch: string,
+  git: AsyncGitClient = createNodeAsyncGitClient(),
+): Promise<Result<VaultGitOutcome, AppError>> {
+  return ensureVaultGitRepositoryAsync({
+    vaultPath,
+    configuredBranch: backupBranch,
+    repositoryExists: () => ok(existsSync(join(vaultPath, ".git"))),
+    reassertPolicyFiles: () => {
+      const reasserted = createVaultInitializer(clock).initialize(vaultPath, installationId);
+      if (!reasserted.ok) return err(reasserted.error);
+      return ok(undefined);
+    },
+    git,
   });
 }

@@ -221,13 +221,24 @@ describe("a draining daemon refuses new mutations (SEC-015)", () => {
 });
 
 describe("rotation invalidates every live session (SEC-020)", () => {
-  it("rotates for the Installation token and kills the pre-rotation material", async () => {
+  it("rotates for the Installation token, kills pre-rotation material, and prunes live sessions immediately", async () => {
+    const store = createNodeWebSecretStore({ stateDir, clock: { now: () => new Date() } });
+    const issued = store.issue();
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+    const exchange = await request("/api/v1/session", { method: "POST", body: { secret: issued.value.secret } });
+    expect(exchange.status).toBe(200);
+    const sessionToken = json(exchange).data.token as string;
+    expect(session.activeSessionCount?.()).toBeGreaterThan(0);
+
     const stale = tokenStore.read() as string;
     const rotated = await request("/api/v1/token/rotate", { method: "POST", bearer: tokenStore.read() });
     expect(rotated.status).toBe(200);
     expect(json(rotated)).toMatchObject({ ok: true, data: { rotated: true } });
     expect(tokenStore.read()).not.toBe(stale);
     expect(rotated.headers["set-cookie"]).toBeUndefined();
+    expect(session.activeSessionCount?.()).toBe(0);
+    expect(session.authenticate(sessionToken)).toMatchObject({ ok: false, error: { code: "TOKEN_INVALID" } });
   });
 
   it("leaves a session token unusable for CLI-only operations but recognized until rotation", async () => {
