@@ -193,10 +193,13 @@ describe("AJ-14 the daily Git backup", () => {
     const brief = join(work, "brief.md");
     writeFileSync(brief, "# brief\n");
     sorage(["project", "add", "--name", "Alpha", "--dir", work, "--json"], { home, cwd: work });
-    const sent = sorage(["send", "--as", "alpha", "--to", "alpha", "--title", "b", "--file", brief, "--json"], {
-      home,
-      cwd: work,
-    });
+    const sent = sorage(
+      ["send", "--as-user", "--to", "alpha", "--title", "b", "--file", brief, "--allow-external-source", "--json"],
+      {
+        home,
+        cwd: work,
+      },
+    );
     expect(sent.status).toBe(0);
     git(vault, "remote", "add", "origin", `http://127.0.0.1:${String(bound)}/vault.git`);
     const enablePush = sorage(["backup", "enable-push", "--remote", "origin", "--branch", "main", "--as-user"], {

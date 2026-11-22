@@ -319,7 +319,18 @@ describe("the compiled Vault-open matrix (TASK-118)", () => {
     const document = join(work, "brief.md");
     writeFileSync(document, "# Brief\n");
     const sent = sorage(
-      ["send", "--to", "alpha", "--title", "T118", "--file", document, "--allow-external-source", "--json"],
+      [
+        "send",
+        "--as-user",
+        "--to",
+        "alpha",
+        "--title",
+        "T118",
+        "--file",
+        document,
+        "--allow-external-source",
+        "--json",
+      ],
       { home, cwd: work },
     );
     expect(sent.status, sent.stderr).toBe(0);

@@ -47,6 +47,12 @@ function failure(run: ReturnType<typeof sorage>, code: string, exit: number) {
 }
 function fixture(kind: "body" | "file" | "binary" = "body", fanout = false, execute = true) {
   const f = twoProjectFixture("sorage-send-recovery-");
+  const bindings = [f.workA, f.workB];
+  if (fanout) {
+    const workC = makeTempDir("sorage-send-recovery-gamma-");
+    data(sorage(["project", "add", "--name", "Gamma", "--slug", "gamma", "--dir", workC, "--json"], { home: f.home }));
+    bindings.push(workC);
+  }
   const physicalSource = kind === "binary" ? join(f.workA, "legacy.bin") : f.document;
   if (kind === "binary") writeFileSync(physicalSource, Buffer.from([0, 255, 1, 254]));
   const key = `legacy:${randomUUID()}`;
@@ -55,7 +61,7 @@ function fixture(kind: "body" | "file" | "binary" = "body", fanout = false, exec
     "send",
     "--to",
     "beta",
-    ...(fanout ? ["--to", "alpha"] : []),
+    ...(fanout ? ["--to", "gamma"] : []),
     "--title",
     "Original",
     ...(kind === "body" ? ["--body", body] : ["--file", physicalSource, "--allow-external-source"]),
@@ -73,7 +79,6 @@ function fixture(kind: "body" | "file" | "binary" = "body", fanout = false, exec
       held.close();
     }
   };
-  const bindings = [f.workA, f.workB];
   const proof = () => [storageProof(f.home), ...bindings.map(storageProof)];
   const recover = (extra: string[] = [], json = true) => {
     const before = proof();

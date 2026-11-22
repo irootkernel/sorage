@@ -131,7 +131,7 @@ describe("startup-site contention on the compiled binary", () => {
 
       const sendBefore = snapshot(holder, sendTables);
       const send = sorage(
-        ["send", "--to", "alpha", "--title", "t", "--body", "b", "--idempotency-key", sendKey, "--json"],
+        ["send", "--as-user", "--to", "alpha", "--title", "t", "--body", "b", "--idempotency-key", sendKey, "--json"],
         {
           home,
           cwd: work,
@@ -172,7 +172,7 @@ describe("startup-site contention on the compiled binary", () => {
     const channelRetry = sorage(["channel", "create", "aq-startup", "--json"], { home, cwd: work });
     expect(channelRetry.status, channelRetry.stderr).toBe(0);
     const sendRetry = sorage(
-      ["send", "--to", "alpha", "--title", "t", "--body", "b", "--idempotency-key", sendKey, "--json"],
+      ["send", "--as-user", "--to", "alpha", "--title", "t", "--body", "b", "--idempotency-key", sendKey, "--json"],
       { home, cwd: work },
     );
     expect(sendRetry.status, sendRetry.stderr).toBe(0);
@@ -196,8 +196,14 @@ describe("domain-transaction contention through the Git PATH barrier (W2)", () =
       registerCleanup(() => rmSync(repo, { recursive: true, force: true }));
       expect(sorage(["init", "--vault", join(home, "vault"), "--non-interactive"], { home }).status).toBe(0);
       expect(spawnSync("git", ["init", "-q"], { cwd: repo, encoding: "utf8" }).status).toBe(0);
+      const recipientDir = mkdtempSync(join(tmpdir(), "sorage-e2e-barrier-gamma-"));
+      registerCleanup(() => rmSync(recipientDir, { recursive: true, force: true }));
       expect(
         sorage(["project", "add", "--name", "Alpha", "--slug", "alpha", "--dir", repo, "--json"], { home }).status,
+      ).toBe(0);
+      expect(
+        sorage(["project", "add", "--name", "Gamma", "--slug", "gamma", "--dir", recipientDir, "--json"], { home })
+          .status,
       ).toBe(0);
       // The file-backed send body exceeds the inline threshold so the fan-out is
       // file-backed; it lives inside the sender workspace.
@@ -258,7 +264,7 @@ describe("domain-transaction contention through the Git PATH barrier (W2)", () =
       const sendArgs = [
         "send",
         "--to",
-        "alpha",
+        "gamma",
         "--title",
         "t",
         "--file",

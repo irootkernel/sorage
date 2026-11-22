@@ -66,6 +66,7 @@ function protectedInstallation(protect = true): {
   const channelBody = "channel committed body";
   const sendArgs = [
     "send",
+    "--as-user",
     "--to",
     "alpha",
     "--title",
@@ -218,7 +219,6 @@ describe("a write-protected installation (TASK-119)", () => {
 
   it("refuses Channel mutations and Handoff sends with the typed write-protected envelope", () => {
     const f = protectedInstallation();
-    void f;
     const channel = sorage(["channel", "create", "refused", "--json"], { home: f.home, cwd: f.work });
     expect(channel.status).toBe(75);
     expect(channel.stdout).toBe("");
@@ -242,7 +242,7 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(post.status).toBe(75);
     expect((JSON.parse(post.stderr) as { error: { code: string } }).error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
 
-    const send = sorage(["send", "--to", "alpha", "--title", "Second", "--body", "b2", "--json"], {
+    const send = sorage(["send", "--as-user", "--to", "alpha", "--title", "Second", "--body", "b2", "--json"], {
       home: f.home,
       cwd: f.work,
     });
@@ -255,7 +255,7 @@ describe("a write-protected installation (TASK-119)", () => {
     expect(sendEnvelope.error.message).toBe(WRITE_PROTECTED_HANDOFF_MESSAGE);
     expect(sendEnvelope.error.recovery.suggestedCommand).toBe(WRITE_PROTECTED_HANDOFF_RECOVERY);
 
-    const sendHuman = sorage(["send", "--to", "alpha", "--title", "Second", "--body", "b3"], {
+    const sendHuman = sorage(["send", "--as-user", "--to", "alpha", "--title", "Second", "--body", "b3"], {
       home: f.home,
       cwd: f.work,
     });

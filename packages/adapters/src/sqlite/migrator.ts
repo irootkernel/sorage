@@ -1,3 +1,4 @@
+import { accessSync, constants } from "node:fs";
 import { admitAppliedHistory, type AppliedMigrationRow, type AppError, type KnownSchemaVersion } from "@sorage/core";
 import type { SorageSqlite } from "./connection";
 import { openSorageDatabase } from "./connection";
@@ -424,7 +425,12 @@ export function openAndMigrate(
   // Both direct readonly and coherent private-copy inspection avoid source
   // checkpointing before admission; the transaction still rechecks history.
   const rows = inspectAppliedHistory(path);
-  if (rows !== null) admitRowsOrThrow(rows, combinedCatalog(migrations, options.rebuilds ?? []));
+  if (rows !== null) {
+    admitRowsOrThrow(rows, combinedCatalog(migrations, options.rebuilds ?? []));
+    if (path !== ":memory:") {
+      assertWritableDatabaseFiles(path);
+    }
+  }
   const db = openSorageDatabase(path);
   try {
     const outcome = migrate(db, migrations, () => new Date().toISOString(), { databasePath: path, ...options });
@@ -432,6 +438,33 @@ export function openAndMigrate(
   } catch (error) {
     db.close();
     throw error;
+  }
+}
+
+/**
+ * Verifies OS-level write permission on an existing database and its WAL
+ * sidecars before opening a writable SQLite handle. Uses `accessSync(..., W_OK)`
+ * rather than `open`/`close` so zero file descriptors are opened or closed —
+ * closing any descriptor for the database or `-shm` inode in the same process
+ * would strip SQLite's POSIX `fcntl` / WAL `UNIX_SHM_DMS` locks. Failing closed
+ * here prevents SQLite from silently downgrading a write-protected or
+ * sandboxed database to a read-only handle whose WAL `PRAGMA data_version`
+ * advances on every transaction, preserving SHR-015 classification while
+ * keeping zero-lock up-to-date opens (TASK-151).
+ */
+function assertWritableDatabaseFiles(path: string): void {
+  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      accessSync(candidate, constants.W_OK);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+        throw Object.assign(new Error("attempt to write a readonly database", { cause: error }), {
+          code: "SQLITE_READONLY",
+        });
+      }
+    }
   }
 }
 
