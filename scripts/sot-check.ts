@@ -121,6 +121,7 @@ const MILESTONE_ORDER = new Map([
   ["M8", 8],
   ["M9", 9],
   ["M10", 10],
+  ["M11", 11],
 ]);
 const TASK_MILESTONES = [...MILESTONE_ORDER.keys()];
 const REQUIREMENT_MILESTONES = [...TASK_MILESTONES, "Deferred"];

@@ -1649,3 +1649,120 @@ TASK-139 adopted the EXC requirements, M10 gate and journeys, and dated amendmen
 ### Consequences
 
 Projects gain a durable peer collaboration record with explicit acceptance and completion, and working evidence no longer accumulates in the Vault or its Git history. The cost is a new domain with its own storage scope, session leases and a global backup-format transition. An unfinished Exchange keeps its working material and can continue to occupy storage. Acceptance of this decision depends on the recorded qualification; version edits, installation, consumer activation, commits and publication keep their separate authorization.
+
+## ADR-0038: M11 non-breaking hardening, v17 index migration and internal architecture cleanup
+
+- **Status:** Proposed
+- **Date:** 2026-11-22
+- **Design owner:** TASK-147 under [EPIC-022](../roadmap/README.md#epic-022-m11-non-breaking-defect-fixes-hot-path-performance-and-v17-indexes) and [EPIC-023](../roadmap/README.md#epic-023-m11-golden-preserving-internal-architecture-cleanup).
+- **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
+
+### Problem
+
+Incremental delivery across milestones M1 through M10 left four verified classes of structural and operational debt across the four collaboration modes (Handoff, Project Memo, Channel and Exchange): concrete contract and adapter defects (`domain-routes.ts` forcing `asUser: true` on three retention routes and dropping `reason` on `deletion-reject`; `/api/v1/handoffs/{id}/revise` capped at 1 MiB by missing `idempotencyBodyLimit`; daemon-routed `config set` bypassing `--as-user` and losing human output; malformed JSON silently defaulting to `{}`; `logVaultMoved` ignoring injected `SORAGE_HOME`; `config-command-ports` broken `EDITOR` fallback; `daemon.lock` bypassing owner-checked release; `renderMarkdownSafe` double-escaping Markdown; unencoded Web filter URLs, broken `backupPage` deduplication and unpaginated `limit=200`/`50` aggregates; and undefined self-handoff semantics), high-impact runtime bottlenecks (`migrator.ts` acquiring a 3rd connection and empty `BEGIN IMMEDIATE` write lock on every up-to-date writable command because rebuilds 9 and 10 are always registered; missing secondary, foreign-key and sort indexes across Handoff, Memo, Event, Intent and Exchange tables; synchronous `git push` and up to 64 MiB `readFileSync` blocking the daemon HTTP event loop; and Exchange `planRead` re-hashing entire files on every 64 KiB page), three runtime circular dependencies (`content-store.ts <-> intent-log.ts`, `project-commands.ts <-> workspace-identity.ts` and `channel-snapshot.ts <-> content-snapshot.ts`), and layer erosion across monolithic files in `core`, `adapters` and `cli`.
+
+### Decision
+
+Register milestone `M11` targeting intended product release `v0.1.6` with a non-breaking-first execution sequence that preserves v0.1.5 data compatibility, legacy Format 1–5 restore readers and `ADR-0031` short Artifact IDs:
+
+1. **Forbid self-handoffs explicitly:** Reject any Handoff creation whose resolved sender Project equals a recipient Project, closing the role-resolution, `firstFetchedAt` and `withdraw` ambiguity discovered in review. `TASK-147` pins the exact symbolic error code, HTTP/exit mapping and fan-out validation rule before `TASK-149` implements it.
+2. **Reaffirm CLI and MCP ownership for Channel and Exchange:** Channel and Exchange remain AI-agent communication domains served only through CLI and MCP with no Daemon HTTP or Web UI surface, reaffirming `CHN-010` and `ADR-0037` decision 2.
+3. **Deliver non-breaking fixes and hot-path performance first (`EPIC-022`):** Record reproducible pre-work baselines in `TASK-147`; fix confirmed HTTP/CLI, adapter and Web defects (`TASK-148` to `TASK-150`); short-circuit `migrator.ts` when no migration is pending and reuse command-scoped DB/config resources under `ADR-0036` with no global singleton, pool or DI container (`TASK-151`); append additive schema `v17` indexes under `SHR-009` with no backup-format change and add `"exchange"` to `SchemaSurface` (`TASK-152`); move daemon backup/sweep work off the HTTP event loop and skip raw-body spooling when `Idempotency-Key` is absent (`TASK-153`); and optimize Exchange hashing/`planRead`, `handoff-read-store`, `removeContentRecordInTx`, `preflight`, Memo search/staging and `doctor` (`TASK-154`).
+4. **Execute golden-preserving internal architecture cleanup second (`EPIC-023`):** Extract zero-cycle `packages/core/src/primitives/`, break the three runtime import cycles, replace raw SQL column maps in `core` with typed domain mutation unions, move platform/CLI mechanics behind adapter ports, selectively migrate compatible manual transactions (excluding fence-owner, migrator, preflight and incompatible Project transactions), flatten snapshot export to single-pass `SnapshotDomainCodec<T>` while keeping Format 1–5 restore readers intact, split `@sorage/adapters/testkit` with symmetric package `"exports"`, add a lazy bootstrap in `apps/cli/src/main.ts` while preserving `MCP-002`, and unify `mcp-catalogue.ts` onto `defineMcpTool()` with `MCP-005` golden parity.
+5. **Keep deliberate accepted contracts intact:** Retain `Makefile` `test-prepare` auto-formatting (`testing-and-acceptance.md`), `skills/use-sorage/SKILL.md`'s 35-tool domain scope (tightening only the line-53 `"published"` phrasing) and `handoffs.ts` `idempotencyLookup` expiry cleanup (`ADR-0033`).
+
+### Alternatives considered
+
+- **Perform a breaking clean-baseline cutover in `v0.1.6` (drop v0.1.5 schema/backup compatibility and ship an offline migrator):** rejected for M11 because it conflicts with `SHR-009`, `SHR-010`, `SHR-014`, `EXC-010`, `VLT-020`, `ADR-0031` and `ADR-0036`, blocks direct restoration of existing Format 1–5 Git backups, relocates rather than eliminates legacy format knowledge into the migrator, and creates a Big-Bang release freeze when every major performance gain is achievable without breaking compatibility. Recorded as a deferred `v0.2.0` candidate in [Future Work](../todo/future-work.md#clean-baseline-cutover-and-offline-migrator-v020-candidate).
+- **Allow self-handoffs with explicit role precedence:** rejected by Master because a Project handing a reviewable document to itself has no meaningful sender-versus-recipient separation and complicates `firstFetchedAt`, review notes and `withdraw` semantics.
+- **Bundle HTTP replay unification and Web build-pipeline changes into ADR-0038:** rejected because each alters distinct accepted contracts (`interfaces §17.3`/`MEM-013` and `ADR-0016`) and warrants its own Material Change Control record (`ADR-0039` and `ADR-0040`).
+- **Introduce a global connection pool or DI container to solve repeated DB opens:** rejected under `ADR-0036`; command-local injection and explicit `.close()` cleanup solve the problem without ambient mutable state.
+
+### Compatibility impact
+
+Existing v0.1.5 databases, Vaults, Format 1–5 backups, `ADR-0031` short Artifact IDs, CLI/MCP envelopes and `MCP-005` tool schemas remain compatible. Two contract corrections intentionally change defective behavior: rejecting self-handoffs and strictly rejecting malformed JSON / unauthorized `?as=<slug>` retention calls / unverified daemon-routed `config set`. Two pinned test assertions that encoded defective behavior (`domain-routes.int.test.ts:655-657` double-escaped Markdown and `send-recovery-completion-zsh.txt:122` leaked hidden `daemon serve`) update alongside their fixes. Schema `v17` is additive for newer builds; older binaries retain their existing `STORAGE_SCHEMA_UNSUPPORTED` forward-schema refusal.
+
+### Migration impact
+
+`TASK-152` appends one additive SQLite migration (`v17`) creating secondary, foreign-key and sort indexes only. No table rebuild, no Vault file move, no snapshot format bump and no offline migrator are required. Existing matched-binary rollback and pre-upgrade backup procedures remain unchanged.
+
+### Required Source of Truth edits and roadmap impact
+
+Registration adds milestone `M11` to `scripts/sot-check.ts`, `test/unit/sot-check.test.ts` and `docs/governance/README.md`, adds `EPIC-022` (`TASK-147` to `TASK-154`) and `EPIC-023` (`TASK-155` to `TASK-160`) to `docs/roadmap/README.md`, adds the registration dossier and Future Work entry under `docs/todo/`, and records `governance` section 20 and a `traceability.md` registration note. `TASK-147` accepts or revises `ADR-0038`, adopts the self-handoff rule, `v17` schema inventory, defect-fix clarifications, Gate M11 and baseline protocol into the canonical specifications, and populates `EPIC-022` and `EPIC-023` requirement citations and reverse-index rows.
+
+### Consequences
+
+Every Epic closes in a releasable state with measurable before/after baselines, critical daemon blocking and migrator lock storms are eliminated first, and internal code modularity improves without breaking existing users or historical Git backups.
+
+## ADR-0039: Daemon HTTP idempotency unification onto Core SQLite receipts
+
+- **Status:** Proposed
+- **Date:** 2026-11-22
+- **Design owner:** TASK-161 under [EPIC-024](../roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification).
+- **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
+
+### Problem
+
+The five `idempotent: true` Handoff and Backup HTTP routes in `apps/daemon/src/domain-routes.ts` (`/api/v1/handoffs/upload`, `/api/v1/handoffs/import-path`, `/api/v1/handoffs/{id}/revise`, `/api/v1/handoffs/{id}/deletion-approve`, `/api/v1/backup/run`) already forward `Idempotency-Key` into Core use cases backed by SQLite `idempotency_keys`, yet `apps/daemon/src/server.ts` and `route-kit.ts` wrap them in a second process-global in-memory `idempotencyStore` with raw-body disk spooling and `response.end` monkey-patching. That dual authority causes false `IDEMPOTENCY_CONFLICT` errors when a multipart upload retry uses a new MIME boundary, leaks unretried response bodies in daemon RAM, diverges across CLI and HTTP, and vanishes on daemon restart.
+
+### Decision
+
+Retire the daemon in-memory `idempotencyStore`, `spoolRequestBody`, `replayableRequest` and `response.end` monkey-patch in `TASK-161` after completing an explicit route-by-route Core receipt inventory across all six operations listed in `interfaces-and-operations.md` section 17.3. Make Core SQLite `idempotency_keys` the sole replay authority for Handoff, Backup and Memo HTTP routes alike, retaining only a lightweight per-server `inFlightKeys: Set<string>` guard to reject concurrent in-flight duplicates during asynchronous multipart streaming.
+
+### Alternatives considered
+
+- **Keep and patch the in-memory `idempotencyStore`:** rejected because dual RAM/SQLite authority, multipart boundary false conflicts, daemon-restart amnesia and `response.end` interception remain structurally inherent.
+- **Add a separate HTTP-only SQLite idempotency table:** rejected because Core already owns `idempotency_keys` in SQLite; a second table duplicates storage and preserves CLI-versus-HTTP divergence.
+
+### Compatibility impact
+
+**Breaking for HTTP replay envelope and hash semantics on legacy Handoff and Backup routes:** replaces raw-HTTP-byte hashing and verbatim old-envelope replay with semantic request hashing and fresh-envelope (`X-Request-Id`) replay of the committed Core outcome, matching the M7 Memo replay model. Legitimate multipart retries with regenerated boundaries now succeed instead of spuriously conflicting.
+
+### Migration impact
+
+None for stored SQLite schema or Vault files. Existing unexpired `idempotency_keys` rows in SQLite continue to resolve under their existing scopes and keys.
+
+### Required Source of Truth edits and roadmap impact
+
+`TASK-161` records the six-operation Core receipt inventory, accepts or revises `ADR-0039`, amends `docs/specs/interfaces-and-operations.md` section 17.3, `docs/architecture/README.md` section 3.9, `docs/specs/project-memos.md` line 146, `docs/specs/required-specification.md` (`MEM-013`) and `ADR-0027` (dated amendment), and populates `TASK-161` citations and reverse-index entries before removing `idempotencyStore`.
+
+### Consequences
+
+The daemon eliminates ~200 lines of fragile stream-spooling and response-patching code, unifies idempotency semantics across CLI, HTTP, Handoff, Memo and Backup, and eliminates upload triple-copying and daemon RAM leaks.
+
+## ADR-0040: Separated Web UI assets with minimal build-time embedding
+
+- **Status:** Proposed
+- **Date:** 2026-11-22
+- **Design owner:** TASK-162 under [EPIC-024](../roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification).
+- **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
+
+### Problem
+
+`apps/daemon/src/web-app.ts` (1,183 LOC) and `apps/daemon/src/web-memos.ts` (517 LOC) embed the entire browser application (HTML, CSS and JavaScript) inside TypeScript template literals spliced together via string interpolation and undeclared closure globals. Neither `tsc` nor `biome` checks the embedded JavaScript or CSS, which allowed concrete defects (double-escaped Markdown preview, unencoded URL interpolation, broken backup-run deduplication) to survive static gates.
+
+### Decision
+
+Extract the daemon-served Web UI from template literals into real source modules under `apps/daemon/src/web/` (`.ts` and `.css`) checked by `tsc` and `biome`, and introduce a minimal build-time Bun bundle/embed script that emits the static asset module consumed by `apps/daemon/src/server.ts`. Wire that generation step into `make test-prepare` and `build:cli` so both Node-hosted `vitest` tests and the compiled single-file Bun executable serve identical verified assets with zero new runtime dependencies and no frontend framework.
+
+### Alternatives considered
+
+- **Keep inline TypeScript template literals indefinitely:** rejected because 1,700+ lines of untyped, unlinted browser code cannot be maintained safely across future changes.
+- **Adopt an external frontend framework and toolchain (React, Preact, Vite):** rejected because Sorage's local daemon SPA stays framework-free, lightweight and self-contained inside the single compiled executable (`ADR-0023`).
+- **Serve loose static files from disk at runtime:** rejected because it breaks single-binary distribution and introduces runtime asset-path discovery failures.
+
+### Compatibility impact
+
+Non-breaking at runtime: served routes, CSP headers (`script-src 'self'`), zero-cookie bearer session model, accessibility and single-binary distribution remain unchanged. Developer build and `test-prepare` pipelines gain one deterministic asset-generation step.
+
+### Migration impact
+
+None. No database, Vault, configuration or backup format changes.
+
+### Required Source of Truth edits and roadmap impact
+
+`TASK-162` accepts or revises `ADR-0040`, adds dated amendments to `ADR-0016` (replacing the 2026-10-28 "no-build" sentence while preserving framework-free embedded serving), `ADR-0027` and `ADR-0036`, updates `docs/architecture/README.md` section 15 and `docs/specs/testing-and-acceptance.md` section 1 for the asset generation step in `test-prepare`, and populates `TASK-162` citations and reverse-index entries.
+
+### Consequences
+
+The Web UI gains full TypeScript typechecking and Biome formatting/linting while keeping zero frontend framework dependencies and single-binary distribution intact. The small cost is one deterministic build-time asset-embed script shared by `test-prepare` and `build:cli`.

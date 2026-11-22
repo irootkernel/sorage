@@ -137,3 +137,13 @@ Audit Retention
 Remote mode must not expose server filesystem paths, and `fetch` either materializes locally or downloads a stream.
 
 The seam that keeps this reachable is the CLI transport adapter: commands call a use-case interface, and satisfying it with an HTTP client instead of an in-process call is an adapter choice.
+
+## Clean-baseline cutover and offline migrator (v0.2.0 candidate)
+
+Sorage currently carries incremental SQLite migrations (`v1` through `v17`), legacy backup snapshot readers (Formats 1 through 5) and legacy `artifacts/` Vault storage paths alongside the shared `content/` layout. During the M11 (`v0.1.6`) architecture review, cutting runtime backward compatibility with v0.1.5 in favor of a single clean schema, a single snapshot format and a dedicated offline live-home migration tool was evaluated and deliberately deferred.
+
+The M11 work delivers the major performance and structure wins without breaking compatibility (`migrator` early-exit, `v17` additive indexes, async daemon ticks and single-pass export while retaining legacy restore readers). Reopen a clean-baseline cutover as an independent `v0.2.0` ADR only if post-`v0.1.6` measurements demonstrate that legacy readers impose a real ongoing maintenance or runtime burden. If reopened later:
+
+- Preserve `ADR-0031` legacy short Artifact IDs rather than rewriting historical identifiers across events, receipts, pending intents, files and backups.
+- Finalize the target schema and Vault layout before building the offline migrator.
+- Ship an explicit operations runbook and end-to-end verification for two-step recovery of historical Format 1–5 Git backups through the matched prior binary plus migrator.

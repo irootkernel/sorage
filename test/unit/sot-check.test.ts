@@ -240,23 +240,39 @@ describe("sot-check", () => {
     expect(result.stderr).toContain("requirement EXC-001 (milestone M10) has no citing Task");
   });
 
-  it("rejects an unadopted milestone beyond M10", () => {
+  it("accepts M11 Tasks and their matching reverse index", () => {
+    const result = runCheck(
+      docFixture((root) => {
+        for (const relative of [
+          ["docs", "specs", "required-specification.md"],
+          ["docs", "roadmap", "README.md"],
+          ["docs", "specs", "traceability.md"],
+        ]) {
+          const path = join(root, ...relative);
+          writeFileSync(path, readTheFile(path).replaceAll("| M1 |", "| M11 |"));
+        }
+      }),
+    );
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects an unadopted milestone beyond M11", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "roadmap", "README.md");
         writeFileSync(
           path,
-          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M11 |"),
+          readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned | M12 |"),
         );
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "M11"');
+    expect(result.stderr).toContain('invalid milestone "M12"');
   });
 
   it.each([
-    ["an unadopted milestone", "M11"],
-    ["a misspelled milestone", "m10"],
+    ["an unadopted milestone", "M12"],
+    ["a misspelled milestone", "m11"],
     ["an empty milestone", ""],
   ])("reports a requirement row with %s instead of skipping it", (_label, milestone) => {
     const result = runCheck(
@@ -274,7 +290,7 @@ describe("sot-check", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("docs/specs/required-specification.md:6");
     expect(result.stderr).toContain(
-      `requirement GEN-002 has unsupported milestone ${JSON.stringify(milestone)}; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, or Deferred`,
+      `requirement GEN-002 has unsupported milestone ${JSON.stringify(milestone)}; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, or Deferred`,
     );
     expect(result.stderr.split("requirement GEN-002 has unsupported milestone")).toHaveLength(2);
     // TASK-001 cites GEN-002 and the reverse index lists it, so a discarded row would surface here.
@@ -394,7 +410,7 @@ describe("sot-check", () => {
         const traceability = join(root, "docs", "specs", "traceability.md");
         writeFileSync(
           traceability,
-          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| ` GEN-002 ` | M11 | `TASK-001` |"),
+          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| ` GEN-002 ` | M12 | `TASK-001` |"),
         );
       }),
     );
@@ -469,14 +485,14 @@ describe("sot-check", () => {
         const traceability = join(root, "docs", "specs", "traceability.md");
         writeFileSync(
           traceability,
-          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| `GEN-002` | M11 | `TASK-001` |"),
+          readTheFile(traceability).replace("| `GEN-002` | M1 | `TASK-001` |", "| `GEN-002` | M12 | `TASK-001` |"),
         );
       }),
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("docs/specs/traceability.md:8");
     expect(result.stderr).toContain(
-      'reverse-index row GEN-002 has unsupported milestone "M11"; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, or Deferred',
+      'reverse-index row GEN-002 has unsupported milestone "M12"; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, or Deferred',
     );
     expect(result.stderr).not.toContain("missing its row for GEN-002");
   });
@@ -504,14 +520,14 @@ describe("sot-check", () => {
           traceability,
           readTheFile(traceability).replace(
             "| `GEN-002` | M1 | `TASK-001` |\n",
-            "| `GEN-002` | M1 | `TASK-001` |\n|  `GEN-002`  | M11 | `TASK-001` |\n",
+            "| `GEN-002` | M1 | `TASK-001` |\n|  `GEN-002`  | M12 | `TASK-001` |\n",
           ),
         );
       }),
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("docs/specs/traceability.md:9");
-    expect(result.stderr).toContain('reverse-index row GEN-002 has unsupported milestone "M11"');
+    expect(result.stderr).toContain('reverse-index row GEN-002 has unsupported milestone "M12"');
     expect(result.stderr).toContain("duplicate reverse-index row GEN-002");
   });
 
@@ -582,11 +598,11 @@ describe("sot-check", () => {
     const result = runCheck(
       docFixture((root) => {
         const path = join(root, "docs", "roadmap", "README.md");
-        writeFileSync(path, readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned |M11|"));
+        writeFileSync(path, readTheFile(path).replace("| `TASK-002` | Planned | M1 |", "| `TASK-002` | Planned |M12|"));
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Task TASK-002 has invalid milestone "M11"');
+    expect(result.stderr).toContain('Task TASK-002 has invalid milestone "M12"');
   });
 
   it.each([
@@ -770,7 +786,9 @@ describe("sot-check", () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, or M10');
+    expect(result.stderr).toContain(
+      'invalid milestone "0.1"; expected M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, or M11',
+    );
   });
 
   it("fails when the reverse index disagrees with the roadmap's Requirements column", () => {
