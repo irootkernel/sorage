@@ -6,16 +6,22 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
-- Use `sorage exchange` to collaborate between registered Projects, share working material, accept specific report versions, and recover committed operations.
-- Use the Exchange MCP tools or CLI session owner to keep claims active and release them on graceful shutdown. Continue from a delivery cursor to see relevant activity, including acceptance of a report from a replacement assignee.
-- Correct Exchange membership and request ownership, pause and resume collaboration, and record unanimous completion with recoverable cleanup.
-- Discover Exchange connection checks and unread delivery notices, reserve a reporting slot, and acknowledge issuance to the user through CLI or MCP.
-- Start or join an Exchange from either independently copied skill, with bundled guidance for CLI and MCP participation.
+- Collaborate across registered Projects through `sorage exchange` and 24 new MCP tools, with addressed messages, versioned reports, exact acceptance, and operation-ID recovery.
+- Share workspace-confined working copies or registered originals whose ownership, path, and version are checked on retrieval.
+- Inspect Exchange history and materials, wait for activity, and look up committed operations without writing to the Installation.
+- Keep claims renewed through the CLI session owner or MCP connection, release them on graceful shutdown, and follow acceptance of a replacement assignee's report from a delivery cursor.
+- Correct membership and request ownership, pause and resume work, and agree on completion by unanimous vote with recoverable cleanup that protects original sources.
+- Revoke a Project's Exchange session and notice claims when it is archived or loses its last workspace binding.
+- Discover eligible connection checks and unread-delivery notices, reserve a reporting slot, and acknowledge a notice after issuing it to the user.
+- Use the standalone `start-exchange` and `join-exchange` skills through CLI or MCP, including supported Plan-mode and read-only MCP sessions.
 
 ### Changed
 
-- Pin source-development toolchains and run automatic formatting before the complete test gate; add explicit runtime installation, version synchronization, and dependency-lock commands.
-- **Breaking storage upgrade:** The one-way upgrade moves live storage to schema 16 and writes the `notices` inventory in global backup format 5. Use the new executable with upgraded storage and `notices` backups. Before upgrading, verify and retain a backup and its matching executable. For rollback, restore that backup with its matching executable into a separate empty home and Vault. The new reader imports earlier format-5 inventories and legacy backup formats.
+- Build and verify from source with pinned Bun and Node runtimes, explicit toolchain setup and dependency-lock commands, and automatic formatting before the complete test gate.
+- **Breaking storage upgrade:** Move live storage one-way to schema 16 and use a compatible executable for the global format-5 `notices` backup inventory.
+- Stop old writers and verify a backup with its matching executable before upgrading, then use that pair for rollback into a separate empty home and Vault.
+- Back up compact Exchange outcomes with configurable workspace-path redaction and exclude working bytes, Project bindings, and live claims from the snapshot.
+- Restore formats 1 through 4 or earlier format-5 inventories with the new executable, and rebind the owning Project and revalidate its local references before using them in a restored Installation.
 
 ## v0.1.4 - 2026-11-08
 
