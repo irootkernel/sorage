@@ -88,24 +88,27 @@ describe("revision verification against superseded authority", () => {
       }
       const db = openSorageDatabase(join(f.home, "state", "sorage.sqlite3"));
       cleanups.push(() => db.close());
+      let separateArtifactQueries = 0;
       const scheduledDb: SorageSqlite = {
         exec: db.exec.bind(db),
         close: db.close.bind(db),
         prepare<Row>(sql: string) {
           const statement = db.prepare<Row>(sql);
-          if (
-            phase !== "partial-read" ||
-            !sql.startsWith("SELECT id, handoff_id, original_name, mime_type, content_record_id FROM artifacts")
-          )
+          if (sql.startsWith("SELECT id, handoff_id, original_name, mime_type, content_record_id FROM artifacts")) {
+            separateArtifactQueries += 1;
+          }
+          if (phase !== "partial-read" || !(sql.includes("FROM handoffs h") && sql.includes("LEFT JOIN artifacts a")))
             return statement;
           return {
             all: statement.all.bind(statement),
             run: statement.run.bind(statement),
             ...(statement.finalize ? { finalize: statement.finalize.bind(statement) } : {}),
             get(...params: unknown[]) {
-              // The Handoff row was read, but its old Artifact has not been.
+              // loadHandoff reads the Handoff and its Artifact atomically via a single LEFT JOIN;
+              // let the concurrent winner commit right after that snapshot and before revision staging/CAS.
+              const row = statement.get(...params);
               win();
-              return statement.get(...params);
+              return row;
             },
           };
         },
@@ -133,6 +136,7 @@ describe("revision verification against superseded authority", () => {
         expectedRowVersion: beforeVersion,
         ...(phase === "no-change" ? { noChange: true, reason: "No change" } : { file: loserFile }),
       });
+      expect(separateArtifactQueries).toBe(0);
       expect(won).toBe(true);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe("ROW_VERSION_CONFLICT");
