@@ -548,4 +548,74 @@ describe("true overlapping migrator concurrency across live processes", () => {
       opened.db.close();
     }
   });
+
+  it("short-circuits an up-to-date database with zero write locks, zero rebuild opens, and zero FK toggles (TASK-151)", () => {
+    const temp = freshDb();
+    const first = migrate(temp.db, [TOY_BASE], () => "2026-01-01T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: [TOY_REBUILD],
+    });
+    expect(first.appliedVersions).toEqual([1, 2]);
+
+    const execs: string[] = [];
+    let factoryOpens = 0;
+    const trackedDb: SorageSqlite = {
+      exec: (sql: string) => {
+        execs.push(sql);
+        temp.db.exec(sql);
+      },
+      prepare: <Row = Record<string, unknown>>(sql: string) => temp.db.prepare<Row>(sql),
+      close: () => temp.db.close(),
+    };
+    const second = migrate(trackedDb, [TOY_BASE], () => "2026-01-02T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: [TOY_REBUILD],
+      connectionFactory: (path: string) => {
+        factoryOpens += 1;
+        return openSorageDatabase(path);
+      },
+    });
+    expect(second).toEqual({ appliedVersions: [], alreadyUpToDate: true });
+    expect(factoryOpens).toBe(0);
+    expect(execs).toEqual([]);
+  });
+
+  it("runs pending ordinary-only steps without a rebuild connection after rebuilds are already applied (TASK-151)", () => {
+    const temp = freshDb();
+    migrate(temp.db, [TOY_BASE], () => "2026-01-01T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: [TOY_REBUILD],
+    });
+    const additiveV3: Migration = {
+      version: 3,
+      name: "toy-additive-v3",
+      sql: "CREATE INDEX idx_toy_child_parent ON toy_child(parent_id);",
+    };
+    const execs: string[] = [];
+    let factoryOpens = 0;
+    const trackedDb: SorageSqlite = {
+      exec: (sql: string) => {
+        execs.push(sql);
+        temp.db.exec(sql);
+      },
+      prepare: <Row = Record<string, unknown>>(sql: string) => temp.db.prepare<Row>(sql),
+      close: () => temp.db.close(),
+    };
+    const outcome = migrate(trackedDb, [TOY_BASE, additiveV3], () => "2026-01-02T00:00:00.000Z", {
+      databasePath: temp.databasePath,
+      rebuilds: [TOY_REBUILD],
+      connectionFactory: (path: string) => {
+        factoryOpens += 1;
+        return openSorageDatabase(path);
+      },
+    });
+    expect(outcome).toEqual({ appliedVersions: [3], alreadyUpToDate: false });
+    expect(factoryOpens).toBe(0);
+    expect(execs.some((sql) => /foreign_keys\s*=\s*off/i.test(sql))).toBe(false);
+    expect(history(temp.db)).toEqual([
+      { version: 1, name: "toy-base-v1" },
+      { version: 2, name: "toy-rebuild-v1" },
+      { version: 3, name: "toy-additive-v3" },
+    ]);
+  });
 });

@@ -9,19 +9,50 @@ import { createHomePaths } from "./home";
 import { withInboxMarkerLock } from "./inbox-marker-lock";
 
 /**
- * The Node wiring of the derived inbox marker (HND-026): the flag comes from the
- * effective configuration and each write lands atomically under
- * `<binding>/.sorage/INBOX.md` through a temporary file and a rename, so a crash
- * mid-write never leaves a half-written marker behind.
+ * Reads `handoff.inboxMarker` from configuration without opening SQLite, so
+ * disabled installations open zero marker database handles (HND-026, ADR-0036).
  */
-export function createNodeInboxMarkerPorts(options: NodeHandoffCommandPortsOptions = {}): InboxMarkerPorts {
-  const read = createNodeHandoffReadPorts(options);
+export function isNodeInboxMarkerEnabled(
+  options: Pick<NodeHandoffCommandPortsOptions, "env" | "userHome" | "configuration"> = {},
+): boolean {
+  if (options.configuration !== undefined) {
+    return options.configuration.config.handoff.inboxMarker;
+  }
   const env = options.env ?? process.env;
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
   const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
   const effective = config.read();
-  const enabled = effective.ok && effective.value !== null ? effective.value.config.handoff.inboxMarker : false;
+  return effective.ok && effective.value !== null ? effective.value.config.handoff.inboxMarker : false;
+}
+
+/**
+ * The Node wiring of the derived inbox marker (HND-026): the flag comes from the
+ * effective configuration and each write lands atomically under
+ * `<binding>/.sorage/INBOX.md` through a temporary file and a rename, so a crash
+ * mid-write never leaves a half-written marker behind.
+ */
+export function createNodeInboxMarkerPorts(
+  options: NodeHandoffCommandPortsOptions = {},
+): InboxMarkerPorts & { close(): void } {
+  const env = options.env ?? process.env;
+  const userHome = options.userHome ?? homedir();
+  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  let resolvedConfig = options.configuration;
+  let enabled: boolean;
+  if (resolvedConfig !== undefined) {
+    enabled = resolvedConfig.config.handoff.inboxMarker;
+  } else {
+    const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
+    const effective = config.read();
+    enabled = effective.ok && effective.value !== null ? effective.value.config.handoff.inboxMarker : false;
+    if (effective.ok && effective.value !== null) resolvedConfig = effective.value;
+  }
+  const read = createNodeHandoffReadPorts(
+    resolvedConfig !== undefined && options.configuration === undefined
+      ? { ...options, configuration: resolvedConfig }
+      : options,
+  );
   return {
     ...read,
     marker: {
@@ -80,5 +111,6 @@ export function createNodeInboxMarkerPorts(options: NodeHandoffCommandPortsOptio
         },
       },
     },
+    close: read.close,
   };
 }

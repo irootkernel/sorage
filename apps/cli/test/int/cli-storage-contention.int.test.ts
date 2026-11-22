@@ -253,9 +253,9 @@ describe("typed refusals per family", () => {
     registerProject();
     const fresh = mkdtempSync(join(tmpdir(), "sorage-cli-contention-fresh-"));
     // Ports are built for real; the injected wrapper blocks the domain
-    // BEGIN IMMEDIATE (the second globally: the rebuild migration takes the
-    // first on its dedicated connection) with a self-held lock, so the real
-    // engine returns SQLITE_BUSY against the short busy timeout.
+    // BEGIN IMMEDIATE (the first globally now that an up-to-date database takes
+    // zero migrator write locks under TASK-151) with a self-held lock, so the
+    // real engine returns SQLITE_BUSY against the short busy timeout.
     const realOpen = sqliteConnections.openSorageDatabase;
     let beginCount = 0;
     const openSpy = vi.spyOn(sqliteConnections, "openSorageDatabase").mockImplementation((path: string) => {
@@ -266,7 +266,7 @@ describe("typed refusals per family", () => {
         exec(sql: string) {
           if (sql === "BEGIN IMMEDIATE") {
             beginCount += 1;
-            if (beginCount === 2) {
+            if (beginCount === 1) {
               const blocker = new DatabaseSync(path);
               blocker.exec("BEGIN IMMEDIATE");
               try {
@@ -748,6 +748,7 @@ describe("contained post-commit warnings (category (i))", () => {
 describe("the marker and Channel cleanup warning paths (categories (ii) and (iv))", () => {
   it("warns contained when marker port creation fails after a committed send", () => {
     registerProject();
+    expect(runCli(["config", "set", "handoff.inboxMarker", "true", "--as-user"], capture().ports)).toBe(0);
     const markerSpy = vi.spyOn(inboxMarkerPorts, "createNodeInboxMarkerPorts").mockImplementation(() => {
       throw new Error("injected marker port failure");
     });
@@ -763,6 +764,7 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
 
   it("warns contained when the rebind reconciliation cannot create its ports, keeping the committed rebind", () => {
     registerProject();
+    expect(runCli(["config", "set", "handoff.inboxMarker", "true", "--as-user"], capture().ports)).toBe(0);
     const bound = mkdtempSync(join(work, "bound-"));
     const markerSpy = vi.spyOn(inboxMarkerPorts, "createNodeInboxMarkerPorts").mockImplementation(() => {
       throw new Error("injected marker port failure");
@@ -829,6 +831,7 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
 
   it("keeps the committed send and exit code when the marker warning's diagnostic sink throws", () => {
     registerProject();
+    expect(runCli(["config", "set", "handoff.inboxMarker", "true", "--as-user"], capture().ports)).toBe(0);
     const markerSpy = vi.spyOn(inboxMarkerPorts, "createNodeInboxMarkerPorts").mockImplementation(() => {
       throw new Error("injected marker port failure");
     });
@@ -849,6 +852,7 @@ describe("the marker and Channel cleanup warning paths (categories (ii) and (iv)
 
   it("keeps the committed rebind when the marker warning's diagnostic sink throws", () => {
     registerProject();
+    expect(runCli(["config", "set", "handoff.inboxMarker", "true", "--as-user"], capture().ports)).toBe(0);
     const bound = mkdtempSync(join(work, "bound-"));
     const markerSpy = vi.spyOn(inboxMarkerPorts, "createNodeInboxMarkerPorts").mockImplementation(() => {
       throw new Error("injected marker port failure");

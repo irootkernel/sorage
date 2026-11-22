@@ -641,28 +641,39 @@ describe("the narrow Memo CLI startup classifier (TASK-127)", () => {
 
 describe("the unchanged Memo repository and composition", () => {
   it("keeps Memo output byte-for-byte through factory contention and busy Project lookups (V2)", () => {
-    // Factory open contention: the real open meets a held lock through the
-    // connection seam with a short busy timeout.
+    // Factory open contention: make schema v16 pending so openAndMigrate inside
+    // createNodeMemoPorts genuinely contends on the held write lock with a short
+    // busy timeout.
     const realOpen = sqliteConnections.openSorageDatabase;
     const openSpy = vi.spyOn(sqliteConnections, "openSorageDatabase").mockImplementation((path: string) => {
       const db = realOpen(path);
       db.exec("PRAGMA busy_timeout = 50");
       return db;
     });
+    const downgrade = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      downgrade.exec("DELETE FROM schema_migrations WHERE version = 16");
+    } finally {
+      downgrade.close();
+    }
     try {
       const lock = holdWriteLock();
       let threw: unknown;
+      let opened: ReturnType<typeof createNodeMemoPorts> | undefined;
       try {
-        createNodeMemoPorts();
+        opened = createNodeMemoPorts();
       } catch (error) {
         threw = error;
+      } finally {
+        opened?.close();
+        lock.release();
       }
+      expect(threw).toBeDefined();
       // memoStorageError collapses every non-admission failure, including a
       // carried refusal, to the unchanged INTERNAL_ERROR wording.
-      const mapped = memoStorageError(threw ?? new Error("unused"));
+      const mapped = memoStorageError(threw);
       expect(mapped.code).toBe("INTERNAL_ERROR");
       expect(mapped.message).toBe("Memo storage could not be opened");
-      lock.release();
     } finally {
       openSpy.mockRestore();
     }
@@ -682,12 +693,23 @@ describe("the unchanged Memo repository and composition", () => {
 describe("the composition factories", () => {
   it("carries the stamped refusal for open contention and the typed configuration conditions", () => {
     const realOpen = sqliteConnections.openSorageDatabase;
+    // An up-to-date database takes zero migrator write locks, so open contention
+    // surfaces when a migration is pending or when opening the database itself
+    // encounters SQLITE_BUSY / SQLITE_CANTOPEN (TASK-151, SHR-015).
     const openSpy = vi.spyOn(sqliteConnections, "openSorageDatabase").mockImplementation((path: string) => {
       const db = realOpen(path);
       db.exec("PRAGMA busy_timeout = 50");
       return db;
     });
     try {
+      // Remove the latest additive schema row so a real pending migration contends
+      // on the held write lock during factory construction.
+      const downgrade = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        downgrade.exec("DELETE FROM schema_migrations WHERE version = 16");
+      } finally {
+        downgrade.close();
+      }
       const lock = holdWriteLock();
       for (const [build, surface] of [
         [() => createNodeProjectPorts({ contentionSurface: "project" }), "Project"],
@@ -750,8 +772,19 @@ describe("the composition factories", () => {
 describe("the flagged startup drain", () => {
   it("classifies migration contention and the drain-internal failure separately, on both surfaces (W1)", async () => {
     const realOpen = sqliteConnections.openSorageDatabase;
-    // Case (a): the lock is held before the drain opens, so the rebuild
-    // migration's dedicated connection refuses first — the migration site.
+    // Case (a): make schema v16 pending and hold the write lock before the drain
+    // opens, so openAndMigrate inside withDatabase() refuses at the migration
+    // site before the drain body executes.
+    let savedV16: { version: number; name: string; applied_at: string };
+    const downgrade = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      savedV16 = downgrade
+        .prepare("SELECT version, name, applied_at FROM schema_migrations WHERE version = 16")
+        .get() as { version: number; name: string; applied_at: string };
+      downgrade.exec("DELETE FROM schema_migrations WHERE version = 16");
+    } finally {
+      downgrade.close();
+    }
     const openSpy = vi.spyOn(sqliteConnections, "openSorageDatabase").mockImplementation((path: string) => {
       const db = realOpen(path);
       db.exec("PRAGMA busy_timeout = 50");
@@ -759,48 +792,56 @@ describe("the flagged startup drain", () => {
     });
     try {
       const lock = holdWriteLock();
-      const flagged = createNodeVaultCommandPorts({ contentionSurface: "handoff" });
-      const refusedDrain = flagged.drainAtStart();
-      expect(refusedDrain.ok).toBe(false);
-      expect(errorOf(refusedDrain).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
-      expect(errorOf(refusedDrain).message).toContain("Handoff storage is contended");
-      const unflagged = createNodeVaultCommandPorts();
-      const internalDrain = unflagged.drainAtStart();
-      expect(internalDrain.ok).toBe(false);
-      expect(errorOf(internalDrain).code).toBe("INTERNAL_ERROR");
-      lock.release();
+      try {
+        for (const surface of ["handoff", "channel"] as const) {
+          const flagged = createNodeVaultCommandPorts({ contentionSurface: surface });
+          const refusedDrain = flagged.drainAtStart();
+          expect(refusedDrain.ok).toBe(false);
+          expect(errorOf(refusedDrain).code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+          expect(errorOf(refusedDrain).message).toContain(
+            surface === "handoff" ? "Handoff storage is contended" : "Channel storage is contended",
+          );
+        }
+        const unflagged = createNodeVaultCommandPorts();
+        const internalDrain = unflagged.drainAtStart();
+        expect(internalDrain.ok).toBe(false);
+        expect(errorOf(internalDrain).code).toBe("INTERNAL_ERROR");
+        // Proves the refusal originated in withDatabase()'s openAndMigrate catch
+        // block rather than inside contentStore.cleanup().
+        expect(errorOf(internalDrain).message).toContain("Reading the database failed:");
+      } finally {
+        lock.release();
+      }
 
-      // Case (b): the migration completes normally on its dedicated connection
-      // (its BEGIN IMMEDIATE and COMMIT run through), and the busy failure is
-      // injected only at the drain's own internal transaction on the drain's
-      // connection. The event log proves the target site: the failing BEGIN
-      // ran after the dedicated connection's COMMIT, on a different connection.
+      // Restore the exact v16 history row so Case (b) observes an up-to-date DB.
+      const restore = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        restore
+          .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+          .run(savedV16.version, savedV16.name, savedV16.applied_at);
+      } finally {
+        restore.close();
+      }
+
+      // Case (b): on an up-to-date database, startup migration takes zero write
+      // locks, so the very first BEGIN IMMEDIATE is the drain's own internal
+      // cleanup transaction on the drain's single operational connection.
       const events: Array<{ conn: number; sql: string }> = [];
       let connSeq = 0;
-      let migrationCommitted = false;
       openSpy.mockImplementation((path: string) => {
         const db = realOpen(path);
         db.exec("PRAGMA busy_timeout = 50");
         connSeq += 1;
         const conn = connSeq;
-        let inMigrationTransaction = false;
         return {
           prepare: (sql: string) => db.prepare(sql),
           exec(sql: string) {
             if (sql === "BEGIN IMMEDIATE") {
               events.push({ conn, sql });
-              inMigrationTransaction = true;
-              if (migrationCommitted) throw busyError();
-              return db.exec(sql);
+              throw busyError();
             }
             if (sql === "COMMIT") {
               events.push({ conn, sql });
-              const outcome = db.exec(sql);
-              if (inMigrationTransaction) {
-                inMigrationTransaction = false;
-                migrationCommitted = true;
-              }
-              return outcome;
             }
             return db.exec(sql);
           },
@@ -810,7 +851,6 @@ describe("the flagged startup drain", () => {
       for (const surface of ["handoff", "channel"] as const) {
         events.length = 0;
         connSeq = 0;
-        migrationCommitted = false;
         const surfaced = createNodeVaultCommandPorts({ contentionSurface: surface });
         const internalRefused = surfaced.drainAtStart();
         expect(internalRefused.ok).toBe(false);
@@ -818,14 +858,10 @@ describe("the flagged startup drain", () => {
         expect(errorOf(internalRefused).message).toContain(
           surface === "handoff" ? "Handoff storage is contended" : "Channel storage is contended",
         );
-        // The dedicated migration connection completed its transaction before
-        // the failing BEGIN ran on the drain's own connection.
-        const dedicatedCommit = events.findIndex((event) => event.sql === "COMMIT");
-        const failingBegin = events.findIndex(
-          (event) => event.sql === "BEGIN IMMEDIATE" && event.conn !== events[dedicatedCommit]?.conn,
-        );
-        expect(dedicatedCommit).toBeGreaterThanOrEqual(0);
-        expect(failingBegin).toBeGreaterThan(dedicatedCommit);
+        // Zero migrator write locks ran; only the drain's single operational
+        // connection attempted BEGIN IMMEDIATE.
+        expect(connSeq).toBe(1);
+        expect(events).toEqual([{ conn: 1, sql: "BEGIN IMMEDIATE" }]);
       }
     } finally {
       openSpy.mockRestore();
@@ -1122,7 +1158,30 @@ describe("a write-protected installation (TASK-119)", () => {
     return restore;
   }
 
+  /** Makes schema v16 pending so writable openAndMigrate genuinely runs DDL. */
+  function markMigrationPending(): void {
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      db.exec("DELETE FROM schema_migrations WHERE version = 16");
+    } finally {
+      db.close();
+    }
+  }
+
+  /** Seeds one synthetic pending intent so drainAtStart must perform a real write. */
+  function seedPendingIntent(): void {
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      db.exec(
+        "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES ('11111111-1111-4111-8111-111111111111', 'unlink', NULL, 'artifacts/never/existed.md', NULL, '2026-01-01T00:00:00.000Z', 0)",
+      );
+    } finally {
+      db.close();
+    }
+  }
+
   it("rethrows the native readonly failure from the raw layers and classifies it at the boundary (V2)", () => {
+    markMigrationPending();
     protect();
     let native: unknown;
     try {
@@ -1173,6 +1232,7 @@ describe("a write-protected installation (TASK-119)", () => {
   });
 
   it("refuses the surfaced startup drain with the typed write-protected refusal on both surfaces (V2)", () => {
+    seedPendingIntent();
     protect();
     const before = snapshot(["channels", "projects", "events"]);
     for (const surface of ["channel", "handoff"] as const) {
@@ -1188,11 +1248,12 @@ describe("a write-protected installation (TASK-119)", () => {
     const unflagged = createNodeVaultCommandPorts().drainAtStart();
     expect(unflagged.ok).toBe(false);
     expect(errorOf(unflagged).code).toBe("INTERNAL_ERROR");
-    expect(errorOf(unflagged).message).toContain("Reading the database failed");
+    expect(errorOf(unflagged).message).toContain("attempt to write a readonly database");
     expect(snapshot(["channels", "projects", "events"])).toEqual(before);
   });
 
   it("refuses the surfaced Project, Handoff, and Channel factories with the typed write-protected refusal (V2)", () => {
+    markMigrationPending();
     protect();
     let projectFailure: unknown;
     try {
@@ -1235,6 +1296,7 @@ describe("a write-protected installation (TASK-119)", () => {
   });
 
   it("succeeds again once write access is restored, proving the protection caused the refusals (design c)", () => {
+    seedPendingIntent();
     const restore = protect();
     expect(createNodeVaultCommandPorts({ contentionSurface: "channel" }).drainAtStart().ok).toBe(false);
     restore();

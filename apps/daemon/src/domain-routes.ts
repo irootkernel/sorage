@@ -16,7 +16,7 @@ import {
 } from "@sorage/adapters/src/handoff-command-ports";
 import { openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
 import { createNodeHomePaths } from "@sorage/adapters/src/home";
-import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
+import { createNodeInboxMarkerPorts, isNodeInboxMarkerEnabled } from "@sorage/adapters/src/inbox-marker-ports";
 import { createNodeProjectPorts as createProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
 import {
@@ -120,6 +120,13 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       // A diagnostic sink failure never changes a committed route outcome.
     }
   };
+  const withPorts = <P extends { close(): void }, R>(ports: P, body: (ports: P) => R): R => {
+    try {
+      return body(ports);
+    } finally {
+      ports.close();
+    }
+  };
   const createNodeProjectPorts = () => createProjectPorts({ ...databaseOptions, contentionSurface: "project" });
   const createNodeSendPorts = () => createSendPorts({ ...databaseOptions, completionWarning: daemonCompletionWarning });
   const createNodeHandoffReadPorts = () => createHandoffReadPorts(databaseOptions);
@@ -152,8 +159,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       }
     };
     try {
-      const refreshed = refreshProjectInboxMarker(createNodeInboxMarkerPorts(databaseOptions), projectId);
-      if (!refreshed.ok) emit(refreshed.error.message);
+      if (!isNodeInboxMarkerEnabled()) return;
+      const markerPorts = createNodeInboxMarkerPorts(databaseOptions);
+      try {
+        const refreshed = refreshProjectInboxMarker(markerPorts, projectId);
+        if (!refreshed.ok) emit(refreshed.error.message);
+      } finally {
+        markerPorts.close();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       emit(`the project inbox marker could not be refreshed: ${message}`);
@@ -192,7 +205,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "GET",
     pattern: "/api/v1/projects",
     handler: async (_request, response, context) => {
-      const result = listProjects(createNodeProjectPorts());
+      const result = withPorts(createNodeProjectPorts(), (ports) => listProjects(ports));
       return void respond(response, context, result);
     },
   });
@@ -203,13 +216,15 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = await resolveActor(body);
       if (!actor.ok) return void respond(response, context, actor);
-      const result = addProject(createNodeProjectPorts(), {
-        name: String(body.name ?? ""),
-        ...(typeof body.slug === "string" ? { slug: body.slug } : {}),
-        dir: String(body.dir ?? ""),
-        userHome,
-        actor: actor.value,
-      });
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        addProject(ports, {
+          name: String(body.name ?? ""),
+          ...(typeof body.slug === "string" ? { slug: body.slug } : {}),
+          dir: String(body.dir ?? ""),
+          userHome,
+          actor: actor.value,
+        }),
+      );
       if (result.ok) refreshBoundMarker(result.value.project.id);
       return void respond(response, context, result, 201);
     },
@@ -218,7 +233,9 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "GET",
     pattern: "/api/v1/projects/{id}",
     handler: async (_request, response, context) => {
-      const result = showProject(createNodeProjectPorts(), (context.params?.id ?? "") as string);
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        showProject(ports, (context.params?.id ?? "") as string),
+      );
       return void respond(response, context, result);
     },
   });
@@ -229,11 +246,13 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = await resolveActor(body);
       if (!actor.ok) return void respond(response, context, actor);
-      const result = renameProject(createNodeProjectPorts(), {
-        slug: (context.params?.id ?? "") as string,
-        name: String(body.name ?? body.displayName ?? ""),
-        actor: actor.value,
-      });
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        renameProject(ports, {
+          slug: (context.params?.id ?? "") as string,
+          name: String(body.name ?? body.displayName ?? ""),
+          actor: actor.value,
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -241,9 +260,11 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "POST",
     pattern: "/api/v1/projects/{id}/archive",
     handler: async (_request, response, context) => {
-      const result = archiveProject(createNodeProjectPorts(), {
-        slug: (context.params?.id ?? "") as string,
-      });
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        archiveProject(ports, {
+          slug: (context.params?.id ?? "") as string,
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -251,9 +272,11 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "POST",
     pattern: "/api/v1/projects/{id}/unarchive",
     handler: async (_request, response, context) => {
-      const result = unarchiveProject(createNodeProjectPorts(), {
-        slug: (context.params?.id ?? "") as string,
-      });
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        unarchiveProject(ports, {
+          slug: (context.params?.id ?? "") as string,
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -264,12 +287,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = await resolveActor(body);
       if (!actor.ok) return void respond(response, context, actor);
-      const result = bindProject(createNodeProjectPorts(), {
-        slug: (context.params?.id ?? "") as string,
-        dir: String(body.dir ?? ""),
-        userHome,
-        actor: actor.value,
-      });
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        bindProject(ports, {
+          slug: (context.params?.id ?? "") as string,
+          dir: String(body.dir ?? ""),
+          userHome,
+          actor: actor.value,
+        }),
+      );
       if (result.ok) refreshBoundMarker(result.value.projectId);
       return void respond(response, context, result, 201);
     },
@@ -282,13 +307,15 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const actor = await resolveActor(body);
       if (!actor.ok) return void respond(response, context, actor);
-      const result = unbindProject(createNodeProjectPorts(), {
-        slug: (context.params?.id ?? "") as string,
-        dir: url.searchParams.get("dir") ?? String(body.dir ?? ""),
-        userHome,
-        confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
-        actor: actor.value,
-      });
+      const result = withPorts(createNodeProjectPorts(), (ports) =>
+        unbindProject(ports, {
+          slug: (context.params?.id ?? "") as string,
+          dir: url.searchParams.get("dir") ?? String(body.dir ?? ""),
+          userHome,
+          confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
+          actor: actor.value,
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -307,11 +334,13 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           appError("FORBIDDEN_ACTOR", "resolve needs a path or an as=<project-slug>"),
         );
       }
-      const resolved = resolveWorkspaceActor(createNodeProjectPorts(), {
-        path,
-        userHome,
-        ...(as !== undefined ? { as } : {}),
-      });
+      const resolved = withPorts(createNodeProjectPorts(), (ports) =>
+        resolveWorkspaceActor(ports, {
+          path,
+          userHome,
+          ...(as !== undefined ? { as } : {}),
+        }),
+      );
       return void respond(response, context, resolved);
     },
   });
@@ -401,27 +430,26 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       if (!actor.ok) return void respondError(response, context, actor.error);
       // The daemon runs the RUN-002 drain obligation before serving bytes, so a
       // Handoff this daemon just created materializes instead of 409ing.
-      createNodeVaultCommandPorts().drainAtStart();
-      const prepared = prepareHandoffFetch(
-        createNodeHandoffReadPorts(),
-        actor.value,
-        (context.params?.id ?? "") as string,
-        { kind: "body" },
-      );
-      if (!prepared.ok) return void respondError(response, context, prepared.error);
-      if (prepared.value.kind !== "body") {
-        prepared.value.close();
-        return void respondError(
-          response,
-          context,
-          appError("INTERNAL_ERROR", "the prepared fetch carried no opened body"),
-        );
-      }
-      // The safely opened descriptor is the one authority for size and bytes:
-      // no reconstructed vault path is statSynced or reopened after this guard
-      // (VLT-020, section 11.3).
-      const handle = prepared.value.body;
+      createNodeVaultCommandPorts(databaseOptions).drainAtStart();
+      const readPorts = createNodeHandoffReadPorts();
+      let handle: ArtifactReadHandle | undefined;
       try {
+        const prepared = prepareHandoffFetch(readPorts, actor.value, (context.params?.id ?? "") as string, {
+          kind: "body",
+        });
+        if (!prepared.ok) return void respondError(response, context, prepared.error);
+        if (prepared.value.kind !== "body") {
+          prepared.value.close();
+          return void respondError(
+            response,
+            context,
+            appError("INTERNAL_ERROR", "the prepared fetch carried no opened body"),
+          );
+        }
+        // The safely opened descriptor is the one authority for size and bytes:
+        // no reconstructed vault path is statSynced or reopened after this guard
+        // (VLT-020, section 11.3).
+        handle = prepared.value.body;
         const size = handle.sizeBytes;
         // Both admitted content and 416 retain the representation headers.
         // Delay setting them on other paths so settlement errors remain JSON.
@@ -521,10 +549,11 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
         // disposal failure must never reject the handler or touch a response
         // it no longer owns.
         try {
-          handle.close();
+          handle?.close();
         } catch {
           // Ownership was consumed; a failed backstop close stays contained.
         }
+        readPorts.close();
       }
     },
   });
@@ -537,11 +566,8 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       // Reveal prepares the same authorized safe local path a fetch would, but
       // never settles a first fetch: only the CLI fetch command and an admitted
       // content response record one (HND-012, section 11.3).
-      const prepared = prepareHandoffFetch(
-        createNodeHandoffReadPorts(),
-        actor.value,
-        (context.params?.id ?? "") as string,
-        { kind: "local-path" },
+      const prepared = withPorts(createNodeHandoffReadPorts(), (ports) =>
+        prepareHandoffFetch(ports, actor.value, (context.params?.id ?? "") as string, { kind: "local-path" }),
       );
       if (!prepared.ok) return void respondError(response, context, prepared.error);
       if (prepared.value.kind !== "local-path") {
@@ -591,26 +617,28 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       }
       const to = upload.value.fields.to ?? [];
       const title = (upload.value.fields.title ?? (file !== null ? [file.filename] : []))[0] ?? file?.filename ?? "";
-      const result = sendHandoffs(createNodeSendPorts(), {
-        to,
-        title,
-        ...(file !== null
-          ? {
-              file: file.path,
-              // The spool path is an opaque UUID, so the browser's filename is the
-              // original name the Artifact must record (VLT-007), and the source is
-              // an authenticated upload rather than a workspace path import (API-003).
-              originalName: file.filename,
-              fileSourceKind: "authenticated-spool" as const,
-            }
-          : { bodyFile: bodyPart?.path }),
-        allowExternalSource: true, // the browser upload is already the authenticated source
-        allowUnregistered: false,
-        ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
-        path: "",
-        userHome,
-        asUser: true,
-      });
+      const result = withPorts(createNodeSendPorts(), (ports) =>
+        sendHandoffs(ports, {
+          to,
+          title,
+          ...(file !== null
+            ? {
+                file: file.path,
+                // The spool path is an opaque UUID, so the browser's filename is the
+                // original name the Artifact must record (VLT-007), and the source is
+                // an authenticated upload rather than a workspace path import (API-003).
+                originalName: file.filename,
+                fileSourceKind: "authenticated-spool" as const,
+              }
+            : { bodyFile: bodyPart?.path }),
+          allowExternalSource: true, // the browser upload is already the authenticated source
+          allowUnregistered: false,
+          ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+          path: "",
+          userHome,
+          asUser: true,
+        }),
+      );
       upload.value.cleanup();
       return void respond(response, context, result, 201);
     },
@@ -627,39 +655,41 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
       const to = Array.isArray(body.to) ? body.to.map(String) : typeof body.to === "string" ? [body.to] : [];
-      const result = sendHandoffs(createNodeSendPorts(), {
-        to,
-        title: String(body.title ?? ""),
-        ...(typeof body.path === "string"
-          ? {
-              file: body.path,
-              // A path import records its own basename, so an original name's
-              // presence alone never identifies an upload spool (VLT-007).
-              originalName: basename(body.path),
-            }
-          : {}),
-        ...(typeof body.body === "string" ? { body: body.body } : {}),
-        ...(typeof body.supersedes === "string" ? { supersedes: body.supersedes } : {}),
-        allowExternalSource: body.allowExternalSource === true,
-        allowUnregistered: body.allowUnregistered === true,
-        ...(typeof body.idempotencyKey === "string"
-          ? { idempotencyKey: body.idempotencyKey }
-          : context.idempotencyKey !== undefined
-            ? { idempotencyKey: context.idempotencyKey }
+      const result = withPorts(createNodeSendPorts(), (ports) =>
+        sendHandoffs(ports, {
+          to,
+          title: String(body.title ?? ""),
+          ...(typeof body.path === "string"
+            ? {
+                file: body.path,
+                // A path import records its own basename, so an original name's
+                // presence alone never identifies an upload spool (VLT-007).
+                originalName: basename(body.path),
+              }
             : {}),
-        // The CLI's working directory travels with the request: the daemon has no
-        // working directory of the caller's, and the sender workspace governs the
-        // external-source policy of the import (VLT-016).
-        path:
-          typeof body.senderPath === "string"
-            ? body.senderPath
-            : typeof body.path === "string"
-              ? dirname(body.path)
-              : "",
-        userHome,
-        as: actor.value.as,
-        asUser: actor.value.asUser,
-      });
+          ...(typeof body.body === "string" ? { body: body.body } : {}),
+          ...(typeof body.supersedes === "string" ? { supersedes: body.supersedes } : {}),
+          allowExternalSource: body.allowExternalSource === true,
+          allowUnregistered: body.allowUnregistered === true,
+          ...(typeof body.idempotencyKey === "string"
+            ? { idempotencyKey: body.idempotencyKey }
+            : context.idempotencyKey !== undefined
+              ? { idempotencyKey: context.idempotencyKey }
+              : {}),
+          // The CLI's working directory travels with the request: the daemon has no
+          // working directory of the caller's, and the sender workspace governs the
+          // external-source policy of the import (VLT-016).
+          path:
+            typeof body.senderPath === "string"
+              ? body.senderPath
+              : typeof body.path === "string"
+                ? dirname(body.path)
+                : "",
+          userHome,
+          as: actor.value.as,
+          asUser: actor.value.asUser,
+        }),
+      );
       return void respond(response, context, result, 201);
     },
   });
@@ -692,8 +722,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           expectedRevision: body.expectedRevision as number,
           expectedRowVersion: body.expectedRowVersion as number,
         };
-        const ports = createNodeReviewPorts();
-        const result =
+        const result = withPorts(createNodeReviewPorts(), (ports) =>
           operation === "comment"
             ? setRecipientComment(ports, {
                 ...input,
@@ -703,7 +732,8 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
             : (operation === "start" ? startProcessing : completeProcessing)(ports, {
                 ...input,
                 ...(body.comment !== undefined ? { comment: body.comment as string } : {}),
-              });
+              }),
+        );
         return void respond(response, context, result);
       },
     });
@@ -717,13 +747,15 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const result = setReviewNote(createNodeReviewPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        text: String(body.text ?? ""),
-        ...(body.targetRevision !== undefined ? { targetRevision: body.targetRevision as number } : {}),
-        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
-      });
+      const result = withPorts(createNodeReviewPorts(), (ports) =>
+        setReviewNote(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          text: String(body.text ?? ""),
+          ...(body.targetRevision !== undefined ? { targetRevision: body.targetRevision as number } : {}),
+          ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -735,12 +767,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const actor = actorInputOf(url.searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const result = removeReviewNote(createNodeReviewPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
-        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
-      });
+      const result = withPorts(createNodeReviewPorts(), (ports) =>
+        removeReviewNote(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
+          ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -751,11 +785,13 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const result = withdrawReviewNote(createNodeReviewPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
-      });
+      const result = withPorts(createNodeReviewPorts(), (ports) =>
+        withdrawReviewNote(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -801,40 +837,44 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           return void respondError(response, context, actor.error);
         }
         const rowVersionField = fields.expectedRowVersion?.[0];
-        const result = reviseHandoff(createNodeRevisionPorts(), {
-          ...actor.value,
-          handoffId: (context.params?.id ?? "") as string,
-          file: file.path,
-          // The spool path is an opaque UUID, so the browser's filename is the
-          // original name the replacement Artifact must record (VLT-007).
-          originalName: file.filename,
-          fileSourceKind: "authenticated-spool",
-          allowExternalSource: true, // the browser upload is already the authenticated source
-          ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
-          ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
-          ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
-          ...(rowVersionField !== undefined ? { expectedRowVersion: Number(rowVersionField) } : {}),
-        });
+        const result = withPorts(createNodeRevisionPorts(), (ports) =>
+          reviseHandoff(ports, {
+            ...actor.value,
+            handoffId: (context.params?.id ?? "") as string,
+            file: file.path,
+            // The spool path is an opaque UUID, so the browser's filename is the
+            // original name the replacement Artifact must record (VLT-007).
+            originalName: file.filename,
+            fileSourceKind: "authenticated-spool",
+            allowExternalSource: true, // the browser upload is already the authenticated source
+            ...(fields.noChange?.[0] === "true" ? { noChange: true } : {}),
+            ...(typeof fields.reason?.[0] === "string" ? { reason: fields.reason[0] } : {}),
+            ...(context.idempotencyKey !== undefined ? { idempotencyKey: context.idempotencyKey } : {}),
+            ...(rowVersionField !== undefined ? { expectedRowVersion: Number(rowVersionField) } : {}),
+          }),
+        );
         upload.value.cleanup();
         return void respond(response, context, result);
       }
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const result = reviseHandoff(createNodeRevisionPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        ...(typeof body.path === "string" ? { file: body.path, originalName: basename(body.path) } : {}),
-        ...(body.noChange === true ? { noChange: true } : {}),
-        ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
-        ...(typeof body.idempotencyKey === "string"
-          ? { idempotencyKey: body.idempotencyKey }
-          : context.idempotencyKey !== undefined
-            ? { idempotencyKey: context.idempotencyKey }
-            : {}),
-        ...(body.allowExternalSource === true ? { allowExternalSource: true } : {}),
-        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
-      });
+      const result = withPorts(createNodeRevisionPorts(), (ports) =>
+        reviseHandoff(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          ...(typeof body.path === "string" ? { file: body.path, originalName: basename(body.path) } : {}),
+          ...(body.noChange === true ? { noChange: true } : {}),
+          ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+          ...(typeof body.idempotencyKey === "string"
+            ? { idempotencyKey: body.idempotencyKey }
+            : context.idempotencyKey !== undefined
+              ? { idempotencyKey: context.idempotencyKey }
+              : {}),
+          ...(body.allowExternalSource === true ? { allowExternalSource: true } : {}),
+          ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -849,12 +889,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       // not a stale one, so it answers CONFIG_INVALID instead of a bogus conflict.
       const expectations = numericExpectations(body, ["expectedRevision", "expectedRowVersion"]);
       if (!expectations.ok) return void respondError(response, context, expectations.error);
-      const result = acceptHandoff(createNodeTerminalPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        expectedRevision: expectations.value.expectedRevision,
-        expectedRowVersion: expectations.value.expectedRowVersion,
-      });
+      const result = withPorts(createNodeTerminalPorts(), (ports) =>
+        acceptHandoff(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          expectedRevision: expectations.value.expectedRevision,
+          expectedRowVersion: expectations.value.expectedRowVersion,
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -867,12 +909,14 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       if (!actor.ok) return void respondError(response, context, actor.error);
       const expectations = numericExpectations(body, ["expectedRowVersion"]);
       if (!expectations.ok) return void respondError(response, context, expectations.error);
-      const result = declineHandoff(createNodeTerminalPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        reason: String(body.reason ?? ""),
-        expectedRowVersion: expectations.value.expectedRowVersion,
-      });
+      const result = withPorts(createNodeTerminalPorts(), (ports) =>
+        declineHandoff(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          reason: String(body.reason ?? ""),
+          expectedRowVersion: expectations.value.expectedRowVersion,
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -883,11 +927,13 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const body = await readJsonBody(request);
       const actor = actorInputOf(new URL(request.url ?? "/", "http://127.0.0.1").searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const result = withdrawHandoff(createNodeTerminalPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
-      });
+      const result = withPorts(createNodeTerminalPorts(), (ports) =>
+        withdrawHandoff(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -907,18 +953,20 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const actor = actorInputOf(url.searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const result = approveDeletion(createNodeRetentionPorts(), {
-        ...actor.value,
-        handoffId: (context.params?.id ?? "") as string,
-        confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
-        ...(typeof body.confirmPinned === "string" ? { confirmPinned: body.confirmPinned } : {}),
-        ...(typeof body.idempotencyKey === "string"
-          ? { idempotencyKey: body.idempotencyKey }
-          : context.idempotencyKey !== undefined
-            ? { idempotencyKey: context.idempotencyKey }
-            : {}),
-        ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
-      });
+      const result = withPorts(createNodeRetentionPorts(), (ports) =>
+        approveDeletion(ports, {
+          ...actor.value,
+          handoffId: (context.params?.id ?? "") as string,
+          confirm: url.searchParams.get("confirm") === "true" || body.confirm === true,
+          ...(typeof body.confirmPinned === "string" ? { confirmPinned: body.confirmPinned } : {}),
+          ...(typeof body.idempotencyKey === "string"
+            ? { idempotencyKey: body.idempotencyKey }
+            : context.idempotencyKey !== undefined
+              ? { idempotencyKey: context.idempotencyKey }
+              : {}),
+          ...(body.expectedRowVersion !== undefined ? { expectedRowVersion: body.expectedRowVersion as number } : {}),
+        }),
+      );
       return void respond(response, context, result);
     },
   });
@@ -1108,13 +1156,12 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const actor = actorInputOf(url.searchParams, body);
       if (!actor.ok) return void respondError(response, context, actor.error);
-      const ports = createNodeRetentionPorts();
       const base = {
         ...actor.value,
         handoffId: (context.params?.id ?? "") as string,
         ...(typeof body.expectedRowVersion === "number" ? { expectedRowVersion: body.expectedRowVersion } : {}),
       };
-      const result =
+      const result = withPorts(createNodeRetentionPorts(), (ports) =>
         kind === "pin"
           ? pinHandoff(ports, base)
           : kind === "unpin"
@@ -1128,24 +1175,27 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
                   : rejectDeletion(ports, {
                       ...base,
                       ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
-                    });
+                    }),
+      );
       return void respond(response, context, result);
     };
   }
 
   async function resolveActor(body: Record<string, unknown>): Promise<CoreResult<ActorRef, AppError>> {
-    const ports = createNodeProjectPorts();
     if (body.asUser === true) return { ok: true, value: USER_ACTOR };
     if (typeof body.as === "string") {
-      const found = ports.projects.findProjectBySlug(body.as);
-      if (!found.ok) return found;
-      if (found.value === null) {
-        return {
-          ok: false,
-          error: appError("PROJECT_NOT_FOUND", `no Project matches the slug '${body.as}'`, { slug: body.as }),
-        };
-      }
-      return { ok: true, value: projectActor(found.value.id) };
+      const slug = body.as;
+      return withPorts(createNodeProjectPorts(), (ports) => {
+        const found = ports.projects.findProjectBySlug(slug);
+        if (!found.ok) return found;
+        if (found.value === null) {
+          return {
+            ok: false,
+            error: appError("PROJECT_NOT_FOUND", `no Project matches the slug '${slug}'`, { slug }),
+          };
+        }
+        return { ok: true, value: projectActor(found.value.id) };
+      });
     }
     return {
       ok: false,

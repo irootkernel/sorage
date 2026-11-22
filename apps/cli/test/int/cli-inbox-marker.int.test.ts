@@ -12,10 +12,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as inboxMarkerPorts from "@sorage/adapters/src/inbox-marker-ports";
 import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
 import { acquireLock, createNodeLockProbePorts } from "@sorage/adapters/src/lockfile";
 import { reconcileReboundInboxMarker } from "@sorage/core";
+import { assertWindowConnectionsClosed, openWindow, settleConnections } from "../fixtures/connection-window";
 import { runCli } from "../../src/main";
 
 /**
@@ -265,5 +267,68 @@ describe("the derived inbox marker behind handoff.inboxMarker", () => {
     expect(accept.exit).toBe(0);
     expect(accept.err).toContain("warning:");
     expect(accept.err).toContain("inbox marker");
+  });
+
+  it("opens zero marker DB ports on multi-recipient fan-out when disabled and leaks zero handles when enabled (TASK-151)", () => {
+    const { home, workB1, workB2 } = fixture();
+    const workC = join(home, "work-c");
+    mkdirSync(workC, { recursive: true });
+    expect(run(["project", "add", "--name", "Gamma", "--dir", workC]).exit).toBe(0);
+
+    // Disabled (default): zero createNodeInboxMarkerPorts calls and zero leaked connections.
+    settleConnections();
+    const disabledMark = openWindow();
+    const disabledSpy = vi.spyOn(inboxMarkerPorts, "createNodeInboxMarkerPorts");
+    try {
+      const disabledSend = run([
+        "send",
+        "--as",
+        "alpha",
+        "--to",
+        "beta",
+        "--to",
+        "gamma",
+        "--title",
+        "Disabled fan-out",
+        "--body",
+        "# Disabled",
+      ]);
+      expect(disabledSend.exit).toBe(0);
+      expect(disabledSpy).not.toHaveBeenCalled();
+    } finally {
+      disabledSpy.mockRestore();
+    }
+    assertWindowConnectionsClosed(disabledMark, "send fan-out with inboxMarker disabled");
+
+    // Enabled: one marker port composition shared across all recipients, zero leaked connections,
+    // and one failing recipient does not skip refreshing the remaining recipients.
+    expect(run(["config", "set", "handoff.inboxMarker", "true", "--as-user"]).exit).toBe(0);
+    chmodSync(workB2, 0o500);
+    settleConnections();
+    const enabledMark = openWindow();
+    const enabledSpy = vi.spyOn(inboxMarkerPorts, "createNodeInboxMarkerPorts");
+    try {
+      const enabledSend = run([
+        "send",
+        "--as",
+        "alpha",
+        "--to",
+        "beta",
+        "--to",
+        "gamma",
+        "--title",
+        "Enabled fan-out",
+        "--body",
+        "# Enabled",
+      ]);
+      expect(enabledSend.exit).toBe(0);
+      expect(enabledSpy).toHaveBeenCalledTimes(1);
+      expect(enabledSend.err).toContain("warning:");
+      expect(readFileSync(markerOf(workB1), "utf8")).toContain("Enabled fan-out");
+      expect(readFileSync(markerOf(workC), "utf8")).toContain("Enabled fan-out");
+    } finally {
+      enabledSpy.mockRestore();
+    }
+    assertWindowConnectionsClosed(enabledMark, "send fan-out with inboxMarker enabled");
   });
 });

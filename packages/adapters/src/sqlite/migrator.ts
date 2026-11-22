@@ -146,10 +146,18 @@ export function migrate(
   options: MigrateOptions = {},
 ): MigrationOutcome {
   const rebuilds = options.rebuilds ?? [];
-  const combined = combinedCatalog(migrations, rebuilds);
+  const ordered = orderedSteps(migrations, rebuilds);
+  const combined = ordered.map((migration) => ({ version: migration.version, name: migration.name }));
   // Admission before any DDL: a refused database is only ever read.
-  admitHistory(db, combined);
-  if (rebuilds.length > 0) {
+  const appliedRows = readAppliedRows(db);
+  admitRowsOrThrow(appliedRows, combined);
+  const applied = new Set(appliedRows.map((row) => row.version));
+  const toApply = ordered.filter((migration) => !applied.has(migration.version));
+  if (toApply.length === 0) {
+    return { appliedVersions: [], alreadyUpToDate: true };
+  }
+  const rebuildVersions = new Set(rebuilds.map((migration) => migration.version));
+  if (toApply.some((migration) => rebuildVersions.has(migration.version))) {
     return migrateRebuildBatch(migrations, rebuilds, combined, now, options);
   }
   return migrateOrdinary(db, migrations, combined, now);
@@ -382,10 +390,6 @@ function orderedSteps(migrations: Migration[], rebuilds: Migration[]): Migration
     }
   }
   return ordered;
-}
-
-function admitHistory(db: SorageSqlite, catalog: KnownSchemaVersion[]): void {
-  admitRowsOrThrow(readAppliedRows(db), catalog);
 }
 
 function admitRowsOrThrow(rows: AppliedMigrationRow[], catalog: KnownSchemaVersion[]): void {

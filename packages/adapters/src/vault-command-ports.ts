@@ -40,7 +40,7 @@ import {
   type VaultVerifyPorts,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
-import { type ConfigStore, createConfigStore } from "./config-store";
+import { type ConfigStore, createConfigStore, type ReadConfiguration } from "./config-store";
 import {
   createSqliteContentStore,
   receiptReferencedContentKeys,
@@ -61,6 +61,7 @@ import {
 } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { asAppCommandError, storageContentionOf } from "./storage-contention";
+import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { appendStructuredLog } from "./structured-log";
@@ -77,6 +78,10 @@ export interface NodeVaultCommandPortsOptions {
   /** Test seam for the injected mid-move failure of AJ-09. */
   afterStagedCopy?: ((relativePath: string) => void) | undefined;
   clock?: { now(): Date } | undefined;
+  /** Borrowed connection: caller owns its lifetime and closes it (ADR-0036). */
+  database?: SorageSqlite | undefined;
+  /** Borrowed operational configuration already read by an enclosing command (ADR-0036). */
+  configuration?: ReadConfiguration | undefined;
   /**
    * The invoking command family of SHR-015: when set, storage-preparation
    * contention in this composition's open, migration, and drain maps to the
@@ -122,7 +127,17 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     userHome,
   });
 
-  function installation(): Result<InstallationView, AppError> {
+  function installation(fresh = false): Result<InstallationView, AppError> {
+    if (!fresh && options.configuration !== undefined) {
+      const config = options.configuration.config;
+      return ok({
+        vaultPath: expandConfigurationPath(config.vault.path, userHome, home.home),
+        installationId: config.installationId,
+        etag: options.configuration.etag,
+        graceHours: config.gc.graceHours,
+        logging: config.logging,
+      });
+    }
     // A surfaced composition reads operationally: an unreadable configuration
     // is CONFIG_INVALID rather than the swallowed-absence NOT_INITIALIZED.
     const read = options.contentionSurface !== undefined ? store.readForOperation() : store.read();
@@ -148,6 +163,9 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     body: (db: ReturnType<typeof openAndMigrate>["db"]) => Result<T, AppError>,
   ): Result<T, AppError> {
     try {
+      if (options.database !== undefined) {
+        return body(options.database);
+      }
       const plan = productionMigrationPlan();
       const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
         rebuilds: plan.rebuilds,
@@ -186,9 +204,10 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     });
   }
 
-  /** The recorded current Artifacts; empty while the TASK-027 registry is absent. */
-  function recordedArtifacts(): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
-    return withDatabase((db) => {
+  function recordedArtifactsOn(
+    db: ReturnType<typeof openAndMigrate>["db"],
+  ): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
+    try {
       // The shared content-link guard runs before the missing-table empty
       // branch: a normalized database whose artifacts table or referenced
       // record rows are missing must surface as an integrity error — the
@@ -207,7 +226,18 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         )
         .all() as unknown as Array<{ storage_key: string; sha256: string }>;
       return ok(rows.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })));
-    });
+    } catch (error) {
+      return err(
+        appError("INTERNAL_ERROR", `Reading the recorded artifacts failed: ${messageOf(error)}.`, {
+          cause: String(error),
+        }),
+      );
+    }
+  }
+
+  /** The recorded current Artifacts; empty while the TASK-027 registry is absent. */
+  function recordedArtifacts(): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
+    return withDatabase(recordedArtifactsOn);
   }
 
   function directoryStats(path: string): Result<{ count: number; bytes: number }, AppError> {
@@ -531,7 +561,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         },
         config: {
           current: () => {
-            const now = installation();
+            const now = installation(true);
             if (!now.ok) return err(now.error);
             return ok({ vaultPath: now.value.vaultPath, etag: now.value.etag });
           },
@@ -627,7 +657,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
         // failed sweep never fails the command: doctor's vault.writable reports
         // the underlying condition.
         const surviving = log.pending();
-        const recorded = recordedArtifacts();
+        const recorded = recordedArtifactsOn(db);
         const contentKeys = recordedContentKeys(db);
         const receiptKeys = receiptReferencedContentKeys(db, clock.now());
         if (surviving.ok && recorded.ok && contentKeys.ok && receiptKeys.ok) {

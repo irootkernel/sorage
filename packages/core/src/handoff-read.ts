@@ -356,6 +356,13 @@ export interface InboxWaitOptions {
   intervalSeconds: number;
   timeoutSeconds: number;
   sleepMs: (ms: number) => void;
+  /**
+   * Optional per-iteration port scope: when supplied, the initial scope + seed
+   * pass, each seed retry, and each poll iteration each execute inside one
+   * invocation of `withPollPorts`, so multi-page listings share one coherent
+   * snapshot and no storage handle stays open across `sleepMs`.
+   */
+  withPollPorts?: <T>(body: (ports: HandoffReadPorts) => Result<T, AppError>) => Result<T, AppError>;
 }
 
 /** What one wait returns: the items that appeared after the wait began, or an empty list on timeout. */
@@ -400,40 +407,69 @@ export function waitForNewInboxItems(
 ): Result<WaitedInbox, AppError> {
   const bounds = validateBounds(query.filters);
   if (!bounds.ok) return bounds;
-  const scope = inboxScopeOf(ports, actorInput);
-  if (!scope.ok) return err(scope.error);
-  // The wait began now: no Handoff created after this instant can sort below an
-  // item that has not changed since, which is what lets each poll stop paging at
-  // the first item older than the wait. The deadline is measured from this same
-  // invocation instant, so a slow seed consumes the wait's budget (CHN-012).
-  const startedAt = ports.clock.now();
-  const startedAtIso = startedAt.toISOString();
-  const deadlineMs = startedAt.getTime() + options.timeoutSeconds * 1000;
+  const runPoll =
+    options.withPollPorts ?? (<T>(body: (pollPorts: HandoffReadPorts) => Result<T, AppError>) => body(ports));
+
+  // Resolve actor scope and attempt the initial full-inbox seed inside one
+  // coherent snapshot so an already-healthy startup uses one storage open.
+  // Startup open/scope failures fail fast instead of waiting until deadlineMs;
+  // retryable listing failures after scope resolution retry at the poll cadence.
+  let resolvedScope: ListingScope | null = null;
+  let startedAtIso = "";
+  let deadlineMs = 0;
+  let seed: HandoffView[] | null = null;
+  let tracked: AppError | null = null;
+
+  const initial = runPoll((pollPorts) => {
+    const scope = inboxScopeOf(pollPorts, actorInput);
+    if (!scope.ok) return err(scope.error);
+    resolvedScope = scope.value;
+    // The wait began now: no Handoff created after this instant can sort below an
+    // item that has not changed since, which is what lets each poll stop paging at
+    // the first item older than the wait. The deadline is measured from this same
+    // invocation instant, so a slow seed consumes the wait's budget (CHN-012).
+    const startedAt = pollPorts.clock.now();
+    startedAtIso = startedAt.toISOString();
+    deadlineMs = startedAt.getTime() + options.timeoutSeconds * 1000;
+    return pageThrough(pollPorts, scope.value, query.filters, query.limit);
+  });
+
+  if (resolvedScope === null) {
+    return initial.ok ? err(appError("INTERNAL_ERROR", "inbox wait scope could not be resolved")) : err(initial.error);
+  }
+  const scope: ListingScope = resolvedScope;
+
   const sleepUntil = (): boolean => {
     const remaining = deadlineMs - ports.clock.now().getTime();
     if (remaining <= 0) return false;
     options.sleepMs(Math.min(options.intervalSeconds * 1000, remaining));
     return true;
   };
-  let tracked: AppError | null = null;
+
+  if (initial.ok) {
+    seed = initial.value;
+  } else {
+    if (!isRetryableWaitListingFailure(initial.error)) return err(initial.error);
+    tracked = initial.error;
+  }
+
   // The initial seed must cover the whole filtered inbox, not only the first
   // page: an off-page item that changes state resurfaces at the head of a later
   // poll, and without the full seed it would falsely wake the wait as new. A
   // retryable listing failure restarts the whole seed at the poll cadence, and a
   // seed that completes at the deadline still delivers its arrivals.
-  let seed: HandoffView[] | null = null;
   while (seed === null) {
-    const attempt = pageThrough(ports, scope.value, query.filters, query.limit);
+    if (!sleepUntil()) {
+      if (tracked !== null) return err(tracked);
+      return ok({ handoffs: [], timedOut: true });
+    }
+    const attempt = runPoll((pollPorts) => pageThrough(pollPorts, scope, query.filters, query.limit));
     if (!attempt.ok) {
       if (!isRetryableWaitListingFailure(attempt.error)) return err(attempt.error);
       tracked = attempt.error;
     } else {
       seed = attempt.value;
       tracked = null;
-    }
-    if (seed === null && !sleepUntil()) {
-      if (tracked !== null) return err(tracked);
-      return ok({ handoffs: [], timedOut: true });
     }
   }
   // The first complete successful seed fixes the baseline: items created
@@ -451,7 +487,7 @@ export function waitForNewInboxItems(
     }
     // A poll pages past churned known items, because enough of them can fill the
     // first page and hide a genuinely new item one page deeper until the timeout.
-    const poll = collectFreshInboxItems(ports, scope.value, query, known, startedAtIso);
+    const poll = runPoll((pollPorts) => collectFreshInboxItems(pollPorts, scope, query, known, startedAtIso));
     if (!poll.ok) {
       if (!isRetryableWaitListingFailure(poll.error)) return poll;
       tracked = poll.error;

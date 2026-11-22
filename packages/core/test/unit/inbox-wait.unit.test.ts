@@ -582,4 +582,117 @@ describe("waitForNewInboxItems", () => {
       expect(result.value.handoffs).toEqual([]);
     }
   });
+
+  it("opens one withPollPorts scope across multi-page seed and polls and holds none open during sleep", () => {
+    resetClock();
+    const items: HandoffView[] = [view("h-1", nowMs - 2_000), view("h-2", nowMs - 1_000)];
+    let activeHandles = 0;
+    let totalPollScopes = 0;
+    let listPageCalls = 0;
+    const handlesDuringSleep: number[] = [];
+    const basePorts = portsOf(() => items);
+    // Real slicing paginator returning lastSortKey so limit: 1 genuinely spans
+    // multiple pages inside each single withPollPorts scope.
+    basePorts.handoffs.listPage = (_scope, filters, limit, afterSortKey) => {
+      listPageCalls += 1;
+      const sorted = [...items]
+        .filter((item) => filters.state === undefined || item.reviewState === filters.state)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+      const keyOf = (item: HandoffView) => `${item.updatedAt}|${item.id}`;
+      const startIndex = afterSortKey === null ? 0 : sorted.findIndex((item) => keyOf(item) === afterSortKey) + 1;
+      const slice = startIndex <= 0 && afterSortKey !== null ? [] : sorted.slice(startIndex, startIndex + limit);
+      const last = slice[slice.length - 1];
+      return ok({
+        items: slice.map((item) => ({ view: item, contentIntegrity: "ok" as const })),
+        lastSortKey: last === undefined ? null : keyOf(last),
+      });
+    };
+    const result = waitForNewInboxItems(
+      basePorts,
+      userActor,
+      { ...query, limit: 1 },
+      {
+        intervalSeconds: 1,
+        timeoutSeconds: 5,
+        sleepMs: (ms) => {
+          handlesDuringSleep.push(activeHandles);
+          nowMs += ms;
+          // Touch both known items so poll 1 must page across multiple pages before
+          // stopping, then deliver h-3 on poll 2.
+          for (let i = 0; i < items.length; i += 1) {
+            const existing = items[i];
+            if (existing !== undefined) {
+              items[i] = { ...existing, updatedAt: new Date(nowMs).toISOString() };
+            }
+          }
+          if (totalPollScopes === 2) {
+            items.push(view("h-3", nowMs + 1));
+          }
+        },
+        withPollPorts: (body) => {
+          totalPollScopes += 1;
+          activeHandles += 1;
+          try {
+            return body(basePorts);
+          } finally {
+            activeHandles -= 1;
+          }
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.timedOut).toBe(false);
+      expect(result.value.handoffs.map((h) => h.id)).toEqual(["h-3"]);
+    }
+    // 1 seed scope (3 pages for 2 items at limit 1) + 2 poll scopes (poll 1 pages
+    // across both churned known items; poll 2 sees h-3) = 3 scopes total, never per-page.
+    expect(totalPollScopes).toBe(3);
+    expect(listPageCalls).toBeGreaterThan(totalPollScopes);
+    expect(activeHandles).toBe(0);
+    expect(handlesDuringSleep).toEqual([0, 0]);
+  });
+
+  it("fails fast on startup withPollPorts open refusal without sleeping until timeout, while retrying post-scope transient refusals", () => {
+    resetClock();
+    const sleeps: number[] = [];
+    const basePorts = portsOf(() => []);
+    const startupFail = waitForNewInboxItems(basePorts, userActor, query, {
+      intervalSeconds: 1,
+      timeoutSeconds: 300,
+      sleepMs: (ms) => {
+        sleeps.push(ms);
+        nowMs += ms;
+      },
+      withPollPorts: () => err(appError("STORAGE_INSPECTION_UNAVAILABLE", "startup sidecar gap")),
+    });
+    expect(startupFail.ok).toBe(false);
+    if (!startupFail.ok) expect(startupFail.error.code).toBe("STORAGE_INSPECTION_UNAVAILABLE");
+    expect(sleeps).toEqual([]);
+
+    // Once initial scope resolves, a transient STORAGE_INSPECTION_UNAVAILABLE on
+    // a subsequent poll sleeps and retries cleanly until recovery.
+    resetClock();
+    const items: HandoffView[] = [];
+    const pollPorts = portsOf(() => items);
+    let calls = 0;
+    const recovered = waitForNewInboxItems(pollPorts, userActor, query, {
+      intervalSeconds: 1,
+      timeoutSeconds: 5,
+      sleepMs: (ms) => {
+        nowMs += ms;
+      },
+      withPollPorts: (body) => {
+        calls += 1;
+        if (calls === 2) return err(appError("STORAGE_INSPECTION_UNAVAILABLE", "transient contention"));
+        if (calls === 3) items.push(view("h-after-transient", nowMs));
+        return body(pollPorts);
+      },
+    });
+    expect(recovered.ok).toBe(true);
+    if (recovered.ok) {
+      expect(recovered.value.handoffs.map((h) => h.id)).toEqual(["h-after-transient"]);
+    }
+    expect(calls).toBe(3);
+  });
 });

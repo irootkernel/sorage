@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as readStorage from "@sorage/adapters/src/read-storage";
+import { assertWindowConnectionsClosed, openWindow, settleConnections } from "../fixtures/connection-window";
 import { runCli } from "../../src/main";
 
 /**
@@ -127,5 +129,56 @@ describe("sorage inbox --wait", () => {
     const exit = runCli(["inbox", "--as", "beta", "--wait", "--cursor", "opaque", "--json"], wait.ports);
     expect(exit).toBe(2);
     expect(wait.errText()).toContain("inbox --wait cannot combine with --cursor");
+  });
+
+  it("opens one CoveredReadStorage per multi-page poll iteration and closes every handle cleanly (TASK-151)", () => {
+    fixture();
+    // Seed 3 existing items so --limit 1 forces 4 pages per full seed/poll scan.
+    for (let i = 1; i <= 3; i += 1) {
+      expect(
+        runCli(
+          ["send", "--as", "alpha", "--to", "beta", "--title", `Seed ${i}`, "--body", `body ${i}`],
+          capture().ports,
+        ),
+      ).toBe(0);
+    }
+    settleConnections();
+    const mark = openWindow();
+    const realOpen = readStorage.openCoveredReadStorage;
+    let opens = 0;
+    let closes = 0;
+    const spy = vi.spyOn(readStorage, "openCoveredReadStorage").mockImplementation((options) => {
+      opens += 1;
+      const result = realOpen(options);
+      if (!result.ok) return result;
+      const originalClose = result.value.close.bind(result.value);
+      return {
+        ok: true,
+        value: {
+          ...result.value,
+          close: () => {
+            closes += 1;
+            originalClose();
+          },
+        },
+      };
+    });
+    try {
+      const wait = capture();
+      const exit = runCli(
+        ["inbox", "--as", "beta", "--wait", "--limit", "1", "--timeout", "1", "--interval", "1", "--json"],
+        wait.ports,
+      );
+      expect(exit).toBe(0);
+      expect(wait.errText()).toBe("");
+      const envelope = JSON.parse(wait.outText()) as WaitEnvelope;
+      expect(envelope.meta.timedOut).toBe(true);
+      // 1 seed (spanning 4 pages on ONE handle!) + 1 poll after 1s sleep = 2 opens total, NOT 1 outer + 5 per-page.
+      expect(opens).toBe(2);
+      expect(closes).toBe(opens);
+    } finally {
+      spy.mockRestore();
+    }
+    assertWindowConnectionsClosed(mark, "inbox --wait multi-page");
   });
 });

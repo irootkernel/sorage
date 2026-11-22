@@ -21,6 +21,7 @@ This file records concise shipped outcomes and the planned next stable release.
 - Clean up temporary `.sorage-vault.json.tmp-<pid>` files on `adoptMarker` failures so same-process retries succeed without `EEXIST`.
 - Remove double HTML-entity escaping in Web Markdown preview (`renderMarkdownSafe`) so angle brackets and ampersands render uncorrupted via `textContent` without HTML parsing.
 - Percent-encode Web UI URL query and hash interpolations with `encodeURIComponent`, deduplicate Backup page runs by `run.id`, paginate Web dashboard/deletion-request/unregistered-workspace Handoff aggregates beyond a single page, and debounce Memo editor preview and byte-counting with synchronous draft tracking and submit flush.
+- Eliminate the startup migrator write-lock storm on up-to-date databases, reuse command-scoped SQLite connections and operational configuration across Handoff, Project, and startup-drain port bundles with explicit `.close()` lifecycle cleanup, open one coherent `CoveredReadStorage` per `inbox --wait` poll iteration without holding an idle handle across sleeps, and check `handoff.inboxMarker` before opening marker database ports on fan-out refreshes.
 
 ## v0.1.5 - 2026-11-22
 
