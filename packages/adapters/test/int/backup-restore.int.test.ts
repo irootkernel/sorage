@@ -266,7 +266,7 @@ describe("backupRestore across two installations", () => {
     expect(JSON.parse((restoredFirst as { metadata_json: string }).metadata_json)).toEqual(exportedFirst.metadata);
     const types = db
       .prepare(
-        "SELECT event_type FROM events WHERE id NOT IN ('44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555') ORDER BY created_at",
+        "SELECT event_type FROM events WHERE id NOT IN ('44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555') ORDER BY created_at, rowid",
       )
       .all() as Array<{ event_type: string }>;
     expect(types.map((row) => row.event_type)).toEqual(["VAULT_ADOPTED", "RESTORE_COMPLETED"]);

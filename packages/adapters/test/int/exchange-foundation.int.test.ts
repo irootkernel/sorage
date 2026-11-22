@@ -17,6 +17,7 @@ import {
   type ExchangeSnapshotRecord,
   exportSnapshot,
   initializeInstallation,
+  knownSchemaMaximum,
   type Result,
   runBackupCommand,
 } from "@sorage/core";
@@ -151,7 +152,7 @@ describe("the real SQLite Exchange storage foundation", () => {
     }
     const reopened = openAndMigrate(path, plan.migrations, { rebuilds: plan.rebuilds });
     try {
-      expect(counts(reopened.db, "schema_migrations")).toBe(16);
+      expect(counts(reopened.db, "schema_migrations")).toBe(knownSchemaMaximum());
     } finally {
       reopened.db.close();
     }

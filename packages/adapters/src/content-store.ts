@@ -2453,7 +2453,9 @@ export function sqliteContentReferences(db: SorageSqlite): ContentReferences {
       // a broken parser result must never become deletion license.
       try {
         const rows = db
-          .prepare("SELECT scope, response_json FROM idempotency_keys WHERE scope LIKE 'memo:%' AND expires_at > ?")
+          .prepare(
+            "SELECT scope, response_json FROM idempotency_keys WHERE scope >= 'memo:' AND scope < 'memo;' AND expires_at > ?",
+          )
           .all(now.toISOString()) as unknown as Array<{ scope: string; response_json: string }>;
         const ids: string[] = [];
         for (const row of rows) {

@@ -19,7 +19,11 @@ import { type AppError, appError } from "./errors";
  * is refused by the migration-name check rather than migrated (CHN-009).
  * Version 12 appends the Handoff reporting fields and recipient comment
  * purpose/activity without rewriting the version-11 tables or migration.
- * Version 13 appends the Exchange storage foundation.
+ * Versions 13 through 16 append the Exchange storage, collaboration, lifecycle
+ * and response-notice schemas.
+ * Version 17 (`m11-secondary-indexes-v1`) appends twelve additive secondary,
+ * foreign-key and sort indexes under SHR-009 with no table rebuilds and no
+ * backup-format change.
  */
 
 export interface KnownSchemaVersion {
@@ -44,6 +48,7 @@ export const KNOWN_SCHEMA_HISTORY: readonly KnownSchemaVersion[] = [
   { version: 14, name: "exchange-collaboration" },
   { version: 15, name: "exchange-lifecycle" },
   { version: 16, name: "exchange-notices" },
+  { version: 17, name: "m11-secondary-indexes-v1" },
 ];
 
 /** The highest database schema version this build knows. */
@@ -56,13 +61,15 @@ export function knownSchemaEntry(version: number): KnownSchemaVersion | undefine
 }
 
 /**
- * The read surfaces that share this inventory (section 38.7): the operational
- * migrator and preflight read every known version; send replay-only reads
- * complete known receipt histories from version 4 on; Memo surfaces read only
- * histories that contain the Memo domain from version 7 on; Channel surfaces
- * require the Channel migration of TASK-109, so earlier versions are ineligible.
+ * The read surfaces that share this inventory (section 38.7 and section 42.2):
+ * the operational migrator and preflight read every known version; send
+ * replay-only reads complete known receipt histories from version 4 on; Memo
+ * surfaces read only histories that contain the Memo domain from version 7 on;
+ * Channel surfaces require the rebuilt Channel migration from version 11 on;
+ * Exchange surfaces require the complete shipped Exchange schema from version
+ * 16 (`exchange-notices`) on.
  */
-export type SchemaSurface = "operational" | "preflight" | "send-replay" | "memo" | "channel";
+export type SchemaSurface = "operational" | "preflight" | "send-replay" | "memo" | "channel" | "exchange";
 
 export const SCHEMA_SURFACE_FLOORS: Record<SchemaSurface, number> = {
   operational: 1,
@@ -70,6 +77,7 @@ export const SCHEMA_SURFACE_FLOORS: Record<SchemaSurface, number> = {
   "send-replay": 4,
   memo: 7,
   channel: 11,
+  exchange: 16,
 };
 
 /** The lowest applied maximum a surface can read; a floor above the build's maximum means the surface does not exist yet. */

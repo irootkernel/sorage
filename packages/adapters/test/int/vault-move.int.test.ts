@@ -186,7 +186,7 @@ describe("moveVault", () => {
       // The mover's drain completed the activation before the copy and its
       // success event landed in the ledger beside VAULT_MOVED.
       const events = database
-        .prepare("SELECT event_type, handoff_id, actor_kind, metadata_json FROM events ORDER BY created_at")
+        .prepare("SELECT event_type, handoff_id, actor_kind, metadata_json FROM events ORDER BY created_at, rowid")
         .all() as Array<{ event_type: string; handoff_id: string | null; actor_kind: string; metadata_json: string }>;
       expect(events.map((event) => event.event_type)).toEqual(["ARTIFACT_ACTIVATED", "VAULT_MOVED"]);
       expect(events[0]?.handoff_id).toBe(handoffId);

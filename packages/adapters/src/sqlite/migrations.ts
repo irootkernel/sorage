@@ -1132,25 +1132,45 @@ WHERE NOT EXISTS (
 `,
 };
 
+export const M11_SECONDARY_INDEXES_MIGRATION: Migration = {
+  version: 17,
+  name: "m11-secondary-indexes-v1",
+  sql: `
+CREATE INDEX idx_content_records_storage_key ON content_records(storage_key) WHERE storage_key IS NOT NULL;
+CREATE INDEX idx_pending_fs_ops_op_to_path ON pending_fs_ops(op, to_path);
+CREATE INDEX idx_project_memos_content_record ON project_memos(content_record_id);
+CREATE INDEX idx_handoffs_recipient_updated ON handoffs(recipient_project_id, updated_at DESC, id DESC);
+CREATE INDEX idx_handoffs_sender_updated ON handoffs(sender_project_id, updated_at DESC, id DESC);
+CREATE INDEX idx_handoffs_updated ON handoffs(updated_at DESC, id DESC);
+CREATE INDEX idx_events_created ON events(created_at DESC, id DESC);
+CREATE INDEX idx_exchange_claims_project ON exchange_claims(project_id);
+CREATE INDEX idx_exchange_notice_claims_project ON exchange_notice_claims(project_id);
+CREATE INDEX idx_exchange_materials_content ON exchange_materials(content_id);
+CREATE INDEX idx_exchange_cleanup_items_content ON exchange_cleanup_items(content_id);
+CREATE INDEX idx_idempotency_keys_scope_expires ON idempotency_keys(scope, expires_at);
+`,
+};
+
 export interface ProductionMigrationPlan {
   migrations: Migration[];
   rebuilds: Migration[];
 }
 
 /**
- * The single production migration plan of TASK-107 through TASK-129 (SHR-009,
- * interface section 38.7): the raw `MIGRATIONS` list stays exactly versions 1
- * to 8 — the legacy fixture catalog every historical builder migrates with —
- * while the production accessor appends the Channel migration at version 11
- * and appends Handoff reporting at version 12 and Exchange at versions 13
- * through 16 as ordinary steps. It registers versions 9 and 10
- * exactly once each as the rebuild-marked steps. The combined runner orders
- * every pending step by version, so ordinary 11 through 16 execute after rebuilds
- * 9 and 10 inside the one guarded whole-batch path the non-empty rebuild set already
- * selects; no runner branch changes. Every production opener, the migrator's
- * admission catalog, and preflight's reference catalog consume this one
- * accessor so no surface can drift, never a second ordinary registration, and
- * never a silent bypass of the dedicated path.
+ * The single production migration plan of TASK-107 through TASK-152 (SHR-009,
+ * interface sections 38.7 and 42.2): the raw `MIGRATIONS` list stays exactly
+ * versions 1 to 8 — the legacy fixture catalog every historical builder
+ * migrates with — while the production accessor appends the Channel migration
+ * at version 11, Handoff reporting at version 12, Exchange at versions 13
+ * through 16, and the additive M11 secondary/FK/sort indexes at version 17 as
+ * ordinary steps. It registers versions 9 and 10 exactly once each as the
+ * rebuild-marked steps. The combined runner orders every pending step by
+ * version, so ordinary 11 through 17 execute after rebuilds 9 and 10 when
+ * upgrading from before version 9, and execute directly on the ordinary path
+ * when upgrading from version 10 or later (TASK-151). Every production opener,
+ * the migrator's admission catalog, and preflight's reference catalog consume
+ * this one accessor so no surface can drift, never a second ordinary
+ * registration, and never a silent bypass of the dedicated path.
  */
 export function productionMigrationPlan(): ProductionMigrationPlan {
   return {
@@ -1162,6 +1182,7 @@ export function productionMigrationPlan(): ProductionMigrationPlan {
       EXCHANGE_COLLABORATION_MIGRATION,
       EXCHANGE_LIFECYCLE_MIGRATION,
       EXCHANGE_NOTICES_MIGRATION,
+      M11_SECONDARY_INDEXES_MIGRATION,
     ],
     rebuilds: [HANDOFF_SHARED_CONTENT_REBUILD_MIGRATION, MEMO_SHARED_CONTENT_REBUILD_MIGRATION],
   };

@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Changed
 
 - **Breaking behavior restriction:** Refuse fresh self-handoffs where the resolved registered sender Project equals a recipient Project (`HANDOFF_INVALID_INPUT`, HTTP 422, CLI exit 64, all-or-nothing across single and fan-out sends on CLI, HTTP, and MCP), while preserving User and unregistered-Workspace sends, pre-M11 idempotency replay, and pre-M11 rows with unified role resolution and `PRJ-020` inherited-workspace sender authority.
+- **One-way additive schema upgrade (`17 / m11-secondary-indexes-v1`):** Append twelve secondary, foreign-key, and sort indexes with no table rebuilds, switch Memo receipt scanning in `content-store.ts` to a `BINARY`-indexable prefix range (`scope >= 'memo:' AND scope < 'memo;'`), and add `"exchange"` (floor `16`) to `SchemaSurface` while keeping global backup format `5` and Format 1–5 legacy restore readers unchanged; guarded v0.1.5 binaries fail closed with `STORAGE_SCHEMA_UNSUPPORTED` on upgraded v17 databases, and rollback restores a verified pre-upgrade backup with its matching prior executable into a separate empty home and Vault.
 
 ### Fixed
 

@@ -15,6 +15,7 @@ import {
   declineHandoff,
   fetchHandoff,
   initializeInstallation,
+  knownSchemaMaximum,
   listChannelMessages,
   postMessage,
   renameProject,
@@ -641,9 +642,9 @@ describe("the narrow Memo CLI startup classifier (TASK-127)", () => {
 
 describe("the unchanged Memo repository and composition", () => {
   it("keeps Memo output byte-for-byte through factory contention and busy Project lookups (V2)", () => {
-    // Factory open contention: make schema v16 pending so openAndMigrate inside
-    // createNodeMemoPorts genuinely contends on the held write lock with a short
-    // busy timeout.
+    // Factory open contention: make the latest additive migration pending so
+    // openAndMigrate inside createNodeMemoPorts genuinely contends on the held
+    // write lock with a short busy timeout.
     const realOpen = sqliteConnections.openSorageDatabase;
     const openSpy = vi.spyOn(sqliteConnections, "openSorageDatabase").mockImplementation((path: string) => {
       const db = realOpen(path);
@@ -652,7 +653,7 @@ describe("the unchanged Memo repository and composition", () => {
     });
     const downgrade = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     try {
-      downgrade.exec("DELETE FROM schema_migrations WHERE version = 16");
+      downgrade.prepare("DELETE FROM schema_migrations WHERE version = ?").run(knownSchemaMaximum());
     } finally {
       downgrade.close();
     }
@@ -706,7 +707,7 @@ describe("the composition factories", () => {
       // on the held write lock during factory construction.
       const downgrade = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
       try {
-        downgrade.exec("DELETE FROM schema_migrations WHERE version = 16");
+        downgrade.prepare("DELETE FROM schema_migrations WHERE version = ?").run(knownSchemaMaximum());
       } finally {
         downgrade.close();
       }
@@ -772,16 +773,17 @@ describe("the composition factories", () => {
 describe("the flagged startup drain", () => {
   it("classifies migration contention and the drain-internal failure separately, on both surfaces (W1)", async () => {
     const realOpen = sqliteConnections.openSorageDatabase;
-    // Case (a): make schema v16 pending and hold the write lock before the drain
-    // opens, so openAndMigrate inside withDatabase() refuses at the migration
-    // site before the drain body executes.
-    let savedV16: { version: number; name: string; applied_at: string };
+    // Case (a): make the latest additive migration pending and hold the write
+    // lock before the drain opens, so openAndMigrate inside withDatabase()
+    // refuses at the migration site before the drain body executes.
+    let savedLatest: { version: number; name: string; applied_at: string };
+    const latestVersion = knownSchemaMaximum();
     const downgrade = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     try {
-      savedV16 = downgrade
-        .prepare("SELECT version, name, applied_at FROM schema_migrations WHERE version = 16")
-        .get() as { version: number; name: string; applied_at: string };
-      downgrade.exec("DELETE FROM schema_migrations WHERE version = 16");
+      savedLatest = downgrade
+        .prepare("SELECT version, name, applied_at FROM schema_migrations WHERE version = ?")
+        .get(latestVersion) as { version: number; name: string; applied_at: string };
+      downgrade.prepare("DELETE FROM schema_migrations WHERE version = ?").run(latestVersion);
     } finally {
       downgrade.close();
     }
@@ -813,12 +815,12 @@ describe("the flagged startup drain", () => {
         lock.release();
       }
 
-      // Restore the exact v16 history row so Case (b) observes an up-to-date DB.
+      // Restore the exact latest history row so Case (b) observes an up-to-date DB.
       const restore = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
       try {
         restore
           .prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
-          .run(savedV16.version, savedV16.name, savedV16.applied_at);
+          .run(savedLatest.version, savedLatest.name, savedLatest.applied_at);
       } finally {
         restore.close();
       }
@@ -1158,11 +1160,11 @@ describe("a write-protected installation (TASK-119)", () => {
     return restore;
   }
 
-  /** Makes schema v16 pending so writable openAndMigrate genuinely runs DDL. */
+  /** Makes the latest additive migration pending so writable openAndMigrate genuinely runs DDL. */
   function markMigrationPending(): void {
     const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
     try {
-      db.exec("DELETE FROM schema_migrations WHERE version = 16");
+      db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(knownSchemaMaximum());
     } finally {
       db.close();
     }

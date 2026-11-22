@@ -135,6 +135,7 @@ describe("the replaced version-11 slot (channels-v2)", () => {
       { version: 14, name: "exchange-collaboration" },
       { version: 15, name: "exchange-lifecycle" },
       { version: 16, name: "exchange-notices" },
+      { version: 17, name: "m11-secondary-indexes-v1" },
     ]);
     const catalog = [
       ...plan.migrations.map((migration) => ({ version: migration.version, name: migration.name })),
