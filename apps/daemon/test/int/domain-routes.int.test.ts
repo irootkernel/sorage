@@ -648,13 +648,15 @@ describe("matrix rows 10 and 11: hostile content types never render inline (WEB-
     expect(String(served.headers["content-type"])).toContain("text/");
     expect(String(served.headers["content-type"])).not.toContain("html");
     expect(served.body).toContain("<script>alert(3)</script>");
-    // The client script escapes before building DOM nodes and never uses
-    // innerHTML; the CSP of row 9 blocks the external image load.
+    // The client script builds DOM nodes exclusively through textContent (never
+    // innerHTML, and without double-escaping HTML entities); the CSP of row 9
+    // blocks external image loads.
     const script = await call("/assets/app.js", { bearer: null });
     expect(script.status).toBe(200);
     expect(script.body).not.toContain("innerHTML");
     expect(script.body).toContain("renderMarkdownSafe");
-    expect(script.body).toContain('replace(/</g, "&lt;")');
+    expect(script.body).toContain("node.textContent =");
+    expect(script.body).not.toContain('replace(/</g, "&lt;")');
   });
 });
 

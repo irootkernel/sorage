@@ -38,10 +38,24 @@ beforeAll(async () => {
   writeFileSync(join(work, "brief.md"), "# The backup web brief\n");
   expect(sorage(["project", "add", "--name", "App", "--dir", work, "--json"], { home, cwd: work }).status).toBe(0);
   expect(
-    sorage(["send", "--to", "app", "--title", "The backup web brief", "--file", join(work, "brief.md"), "--json"], {
-      home,
-      cwd: work,
-    }).status,
+    sorage(
+      [
+        "send",
+        "--as-user",
+        "--allow-external-source",
+        "--to",
+        "app",
+        "--title",
+        "The backup web brief",
+        "--file",
+        join(work, "brief.md"),
+        "--json",
+      ],
+      {
+        home,
+        cwd: work,
+      },
+    ).status,
   ).toBe(0);
   expect(sorage(["backup", "run", "--json"], { home }).status).toBe(0);
   expect(sorage(["daemon", "start", "--json"], { home }).status).toBe(0);
@@ -72,6 +86,7 @@ describe("the Web backup page and the Backup Health card", () => {
     // BKP-018: the backup page states the protection plainly.
     await page.goto(`http://127.0.0.1:${port}/#/backup`);
     await page.waitForSelector("table tbody tr");
+    expect(await page.locator("table tbody tr").count()).toBe(1);
     const body = (await page.textContent("main")) ?? "";
     expect(body).toContain("Protection is local-only.");
     expect(body).toContain("Recent runs");

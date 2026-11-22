@@ -213,6 +213,43 @@ export const WEB_APP_JS = `(function () {
       .then(function (response) { return response.json().then(function (body) { return { status: response.status, body: body }; }); });
   }
 
+  function hashQuery() {
+    var qIdx = location.hash.indexOf("?");
+    return qIdx === -1 ? "" : location.hash.slice(qIdx + 1);
+  }
+
+  function decodeHashSegment(value) {
+    try { return decodeURIComponent(value); } catch (error) { return value; }
+  }
+
+  function fetchAllHandoffs(baseUrl, isStale) {
+    var all = [];
+    var seen = new Set();
+    var seenCursors = new Set();
+    function nextPage(cursor) {
+      if (isStale && isStale()) return Promise.resolve({ stale: true });
+      var url = cursor ? baseUrl + "&cursor=" + encodeURIComponent(cursor) : baseUrl;
+      return api(url).then(function (result) {
+        if (isStale && isStale()) return { stale: true };
+        if (result.status !== 200) return result;
+        var data = result.body && result.body.data ? result.body.data : { handoffs: [], nextCursor: null };
+        var pageItems = Array.isArray(data.handoffs) ? data.handoffs : [];
+        pageItems.forEach(function (handoff) {
+          if (!seen.has(handoff.id)) {
+            seen.add(handoff.id);
+            all.push(handoff);
+          }
+        });
+        if (data.nextCursor && !seenCursors.has(data.nextCursor) && pageItems.length > 0) {
+          seenCursors.add(data.nextCursor);
+          return nextPage(data.nextCursor);
+        }
+        return { status: 200, body: { ok: true, data: { handoffs: all, nextCursor: null } } };
+      });
+    }
+    return nextPage(null);
+  }
+
   function el(tag, attributes, children) {
     var node = document.createElement(tag);
     Object.keys(attributes || {}).forEach(function (key) {
@@ -281,15 +318,14 @@ export const WEB_APP_JS = `(function () {
   }
 
   function renderMarkdownSafe(text) {
-    // Escape first, then re-enable the tiny markdown subset as elements; no raw
-    // HTML from the document ever reaches the DOM (WEB-006).
+    // Build DOM nodes exclusively via el(..., { text }) (textContent); no raw
+    // HTML from the document is ever parsed (WEB-006).
     var lines = String(text).split("\\n");
     var container = el("div", {});
     var list = null;
     lines.forEach(function (line) {
-      var safe = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      var heading = /^(#{1,3})\\s+(.*)$/.exec(safe);
-      var bullet = /^[-*]\\s+(.*)$/.exec(safe);
+      var heading = /^(#{1,3})\\s+(.*)$/.exec(line);
+      var bullet = /^[-*]\\s+(.*)$/.exec(line);
       if (heading !== null) {
         list = null;
         container.appendChild(el("h" + (heading[1].length + 2), { text: heading[2] }));
@@ -298,7 +334,7 @@ export const WEB_APP_JS = `(function () {
         list.appendChild(el("li", { text: bullet[1] }));
       } else {
         list = null;
-        container.appendChild(el("p", { text: safe }));
+        container.appendChild(el("p", { text: line }));
       }
     });
     return container;
@@ -315,9 +351,11 @@ export const WEB_APP_JS = `(function () {
     var counts = el("div", { class: "counts" });
     var states = {};
     var retention = { pinned: 0, archived: 0, deletionRequested: 0, deleted: 0 };
-    api("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200").then(function (result) {
+    fetchAllHandoffs("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200", function () {
+      return !pending.isConnected;
+    }).then(function (result) {
       // A late response must not paint into whatever view navigated in meanwhile.
-      if (!pending.isConnected) return;
+      if (result.stale || !pending.isConnected) return;
       pending.remove();
       if (result.status !== 200) { note("The dashboard could not load: " + result.body.error.code); return; }
       result.body.data.handoffs.forEach(function (handoff) {
@@ -342,6 +380,7 @@ export const WEB_APP_JS = `(function () {
       var health = el("div", { class: "stat backup-health", "data-state": "backup-ok" });
       counts.appendChild(health);
       api("/api/v1/backup/status").then(function (statusResult) {
+        if (!health.isConnected) return;
         if (statusResult.status !== 200) {
           health.setAttribute("data-state", "backup-warn");
           health.appendChild(el("strong", { text: "Backup: unknown" }));
@@ -356,6 +395,11 @@ export const WEB_APP_JS = `(function () {
         health.setAttribute("data-state", healthy ? "backup-ok" : "backup-warn");
         health.appendChild(el("strong", { text: healthy ? "Backup: healthy" : "Backup: needs attention" }));
         health.appendChild(el("span", { text: protection + (status.lastAttempt !== null ? ", last run " + status.lastAttempt.outcome : ", never run") }));
+      }).catch(function () {
+        if (!health.isConnected) return;
+        health.setAttribute("data-state", "backup-warn");
+        health.appendChild(el("strong", { text: "Backup: unknown" }));
+        health.appendChild(el("span", { text: "the status endpoint is unavailable" }));
       });
       view().appendChild(counts);
       view().appendChild(el("h3", { text: "Recent updates" }));
@@ -368,21 +412,25 @@ export const WEB_APP_JS = `(function () {
       result.body.data.handoffs.slice(0, 10).forEach(function (handoff) {
         body.appendChild(el("tr", {}, [
           el("td", {}, [timeNode(handoff.updatedAt || handoff.createdAt || "")]),
-          el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
+          el("td", {}, [el("a", { href: "#/handoff/" + encodeURIComponent(handoff.id), text: handoff.title })]),
           el("td", {}, [badge(handoff.reviewState)]),
         ]));
       });
       recent.appendChild(body);
       view().appendChild(recent);
+    }).catch(function () {
+      if (!pending.isConnected) return;
+      pending.remove();
+      note("The dashboard could not load.");
     });
   }
 
   function listing(kind) {
-    var query = location.hash.split("?")[1] || "";
+    var query = hashQuery();
     var params = new URLSearchParams(query);
-    var url = "/api/v1/handoffs?box=" + kind + (store.as ? "&as=" + encodeURIComponent(store.as) : "&asUser=true");
+    var url = "/api/v1/handoffs?box=" + encodeURIComponent(kind) + (store.as ? "&as=" + encodeURIComponent(store.as) : "&asUser=true");
     ["state", "sender", "recipient", "updatedSince", "updatedUntil", "includeArchived", "includeDeleted"].forEach(function (key) {
-      if (params.has(key)) url += "&" + key + "=" + params.get(key);
+      if (params.has(key)) url += "&" + key + "=" + encodeURIComponent(params.get(key));
     });
     view().replaceChildren();
     view().appendChild(el("h2", { text: kind === "inbox" ? "Inbox" : "Outbox" }));
@@ -457,7 +505,7 @@ export const WEB_APP_JS = `(function () {
       }
       result.body.data.handoffs.forEach(function (handoff) {
         body.appendChild(el("tr", {}, [
-          el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
+          el("td", {}, [el("a", { href: "#/handoff/" + encodeURIComponent(handoff.id), text: handoff.title })]),
           el("td", {}, [badge(handoff.reviewState)]),
           el("td", {}, [el("span", { class: "mono", text: String(handoff.revision) })]),
           el("td", { class: "report-summary" }, [el("div", { text: readText(handoff) }), el("div", { text: processingText(handoff) }), el("div", { class: "muted", text: handoff.comment ? commentText(handoff.comment, handoff.revision) : "No recipient comment" })]),
@@ -473,8 +521,10 @@ export const WEB_APP_JS = `(function () {
     var pending = loading("Loading the deletion requests…");
     view().appendChild(pending);
     view().appendChild(el("p", { class: "muted", text: "Approve or reject a request from the Handoff detail view; approval of a pinned Handoff asks for the distinct confirmation there." }));
-    api("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200").then(function (result) {
-      if (!pending.isConnected) return;
+    fetchAllHandoffs("/api/v1/handoffs?asUser=true&includeArchived=true&includeDeleted=true&limit=200", function () {
+      return !pending.isConnected;
+    }).then(function (result) {
+      if (result.stale || !pending.isConnected) return;
       pending.remove();
       if (result.status !== 200) { note("The deletion requests could not load: " + result.body.error.code); return; }
       var requested = result.body.data.handoffs.filter(function (handoff) { return handoff.pendingDeletionRequest === true; });
@@ -487,21 +537,26 @@ export const WEB_APP_JS = `(function () {
       table.appendChild(body);
       requested.forEach(function (handoff) {
         body.appendChild(el("tr", {}, [
-          el("td", {}, [el("a", { href: "#/handoff/" + handoff.id, text: handoff.title })]),
+          el("td", {}, [el("a", { href: "#/handoff/" + encodeURIComponent(handoff.id), text: handoff.title })]),
           el("td", {}, [badge(handoff.reviewState)]),
           el("td", { text: handoff.pinned === true ? "pinned" : "" }),
         ]));
       });
       view().appendChild(table);
+    }).catch(function () {
+      if (!pending.isConnected) return;
+      pending.remove();
+      note("The deletion requests could not load.");
     });
   }
 
   function detail(id) {
+    var encodedId = encodeURIComponent(id);
     view().replaceChildren();
     view().appendChild(el("h2", { text: "Handoff" }));
     var pending = loading("Loading the Handoff…");
     view().appendChild(pending);
-    api("/api/v1/handoffs/" + id + "?asUser=true").then(function (result) {
+    api("/api/v1/handoffs/" + encodedId + "?asUser=true").then(function (result) {
       if (!pending.isConnected) return;
       pending.remove();
       if (result.status !== 200) { view().appendChild(el("p", { text: "Not found: " + result.body.error.code })); return; }
@@ -557,7 +612,7 @@ export const WEB_APP_JS = `(function () {
         var revealStatus = el("span", { class: "muted", text: "" });
         var reveal = el("button", { text: "Reveal in Finder" });
         reveal.addEventListener("click", function () {
-          api("/api/v1/handoffs/" + id + "/artifact/reveal?asUser=true", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(function (outcome) {
+          api("/api/v1/handoffs/" + encodedId + "/artifact/reveal?asUser=true", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(function (outcome) {
             revealStatus.textContent = outcome.body.ok ? " " + outcome.body.data.localPath : " " + outcome.body.error.code;
           });
         });
@@ -567,7 +622,7 @@ export const WEB_APP_JS = `(function () {
         download.addEventListener("click", function () {
           download.disabled = true;
           downloadStatus.textContent = "";
-          fetch("/api/v1/handoffs/" + id + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
+          fetch("/api/v1/handoffs/" + encodedId + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
             .then(function (response) {
               if (!response.ok) {
                 downloadStatus.textContent = "Download failed (HTTP " + response.status + ").";
@@ -594,7 +649,7 @@ export const WEB_APP_JS = `(function () {
         card.appendChild(actions);
         view().appendChild(card);
         if (isPreviewable(artifact.mimeType || "", artifact.originalName || "")) {
-          fetch("/api/v1/handoffs/" + id + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
+          fetch("/api/v1/handoffs/" + encodedId + "/artifact/content?asUser=true", { headers: { authorization: "Bearer " + store.token } })
             .then(function (response) { if (!response.ok) throw new Error("preview unavailable"); return response.text(); })
             .then(function (text) {
               if (!metaCard.isConnected) return;
@@ -650,7 +705,7 @@ export const WEB_APP_JS = `(function () {
     var status = el("p", { role: "status", text: "Loading comment…" });
     card.appendChild(status);
     view().appendChild(card);
-    api("/api/v1/handoffs/" + id + "/comment?asUser=true").then(function (result) {
+    api("/api/v1/handoffs/" + encodeURIComponent(id) + "/comment?asUser=true").then(function (result) {
       if (!card.isConnected) return;
       if (result.status !== 200) { status.textContent = "Comment could not load: " + result.body.error.code; return; }
       var comment = result.body.data;
@@ -687,7 +742,7 @@ export const WEB_APP_JS = `(function () {
         else if (replacement.checked) body.comment = text.value;
         busy = true;
         status.textContent = "Submitting…";
-        api("/api/v1/handoffs/" + handoff.id + path + "?asUser=true", { method: method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+        api("/api/v1/handoffs/" + encodeURIComponent(handoff.id) + path + "?asUser=true", { method: method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
           .then(function (outcome) {
             if (!outcome.body.ok) { status.textContent = outcome.body.error.code + ": " + outcome.body.error.message + " Proposal retained with its original observations; inspect before reconciling."; return; }
             detail(handoff.id);
@@ -715,7 +770,7 @@ export const WEB_APP_JS = `(function () {
   }
 
   function renderTimeline(id) {
-    api("/api/v1/handoffs/" + id + "/events?asUser=true").then(function (result) {
+    api("/api/v1/handoffs/" + encodeURIComponent(id) + "/events?asUser=true").then(function (result) {
       var timelineCard = el("div", { class: "card timeline" });
       timelineCard.appendChild(el("h3", { text: "Timeline" }));
       var events = result.status === 200 && result.body.data ? result.body.data : [];
@@ -748,7 +803,7 @@ export const WEB_APP_JS = `(function () {
       var form = new FormData();
       form.append("file", file.files[0]);
       form.append("expectedRowVersion", String(expectedRowVersion));
-      api("/api/v1/handoffs/" + id + "/revise?asUser=true", { method: "POST", body: form }).then(function (outcome) {
+      api("/api/v1/handoffs/" + encodeURIComponent(id) + "/revise?asUser=true", { method: "POST", body: form }).then(function (outcome) {
         status.textContent = outcome.body.ok ? "Revised to revision " + outcome.body.data.revision : outcome.body.error.code;
         if (outcome.body.ok) detail(id);
       }).catch(function () { status.textContent = "Revision outcome unknown. Selected file and original observation retained; inspect current state explicitly before retrying."; });
@@ -819,23 +874,24 @@ export const WEB_APP_JS = `(function () {
             });
             return button;
           }
+          var encodedSlug = encodeURIComponent(project.slug);
           var renameButton = el("button", { text: "Rename" });
           renameButton.addEventListener("click", function () {
             if (rename.value === "") return;
-            api("/api/v1/projects/" + project.slug, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: rename.value, asUser: true }) })
+            api("/api/v1/projects/" + encodedSlug, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: rename.value, asUser: true }) })
               .then(function () { projects(); });
           });
           var rowActions = el("div", { class: "actions-row" });
-          rowActions.appendChild(el("a", { href: "#/memos?projectId=" + project.id, text: "Memos" }));
+          rowActions.appendChild(el("a", { href: "#/memos?projectId=" + encodeURIComponent(project.id), text: "Memos" }));
           rowActions.appendChild(renameButton);
-          rowActions.appendChild(action("Bind", "/api/v1/projects/" + project.slug + "/bindings", function () {
+          rowActions.appendChild(action("Bind", "/api/v1/projects/" + encodedSlug + "/bindings", function () {
             return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dir: bindDir.value, asUser: true }) };
           }));
           rowActions.appendChild(action("Unbind", function () {
-            return "/api/v1/projects/" + project.slug + "/bindings/x?dir=" + encodeURIComponent(bindDir.value) + "&confirm=true";
+            return "/api/v1/projects/" + encodedSlug + "/bindings/x?dir=" + encodeURIComponent(bindDir.value) + "&confirm=true";
           }, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
-          rowActions.appendChild(action("Archive", "/api/v1/projects/" + project.slug + "/archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
-          rowActions.appendChild(action("Unarchive", "/api/v1/projects/" + project.slug + "/unarchive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+          rowActions.appendChild(action("Archive", "/api/v1/projects/" + encodedSlug + "/archive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
+          rowActions.appendChild(action("Unarchive", "/api/v1/projects/" + encodedSlug + "/unarchive", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ asUser: true }) }));
           cell.appendChild(rowActions);
           cell.appendChild(el("p", { class: "cell-fields" }, [rename, bindDir]));
           row.appendChild(cell);
@@ -850,20 +906,32 @@ export const WEB_APP_JS = `(function () {
     view().appendChild(el("h3", { text: "Unregistered Workspaces" }));
     var unregistered = el("ul", { class: "muted" });
     view().appendChild(unregistered);
-    api("/api/v1/handoffs?asUser=true&includeArchived=true").then(function (result) {
-      if (result.status !== 200) return;
+    fetchAllHandoffs("/api/v1/handoffs?asUser=true&includeArchived=true&limit=200", function () {
+      return projectsRender !== ticket || !unregistered.isConnected;
+    }).then(function (result) {
+      if (result.stale) return;
       stale(function () {
-      var seen = {};
-      result.body.data.handoffs.forEach(function (handoff) {
-        if (handoff.senderKind !== "unregistered_workspace") return;
-        var key = handoff.senderWorkspaceKey || handoff.senderPathSnapshot || "unknown";
-        if (seen[key] !== undefined) { seen[key] += 1; return; }
-        seen[key] = 1;
+        if (!unregistered.isConnected) return;
+        if (result.status !== 200) {
+          unregistered.replaceChildren(el("li", { text: "Unregistered workspaces could not load." }));
+          return;
+        }
+        var seen = Object.create(null);
+        result.body.data.handoffs.forEach(function (handoff) {
+          if (handoff.senderKind !== "unregistered_workspace") return;
+          var key = handoff.senderWorkspaceKey || handoff.senderPathSnapshot || "unknown";
+          if (seen[key] !== undefined) { seen[key] += 1; return; }
+          seen[key] = 1;
+        });
+        Object.keys(seen).forEach(function (key) {
+          unregistered.appendChild(el("li", { text: key + " — " + seen[key] + " sent Handoff(s); not a recipient" }));
+        });
+        if (Object.keys(seen).length === 0) unregistered.appendChild(el("li", { text: "None recorded." }));
       });
-      Object.keys(seen).forEach(function (key) {
-        unregistered.appendChild(el("li", { text: key + " — " + seen[key] + " sent Handoff(s); not a recipient" }));
-      });
-      if (Object.keys(seen).length === 0) unregistered.appendChild(el("li", { text: "None recorded." }));
+    }).catch(function () {
+      stale(function () {
+        if (!unregistered.isConnected) return;
+        unregistered.replaceChildren(el("li", { text: "Unregistered workspaces could not load." }));
       });
     });
   }
@@ -931,41 +999,42 @@ export const WEB_APP_JS = `(function () {
       if ((isTerminal(handoff) && ["Set note", "Remove note", "Withdraw request", "Accept", "Decline"].indexOf(label) !== -1) || (label === "Accept" && handoff.hasReviewNote) || (label === "Remove note" && !handoff.comment) || (label === "Withdraw request" && !handoff.hasReviewNote)) button.disabled = true;
       return button;
     }
+    var handoffBase = "/api/v1/handoffs/" + encodeURIComponent(handoff.id);
     var noteGroup = el("div", { class: "action-group" });
     noteGroup.appendChild(el("h4", { text: "Review note" }));
     var note = el("textarea", { rows: "2", cols: "40", placeholder: "User proxy review note", "aria-label": "Review note" });
     var noteRow = el("div", { class: "actions-row" });
     noteRow.appendChild(note);
-    noteRow.appendChild(act("Set note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true", function () { return { text: note.value, targetRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }; }, "PUT"));
-    noteRow.appendChild(act("Remove note", "/api/v1/handoffs/" + handoff.id + "/review-note?asUser=true&confirm=true", { expectedRowVersion: handoff.rowVersion, asUser: true }, "DELETE", "danger"));
-    noteRow.appendChild(act("Withdraw request", "/api/v1/handoffs/" + handoff.id + "/review-note/withdraw?asUser=true", { expectedRowVersion: handoff.rowVersion, asUser: true }));
+    noteRow.appendChild(act("Set note", handoffBase + "/review-note?asUser=true", function () { return { text: note.value, targetRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }; }, "PUT"));
+    noteRow.appendChild(act("Remove note", handoffBase + "/review-note?asUser=true&confirm=true", { expectedRowVersion: handoff.rowVersion, asUser: true }, "DELETE", "danger"));
+    noteRow.appendChild(act("Withdraw request", handoffBase + "/review-note/withdraw?asUser=true", { expectedRowVersion: handoff.rowVersion, asUser: true }));
     noteGroup.appendChild(noteRow);
     card.appendChild(noteGroup);
 
     var decisionGroup = el("div", { class: "action-group" });
     decisionGroup.appendChild(el("h4", { text: "Review decision" }));
     var decisionRow = el("div", { class: "actions-row" });
-    decisionRow.appendChild(act("Accept", "/api/v1/handoffs/" + handoff.id + "/accept?asUser=true", { expectedRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }, "POST", "primary"));
-    decisionRow.appendChild(act("Decline", "/api/v1/handoffs/" + handoff.id + "/decline?asUser=true", { reason: "Declined from the Web UI", expectedRowVersion: handoff.rowVersion, asUser: true }, "POST", "danger"));
+    decisionRow.appendChild(act("Accept", handoffBase + "/accept?asUser=true", { expectedRevision: handoff.revision, expectedRowVersion: handoff.rowVersion, asUser: true }, "POST", "primary"));
+    decisionRow.appendChild(act("Decline", handoffBase + "/decline?asUser=true", { reason: "Declined from the Web UI", expectedRowVersion: handoff.rowVersion, asUser: true }, "POST", "danger"));
     decisionGroup.appendChild(decisionRow);
     card.appendChild(decisionGroup);
 
     var organizationGroup = el("div", { class: "action-group" });
     organizationGroup.appendChild(el("h4", { text: "Organization" }));
     var organizationRow = el("div", { class: "actions-row" });
-    organizationRow.appendChild(act(handoff.pinned === true ? "Unpin" : "Pin", "/api/v1/handoffs/" + handoff.id + "/" + (handoff.pinned === true ? "unpin" : "pin") + "?asUser=true", { asUser: true }));
-    organizationRow.appendChild(act(handoff.archivedAt !== null && handoff.archivedAt !== undefined ? "Unarchive" : "Archive", "/api/v1/handoffs/" + handoff.id + "/" + (handoff.archivedAt !== null && handoff.archivedAt !== undefined ? "unarchive" : "archive") + "?asUser=true", { asUser: true }));
+    organizationRow.appendChild(act(handoff.pinned === true ? "Unpin" : "Pin", handoffBase + "/" + (handoff.pinned === true ? "unpin" : "pin") + "?asUser=true", { asUser: true }));
+    organizationRow.appendChild(act(handoff.archivedAt !== null && handoff.archivedAt !== undefined ? "Unarchive" : "Archive", handoffBase + "/" + (handoff.archivedAt !== null && handoff.archivedAt !== undefined ? "unarchive" : "archive") + "?asUser=true", { asUser: true }));
     organizationGroup.appendChild(organizationRow);
     card.appendChild(organizationGroup);
 
     var deletionGroup = el("div", { class: "action-group danger-zone" });
     deletionGroup.appendChild(el("h4", { text: "Deletion" }));
     var deletionRow = el("div", { class: "actions-row" });
-    deletionRow.appendChild(act("Request deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-request?asUser=true", { asUser: true }, "POST", "danger"));
-    deletionRow.appendChild(act("Reject deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-reject?asUser=true", { asUser: true }));
+    deletionRow.appendChild(act("Request deletion", handoffBase + "/deletion-request?asUser=true", { asUser: true }, "POST", "danger"));
+    deletionRow.appendChild(act("Reject deletion", handoffBase + "/deletion-reject?asUser=true", { asUser: true }));
     var pinnedConfirm = el("input", { placeholder: "type the Handoff id to confirm pinned deletion", size: "36", "aria-label": "Pinned deletion confirmation" });
     deletionRow.appendChild(pinnedConfirm);
-    deletionRow.appendChild(act("Approve deletion", "/api/v1/handoffs/" + handoff.id + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, expectedRowVersion: handoff.rowVersion, confirmPinned: pinnedConfirm.value }; }, "POST", "danger"));
+    deletionRow.appendChild(act("Approve deletion", handoffBase + "/deletion-approve?asUser=true&confirm=true", function () { return { asUser: true, expectedRowVersion: handoff.rowVersion, confirmPinned: pinnedConfirm.value }; }, "POST", "danger"));
     deletionGroup.appendChild(deletionRow);
     deletionGroup.appendChild(el("p", { class: "muted", text: "Approving a pinned Handoff needs the distinct confirmation above; the empty form fails with PINNED_DELETE_CONFIRMATION." }));
     card.appendChild(deletionGroup);
@@ -1107,9 +1176,17 @@ export const WEB_APP_JS = `(function () {
       // endpoint returns the five last-* projections, so the page lists the
       // recorded outcomes it names and points at status for the full history.
       var runs = [];
+      var seenRunIds = new Set();
       ["lastAttempt", "lastSuccess", "lastCommit", "lastPush", "lastFailure"].forEach(function (key) {
         var row = status[key];
-        if (row !== null && runs.indexOf(row) === -1) runs.push(row);
+        if (!row) return;
+        if (row.id !== null && row.id !== undefined) {
+          if (seenRunIds.has(row.id)) return;
+          seenRunIds.add(row.id);
+        } else if (runs.indexOf(row) !== -1) {
+          return;
+        }
+        runs.push(row);
       });
       runs.forEach(function (run) {
         body.appendChild(el("tr", {}, [
@@ -1130,6 +1207,7 @@ export const WEB_APP_JS = `(function () {
   }
 
   function route() {
+    memoClearEditorTimer();
     memoRenderTicket += 1;
     memoVisible = null;
     memoRenderRecovery();
@@ -1139,16 +1217,17 @@ export const WEB_APP_JS = `(function () {
     }
     note("");
     var hash = location.hash.replace(/^#/, "") || "/dashboard";
-    var path = hash.split("?")[0];
+    var qIdx = hash.indexOf("?");
+    var path = qIdx === -1 ? hash : hash.slice(0, qIdx);
     if (path === "/" || path === "/dashboard") dashboard();
     else if (path === "/projects") projects();
     else if (path === "/memos") memoList();
-    else if (path.indexOf("/memo/") === 0) memoDetail(path.slice("/memo/".length));
+    else if (path.indexOf("/memo/") === 0) memoDetail(decodeHashSegment(path.slice("/memo/".length)));
     else if (path === "/compose") compose();
     else if (path === "/inbox") listing("inbox");
     else if (path === "/outbox") listing("outbox");
     else if (path === "/deletion-requests") deletionRequests();
-    else if (path.indexOf("/handoff/") === 0) detail(path.slice("/handoff/".length));
+    else if (path.indexOf("/handoff/") === 0) detail(decodeHashSegment(path.slice("/handoff/".length)));
     else if (path === "/diagnostics") diagnostics();
     else if (path === "/backup") backupPage();
     else if (path === "/settings") settings();

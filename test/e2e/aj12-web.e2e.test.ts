@@ -67,10 +67,24 @@ beforeAll(async () => {
   writeFileSync(join(work, "brief.md"), "# The web brief\n");
   expect(sorage(["project", "add", "--name", "Web App", "--dir", work, "--json"], { home, cwd: work }).status).toBe(0);
   expect(
-    sorage(["send", "--to", "web-app", "--title", "The web brief", "--file", join(work, "brief.md"), "--json"], {
-      home,
-      cwd: work,
-    }).status,
+    sorage(
+      [
+        "send",
+        "--as-user",
+        "--allow-external-source",
+        "--to",
+        "web-app",
+        "--title",
+        "The web brief",
+        "--file",
+        join(work, "brief.md"),
+        "--json",
+      ],
+      {
+        home,
+        cwd: work,
+      },
+    ).status,
   ).toBe(0);
   expect(sorage(["daemon", "start", "--json"], { home }).status).toBe(0);
   cleanup.push(() => sorage(["daemon", "stop", "--json"], { home }));

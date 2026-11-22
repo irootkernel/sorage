@@ -17,6 +17,14 @@ export const WEB_MEMOS_JS = String.raw`
   var memoRisk = { current: false, enabled: false, warnBytes: 0 };
   var memoConfigTicket = 0;
   var memoPersistFailure = null;
+  var MEMO_PREVIEW_DEBOUNCE_MS = 150;
+  var memoEditorTimer = null;
+  function memoClearEditorTimer() {
+    if (memoEditorTimer !== null) {
+      clearTimeout(memoEditorTimer);
+      memoEditorTimer = null;
+    }
+  }
 
   function memoUuid(value) { return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
   function memoBytes(text) { return new TextEncoder().encode(text).length; }
@@ -180,7 +188,7 @@ export const WEB_MEMOS_JS = String.raw`
   function memoRefreshCurrent(pending, id, success, settledMemo) {
     memoRefreshing = true;
     memoRenderRecovery();
-    return memoRequest("/api/v1/memos/" + id).then(function (result) {
+    return memoRequest("/api/v1/memos/" + encodeURIComponent(id)).then(function (result) {
       if (result.status !== 200 || !result.body.ok) throw new Error("Current Memo could not be reloaded");
       memoRefreshing = false;
       if (success && (pending.operation === "add" || pending.operation === "update")) {
@@ -195,7 +203,7 @@ export const WEB_MEMOS_JS = String.raw`
         }
       }
       if (memoVisible && memoVisible.kind === "detail" && memoVisible.id === id) memoDetail(id);
-      else if (success && pending.operation === "add" && memoVisible && memoVisible.kind === "list" && memoVisible.projectId === pending.projectId) location.hash = "/memo/" + id;
+      else if (success && pending.operation === "add" && memoVisible && memoVisible.kind === "list" && memoVisible.projectId === pending.projectId) location.hash = "/memo/" + encodeURIComponent(id);
       memoRenderRecovery();
     }).catch(function () {
       memoMessage += " Current state could not be reloaded. Read the Memo again before another write.";
@@ -225,7 +233,7 @@ export const WEB_MEMOS_JS = String.raw`
           memoMessage = "The current Memo body limit is " + cap + " UTF-8 bytes and refuses the original body; nothing was sent. The original outcome remains unknown: inspect it with the original key in replay-only mode from the CLI or an authenticated HTTP client, or explicitly abandon recovery.";
           return null;
         }
-        var path = "/api/v1/memos" + (pending.memoId ? "/" + pending.memoId : "") + (["done", "dismiss", "reopen"].indexOf(pending.operation) !== -1 ? "/" + pending.operation : "");
+        var path = "/api/v1/memos" + (pending.memoId ? "/" + encodeURIComponent(pending.memoId) : "") + (["done", "dismiss", "reopen"].indexOf(pending.operation) !== -1 ? "/" + pending.operation : "");
         var encoded = memoEncodeInput(pending.input);
         return memoRequest(path, { method: pending.operation === "update" ? "PATCH" : "POST", headers: Object.assign(encoded.headers, { "idempotency-key": pending.key, "idempotency-mode": recovery ? "replay-only" : "execute" }), body: encoded.body });
       });
@@ -358,6 +366,7 @@ export const WEB_MEMOS_JS = String.raw`
     return button;
   }
   function memoEditor(container, projectId, memo) {
+    memoClearEditorTimer();
     var key = memo ? memo.id : "new:" + projectId;
     var draft = memoDrafts[key];
     var active = memoRecovery.active;
@@ -374,9 +383,12 @@ export const WEB_MEMOS_JS = String.raw`
     var limits = el("p", { role: "status", class: "muted" });
     var preview = el("div", { class: "card", "aria-label": "Memo preview" });
     var composing = false;
-    function update() {
+    function syncDraft() {
       draft.title = title.value;
       draft.body = body.value === displayedBody ? originalBody : body.value;
+    }
+    function renderFeedback() {
+      syncDraft();
       var bytes = memoBytes(draft.body);
       var valid = memoTitle(draft.title) && memoBodyText(draft.body, null);
       // The cap suffix claims a limit only while the last refresh actually
@@ -394,8 +406,21 @@ export const WEB_MEMOS_JS = String.raw`
       limits.textContent = Array.from(draft.title.trim()).length + "/200 title characters, " + memoBytes(draft.title) + "/800 title bytes; " + bytes + capSuffix + "." + (valid ? "" : " Invalid input: provide a single-line title within the limits; body cannot contain NUL or invalid Unicode.") + riskSentence;
       preview.replaceChildren(el("h4", { text: "Read-only preview" }), renderMarkdownSafe(draft.body));
     }
-    title.addEventListener("input", update);
-    body.addEventListener("input", update);
+    function update() {
+      memoClearEditorTimer();
+      renderFeedback();
+    }
+    function scheduleUpdate() {
+      syncDraft();
+      memoClearEditorTimer();
+      memoEditorTimer = setTimeout(function () {
+        memoEditorTimer = null;
+        if (!limits.isConnected) return;
+        renderFeedback();
+      }, MEMO_PREVIEW_DEBOUNCE_MS);
+    }
+    title.addEventListener("input", scheduleUpdate);
+    body.addEventListener("input", scheduleUpdate);
     form.addEventListener("compositionstart", function () { composing = true; });
     form.addEventListener("compositionend", function () { composing = false; update(); });
     form.addEventListener("keydown", function (event) { if (event.key === "Enter" && (composing || event.isComposing || event.keyCode === 229)) event.preventDefault(); });
@@ -424,6 +449,7 @@ export const WEB_MEMOS_JS = String.raw`
     memoLearnCap().then(function () { if (limits.isConnected) update(); });
   }
   function memoPageStart(heading) {
+    memoClearEditorTimer();
     var ticket = ++memoRenderTicket;
     view().replaceChildren(el("h2", { text: heading }));
     view().appendChild(el("p", { class: "muted", text: "Memos store reminders; their text does not run work. Pending request bodies are temporarily retained in this tab's session storage. Reload can recover them; tab closure, browser data removal, or browser restart may lose this local recovery material. Stored Memos remain on the server." }));
@@ -432,7 +458,8 @@ export const WEB_MEMOS_JS = String.raw`
   }
   function memoList() {
     var ticket = memoPageStart("Memos");
-    var query = new URLSearchParams(location.hash.split("?")[1] || "");
+    var qIdx = location.hash.indexOf("?");
+    var query = new URLSearchParams(qIdx === -1 ? "" : location.hash.slice(qIdx + 1));
     var selected = query.get("projectId") || (query.get("allProjects") === "true" ? "*" : "");
     memoVisible = { kind: "list", projectId: selected };
     var status = loading("Loading Projects and Memos…");
@@ -466,7 +493,7 @@ export const WEB_MEMOS_JS = String.raw`
         if (page.status !== 200 || !page.body.ok) { rows.appendChild(emptyState("Memos unavailable: " + (page.body.error ? page.body.error.code : "invalid response"))); return; }
         if (!page.body.data.items.length) rows.appendChild(emptyState("No Memos match these filters."));
         page.body.data.items.forEach(function (memo) {
-          var card = el("article", { class: "card memo-row" }, [el("h3", {}, [el("a", { href: "#/memo/" + memo.id, text: memo.title })]), el("p", { text: memo.projectDisplayName + " · " + memo.projectSlug + (memo.projectStatus === "archived" ? " (archived)" : "") }), badge(memo.state), timeNode(memo.updatedAt), el("p", { text: memo.bodyPreview + (memo.bodyPreviewTruncated ? "…" : "") })]);
+          var card = el("article", { class: "card memo-row" }, [el("h3", {}, [el("a", { href: "#/memo/" + encodeURIComponent(memo.id), text: memo.title })]), el("p", { text: memo.projectDisplayName + " · " + memo.projectSlug + (memo.projectStatus === "archived" ? " (archived)" : "") }), badge(memo.state), timeNode(memo.updatedAt), el("p", { text: memo.bodyPreview + (memo.bodyPreviewTruncated ? "…" : "") })]);
           rows.appendChild(card);
         });
         if (page.body.data.nextCursor) { var next = new URLSearchParams(params); next.set("cursor", page.body.data.nextCursor); rows.appendChild(el("a", { href: "#/memos?" + next, text: "Next Memo page" })); }
@@ -493,7 +520,7 @@ export const WEB_MEMOS_JS = String.raw`
       var memo = result.body.data;
       var project = results[1].body.data.find(function (entry) { return entry.project.id === memo.projectId; });
       var archived = project && project.project.status === "archived";
-      view().appendChild(el("a", { href: "#/memos?projectId=" + memo.projectId, text: "Back to Project Memos" }));
+      view().appendChild(el("a", { href: "#/memos?projectId=" + encodeURIComponent(memo.projectId), text: "Back to Project Memos" }));
       view().appendChild(el("h3", { text: memo.title }));
       view().appendChild(el("p", { text: (project ? project.project.displayName : memo.projectId) + (archived ? " (archived)" : "") }));
       view().appendChild(badge(memo.state));
