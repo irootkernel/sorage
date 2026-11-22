@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-022`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** `TASK-155`
@@ -116,7 +116,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-019` | Handoff processing status and recipient comment | M9 | Completed | `TASK-128` to `TASK-134` |
 | `EPIC-020` | Pre-release simplification | M9 | Completed | `TASK-135` to `TASK-138` |
 | `EPIC-021` | Exchange peer collaboration between Projects | M10 | Completed | `TASK-139` to `TASK-146` |
-| `EPIC-022` | M11 non-breaking defect fixes, hot-path performance and v17 indexes | M11 | In Progress | `TASK-147` to `TASK-154` |
+| `EPIC-022` | M11 non-breaking defect fixes, hot-path performance and v17 indexes | M11 | Completed | `TASK-147` to `TASK-154` |
 | `EPIC-023` | M11 golden-preserving internal architecture cleanup | M11 | Planned | `TASK-155` to `TASK-160` |
 | `EPIC-024` | M11 targeted contract modernizations and qualification | M11 | Planned | `TASK-161` to `TASK-164` |
 
@@ -644,7 +644,7 @@ The reviewed `error-renderings.json` diff changes only the common `INTERNAL_ERRO
 
 ## EPIC-022: M11 non-breaking defect fixes, hot-path performance and v17 indexes
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M11
 - **Objective:** Fix confirmed HTTP, CLI, adapter and Web UI defects, prohibit self-handoffs cleanly, eliminate the startup migrator write-lock storm and daemon event-loop blocking, append missing secondary/FK/sort indexes in schema `v17`, and optimize Exchange, read-path and diagnostics hot paths while preserving full v0.1.5 data and backup compatibility.
 - **Detailed SOT:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
