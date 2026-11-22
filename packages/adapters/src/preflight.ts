@@ -3,13 +3,17 @@ import { createHash } from "node:crypto";
 import {
   accessSync,
   chmodSync,
+  closeSync,
   copyFileSync,
   constants as fsConstants,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
   statSync,
@@ -46,7 +50,7 @@ import { execMigrationSegments, migrate } from "./sqlite/migrator";
  * and opened only as a private copy; assessPreflight owns the verdict.
  */
 const LOG_FILE_NAME = /^sorage\.log(?:\.[1-9][0-9]*)?$/;
-const SQLITE_HEADER = "SQLite format 3";
+const SQLITE_HEADER = "SQLite format 3\0";
 export const CAPTURE_ATTEMPTS = 2;
 const ROOT_INSTALL_NAMES = new Set(["config.yaml", "logs", "state", "run", "vault"]);
 const referenceCatalogs = new Map<number, Map<string, string>>();
@@ -152,19 +156,18 @@ export function readRecoveryConfiguration(homePath: string, userHome: string): R
     throw error;
   }
   if (text !== again || stamp() !== before || rootBinding(homePath) !== binding) return err(unavailable());
-  const classified = classifyConfig(text, userHome, homePath);
-  if (classified.kind !== "supported") {
+  const classified = classifyAndLoadConfig(text, userHome, homePath);
+  if (classified.fact.kind !== "supported" || classified.config === undefined) {
     return err(
       appError(
-        classified.kind === "newer" || classified.kind === "unsupported-format"
+        classified.fact.kind === "newer" || classified.fact.kind === "unsupported-format"
           ? "STORAGE_SCHEMA_UNSUPPORTED"
           : "CONFIG_INVALID",
         "the selected configuration cannot support inspection",
       ),
     );
   }
-  const loaded = loadConfiguration(text, { userHome, sorageHome: homePath });
-  return loaded.ok ? ok(loaded.value.config) : loaded;
+  return ok(classified.config);
 }
 
 /** Capture retries end before the consumer runs. Reader and scratch never escape this lifetime. */
@@ -227,7 +230,8 @@ function acquireInspection(homePath: string, ports: PreflightInspectPorts): Acqu
   } catch {
     return uncertain("installed");
   }
-  const earlyConfig = classifyConfig(listing.observedConfig, userHome, listing.canonical);
+  const early = classifyAndLoadConfig(listing.observedConfig, userHome, listing.canonical, listing);
+  const earlyConfig = early.fact;
   if (earlyConfig.kind !== "supported") {
     if (!observationHolds(listing, userHome)) return uncertain("installed");
     return refuse(
@@ -248,9 +252,9 @@ function acquireInspection(homePath: string, ports: PreflightInspectPorts): Acqu
       ),
     );
   }
-  const loaded = loadConfiguration(listing.observedConfig, { userHome, sorageHome: listing.canonical });
-  if (!loaded.ok) return uncertain("installed");
-  listing.vaultPath = loaded.value.config.vault.path;
+  const observedConfig = early.config;
+  if (observedConfig === undefined) return uncertain("installed");
+  listing.vaultPath = observedConfig.vault.path;
   const vaultLook = pathLook(listing.vaultPath);
   if (vaultLook.kind === "failed") return uncertain("installed");
   if (vaultLook.kind === "missing") listing.observedVault = "absent";
@@ -301,7 +305,7 @@ function acquireInspection(homePath: string, ports: PreflightInspectPorts): Acqu
     return {
       kind: "ready",
       facts,
-      config: loaded.value.config,
+      config: observedConfig,
       migrationVersion: captured.migrationVersion,
       reader: {
         prepare(sql) {
@@ -414,7 +418,8 @@ function stageCopies(
     listing.linkMoved = true;
     return undefined;
   }
-  const config = classifyConfig(configText, userHome, listing.canonical);
+  const classified = classifyAndLoadConfig(configText, userHome, listing.canonical, listing);
+  const config = classified.fact;
   if (config.kind !== "supported") {
     return {
       configPath: "",
@@ -425,8 +430,7 @@ function stageCopies(
       blocked: false,
     };
   }
-  const loaded = loadConfiguration(configText, { userHome, sorageHome: listing.canonical });
-  if (!loaded.ok)
+  if (classified.config === undefined)
     return {
       configPath: "",
       config: { kind: "invalid" },
@@ -435,7 +439,7 @@ function stageCopies(
       staleFence: fences.stale,
       blocked: false,
     };
-  const vaultDir = loaded.value.config.vault.path;
+  const vaultDir = classified.config.vault.path;
   const vaultRootBefore = rootBinding(vaultDir);
   if (listing.observedVault === "absent") {
     if (pathLook(vaultDir).kind !== "missing") {
@@ -653,23 +657,55 @@ function blankCapture(config: PreflightConfigFact, staleFence: boolean): Capture
   };
 }
 
-function classifyConfig(text: string, userHome: string, sorageHome: string): PreflightConfigFact {
-  const document = parseDocument(text);
-  if (document.errors.length > 0) return { kind: "invalid" };
-  let value: unknown;
-  try {
-    value = document.toJS();
-  } catch {
-    return { kind: "invalid" };
+interface CachedPreflightConfig {
+  text: string;
+  fact: PreflightConfigFact;
+  config?: Configuration;
+}
+
+function classifyAndLoadConfig(
+  text: string,
+  userHome: string,
+  sorageHome: string,
+  listing?: InstalledHome,
+): CachedPreflightConfig {
+  if (listing?.cachedConfig !== undefined && listing.cachedConfig.text === text) {
+    return listing.cachedConfig;
   }
-  if (!isMapping(value)) return { kind: "unsupported-format" };
-  if (!Object.hasOwn(value, "schemaVersion")) return { kind: "invalid" };
-  const schemaVersion = value.schemaVersion;
-  if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion) && schemaVersion > 1)
-    return { kind: "newer" };
-  if (schemaVersion !== 1) return { kind: "invalid" };
-  const loaded = loadConfiguration(text, { userHome, sorageHome });
-  return loaded.ok ? { kind: "supported" } : { kind: "invalid" };
+  const document = parseDocument(text);
+  let result: CachedPreflightConfig;
+  if (document.errors.length > 0) {
+    result = { text, fact: { kind: "invalid" } };
+  } else {
+    let value: unknown;
+    let validJs = true;
+    try {
+      value = document.toJS();
+    } catch {
+      validJs = false;
+    }
+    if (!validJs) {
+      result = { text, fact: { kind: "invalid" } };
+    } else if (!isMapping(value)) {
+      result = { text, fact: { kind: "unsupported-format" } };
+    } else if (!Object.hasOwn(value, "schemaVersion")) {
+      result = { text, fact: { kind: "invalid" } };
+    } else {
+      const schemaVersion = value.schemaVersion;
+      if (typeof schemaVersion === "number" && Number.isInteger(schemaVersion) && schemaVersion > 1) {
+        result = { text, fact: { kind: "newer" } };
+      } else if (schemaVersion !== 1) {
+        result = { text, fact: { kind: "invalid" } };
+      } else {
+        const loaded = loadConfiguration(text, { userHome, sorageHome });
+        result = loaded.ok
+          ? { text, fact: { kind: "supported" }, config: loaded.value.config }
+          : { text, fact: { kind: "invalid" } };
+      }
+    }
+  }
+  if (listing !== undefined) listing.cachedConfig = result;
+  return result;
 }
 
 function isMapping(value: unknown): value is Record<string, unknown> {
@@ -971,11 +1007,23 @@ function judgeLock(
 }
 
 function databaseFormat(path: string): "sqlite" | "corrupt" | "unsupported-format" {
-  const bytes = readFileSync(path);
-  const header = bytes.subarray(0, SQLITE_HEADER.length).toString("utf8");
-  if (header !== SQLITE_HEADER) return "unsupported-format";
-  if (bytes.length < 100) return "corrupt";
-  return "sqlite";
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) return "unsupported-format";
+    const buffer = Buffer.alloc(100);
+    let total = 0;
+    while (total < 100) {
+      const count = readSync(fd, buffer, total, 100 - total, total);
+      if (count === 0) break;
+      total += count;
+    }
+    if (total < SQLITE_HEADER.length) return "unsupported-format";
+    if (buffer.subarray(0, SQLITE_HEADER.length).toString("utf8") !== SQLITE_HEADER) return "unsupported-format";
+    if (total < 100) return "corrupt";
+    return "sqlite";
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function openPrivateCopy(path: string): PrivateDatabase {
@@ -1055,6 +1103,8 @@ interface InstalledHome {
   observedVault?: string;
   /** Expanded Vault path from the observed configuration. */
   vaultPath?: string;
+  /** Request-scoped parsed configuration cache keyed by raw observed text (ADR-0036). */
+  cachedConfig?: CachedPreflightConfig;
   databasePath: string;
   liveness: (pid: number) => PreflightLiveness;
   linkMoved: boolean;
@@ -1328,11 +1378,39 @@ function fileShape(path: string, root: string, required: boolean): string | unde
   return `${target.path} ${look.stat.dev}:${look.stat.ino} ${look.stat.mode}`;
 }
 
+const PREFLIGHT_HASH_CHUNK_BYTES = 64 * 1024;
+
+function streamSha256RegularFile(path: string, expectedStat?: { dev: number | bigint; ino: number | bigint }): string {
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    if (!opened.isFile()) {
+      throw new Error("Preflight hashing requires a regular file");
+    }
+    if (
+      expectedStat !== undefined &&
+      (opened.dev !== BigInt(expectedStat.dev) || opened.ino !== BigInt(expectedStat.ino))
+    ) {
+      throw new Error("Preflight file changed identity while opening");
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(PREFLIGHT_HASH_CHUNK_BYTES);
+    for (;;) {
+      const count = readSync(fd, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      hash.update(buffer.subarray(0, count));
+    }
+    return hash.digest("hex");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function markerFile(path: string, vaultRoot: string): string | undefined {
   const shape = fileShape(path, vaultRoot, true);
   if (shape === undefined) return undefined;
   try {
-    const hash = createHash("sha256").update(readFileSync(path)).digest("hex");
+    const hash = streamSha256RegularFile(path);
     const look = pathLook(path);
     if (look.kind !== "stat") return undefined;
     return `${shape} ${look.stat.mtimeMs} ${hash}`;
@@ -1363,7 +1441,7 @@ function fingerprint(listing: InstalledHome): string | undefined {
     if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
     let hash: string;
     try {
-      hash = createHash("sha256").update(readFileSync(path)).digest("hex");
+      hash = streamSha256RegularFile(path, stat);
     } catch {
       return undefined;
     }
@@ -1410,8 +1488,8 @@ function observationHolds(listing: InstalledHome, userHome: string): boolean {
   if (text !== listing.observedConfig) return false;
   if (listing.observedVault === undefined) return true;
   if (text === undefined || listing.vaultPath === undefined) return false;
-  const loaded = loadConfiguration(text, { userHome, sorageHome: listing.canonical });
-  if (!loaded.ok || loaded.value.config.vault.path !== listing.vaultPath) return false;
+  const loaded = classifyAndLoadConfig(text, userHome, listing.canonical, listing);
+  if (loaded.fact.kind !== "supported" || loaded.config?.vault.path !== listing.vaultPath) return false;
   if (listing.observedVault === "absent") return pathLook(listing.vaultPath).kind === "missing";
   return rootBinding(listing.vaultPath) === listing.observedVault;
 }

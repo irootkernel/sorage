@@ -1,7 +1,7 @@
 import { digestManagedFile } from "./managed-paths";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CheckOutcome, DoctorCheckId, DoctorPorts } from "@sorage/core";
@@ -27,7 +27,6 @@ import {
   appError,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
-import { createConfigStore } from "./config-store";
 import {
   inspectArtifactStorageLayout,
   validateArtifactContentLinks,
@@ -122,11 +121,6 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     });
   const userHome = options.userHome ?? homedir();
   const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const store = createConfigStore({
-    home,
-    lockPorts: { clock: { now: () => new Date() }, hostname: () => "", isPidAlive },
-    userHome,
-  });
   const databasePath = join(home.stateDir, "sorage.sqlite3");
 
   // The eager readonly history-admission guard (SHR-009): every DB open the
@@ -145,18 +139,108 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     | { kind: "unsupported"; error: AppError }
     | { kind: "known-history-finding"; message: string }
     | { kind: "unavailable"; message: string };
+
+  type ConfigurationState =
+    | { kind: "valid"; config: Configuration }
+    | { kind: "absent" }
+    | { kind: "unreadable" }
+    | { kind: "unsafe-path" }
+    | { kind: "malformed"; errorMessage: string };
+
+  type VaultState =
+    | { kind: "opens" }
+    | { kind: "refused"; message: string; recovery: string }
+    | { kind: "unconfigured" };
+
+  interface ProjectRow {
+    id: string;
+    slug: string;
+    status: string;
+  }
+
+  interface BindingRow {
+    id: string;
+    project_id: string;
+    directory: string;
+    binding_kind: string;
+  }
+
+  /** Request-scoped per-run cache (ADR-0036: no global singletons, pools, or DI containers). */
+  interface DoctorContext {
+    sessionActive: boolean;
+    configState: ConfigurationState | null;
+    vaultState: VaultState | null;
+    sharedDb: SorageSqlite | null;
+    sharedDbBlocking: string | null;
+    registry: { projects: ProjectRow[]; bindings: BindingRow[] } | null | "unavailable" | undefined;
+    dirStatCache: Map<string, Stats | null>;
+    fileDigestCache: Map<string, string>;
+  }
+
+  const ctx: DoctorContext = {
+    sessionActive: false,
+    configState: null,
+    vaultState: null,
+    sharedDb: null,
+    sharedDbBlocking: null,
+    registry: undefined,
+    dirStatCache: new Map(),
+    fileDigestCache: new Map(),
+  };
+
   let admission: Admission | null = null;
-  function establishAdmission(): Admission {
-    if (admission !== null) return admission;
-    // K15/K18: never open a non-regular configuration path (a FIFO would
-    // block). Only a regular file has a doctor DB contract to guard.
-    const configPath = configurationPathState(
+
+  /**
+   * The configuration state as observed (TASK-118, Z2): only a confirmed ENOENT
+   * is pre-initialization, where `sorage init` is the right action. A
+   * configuration file that cannot be read, or a home directory that cannot be
+   * traversed, is an access failure whose recovery restores owner-only access
+   * and never suggests initialization; a non-regular entry, a dangling symlink,
+   * or a symlink loop at the configuration path is a path fault, while a live
+   * symlink to a regular file is accepted; a readable but invalid file is the
+   * configuration-repair case where `sorage config validate` runs.
+   */
+  function configurationState(): ConfigurationState {
+    if (ctx.sessionActive && ctx.configState !== null) return ctx.configState;
+    const path = configurationPathState(
       probeConfigurationPath(
         () => statSync(home.configFile),
         () => lstatSync(home.configFile),
       ),
     );
-    if (configPath !== "valid" || store.readText() === null) {
+    let resolved: ConfigurationState;
+    if (path === "absent") {
+      resolved = { kind: "absent" };
+    } else if (path === "access-failure") {
+      resolved = { kind: "unreadable" };
+    } else if (path === "path-fault") {
+      resolved = { kind: "unsafe-path" };
+    } else {
+      let text: string | null = null;
+      try {
+        text = readFileSync(home.configFile, "utf8");
+      } catch {
+        text = null;
+      }
+      if (text === null) {
+        resolved = { kind: "unreadable" };
+      } else {
+        const parsed = parseConfigurationFile(text);
+        resolved = parsed.ok
+          ? { kind: "valid", config: parsed.value.config }
+          : { kind: "malformed", errorMessage: parsed.error.message };
+      }
+    }
+    if (ctx.sessionActive) ctx.configState = resolved;
+    return resolved;
+  }
+
+  function establishAdmission(): Admission {
+    if (admission !== null) return admission;
+    // K15/K18: never open a non-regular configuration path (a FIFO would
+    // block). Only a readable regular file has a doctor DB contract to guard.
+    const cfgState = configurationState();
+    if (cfgState.kind !== "valid" && cfgState.kind !== "malformed") {
       // Before initialization (or without a readable regular file) there is no
       // doctor DB contract to guard.
       admission = { kind: "admitted" };
@@ -215,40 +299,32 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
   }
 
   /**
-   * The configuration state as observed (TASK-118, Z2): only a confirmed ENOENT
-   * is pre-initialization, where `sorage init` is the right action. A
-   * configuration file that cannot be read, or a home directory that cannot be
-   * traversed, is an access failure whose recovery restores owner-only access
-   * and never suggests initialization; a non-regular entry, a dangling symlink,
-   * or a symlink loop at the configuration path is a path fault, while a live
-   * symlink to a regular file is accepted; a readable but invalid file is the
-   * configuration-repair case where `sorage config validate` runs.
+   * Runs one DB-backed callback: inside a `runDoctor` session (`sessionActive === true`),
+   * reuses one lazily opened operational handle closed deterministically in `close()`;
+   * outside a session (standalone `.probe()`), opens and closes per probe so no FD leaks.
    */
-  type ConfigurationState =
-    | { kind: "valid"; config: Configuration }
-    | { kind: "absent" }
-    | { kind: "unreadable" }
-    | { kind: "unsafe-path" }
-    | { kind: "malformed" };
-
-  function configurationState(): ConfigurationState {
-    const path = configurationPathState(
-      probeConfigurationPath(
-        () => statSync(home.configFile),
-        () => lstatSync(home.configFile),
-      ),
-    );
-    if (path === "absent") return { kind: "absent" };
-    if (path === "access-failure") return { kind: "unreadable" };
-    if (path === "path-fault") return { kind: "unsafe-path" };
-    let text: string;
-    try {
-      text = readFileSync(home.configFile, "utf8");
-    } catch {
-      return { kind: "unreadable" };
+  function withDoctorDb<T>(fn: (db: SorageSqlite) => T): { ok: true; value: T } | { ok: false; blocking: string } {
+    if (ctx.sessionActive) {
+      if (ctx.sharedDbBlocking !== null) {
+        return { ok: false, blocking: ctx.sharedDbBlocking };
+      }
+      if (ctx.sharedDb === null) {
+        const opened = doctorOpenDatabase();
+        if (!opened.ok) {
+          ctx.sharedDbBlocking = opened.blocking;
+          return opened;
+        }
+        ctx.sharedDb = opened.db;
+      }
+      return { ok: true, value: fn(ctx.sharedDb) };
     }
-    const parsed = parseConfigurationFile(text);
-    return parsed.ok ? { kind: "valid", config: parsed.value.config } : { kind: "malformed" };
+    const opened = doctorOpenDatabase();
+    if (!opened.ok) return opened;
+    try {
+      return { ok: true, value: fn(opened.db) };
+    } finally {
+      opened.db.close();
+    }
   }
 
   function configuration(): Configuration | null {
@@ -278,62 +354,53 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
    * `openVault` call per doctor instance, so every check reports the same
    * refusal and none of them inspects Vault content the guard would refuse.
    */
-  type VaultState =
-    | { kind: "opens" }
-    | { kind: "refused"; message: string; recovery: string }
-    | { kind: "unconfigured" };
-  let vaultStateCache: VaultState | null = null;
-
   function vaultState(): VaultState {
-    if (vaultStateCache !== null) return vaultStateCache;
+    if (ctx.sessionActive && ctx.vaultState !== null) return ctx.vaultState;
     const config = configuration();
     const vault = vaultPath(config);
+    let resolved: VaultState;
     if (config === null || vault === null) {
-      vaultStateCache = { kind: "unconfigured" };
-      return vaultStateCache;
+      resolved = { kind: "unconfigured" };
+    } else {
+      try {
+        const opened = openVault(vault, config.installationId);
+        resolved = opened.ok
+          ? { kind: "opens" }
+          : {
+              kind: "refused",
+              message: opened.error.message,
+              recovery: openRefusalRecovery(opened.error) ?? VAULT_OPEN_RECOVERY.unreadableDirectory,
+            };
+      } catch {
+        resolved = {
+          kind: "refused",
+          message: `The Vault directory at ${vault} cannot be inspected.`,
+          recovery: VAULT_OPEN_RECOVERY.unreadableDirectory,
+        };
+      }
     }
+    if (ctx.sessionActive) ctx.vaultState = resolved;
+    return resolved;
+  }
+
+  function statDirectory(directory: string): Stats | null {
+    if (ctx.sessionActive && ctx.dirStatCache.has(directory)) {
+      return ctx.dirStatCache.get(directory) ?? null;
+    }
+    let stats: Stats | null;
     try {
-      const opened = openVault(vault, config.installationId);
-      vaultStateCache = opened.ok
-        ? { kind: "opens" }
-        : {
-            kind: "refused",
-            message: opened.error.message,
-            recovery: openRefusalRecovery(opened.error) ?? VAULT_OPEN_RECOVERY.unreadableDirectory,
-          };
+      stats = statSync(directory);
     } catch {
-      vaultStateCache = {
-        kind: "refused",
-        message: `The Vault directory at ${vault} cannot be inspected.`,
-        recovery: VAULT_OPEN_RECOVERY.unreadableDirectory,
-      };
+      stats = null;
     }
-    return vaultStateCache;
-  }
-
-  interface ProjectRow {
-    id: string;
-    slug: string;
-    status: string;
-  }
-
-  interface BindingRow {
-    id: string;
-    project_id: string;
-    directory: string;
-    binding_kind: string;
+    if (ctx.sessionActive) ctx.dirStatCache.set(directory, stats);
+    return stats;
   }
 
   /** Reads backup run history through the admission boundary; "unavailable" when the history cannot be established, empty only when genuinely no rows exist. */
   function backupRunRows(): BackupRunRow[] | "unavailable" {
-    const opened = doctorOpenDatabase();
-    if (!opened.ok) {
-      if (admission !== null && admission.kind === "unavailable") return "unavailable";
-      return [];
-    }
     try {
-      const db = opened.db;
-      try {
+      const result = withDoctorDb((db) => {
         const rows = db.prepare("SELECT * FROM backup_runs").all() as unknown as Array<Record<string, unknown>>;
         return rows.map((row) => ({
           id: String(row.id ?? ""),
@@ -348,24 +415,23 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           failureCode: row.failure_code === null ? null : String(row.failure_code),
           failureMessage: row.failure_message === null ? null : String(row.failure_message ?? ""),
         }));
-      } finally {
-        db.close();
+      });
+      if (!result.ok) {
+        if (admission !== null && admission.kind === "unavailable") return "unavailable";
+        return [];
       }
+      return result.value;
     } catch {
       return [];
     }
   }
 
-  /** Reads the Project registry once per probe; null only when genuinely absent. When admission is unavailable, returns a marker the bindings checks report as an honest warning instead of a vacuous ok. */
+  /** Reads the Project registry once per doctor session; null only when genuinely absent. When admission is unavailable, returns a marker the bindings checks report as an honest warning instead of a vacuous ok. */
   function bindingRegistry(): { projects: ProjectRow[]; bindings: BindingRow[] } | null | "unavailable" {
-    const opened = doctorOpenDatabase();
-    if (!opened.ok) {
-      if (admission !== null && admission.kind === "unavailable") return "unavailable";
-      return null;
-    }
+    if (ctx.sessionActive && ctx.registry !== undefined) return ctx.registry;
+    let resolved: { projects: ProjectRow[]; bindings: BindingRow[] } | null | "unavailable";
     try {
-      const db = opened.db;
-      try {
+      const result = withDoctorDb((db) => {
         // bun:sqlite returns null for a no-row get and node:sqlite returns
         // undefined; both mean the registry tables are not there yet.
         const table = db
@@ -377,16 +443,17 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           .prepare("SELECT id, project_id, directory, binding_kind FROM project_bindings")
           .all() as unknown as BindingRow[];
         return { projects, bindings };
-      } finally {
-        db.close();
+      });
+      if (!result.ok) {
+        resolved = admission !== null && admission.kind === "unavailable" ? "unavailable" : null;
+      } else {
+        resolved = result.value;
       }
     } catch {
-      return null;
+      resolved = null;
     }
-  }
-
-  function projectSlugOf(projects: ProjectRow[], binding: BindingRow): string {
-    return projects.find((project) => project.id === binding.project_id)?.slug ?? binding.project_id;
+    if (ctx.sessionActive) ctx.registry = resolved;
+    return resolved;
   }
 
   function perform(id: DoctorCheckId): CheckOutcome {
@@ -436,7 +503,13 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             CONFIG_PATH_REPAIR,
           );
         }
-        const parsed = parseConfigurationFile(store.readText() ?? "");
+        if (state.kind === "valid") {
+          return ok("config.yaml parses and validates against the schema.");
+        }
+        if (state.kind === "malformed") {
+          return blocking(`config.yaml is invalid: ${state.errorMessage}`);
+        }
+        const parsed = parseConfigurationFile("");
         if (!parsed.ok) {
           return blocking(`config.yaml is invalid: ${parsed.error.message}`);
         }
@@ -585,11 +658,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "db.integrity": {
-        const opened = doctorOpenDatabase();
-        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = opened.db;
-          try {
+          const checked = withDoctorDb((db) => {
             const integrity = db.prepare("PRAGMA integrity_check").get() as unknown;
             const row = integrity as Record<string, unknown> | undefined;
             const verdict = row === undefined ? undefined : row.integrity_check;
@@ -601,9 +671,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             if (journal !== "wal") return blocking(`The database journal mode is ${String(journal)}, expected wal.`);
             if (foreignKeys !== 1) return blocking("Foreign keys are not enabled on this build's connections.");
             return ok("The database passes integrity_check in WAL mode with foreign keys enabled.");
-          } finally {
-            db.close();
-          }
+          });
+          return checked.ok ? checked.value : blocking(checked.blocking);
         } catch (error) {
           return blocking(
             `The database could not be opened or checked: ${error instanceof Error ? error.message : String(error)}`,
@@ -612,11 +681,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
       }
 
       case "db.pendingIntents": {
-        const opened = doctorOpenDatabase();
-        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = opened.db;
-          try {
+          const checked = withDoctorDb((db) => {
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_fs_ops'")
               .get() as { name: string } | null | undefined;
@@ -634,9 +700,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
               );
             }
             return ok("No pending filesystem intents remain after the start drain.");
-          } finally {
-            db.close();
-          }
+          });
+          return checked.ok ? checked.value : blocking(checked.blocking);
         } catch (error) {
           return blocking(
             `pending_fs_ops could not be read: ${error instanceof Error ? error.message : String(error)}`,
@@ -653,11 +718,8 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         if (admissionState.kind === "known-history-finding") {
           return blocking(admissionState.message);
         }
-        const opened = doctorOpenDatabase();
-        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = opened.db;
-          try {
+          const checked = withDoctorDb((db) => {
             const row = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
               | Record<string, unknown>
               | undefined;
@@ -665,9 +727,10 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             if (row?.version !== expected) {
               return blocking(`schema_migrations is at ${String(row?.version)}, expected ${expected}.`);
             }
-          } finally {
-            db.close();
-          }
+            return null;
+          });
+          if (!checked.ok) return blocking(checked.blocking);
+          if (checked.value !== null) return checked.value;
         } catch (error) {
           return blocking(
             `schema_migrations could not be read: ${error instanceof Error ? error.message : String(error)}`,
@@ -704,42 +767,46 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             configurationRecovery(state),
           );
         }
-        const opened = doctorOpenDatabase();
-        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = opened.db;
-          let records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }> = [];
-          try {
+          const loaded = withDoctorDb((db) => {
             // The Memo link guard runs before any census conclusion and inside
             // the connection-close ownership: a schema-10 database whose Memo
             // rows lost their record references is a blocking integrity
-            // finding, never a healthy empty census (SHR-004, SHR-014), and
-            // the refusal path releases this check's own connection.
+            // finding, never a healthy empty census (SHR-004, SHR-014).
             const memoLinks = validateMemoContentLinks(db);
-            if (!memoLinks.ok) return blocking(memoLinks.error.message);
+            if (!memoLinks.ok) return { kind: "blocked" as const, message: memoLinks.error.message };
             // The Channel link guard joins the same census boundary: a
             // schema-11 database whose message rows lost their record
             // references is a blocking finding under the same rule, never a
             // healthy empty census (SHR-004, the TASK-109 reviewed plan).
             const channelLinks = validateChannelContentLinks(db);
-            if (!channelLinks.ok) return blocking(channelLinks.error.message);
+            if (!channelLinks.ok) return { kind: "blocked" as const, message: channelLinks.error.message };
             const table = db
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
               .get() as { name: string } | null | undefined;
-            if (table) {
-              records = db
-                .prepare("SELECT storage_key, inline_text, sha256 FROM content_records WHERE materialized = 1")
-                .all() as unknown as Array<{ storage_key: string | null; inline_text: string | null; sha256: string }>;
-            }
-          } finally {
-            db.close();
-          }
+            const records = table
+              ? (db
+                  .prepare("SELECT storage_key, inline_text, sha256 FROM content_records WHERE materialized = 1")
+                  .all() as unknown as Array<{
+                  storage_key: string | null;
+                  inline_text: string | null;
+                  sha256: string;
+                }>)
+              : [];
+            return { kind: "records" as const, records };
+          });
+          if (!loaded.ok) return blocking(loaded.blocking);
+          if (loaded.value.kind === "blocked") return blocking(loaded.value.message);
+          const { records } = loaded.value;
           if (records.length === 0) return ok("No content records are recorded yet on this installation.");
           // A Vault that cannot open is reported as that refusal, never as
           // missing content bytes (TASK-118, section 3.4).
           const openedVault = vaultState();
           if (openedVault.kind === "refused") return blocking(openedVault.message);
-          const findings = verifyContentRecords({ vault }, records);
+          const findings = verifyContentRecords(
+            { vault, ...(ctx.sessionActive ? { fileDigestCache: ctx.fileDigestCache } : {}) },
+            records,
+          );
           if (!findings.ok) return blocking(findings.error.message);
           if (findings.value.length > 0) {
             return blocking(findings.value.join(" "));
@@ -762,35 +829,18 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
             configurationRecovery(state),
           );
         }
-        const opened = doctorOpenDatabase();
-        if (!opened.ok) return blocking(opened.blocking);
         try {
-          const db = opened.db;
-          let records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }> = [];
-          try {
+          const loaded = withDoctorDb((db) => {
             // The shared content-link guard runs before any census filter: an
             // Artifact whose authoritative record row is missing must surface as
             // a blocking finding, never as a false healthy empty census (SHR-004,
             // SEC-014, section 35).
             const links = validateArtifactContentLinks(db);
             if (!links.ok) {
-              return blocking(links.error.message);
+              return { kind: "blocked" as const, message: links.error.message };
             }
-            // The census covers every current Artifact in the layout the applied
-            // history actually established (INIT-017, SEC-014, section 35): a
-            // legitimate pre-adoption database keeps the legacy Artifact columns
-            // and is censused through them — its file-backed bytes still verify
-            // healthy while db.migrations separately reports the ordinary
-            // 8-expected-9 finding — while an adoption-version database reads
-            // each Artifact through its normalized content record, file-backed
-            // bytes at their managed key and an inline record's stored text in
-            // place. A database at or above the adoption version whose required
-            // artifacts table or reference column is missing is inconsistent and
-            // reported as a visible blocking finding, never as the vacuous
-            // no-Artifacts pass or silently treated as legacy (SHR-004: a
-            // history-only admission check does not establish the required
-            // structure of an already-current database).
             const layout = inspectArtifactStorageLayout(db);
+            let records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }> = [];
             if (layout === "content-records") {
               records = db
                 .prepare(
@@ -810,11 +860,11 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
                 sha256: string;
               }>;
             }
-            // A pre-adoption database without the artifacts table keeps the
-            // honest vacuous pass: no Artifact can be recorded yet.
-          } finally {
-            db.close();
-          }
+            return { kind: "records" as const, records };
+          });
+          if (!loaded.ok) return blocking(loaded.blocking);
+          if (loaded.value.kind === "blocked") return blocking(loaded.value.message);
+          const { records } = loaded.value;
           if (records.length === 0) return ok("No Artifacts are recorded yet on this installation.");
           // A Vault that cannot open is reported as that refusal, never as
           // missing Artifact bytes (TASK-118, section 3.4).
@@ -836,8 +886,23 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           }
           if (inlineFindings.length > 0) return blocking(inlineFindings.join(" "));
           const store = createNodeArtifactStore({ vaultPath: vault, installationId: config.installationId });
+          // Cache only successful SHA-256 digests so `content.checksums` reuses
+          // them without re-hashing while error paths keep their own wording.
+          const cachedArtifactStore = ctx.sessionActive
+            ? {
+                ...store,
+                checksum(storageKey: string) {
+                  const cacheKey = `${vault}\0${storageKey}`;
+                  const cached = ctx.fileDigestCache.get(cacheKey);
+                  if (cached !== undefined) return { ok: true as const, value: cached };
+                  const computed = store.checksum(storageKey);
+                  if (computed.ok) ctx.fileDigestCache.set(cacheKey, computed.value);
+                  return computed;
+                },
+              }
+            : store;
           const findings = verifyVaultArtifacts(
-            { artifactStore: store },
+            { artifactStore: cachedArtifactStore },
             fileRecords.map((row) => ({ storageKey: row.storage_key, sha256: row.sha256 })),
           );
           if (!findings.ok) return blocking(findings.error.message);
@@ -858,24 +923,21 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           return warning("Project bindings cannot be verified because the database history could not be inspected.");
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
+        const boundProjectIds = new Set(bindings.map((binding) => binding.project_id));
+        const slugByProjectId = new Map(projects.map((project) => [project.id, project.slug]));
         const problems: string[] = [];
         for (const project of projects) {
           if (project.status !== "active") continue;
-          if (!bindings.some((binding) => binding.project_id === project.id)) {
+          if (!boundProjectIds.has(project.id)) {
             problems.push(`Project '${project.slug}' has no directory binding on this installation.`);
           }
         }
         for (const binding of bindings) {
-          let exists = false;
-          try {
-            exists = statSync(binding.directory).isDirectory();
-          } catch {
-            exists = false;
+          const stats = statDirectory(binding.directory);
+          if (!stats?.isDirectory()) {
+            const slug = slugByProjectId.get(binding.project_id) ?? binding.project_id;
+            problems.push(`Project '${slug}' binding '${binding.directory}' no longer exists.`);
           }
-          if (!exists)
-            problems.push(
-              `Project '${projectSlugOf(projects, binding)}' binding '${binding.directory}' no longer exists.`,
-            );
         }
         if (problems.length > 0) return warning(problems.join(" "));
         return ok("Every active Project has a binding and every binding directory exists.");
@@ -887,19 +949,54 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           return warning("Project bindings cannot be verified because the database history could not be inspected.");
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
-        const nested: string[] = [];
-        const directories = bindings.filter((binding) => binding.binding_kind === "directory");
-        for (const inner of directories) {
-          for (const outer of directories) {
-            if (outer.id === inner.id || outer.directory === inner.directory) continue;
-            if (inner.directory.startsWith(`${outer.directory}/`)) {
-              nested.push(
-                `'${inner.directory}' (${projectSlugOf(projects, inner)}) is nested inside '${outer.directory}' (${projectSlugOf(projects, outer)}); the deepest match wins`,
-              );
+        const slugByProjectId = new Map(projects.map((project) => [project.id, project.slug]));
+        const indexed = bindings
+          .filter((binding) => binding.binding_kind === "directory")
+          .map((binding, idx) => ({ binding, idx, segments: binding.directory.split("/") }));
+        // Path-segment sort guarantees every directory immediately precedes all
+        // descendants without ASCII sibling traps (e.g. `'-' < '/'` putting
+        // `/a-other` between `/a` and `/a/b`).
+        indexed.sort((a, b) => {
+          const len = Math.min(a.segments.length, b.segments.length);
+          for (let k = 0; k < len; k++) {
+            const sa = a.segments[k] as string;
+            const sb = b.segments[k] as string;
+            if (sa < sb) return -1;
+            if (sa > sb) return 1;
+          }
+          return a.segments.length - b.segments.length || a.idx - b.idx;
+        });
+        const stack: typeof indexed = [];
+        const emitted: Array<{ innerIdx: number; outerIdx: number; message: string }> = [];
+        for (const current of indexed) {
+          while (stack.length > 0) {
+            const top = stack[stack.length - 1] as (typeof indexed)[number];
+            if (
+              current.binding.directory === top.binding.directory ||
+              current.binding.directory.startsWith(`${top.binding.directory}/`)
+            ) {
+              break;
+            }
+            stack.pop();
+          }
+          for (const outer of stack) {
+            if (outer.binding.id === current.binding.id || outer.binding.directory === current.binding.directory) {
+              continue;
+            }
+            if (current.binding.directory.startsWith(`${outer.binding.directory}/`)) {
+              const innerSlug = slugByProjectId.get(current.binding.project_id) ?? current.binding.project_id;
+              const outerSlug = slugByProjectId.get(outer.binding.project_id) ?? outer.binding.project_id;
+              emitted.push({
+                innerIdx: current.idx,
+                outerIdx: outer.idx,
+                message: `'${current.binding.directory}' (${innerSlug}) is nested inside '${outer.binding.directory}' (${outerSlug}); the deepest match wins`,
+              });
             }
           }
+          stack.push(current);
         }
-        if (nested.length > 0) return warning([...new Set(nested)].join(" "));
+        emitted.sort((a, b) => a.innerIdx - b.innerIdx || a.outerIdx - b.outerIdx);
+        if (emitted.length > 0) return warning([...new Set(emitted.map((entry) => entry.message))].join(" "));
         return ok("No directory binding is nested inside another.");
       }
 
@@ -909,66 +1006,60 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           return warning("Project bindings cannot be verified because the database history could not be inspected.");
         if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
         const { projects, bindings } = registry;
-        const aliases: string[] = [];
-        // One identity probe per distinct directory, before the pair loop: the
-        // comment and the resolver's mechanism stay honest, and no directory is
-        // stat once per pair it participates in.
-        const identityOf = new Map<string, string | null>();
-        const identityFor = (directory: string): string | null => {
-          if (!identityOf.has(directory)) {
-            try {
-              const stats = statSync(directory);
-              identityOf.set(directory, `${stats.dev}:${stats.ino}`);
-            } catch {
-              identityOf.set(directory, null);
-            }
+        const slugByProjectId = new Map(projects.map((project) => [project.id, project.slug]));
+        type IndexedBinding = { binding: BindingRow; idx: number };
+        const reachableBuckets = new Map<string, IndexedBinding[]>();
+        const unreachableBuckets = new Map<string, IndexedBinding[]>();
+        for (let idx = 0; idx < bindings.length; idx++) {
+          const binding = bindings[idx] as BindingRow;
+          const stats = statDirectory(binding.directory);
+          if (stats !== null) {
+            const key = `${binding.binding_kind}\0${stats.dev}:${stats.ino}`;
+            const bucket = reachableBuckets.get(key);
+            if (bucket !== undefined) bucket.push({ binding, idx });
+            else reachableBuckets.set(key, [{ binding, idx }]);
+          } else {
+            const key = `${binding.binding_kind}\0${binding.directory}`;
+            const bucket = unreachableBuckets.get(key);
+            if (bucket !== undefined) bucket.push({ binding, idx });
+            else unreachableBuckets.set(key, [{ binding, idx }]);
           }
-          return identityOf.get(directory) ?? null;
-        };
-        for (let i = 0; i < bindings.length; i++) {
-          for (let j = i + 1; j < bindings.length; j++) {
-            const first = bindings[i] as (typeof bindings)[number];
-            const second = bindings[j] as (typeof bindings)[number];
-            // Identical spellings under two different Projects are the resolver's
-            // owner-conflict ambiguity too, so they must warn; under one Project
-            // they are a duplicate the registry forbids and resolution collapses.
-            // Genuine same-inode aliases warn at any depth: section 35 scopes
-            // this check to aliased bindings as a data-quality condition ahead
-            // of time, and a firmlink alias genuinely differs in path depth.
-            if (
-              first.binding_kind !== second.binding_kind ||
-              (first.directory === second.directory && first.project_id === second.project_id)
-            ) {
-              continue;
-            }
-            // The same dev:ino comparison the resolver's step 6 uses, so the
-            // warning actually predicts the condition that raises
-            // AMBIGUOUS_PROJECT: realpath cannot collapse a bind mount or an
-            // APFS firmlink, but their inode identity is still one directory.
-            // One stat per directory, mirroring the resolver's single probe.
-            const firstIdentity = identityFor(first.directory);
-            const secondIdentity = identityFor(second.directory);
-            if (firstIdentity === null || secondIdentity === null) {
-              // An unanswerable probe matters only to a pair the resolver's
-              // same-depth tie can actually reach, and the registry's unique
-              // (installation, directory) constraint leaves identical stored
-              // spellings as the sole such pair, reachable only through
-              // restored or directly edited data. A missing directory of a
-              // distinct spelling already warns through bindings.exist, and
-              // warning here too would name unrelated Projects as ambiguous.
-              if (first.directory === second.directory) {
-                aliases.push(`'${first.directory}' cannot be physically compared while its directory is unreachable`);
-              }
-              continue;
-            }
-            if (firstIdentity === secondIdentity && first.project_id !== second.project_id) {
-              aliases.push(
-                `'${first.directory}' (${projectSlugOf(projects, first)}) and '${second.directory}' (${projectSlugOf(projects, second)}) alias one directory`,
-              );
+        }
+        const emitted: Array<{ firstIdx: number; secondIdx: number; message: string }> = [];
+        for (const bucket of reachableBuckets.values()) {
+          if (bucket.length < 2) continue;
+          for (let i = 0; i < bucket.length; i++) {
+            for (let j = i + 1; j < bucket.length; j++) {
+              const first = bucket[i] as IndexedBinding;
+              const second = bucket[j] as IndexedBinding;
+              if (first.binding.project_id === second.binding.project_id) continue;
+              const firstSlug = slugByProjectId.get(first.binding.project_id) ?? first.binding.project_id;
+              const secondSlug = slugByProjectId.get(second.binding.project_id) ?? second.binding.project_id;
+              emitted.push({
+                firstIdx: first.idx,
+                secondIdx: second.idx,
+                message: `'${first.binding.directory}' (${firstSlug}) and '${second.binding.directory}' (${secondSlug}) alias one directory`,
+              });
             }
           }
         }
-        if (aliases.length > 0) return warning([...new Set(aliases)].join(" "));
+        for (const bucket of unreachableBuckets.values()) {
+          if (bucket.length < 2) continue;
+          for (let i = 0; i < bucket.length; i++) {
+            for (let j = i + 1; j < bucket.length; j++) {
+              const first = bucket[i] as IndexedBinding;
+              const second = bucket[j] as IndexedBinding;
+              if (first.binding.project_id === second.binding.project_id) continue;
+              emitted.push({
+                firstIdx: first.idx,
+                secondIdx: second.idx,
+                message: `'${first.binding.directory}' cannot be physically compared while its directory is unreachable`,
+              });
+            }
+          }
+        }
+        emitted.sort((a, b) => a.firstIdx - b.firstIdx || a.secondIdx - b.secondIdx);
+        if (emitted.length > 0) return warning([...new Set(emitted.map((entry) => entry.message))].join(" "));
         return ok("No two bindings of the same kind alias one directory.");
       }
 
@@ -1223,6 +1314,29 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
     probe(id: DoctorCheckId): CheckOutcome {
       return attachRecovery(id, perform(id));
     },
+
+    beginSession() {
+      ctx.sessionActive = true;
+    },
+
+    close() {
+      ctx.sessionActive = false;
+      const db = ctx.sharedDb;
+      ctx.sharedDb = null;
+      ctx.sharedDbBlocking = null;
+      ctx.configState = null;
+      ctx.vaultState = null;
+      ctx.registry = undefined;
+      ctx.dirStatCache.clear();
+      ctx.fileDigestCache.clear();
+      if (db !== null) {
+        try {
+          db.close();
+        } catch {
+          // Best-effort close on session end.
+        }
+      }
+    },
   };
 }
 
@@ -1270,7 +1384,7 @@ function isNotFound(error: unknown): boolean {
  * the bytes at the managed key. Read-only, never repairing.
  */
 function verifyContentRecords(
-  ports: { vault: string },
+  ports: { vault: string; fileDigestCache?: Map<string, string> },
   records: Array<{ storage_key: string | null; inline_text: string | null; sha256: string }>,
 ): Result<string[], AppError> {
   const findings: string[] = [];
@@ -1292,7 +1406,12 @@ function verifyContentRecords(
         continue;
       }
       try {
-        const recomputed = digestManagedFile(ports.vault, record.storage_key).sha256;
+        const cacheKey = `${ports.vault}\0${record.storage_key}`;
+        let recomputed = ports.fileDigestCache?.get(cacheKey);
+        if (recomputed === undefined) {
+          recomputed = digestManagedFile(ports.vault, record.storage_key).sha256;
+          ports.fileDigestCache?.set(cacheKey, recomputed);
+        }
         if (recomputed.toLowerCase() !== record.sha256.toLowerCase()) {
           findings.push(
             `The content bytes at ${record.storage_key} do not match their recorded SHA-256 ${record.sha256}.`,

@@ -41,7 +41,7 @@ export interface SqliteHandoffReadStoreOptions {
   contentionSurface?: ContentionSurface | undefined;
 }
 
-interface HandoffRow {
+interface ProjectedHandoffRow {
   id: string;
   dispatch_group_id: string | null;
   supersedes_handoff_id: string | null;
@@ -68,22 +68,83 @@ interface HandoffRow {
   deleted_at: string | null;
   created_at: string;
   updated_at: string;
+  sp_slug: string | null;
+  rp_slug: string | null;
+  a_id: string | null;
+  a_handoff_id: string | null;
+  a_original_name: string | null;
+  a_mime_type: string | null;
+  cr_id: string | null;
+  cr_storage_key: string | null;
+  cr_size_bytes: number | null;
+  cr_sha256: string | null;
+  cr_materialized: number | null;
+  rn_handoff_id: string | null;
+  rn_purpose: "general" | "change_request" | null;
+  rn_active: number | null;
+  rn_author_kind: "user" | "registered_project" | null;
+  rn_author_project_id: string | null;
+  rn_target_revision: number | null;
+  rn_created_at: string | null;
+  rn_updated_at: string | null;
+  has_pending_deletion: number;
 }
 
-interface ArtifactRow {
-  id: string;
-  handoff_id: string;
-  original_name: string;
-  mime_type: string;
-  content_record_id: string;
-}
-
-interface ContentRecordRow {
-  storage_key: string | null;
-  size_bytes: number;
-  sha256: string;
-  materialized: number;
-}
+const HANDOFF_PROJECTION_SQL = `SELECT
+  h.id,
+  h.dispatch_group_id,
+  h.supersedes_handoff_id,
+  h.title,
+  h.sender_kind,
+  h.sender_project_id,
+  h.sender_workspace_key,
+  h.sender_path_snapshot,
+  h.recipient_project_id,
+  h.current_artifact_id,
+  h.revision,
+  h.consecutive_no_change_resolutions,
+  h.row_version,
+  h.review_state,
+  h.read_status,
+  h.revision_read_at,
+  h.processing_status,
+  h.processing_started_at,
+  h.processing_completed_at,
+  h.first_fetched_at,
+  h.review_engaged_at,
+  h.pinned,
+  h.archived_at,
+  h.deleted_at,
+  h.created_at,
+  h.updated_at,
+  sp.slug AS sp_slug,
+  rp.slug AS rp_slug,
+  a.id AS a_id,
+  a.handoff_id AS a_handoff_id,
+  a.original_name AS a_original_name,
+  a.mime_type AS a_mime_type,
+  cr.id AS cr_id,
+  cr.storage_key AS cr_storage_key,
+  cr.size_bytes AS cr_size_bytes,
+  cr.sha256 AS cr_sha256,
+  cr.materialized AS cr_materialized,
+  rn.handoff_id AS rn_handoff_id,
+  rn.purpose AS rn_purpose,
+  rn.active AS rn_active,
+  rn.author_kind AS rn_author_kind,
+  rn.author_project_id AS rn_author_project_id,
+  rn.target_revision AS rn_target_revision,
+  rn.created_at AS rn_created_at,
+  rn.updated_at AS rn_updated_at,
+  EXISTS(
+    SELECT 1 FROM deletion_requests dr WHERE dr.handoff_id = h.id AND dr.status = 'pending'
+  ) AS has_pending_deletion
+FROM handoffs h
+LEFT JOIN projects sp ON sp.id = h.sender_project_id
+LEFT JOIN projects rp ON rp.id = h.recipient_project_id
+LEFT JOIN artifacts a ON a.id = h.current_artifact_id
+LEFT JOIN content_records cr ON cr.id = a.content_record_id
+LEFT JOIN review_notes rn ON rn.handoff_id = h.id`;
 
 export function createSqliteHandoffReadStore(
   db: SorageSqlite,
@@ -91,117 +152,59 @@ export function createSqliteHandoffReadStore(
   options: SqliteHandoffReadStoreOptions,
 ): HandoffReadPort {
   const { runDir } = options;
-  const slugStatement = db.prepare("SELECT slug FROM projects WHERE id = ?");
-  const slugMemo = new Map<string, string | null>();
-  const slugOf = (projectId: string | null): string | null => {
-    if (projectId === null) return null;
-    const memoized = slugMemo.get(projectId);
-    if (memoized !== undefined) return memoized;
-    const row = slugStatement.get(projectId) as { slug: string } | null | undefined;
-    const slug = row ? row.slug : null;
-    slugMemo.set(projectId, slug);
-    return slug;
-  };
-  const artifactStatement = db.prepare(
-    "SELECT id, handoff_id, original_name, mime_type, content_record_id FROM artifacts WHERE id = ?",
-  );
-  const recordStatement = db.prepare(
-    "SELECT storage_key, size_bytes, sha256, materialized FROM content_records WHERE id = ?",
-  );
+
   /**
-   * One current Artifact read through its authoritative record, or the
-   * missing-metadata marker. The marker covers every shape in which the
-   * Handoff's named current Artifact has no honest authoritative body here: a
-   * deleted Artifact row, a vanished record row, or an Artifact row that
-   * belongs to a different Handoff — wrong-owner bytes are never projected
-   * into this Handoff's view (SHR-004).
+   * Projects one joined current Artifact through its authoritative record, or
+   * the missing-metadata marker. Checks `cr_id === null` (never `storage_key`,
+   * which is null for inline rows) and verifies `a_handoff_id === row.id` so
+   * wrong-owner bytes are never projected into this Handoff's view (SHR-004).
    */
   const artifactOf = (
-    handoffId: string,
-    artifactId: string | null,
+    row: ProjectedHandoffRow,
   ): { artifact: HandoffView["currentArtifact"]; integrity: HandoffContentIntegrity } => {
-    if (artifactId === null) return { artifact: null, integrity: "ok" };
-    const artifactRow = artifactStatement.get(artifactId) as ArtifactRow | null | undefined;
-    if (artifactRow === null || artifactRow === undefined) {
-      return { artifact: null, integrity: "artifact-record-missing" };
-    }
-    if (artifactRow.handoff_id !== handoffId) {
-      // The Artifact row exists but answers to another Handoff: the stored
-      // ownership is immutable, so a mismatch is stored corruption, and the
-      // marker never fabricates a currentArtifact for the wrong body.
-      return { artifact: null, integrity: "artifact-record-missing" };
-    }
-    const recordRow = recordStatement.get(artifactRow.content_record_id) as ContentRecordRow | null | undefined;
-    if (recordRow === null || recordRow === undefined) {
+    if (row.current_artifact_id === null) return { artifact: null, integrity: "ok" };
+    if (row.a_id === null || row.a_handoff_id !== row.id || row.cr_id === null) {
       return { artifact: null, integrity: "artifact-record-missing" };
     }
     return {
       artifact: {
-        id: artifactRow.id,
+        id: row.a_id,
         // Always present and null exactly for inline rows (SHR-013).
-        storageKey: recordRow.storage_key,
-        originalName: artifactRow.original_name,
-        mimeType: artifactRow.mime_type,
-        sizeBytes: Number(recordRow.size_bytes),
-        sha256: recordRow.sha256,
-        materialized: recordRow.materialized === 1,
+        storageKey: row.cr_storage_key,
+        originalName: row.a_original_name as string,
+        mimeType: row.a_mime_type as string,
+        sizeBytes: Number(row.cr_size_bytes),
+        sha256: row.cr_sha256 as string,
+        materialized: row.cr_materialized === 1,
       },
       integrity: "ok",
     };
   };
-  const noteStatement = db.prepare(
-    "SELECT 1 AS one FROM review_notes WHERE handoff_id = ? AND purpose = 'change_request' AND active = 1",
-  );
-  const noteExists = (handoffId: string): boolean => {
-    const row = noteStatement.get(handoffId) as { one: number } | null | undefined;
-    return row !== null && row !== undefined;
+
+  const commentOf = (row: ProjectedHandoffRow): HandoffView["comment"] => {
+    if (row.rn_handoff_id === null) return null;
+    return {
+      handoffId: row.rn_handoff_id,
+      purpose: row.rn_purpose as "general" | "change_request",
+      active: row.rn_active === 1,
+      authorKind: row.rn_author_kind as "user" | "registered_project",
+      authorProjectId: row.rn_author_project_id,
+      targetRevision: row.rn_target_revision as number,
+      createdAt: row.rn_created_at as string,
+      updatedAt: row.rn_updated_at as string,
+    };
   };
-  const commentStatement = db.prepare(
-    "SELECT handoff_id, purpose, active, author_kind, author_project_id, target_revision, created_at, updated_at FROM review_notes WHERE handoff_id = ?",
-  );
-  const commentOf = (id: string): HandoffView["comment"] => {
-    const row = commentStatement.get(id) as
-      | {
-          handoff_id: string;
-          purpose: "general" | "change_request";
-          active: number;
-          author_kind: "user" | "registered_project";
-          author_project_id: string | null;
-          target_revision: number;
-          created_at: string;
-          updated_at: string;
-        }
-      | null
-      | undefined;
-    return row
-      ? {
-          handoffId: row.handoff_id,
-          purpose: row.purpose,
-          active: row.active === 1,
-          authorKind: row.author_kind,
-          authorProjectId: row.author_project_id,
-          targetRevision: row.target_revision,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        }
-      : null;
-  };
-  const pendingStatement = db.prepare(
-    "SELECT 1 AS one FROM deletion_requests WHERE handoff_id = ? AND status = 'pending'",
-  );
-  const pendingDeletion = (handoffId: string): boolean => {
-    const row = pendingStatement.get(handoffId) as { one: number } | null | undefined;
-    return row !== null && row !== undefined;
-  };
-  const toCandidate = (row: HandoffRow): HandoffListCandidate => {
+
+  const toCandidate = (row: ProjectedHandoffRow): HandoffListCandidate => {
     const tombstone = row.deleted_at !== null;
     const terminal =
       row.review_state === "accepted" || row.review_state === "declined" || row.review_state === "withdrawn";
     // Section 6: a pending Deletion Request adds the User beside the review next
     // actor, and an integrity failure — a current Artifact that never materialized
     // or whose authoritative record is missing — belongs to the User as well.
-    const { artifact, integrity } = artifactOf(row.id, row.current_artifact_id);
+    const { artifact, integrity } = artifactOf(row);
     const integrityFailure = artifact !== null ? artifact.materialized !== true : integrity !== "ok";
+    const hasPendingDeletion = row.has_pending_deletion === 1;
     const nextActors = {
       reviewNextActor:
         tombstone || terminal
@@ -209,7 +212,7 @@ export function createSqliteHandoffReadStore(
           : row.review_state === "awaiting_recipient"
             ? ("recipient" as const)
             : ("sender" as const),
-      administrativeNextActor: pendingDeletion(row.id) || integrityFailure ? ("user" as const) : null,
+      administrativeNextActor: hasPendingDeletion || integrityFailure ? ("user" as const) : null,
     };
     return {
       contentIntegrity: integrity,
@@ -220,11 +223,11 @@ export function createSqliteHandoffReadStore(
         title: row.title,
         senderKind: row.sender_kind as HandoffView["senderKind"],
         senderProjectId: row.sender_project_id,
-        senderProjectSlug: slugOf(row.sender_project_id),
+        senderProjectSlug: row.sender_project_id === null ? null : row.sp_slug,
         senderWorkspaceKey: row.sender_workspace_key,
         senderPathSnapshot: row.sender_path_snapshot,
         recipientProjectId: row.recipient_project_id,
-        recipientProjectSlug: slugOf(row.recipient_project_id) ?? row.recipient_project_id,
+        recipientProjectSlug: row.rp_slug ?? row.recipient_project_id,
         revision: row.revision,
         rowVersion: row.row_version,
         reviewState: row.review_state as HandoffView["reviewState"],
@@ -240,7 +243,7 @@ export function createSqliteHandoffReadStore(
           startedAt: tombstone ? null : row.processing_started_at,
           completedAt: tombstone ? null : row.processing_completed_at,
         },
-        comment: tombstone ? null : commentOf(row.id),
+        comment: tombstone ? null : commentOf(row),
         firstFetchedAt: row.first_fetched_at,
         reviewEngagedAt: row.review_engaged_at,
         pinned: row.pinned === 1,
@@ -249,8 +252,8 @@ export function createSqliteHandoffReadStore(
         currentArtifact: artifact,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        pendingDeletionRequest: pendingDeletion(row.id),
-        hasReviewNote: noteExists(row.id),
+        pendingDeletionRequest: hasPendingDeletion,
+        hasReviewNote: row.rn_handoff_id !== null && row.rn_purpose === "change_request" && row.rn_active === 1,
         consecutiveNoChangeResolutions: row.consecutive_no_change_resolutions,
       },
     };
@@ -260,13 +263,13 @@ export function createSqliteHandoffReadStore(
     switch (scope.kind) {
       case "inbox":
         params.push(scope.recipientProjectId);
-        return "recipient_project_id = ?";
+        return "h.recipient_project_id = ?";
       case "outbox_project":
         params.push(scope.senderProjectId);
-        return "sender_project_id = ?";
+        return "h.sender_project_id = ?";
       case "outbox_workspace":
         params.push(scope.workspaceKey);
-        return "sender_workspace_key = ?";
+        return "h.sender_workspace_key = ?";
       default:
         return "1 = 1";
     }
@@ -278,38 +281,40 @@ export function createSqliteHandoffReadStore(
         const params: unknown[] = [];
         const clauses = [scopeSql(scope, params)];
         if (filters.state !== undefined) {
-          clauses.push("review_state = ?");
+          clauses.push("h.review_state = ?");
           params.push(filters.state);
         }
         if (filters.senderSlug !== undefined) {
-          clauses.push("sender_project_id = (SELECT id FROM projects WHERE slug = ? COLLATE NOCASE)");
+          clauses.push("h.sender_project_id = (SELECT id FROM projects WHERE slug = ? COLLATE NOCASE)");
           params.push(filters.senderSlug);
         }
         if (filters.recipientSlug !== undefined) {
-          clauses.push("recipient_project_id = (SELECT id FROM projects WHERE slug = ? COLLATE NOCASE)");
+          clauses.push("h.recipient_project_id = (SELECT id FROM projects WHERE slug = ? COLLATE NOCASE)");
           params.push(filters.recipientSlug);
         }
         if (filters.updatedSince !== undefined) {
-          clauses.push("updated_at >= ?");
+          clauses.push("h.updated_at >= ?");
           params.push(filters.updatedSince);
         }
         if (filters.updatedUntil !== undefined) {
-          clauses.push("updated_at <= ?");
+          clauses.push("h.updated_at <= ?");
           params.push(filters.updatedUntil);
         }
-        if (!filters.includeArchived) clauses.push("archived_at IS NULL");
-        if (!filters.includeDeleted) clauses.push("deleted_at IS NULL");
+        if (!filters.includeArchived) clauses.push("h.archived_at IS NULL");
+        if (!filters.includeDeleted) clauses.push("h.deleted_at IS NULL");
         if (afterSortKey !== null) {
           const separator = afterSortKey.lastIndexOf("|");
           const afterUpdated = afterSortKey.slice(0, separator);
           const afterId = afterSortKey.slice(separator + 1);
-          clauses.push("(updated_at < ? OR (updated_at = ? AND id < ?))");
+          clauses.push("(h.updated_at < ? OR (h.updated_at = ? AND h.id < ?))");
           params.push(afterUpdated, afterUpdated, afterId);
         }
         params.push(limit);
         const rows = db
-          .prepare(`SELECT * FROM handoffs WHERE ${clauses.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`)
-          .all(...(params as never[])) as unknown as HandoffRow[];
+          .prepare(
+            `${HANDOFF_PROJECTION_SQL} WHERE ${clauses.join(" AND ")} ORDER BY h.updated_at DESC, h.id DESC LIMIT ?`,
+          )
+          .all(...(params as never[])) as unknown as ProjectedHandoffRow[];
         // Candidates carry the private missing-record marker; the core trims the
         // visible page before resolving it, so an overflow row never leaks or
         // fails a page it is not part of (SHR-004, SHR-014).
@@ -325,7 +330,10 @@ export function createSqliteHandoffReadStore(
 
     loadHandoff(id) {
       try {
-        const row = db.prepare("SELECT * FROM handoffs WHERE id = ?").get(id) as HandoffRow | null | undefined;
+        const row = db.prepare(`${HANDOFF_PROJECTION_SQL} WHERE h.id = ?`).get(id) as
+          | ProjectedHandoffRow
+          | null
+          | undefined;
         return ok(row ? toCandidate(row) : null);
       } catch (error) {
         return err(appError("INTERNAL_ERROR", `Reading the Handoff failed: ${messageOf(error)}`));

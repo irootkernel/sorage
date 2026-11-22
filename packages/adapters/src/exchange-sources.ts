@@ -11,6 +11,8 @@ export interface BoundExchangeSource extends ExchangeLocalScope {
   root: string;
   relativePath: string;
   bindingId: string;
+  /** Internal stat identity digest captured at versioned registration/revalidation; stripped from Format 5 snapshots. */
+  observedVersion?: string;
 }
 
 function fail(error: AppError): never {
@@ -155,11 +157,27 @@ export function readExchangeOriginal(
   offset: number,
   limit: number,
   expectedSha256: string | null,
+  expectedSize: number | null = null,
 ): { bytes: Buffer; size: number; observedVersion: string } {
   return withExchangeSource(scope, binding, ({ fd, size, observedVersion }) => {
+    if (expectedSha256 === null) {
+      if (offset > size) return fail(exchangeInvalid("The offset is past the original reference's range."));
+      const length = Math.min(limit, size - offset);
+      return {
+        bytes: Buffer.concat([...exchangeSourceChunks(fd, scope.offset + offset, length)], length),
+        size,
+        observedVersion,
+      };
+    }
+    if (expectedSize !== null && offset > expectedSize) {
+      return fail(exchangeInvalid("The offset is past the original reference's range."));
+    }
+    if (expectedSize !== null && size !== expectedSize) {
+      return unavailable("changed");
+    }
     if (offset > size) return fail(exchangeInvalid("The offset is past the original reference's range."));
     const length = Math.min(limit, size - offset);
-    if (expectedSha256 === null) {
+    if (offset > 0 && scope.observedVersion !== undefined && observedVersion === scope.observedVersion) {
       return {
         bytes: Buffer.concat([...exchangeSourceChunks(fd, scope.offset + offset, length)], length),
         size,

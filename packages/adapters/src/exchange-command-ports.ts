@@ -1234,7 +1234,14 @@ class ExchangeStore implements ExchangeBusinessRepository {
       );
     const { kind } = material;
     return () => {
-      const source = readExchangeOriginal(scope, binding, input.offset, input.limit, material.sha256);
+      const source = readExchangeOriginal(
+        scope,
+        binding,
+        input.offset,
+        input.limit,
+        material.sha256,
+        material.sizeBytes,
+      );
       return {
         ...dataSlice({ ...material, kind }, input.offset, source.bytes, source.size),
         observedVersion: source.observedVersion,
@@ -1342,12 +1349,15 @@ function captureBusiness(
   const custody = resolveExchangeSource(actor.binding, context.cwd, path, offset, length);
   const content =
     kind === "copy" ? captureContent(context, actor, { source: custody, forceBinary: true }, historical) : undefined;
-  const observed =
-    kind === "versioned"
-      ? withExchangeSource(custody, actor.binding, ({ fd, size }) =>
-          digestExchangeSource(exchangeSourceChunks(fd, offset, size), Number.MAX_SAFE_INTEGER),
-        )
-      : content;
+  let versionedObserved: { sizeBytes: number; sha256: string; observedVersion: string } | undefined;
+  if (kind === "versioned") {
+    versionedObserved = withExchangeSource(custody, actor.binding, ({ fd, size, observedVersion }) => ({
+      ...digestExchangeSource(exchangeSourceChunks(fd, offset, size), Number.MAX_SAFE_INTEGER),
+      observedVersion,
+    }));
+    custody.observedVersion = versionedObserved.observedVersion;
+  }
+  const observed = kind === "versioned" ? versionedObserved : content;
   if (kind === "live" && !historical) withExchangeSource(custody, actor.binding, () => undefined);
   return {
     actor,
@@ -1451,7 +1461,7 @@ function readRevalidationCheckpoint(
     return err(
       appError("EXCHANGE_MATERIAL_UNAVAILABLE", "Use the original confined reference path.", { reason: "changed" }),
     );
-  withExchangeSource(custody, actor.binding, ({ fd, size }) => {
+  withExchangeSource(custody, actor.binding, ({ fd, size, observedVersion }) => {
     if (material.kind === "live") return;
     const proof = digestExchangeSource(
       exchangeSourceChunks(fd, custody.offset, size),
@@ -1459,6 +1469,7 @@ function readRevalidationCheckpoint(
     );
     if (proof.sizeBytes !== material.sizeBytes || proof.sha256 !== material.sha256)
       fail(appError("EXCHANGE_MATERIAL_UNAVAILABLE", "The original version no longer matches.", { reason: "changed" }));
+    custody.observedVersion = observedVersion;
   });
   preparation.revalidation = { material, actor, custody };
   return ok({ fingerprint });

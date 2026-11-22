@@ -140,7 +140,28 @@ export function createTestMemoCommandPorts(options: TestMemoPortsOptions): MemoC
   };
 }
 
-function scanBody(store: SqliteContentStore, ref: MemoBodyRef, query: string): Result<boolean, AppError> {
+const PREVIEW_HEAD_BYTES = 2048;
+
+function decodeHeadPreviewSeed(bytes: Uint8Array, totalSizeBytes: number, recordId: string): Result<string, AppError> {
+  const complete = decodeStrictUtf8(bytes);
+  if (complete !== null) return { ok: true, value: complete };
+  if (totalSizeBytes > bytes.byteLength) {
+    for (let trim = 1; trim < 4 && trim <= bytes.byteLength; trim++) {
+      const text = decodeStrictUtf8(bytes.subarray(0, bytes.byteLength - trim));
+      if (text !== null) return { ok: true, value: text };
+    }
+  }
+  return {
+    ok: false,
+    error: appError("CONTENT_CORRUPTED", "The Memo body head is not valid UTF-8", { recordId }),
+  };
+}
+
+function scanBody(
+  store: SqliteContentStore,
+  ref: MemoBodyRef,
+  query: string,
+): Result<{ matched: boolean; previewSeed: string | null }, AppError> {
   const opened = store.openBody(ref.recordId, { verifyFileDigest: "always" });
   if (!opened.ok) return opened;
   const handle = opened.value;
@@ -148,17 +169,37 @@ function scanBody(store: SqliteContentStore, ref: MemoBodyRef, query: string): R
     const identity = requireRefIdentity(handle, ref);
     if (!identity.ok) return identity;
     const needle = Buffer.from(query, "utf8");
+    if (needle.byteLength === 0) return { ok: true, value: { matched: true, previewSeed: null } };
     const overlap = needle.byteLength - 1;
     let position = 0;
     let carry: Uint8Array = new Uint8Array(0);
+    const headParts: Uint8Array[] = [];
+    let headLength = 0;
     for (;;) {
       const chunk = handle.read(position, 64 * 1024);
       if (!chunk.ok) return chunk;
-      if (chunk.value.byteLength === 0) return { ok: true, value: false };
+      if (chunk.value.byteLength === 0) return { ok: true, value: { matched: false, previewSeed: null } };
+      if (headLength < PREVIEW_HEAD_BYTES) {
+        const take = Math.min(PREVIEW_HEAD_BYTES - headLength, chunk.value.byteLength);
+        headParts.push(Uint8Array.from(chunk.value.subarray(0, take)));
+        headLength += take;
+      }
       const window = Buffer.concat([carry, chunk.value]);
-      if (window.indexOf(needle) !== -1) return { ok: true, value: true };
-      carry = window.subarray(Math.max(0, window.length - overlap));
       position += chunk.value.byteLength;
+      if (window.indexOf(needle) !== -1) {
+        while (headLength < PREVIEW_HEAD_BYTES && position < handle.sizeBytes) {
+          const extra = handle.read(position, PREVIEW_HEAD_BYTES - headLength);
+          if (!extra.ok) return extra;
+          if (extra.value.byteLength === 0) break;
+          headParts.push(Uint8Array.from(extra.value));
+          headLength += extra.value.byteLength;
+          position += extra.value.byteLength;
+        }
+        const seed = decodeHeadPreviewSeed(Buffer.concat(headParts, headLength), handle.sizeBytes, ref.recordId);
+        if (!seed.ok) return seed;
+        return { ok: true, value: { matched: true, previewSeed: seed.value } };
+      }
+      carry = window.subarray(Math.max(0, window.length - overlap));
     }
   } finally {
     handle.close();
@@ -172,21 +213,9 @@ function previewSeed(store: SqliteContentStore, ref: MemoBodyRef): Result<string
   try {
     const identity = requireRefIdentity(handle, ref);
     if (!identity.ok) return identity;
-    const chunk = handle.read(0, 2048);
+    const chunk = handle.read(0, PREVIEW_HEAD_BYTES);
     if (!chunk.ok) return chunk;
-    const bytes = chunk.value;
-    const complete = decodeStrictUtf8(bytes);
-    if (complete !== null) return { ok: true, value: complete };
-    if (handle.sizeBytes > bytes.byteLength) {
-      for (let trim = 1; trim < 4; trim++) {
-        const text = decodeStrictUtf8(bytes.subarray(0, bytes.byteLength - trim));
-        if (text !== null) return { ok: true, value: text };
-      }
-    }
-    return {
-      ok: false,
-      error: appError("CONTENT_CORRUPTED", "The Memo body head is not valid UTF-8", { recordId: ref.recordId }),
-    };
+    return decodeHeadPreviewSeed(chunk.value, handle.sizeBytes, ref.recordId);
   } finally {
     handle.close();
   }

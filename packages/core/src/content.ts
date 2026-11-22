@@ -426,6 +426,10 @@ export interface ContentReferences {
    * record; the adoption Tasks introduce the reference format and its parser.
    */
   receiptReferencedRecordIds(now: Date): Result<string[], AppError>;
+  /** Optional indexed point-lookup equivalent of `domainReferencedRecordIds` for single-record removal. */
+  isDomainReferenced?(recordId: string): Result<boolean, AppError>;
+  /** Optional point-lookup equivalent of `receiptReferencedRecordIds` for single-record removal. */
+  isReceiptReferenced?(recordId: string, now: Date): Result<boolean, AppError>;
 }
 
 /**

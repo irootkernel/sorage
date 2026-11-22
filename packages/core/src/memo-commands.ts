@@ -62,12 +62,22 @@ export type AcceptedMemoBody =
   | { kind: "text"; text: string; sizeBytes: number; sha256: string }
   | { kind: "spool"; spoolPath: string; sizeBytes: number; sha256: string };
 
+export interface MemoBodyScanResult {
+  matched: boolean;
+  /** Captured bounded UTF-8 head preview when `matched` is true and a non-empty query scanned the body. */
+  previewSeed: string | null;
+}
+
 /** The bounded body readers and scanners backed by the shared content store. */
 export interface MemoBodyPorts {
   /** Streams an accepted spool's exact bytes in bounded chunks for the request hash. */
   spoolSource(spoolPath: string): MemoBodyByteSource;
-  /** Bounded literal scan of one immutable record's bytes against the bound Vault. */
-  scanBodyForQuery(ref: MemoBodyRef, query: string, binding: { vaultPath: string }): Result<boolean, AppError>;
+  /** Bounded literal scan of one immutable record's bytes against the bound Vault, capturing its head preview on match. */
+  scanBodyForQuery(
+    ref: MemoBodyRef,
+    query: string,
+    binding: { vaultPath: string },
+  ): Result<MemoBodyScanResult, AppError>;
   /** Reads and fatally decodes the record's bounded head bytes for the shared preview rule. */
   readBodyPreviewSeed(ref: MemoBodyRef, binding: { vaultPath: string }): Result<string, AppError>;
   /** Resolves a record's complete exact text outside any transaction, honestly reporting materializing and corrupt bytes. */
@@ -825,7 +835,7 @@ function summaryOf(
   binding: { vaultPath: string },
 ): Result<MemoSummary, AppError> {
   let previewSeed: string;
-  if (descriptor.representation === "inline") {
+  if (descriptor.representation === "inline" || descriptor.previewSeed !== null) {
     previewSeed = descriptor.previewSeed ?? "";
   } else {
     const seed = ports.bodies.readBodyPreviewSeed(
@@ -945,7 +955,8 @@ export function listMemos(ports: MemoCommandPorts, input: unknown): Result<MemoP
             failure = scan.error;
             break;
           }
-          matches = scan.value;
+          matches = scan.value.matched;
+          if (scan.value.previewSeed !== null) descriptor.previewSeed = scan.value.previewSeed;
         }
         if (!matches) continue;
         const summary = summaryOf(ports, descriptor, binding.value);

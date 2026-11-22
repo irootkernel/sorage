@@ -1192,7 +1192,7 @@ describe("owned accepted-input spool area", () => {
     expect(readdirSync(outside)).toEqual([]);
   });
 
-  it("stages a large text body through the owned spool and the guarded Vault stage", () => {
+  it("stages a large text body directly through the guarded Vault stage without creating a spool directory", () => {
     const { home, vault } = installation();
     seedProject(home);
     const ports = portsOf(home);
@@ -1206,7 +1206,7 @@ describe("owned accepted-input spool area", () => {
     expect(created.ok).toBe(true);
     if (created.ok) expect(created.value.memo.body).toBe(text);
     expect(readdirSync(join(vault, "content", "memo"))).toHaveLength(1);
-    expect(readdirSync(memoInputDirectory(join(home, "state")))).toEqual([]);
+    expect(existsSync(memoInputDirectory(join(home, "state")))).toBe(false);
   });
 
   it("updates a Memo body-only through a captured accepted spool", () => {

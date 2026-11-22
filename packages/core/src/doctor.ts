@@ -87,12 +87,21 @@ export interface DoctorPorts {
   initialized(): boolean;
   /** Performs one catalog check against the live installation. */
   probe(id: DoctorCheckId): CheckOutcome;
+  /** Optional per-run session start hook invoked by `runDoctor` (ADR-0036). */
+  beginSession?(): void;
+  /** Optional per-run resource cleanup hook invoked by `runDoctor` in `finally` (ADR-0036). */
+  close?(): void;
 }
 
 /** Runs the milestone-scoped catalog and returns the report in stable order. */
 export function runDoctor(ports: DoctorPorts, configFile: string): DoctorReport {
-  if (!ports.initialized()) return notInitializedReport(configFile);
-  return { checks: DOCTOR_CATALOG_0_1.map((id) => ({ id, ...ports.probe(id) })) };
+  ports.beginSession?.();
+  try {
+    if (!ports.initialized()) return notInitializedReport(configFile);
+    return { checks: DOCTOR_CATALOG_0_1.map((id) => ({ id, ...ports.probe(id) })) };
+  } finally {
+    ports.close?.();
+  }
 }
 
 /** True when at least one check is blocking, which is the non-zero exit condition. */

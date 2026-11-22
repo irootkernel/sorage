@@ -1,5 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fsyncSync, linkSync, openSync, readSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  lstatSync,
+  openSync,
+  readSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   type AppError,
@@ -99,8 +110,98 @@ function databaseFailure(error: unknown): AppError {
   return appError("INTERNAL_ERROR", "Updating Exchange working storage failed.", { cause: String(error) });
 }
 
+interface StageInodeProof {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}
+
+function toInodeProof(stat: {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}): StageInodeProof {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
+
+function statKey(proof: StageInodeProof): string {
+  return `${proof.dev}:${proof.ino}:${proof.size}:${proof.mtimeNs}:${proof.ctimeNs}`;
+}
+
+function matchesFullProof(actual: StageInodeProof, expected: StageInodeProof): boolean {
+  return (
+    actual.dev === expected.dev &&
+    actual.ino === expected.ino &&
+    actual.size === expected.size &&
+    actual.mtimeNs === expected.mtimeNs &&
+    actual.ctimeNs === expected.ctimeNs
+  );
+}
+
+/** `linkSync` bumps `nlink` and updates `ctimeNs` on POSIX/APFS, so post-link checks compare `(dev, ino, size, mtimeNs)`. */
+function matchesPostLinkProof(actual: StageInodeProof, expected: StageInodeProof): boolean {
+  return (
+    actual.dev === expected.dev &&
+    actual.ino === expected.ino &&
+    actual.size === expected.size &&
+    actual.mtimeNs === expected.mtimeNs
+  );
+}
+
+function statManagedFileBigInt(root: string, key: string): { path: string; stat: StageInodeProof | undefined } {
+  const entry = managedFile(root, key);
+  if (entry.stat === undefined) return { path: entry.path, stat: undefined };
+  let big: ReturnType<typeof lstatSync>;
+  try {
+    big = lstatSync(entry.path, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { path: entry.path, stat: undefined };
+    throw error;
+  }
+  if (!big.isFile() || big.isSymbolicLink()) {
+    throw new UnsafeManagedPathError("A managed file is a link or special entry");
+  }
+  return { path: entry.path, stat: toInodeProof(big as StageInodeProof) };
+}
+
+function verifyWithStat(root: string, key: string, intent: ActivationRow): StageInodeProof {
+  const handle = openManagedFile(root, key);
+  try {
+    const before = toInodeProof(fstatSync(handle, { bigint: true }));
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let sizeBytes = 0;
+    for (;;) {
+      const count = readSync(handle, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      digest.update(buffer.subarray(0, count));
+      sizeBytes += count;
+    }
+    if (sizeBytes !== intent.size_bytes || digest.digest("hex") !== intent.sha256) {
+      throw new Error("Exchange working content does not match its recorded size and digest");
+    }
+    const after = toInodeProof(fstatSync(handle, { bigint: true }));
+    if (!matchesFullProof(after, before)) {
+      throw new Error("Exchange working content changed while verifying its digest");
+    }
+    return after;
+  } finally {
+    closeSync(handle);
+  }
+}
+
 /** Finish a previously committed intent outside its transactions. Repeating after a crash is safe. */
-function activate(root: string, intent: ActivationRow): void {
+function activate(root: string, intent: ActivationRow, preverifiedStage?: StageInodeProof): void {
   if (
     !isMemoUuid(intent.content_id) ||
     intent.staging_key !== `staging/${intent.content_id}` ||
@@ -108,17 +209,23 @@ function activate(root: string, intent: ActivationRow): void {
   ) {
     throw new UnsafeManagedPathError("An Exchange activation intent does not match its state keys");
   }
-  const verify = (key: string): void => {
-    const content = digestManagedFile(root, key);
-    if (content.sizeBytes !== intent.size_bytes || content.sha256 !== intent.sha256) {
-      throw new Error("Exchange working content does not match its recorded size and digest");
-    }
-  };
-  const source = managedFile(root, intent.staging_key);
-  const destination = managedFile(root, intent.storage_key);
+  const expectedSize = BigInt(intent.size_bytes);
+  const source = statManagedFileBigInt(root, intent.staging_key);
+  const destination = statManagedFileBigInt(root, intent.storage_key);
+  let verified: StageInodeProof | undefined;
   if (destination.stat === undefined) {
     try {
-      if (source.stat !== undefined) verify(intent.staging_key);
+      if (source.stat !== undefined) {
+        if (
+          preverifiedStage !== undefined &&
+          source.stat.size === expectedSize &&
+          matchesFullProof(source.stat, preverifiedStage)
+        ) {
+          verified = preverifiedStage;
+        } else {
+          verified = verifyWithStat(root, intent.staging_key, intent);
+        }
+      }
       const path = managedPath(root, intent.storage_key, true, 0o700);
       // An idempotent peer may already have placed the destination. A
       // no-clobber link keeps both paths available for integrity checks.
@@ -130,13 +237,24 @@ function activate(root: string, intent: ActivationRow): void {
       }
     }
   }
-  verify(intent.storage_key);
+  const destAfter = statManagedFileBigInt(root, intent.storage_key);
+  if (
+    destAfter.stat === undefined ||
+    verified === undefined ||
+    destAfter.stat.size !== expectedSize ||
+    !matchesPostLinkProof(destAfter.stat, verified)
+  ) {
+    verified = verifyWithStat(root, intent.storage_key, intent);
+  }
   fsyncDirectory(dirname(destination.path));
   fsyncDirectory(root);
-  if (managedFile(root, intent.staging_key).stat !== undefined) {
+  const stageAfter = statManagedFileBigInt(root, intent.staging_key);
+  if (stageAfter.stat !== undefined) {
     try {
-      verify(intent.staging_key);
-      unlinkSync(source.path);
+      if (stageAfter.stat.size !== expectedSize || !matchesPostLinkProof(stageAfter.stat, verified)) {
+        verifyWithStat(root, intent.staging_key, intent);
+      }
+      unlinkSync(stageAfter.path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -150,12 +268,23 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
   const tx = { failure: databaseFailure };
   const paused = () => runDir !== undefined && vaultMoveLockHeld(runDir);
   const pauseRefusal = () => vaultMovePauseRefusal(runDir === undefined ? undefined : join(runDir, "vault-move.lock"));
+  const preparedStageProofs = new WeakMap<PreparedExchangeBody, StageInodeProof>();
+  const verifiedStats = new Map<string, string>();
+  const VERIFIED_STATS_LIMIT = 64;
 
-  function complete(intent: ActivationRow): Result<void> {
+  function recordVerifiedStat(id: string, key: string): void {
+    if (!verifiedStats.has(id) && verifiedStats.size >= VERIFIED_STATS_LIMIT) {
+      const oldest = verifiedStats.keys().next().value;
+      if (oldest !== undefined) verifiedStats.delete(oldest);
+    }
+    verifiedStats.set(id, key);
+  }
+
+  function complete(intent: ActivationRow, preverifiedStage?: StageInodeProof): Result<void> {
     if (paused()) return err(pauseRefusal());
     try {
       const root = workingRoot(options, false);
-      activate(root, intent);
+      activate(root, intent, preverifiedStage);
       removeExchangeStageOwner(root, intent.content_id);
     } catch (error) {
       const noted = runInTransaction(
@@ -253,13 +382,22 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
       if (handle === undefined) startFile();
       if (handle === undefined || staged === undefined) throw new Error("Exchange staging did not open");
       fsyncSync(handle);
+      const stageProof = toInodeProof(fstatSync(handle, { bigint: true }));
       closeSync(handle);
       handle = undefined;
       fsyncDirectory(dirname(staged));
       fsyncDirectory(dirname(dirname(staged)));
       if (paused()) return err(pauseRefusal());
       prepared = true;
-      return ok({ id, exchangeId: input.exchangeId, inline: null, sizeBytes: length, sha256 });
+      const result: PreparedExchangeBody = {
+        id,
+        exchangeId: input.exchangeId,
+        inline: null,
+        sizeBytes: length,
+        sha256,
+      };
+      preparedStageProofs.set(result, stageProof);
+      return ok(result);
     } catch (error) {
       return err(contentFailure(error, id));
     } finally {
@@ -336,7 +474,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
   }
 
   function finish(body: PreparedExchangeBody): Result<void> {
-    return body.inline !== null ? ok(undefined) : complete(intentOf(body));
+    return body.inline !== null ? ok(undefined) : complete(intentOf(body), preparedStageProofs.get(body));
   }
 
   function recover(exchangeId?: string, skipContentId?: string): Result<{ resolved: string[]; failures: AppError[] }> {
@@ -606,22 +744,55 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
           if (body.storage_key !== `content/${id}`) throw new Error("Invalid Exchange working-content key");
           const fd = openManagedFile(workingRoot(options, false), body.storage_key);
           try {
-            const hash = createHash("sha256");
-            const chunk = Buffer.alloc(65_536);
-            const bytes = Buffer.alloc(Math.min(limit, body.size_bytes - offset));
-            let position = 0;
-            for (;;) {
-              const count = readSync(fd, chunk, 0, chunk.length, position);
-              if (count === 0) break;
-              if (count > body.size_bytes - position) throw new Error("The file exceeds its recorded size");
-              hash.update(chunk.subarray(0, count));
-              const start = Math.max(offset, position);
-              const end = Math.min(offset + bytes.length, position + count);
-              if (end > start) chunk.copy(bytes, start - offset, start - position, end - position);
-              position += count;
+            const statBefore = toInodeProof(fstatSync(fd, { bigint: true }));
+            if (statBefore.size !== BigInt(body.size_bytes)) {
+              throw new Error("The file disagrees with its recorded size");
             }
-            if (position !== body.size_bytes || hash.digest("hex") !== body.sha256) {
-              throw new Error("The file disagrees with its recorded size or digest");
+            const beforeKey = statKey(statBefore);
+            const sliceLen = Math.min(limit, body.size_bytes - offset);
+            const cachedKey = verifiedStats.get(id);
+            const needsFullHash = offset === 0 || (cachedKey !== undefined && cachedKey !== beforeKey);
+            if (needsFullHash) {
+              const hash = createHash("sha256");
+              const chunk = Buffer.alloc(65_536);
+              const bytes = Buffer.alloc(sliceLen);
+              let position = 0;
+              for (;;) {
+                const count = readSync(fd, chunk, 0, chunk.length, position);
+                if (count === 0) break;
+                if (count > body.size_bytes - position) throw new Error("The file exceeds its recorded size");
+                hash.update(chunk.subarray(0, count));
+                const start = Math.max(offset, position);
+                const end = Math.min(offset + bytes.length, position + count);
+                if (end > start) chunk.copy(bytes, start - offset, start - position, end - position);
+                position += count;
+              }
+              if (position !== body.size_bytes || hash.digest("hex") !== body.sha256) {
+                throw new Error("The file disagrees with its recorded size or digest");
+              }
+              const afterKey = statKey(toInodeProof(fstatSync(fd, { bigint: true })));
+              if (afterKey !== beforeKey) {
+                throw new Error("The file changed during verification");
+              }
+              recordVerifiedStat(id, beforeKey);
+              return ok(bytes);
+            }
+            const bytes = Buffer.alloc(sliceLen);
+            let done = 0;
+            while (done < sliceLen) {
+              const count = readSync(fd, bytes, done, sliceLen - done, offset + done);
+              if (count === 0) throw new Error("The file is shorter than its recorded size");
+              done += count;
+            }
+            if (offset + sliceLen === body.size_bytes) {
+              const probe = Buffer.allocUnsafe(1);
+              if (readSync(fd, probe, 0, 1, body.size_bytes) !== 0) {
+                throw new Error("The file exceeds its recorded size");
+              }
+            }
+            const afterKey = statKey(toInodeProof(fstatSync(fd, { bigint: true })));
+            if (afterKey !== beforeKey) {
+              throw new Error("The file changed during reading");
             }
             return ok(bytes);
           } finally {

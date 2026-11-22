@@ -1,16 +1,18 @@
 import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
 import {
   appError,
+  CONTENT_INLINE_MAX_UTF8_BYTES,
   err,
   decodeStrictUtf8,
   SystemClock,
   UuidGenerator,
+  validateMemoBody,
   type AcceptedMemoBody,
   type AppError,
   type Clock,
   type MemoBodyRef,
+  type MemoBodyScanResult,
   type MemoCommandPorts,
   type ProjectCommandPorts,
   type Result,
@@ -26,7 +28,7 @@ import {
 } from "./content-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
-import { captureMemoBodyText, createAcceptedBodyCapture, streamMemoSpool } from "./memo-body-file";
+import { createAcceptedBodyCapture, streamMemoSpool } from "./memo-body-file";
 import { releaseMemoInputSpool, sweepMemoInputSpool } from "./memo-input-spool";
 import { createSqliteMemoRepository } from "./memos";
 import { appendStructuredLog } from "./structured-log";
@@ -236,45 +238,34 @@ export function createNodeMemoPorts(options: NodeMemoPortsOptions = {}): MemoCom
               staged.value.sha256,
             );
           }
-          // A large in-memory text (the JSON transport's bounded string) reaches
-          // the Vault through the same two guarded primitives a file body uses:
-          // the owned private spool capture — bounded chunks, scalar and NUL
-          // validation before any encode — and the content store's
-          // managed-path-guarded streaming stage. No raw Vault write bypasses
-          // those guards, and the temporary owned spool is released on every
-          // exit; the accepted input itself stays immutable (ADR-0032 plan).
-          const spoolId = randomUUID();
-          const captured = captureMemoBodyText(accepted.text, {
-            maxBytes: config.artifact.maxBytes,
-            stateDir: home.stateDir,
-            spoolId,
-          });
-          if (!captured.ok) return captured;
-          if (captured.value.kind !== "spool") {
+          // A large in-memory text (the JSON transport's bounded string) validates
+          // with the exact Memo text rules and stages directly into the Vault via
+          // the content store's guarded `stageBytes` primitive, avoiding a redundant
+          // intermediate state spool write/fsync/read/unlink cycle (TASK-154).
+          const validated = validateMemoBody(accepted.text, config.artifact.maxBytes);
+          if (!validated.ok) return validated;
+          const bytes = Buffer.from(accepted.text, "utf8");
+          if (bytes.byteLength <= CONTENT_INLINE_MAX_UTF8_BYTES) {
             return {
               ok: false,
               error: appError(
                 "INTERNAL_ERROR",
-                "A Vault-routed Memo text must spill to its owned spool before staging",
+                "A Vault-routed Memo text must exceed the inline threshold before staging",
               ),
             };
           }
-          try {
-            const staged = boundStore(binding).stage({
-              sourcePath: captured.value.spoolPath,
-              maxBytes: config.artifact.maxBytes,
-              tooLargeCode: "MEMO_TOO_LARGE",
-            });
-            if (!staged.ok) return staged;
-            return relativeStaged(
-              staged.value.stagingPath,
-              binding.vaultPath,
-              staged.value.sizeBytes,
-              staged.value.sha256,
-            );
-          } finally {
-            releaseMemoInputSpool(captured.value.spoolPath);
-          }
+          const staged = boundStore(binding).stageBytes({
+            bytes,
+            maxBytes: config.artifact.maxBytes,
+            tooLargeCode: "MEMO_TOO_LARGE",
+          });
+          if (!staged.ok) return staged;
+          return relativeStaged(
+            staged.value.stagingPath,
+            binding.vaultPath,
+            staged.value.sizeBytes,
+            staged.value.sha256,
+          );
         },
         activateContent: (input, binding) => {
           // The post-commit gate: a held lock leaves the committed intent durably
@@ -345,8 +336,31 @@ function requireRefIdentity(
   return { ok: true, value: undefined };
 }
 
-/** The bounded literal scan over one immutable record's verified bytes (SHR-007). */
-function scanBodyForQuery(store: SqliteContentStore, ref: MemoBodyRef, query: string): Result<boolean, AppError> {
+const PREVIEW_HEAD_BYTES = 2048;
+
+function decodeHeadPreviewSeed(bytes: Uint8Array, totalSizeBytes: number, recordId: string): Result<string, AppError> {
+  const complete = decodeStrictUtf8(bytes);
+  if (complete !== null) return { ok: true, value: complete };
+  // Only a bounded head of a longer body may end inside one scalar. A
+  // complete body, including an empty body, must decode exactly as stored.
+  if (totalSizeBytes > bytes.byteLength) {
+    for (let trim = 1; trim < 4 && trim <= bytes.byteLength; trim++) {
+      const text = decodeStrictUtf8(bytes.subarray(0, bytes.byteLength - trim));
+      if (text !== null) return { ok: true, value: text };
+    }
+  }
+  return {
+    ok: false,
+    error: appError("CONTENT_CORRUPTED", "The Memo body head is not valid UTF-8", { recordId }),
+  };
+}
+
+/** Single-pass literal scan + bounded head preview capture over one verified record (SHR-007, MEM-011). */
+function scanBodyForQuery(
+  store: SqliteContentStore,
+  ref: MemoBodyRef,
+  query: string,
+): Result<MemoBodyScanResult, AppError> {
   const opened = store.openBody(ref.recordId, { verifyFileDigest: "always" });
   if (!opened.ok) return opened;
   const handle = opened.value;
@@ -354,18 +368,37 @@ function scanBodyForQuery(store: SqliteContentStore, ref: MemoBodyRef, query: st
     const identity = requireRefIdentity(handle, ref);
     if (!identity.ok) return identity;
     const needle = Buffer.from(query, "utf8");
-    if (needle.byteLength === 0) return { ok: true, value: true };
+    if (needle.byteLength === 0) return { ok: true, value: { matched: true, previewSeed: null } };
     const overlap = needle.byteLength - 1;
     let position = 0;
     let carry: Uint8Array = new Uint8Array(0);
+    const headParts: Uint8Array[] = [];
+    let headLength = 0;
     for (;;) {
       const chunk = handle.read(position, 64 * 1024);
       if (!chunk.ok) return chunk;
-      if (chunk.value.byteLength === 0) return { ok: true, value: false };
+      if (chunk.value.byteLength === 0) return { ok: true, value: { matched: false, previewSeed: null } };
+      if (headLength < PREVIEW_HEAD_BYTES) {
+        const take = Math.min(PREVIEW_HEAD_BYTES - headLength, chunk.value.byteLength);
+        headParts.push(Uint8Array.from(chunk.value.subarray(0, take)));
+        headLength += take;
+      }
       const window = Buffer.concat([carry, chunk.value]);
-      if (window.indexOf(needle) !== -1) return { ok: true, value: true };
-      carry = window.subarray(Math.max(0, window.length - overlap));
       position += chunk.value.byteLength;
+      if (window.indexOf(needle) !== -1) {
+        while (headLength < PREVIEW_HEAD_BYTES && position < handle.sizeBytes) {
+          const extra = handle.read(position, PREVIEW_HEAD_BYTES - headLength);
+          if (!extra.ok) return extra;
+          if (extra.value.byteLength === 0) break;
+          headParts.push(Uint8Array.from(extra.value));
+          headLength += extra.value.byteLength;
+          position += extra.value.byteLength;
+        }
+        const seed = decodeHeadPreviewSeed(Buffer.concat(headParts, headLength), handle.sizeBytes, ref.recordId);
+        if (!seed.ok) return seed;
+        return { ok: true, value: { matched: true, previewSeed: seed.value } };
+      }
+      carry = window.subarray(Math.max(0, window.length - overlap));
     }
   } finally {
     handle.close();
@@ -380,23 +413,9 @@ function readBodyPreviewSeed(store: SqliteContentStore, ref: MemoBodyRef): Resul
   try {
     const identity = requireRefIdentity(handle, ref);
     if (!identity.ok) return identity;
-    const chunk = handle.read(0, 2048);
+    const chunk = handle.read(0, PREVIEW_HEAD_BYTES);
     if (!chunk.ok) return chunk;
-    const bytes = chunk.value;
-    const complete = decodeStrictUtf8(bytes);
-    if (complete !== null) return { ok: true, value: complete };
-    // Only a bounded head of a longer body may end inside one scalar. A
-    // complete body, including an empty body, must decode exactly as stored.
-    if (handle.sizeBytes > bytes.byteLength) {
-      for (let trim = 1; trim < 4; trim++) {
-        const text = decodeStrictUtf8(bytes.subarray(0, bytes.byteLength - trim));
-        if (text !== null) return { ok: true, value: text };
-      }
-    }
-    return {
-      ok: false,
-      error: appError("CONTENT_CORRUPTED", "The Memo body head is not valid UTF-8", { recordId: ref.recordId }),
-    };
+    return decodeHeadPreviewSeed(chunk.value, handle.sizeBytes, ref.recordId);
   } finally {
     handle.close();
   }

@@ -154,6 +154,12 @@ export interface SqliteContentStore extends ContentStore {
     recordId: string,
     options: { references: ContentReferences; now: Date },
   ): Result<ContentRecordRemovalPlan, AppError>;
+  /** Stages in-memory bytes directly into Vault staging under managed-path, Vault-guard, and move-fence checks. */
+  stageBytes(request: {
+    bytes: Uint8Array;
+    maxBytes: number;
+    tooLargeCode?: StageContentRequest["tooLargeCode"];
+  }): Result<StagedContentFile, AppError>;
   /** Reads one record row; null when no such record exists. */
   readRecord(recordId: string): Result<ContentRecord | null, AppError>;
   /** Lists every record row, the cleanup and census read. */
@@ -301,6 +307,20 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
       });
       if (!written.ok) return written;
       return ok(written.value);
+    },
+
+    stageBytes(request: {
+      bytes: Uint8Array;
+      maxBytes: number;
+      tooLargeCode?: StageContentRequest["tooLargeCode"];
+    }): Result<StagedContentFile, AppError> {
+      const opened = guard();
+      if (!opened.ok) return err(opened.error);
+      if (pausedNow()) return err(pauseError());
+      const buffer = Buffer.isBuffer(request.bytes)
+        ? request.bytes
+        : Buffer.from(request.bytes.buffer, request.bytes.byteOffset, request.bytes.byteLength);
+      return stageBytes(buffer, request.maxBytes, request.tooLargeCode ?? "ARTIFACT_TOO_LARGE");
     },
 
     stage(request: StageContentRequest): Result<StagedContentFile, AppError> {
@@ -1169,52 +1189,46 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
           ),
         );
       }
-      // The strengthened metadata guard joins the reference proof inside the
-      // caller's open transaction: a broken living-Handoff link refuses the
-      // removal before any row changes, and the caller aborts the enclosing
-      // transaction on this Result (SHR-004, SHR-014). Legitimate revision and
-      // retention flows keep metadata coherent at proof time — the revision
-      // inserts its new Artifact before removing superseded records, and the
-      // tombstone already names no current Artifact — so only a real fault
-      // refuses here.
-      const livingLinks = validateArtifactContentLinks(db);
-      if (!livingLinks.ok) return livingLinks;
-      // The Memo link guard joins this same open transaction before the first
-      // deletion, mirroring the cleanup path: a schema-10 Memo reference fault
-      // refuses the removal instead of freeing an owned record (SHR-004).
-      const livingMemoLinks = validateMemoContentLinks(db);
-      if (!livingMemoLinks.ok) return livingMemoLinks;
-      // The Channel link guard joins the same open transaction under the same
-      // rule: a schema-11 Channel reference fault — a NULL or dangling message
-      // reference — refuses the removal before any row changes and the caller
-      // aborts its enclosing transaction (SHR-004, the TASK-109 reviewed plan).
-      const livingChannelLinks = validateChannelContentLinks(db);
-      if (!livingChannelLinks.ok) return livingChannelLinks;
-      const domainIds = options.references.domainReferencedRecordIds();
-      if (!domainIds.ok) return domainIds;
-      const receiptIds = options.references.receiptReferencedRecordIds(options.now);
-      if (!receiptIds.ok) return receiptIds;
-      const pendingActivations = new Set(
-        (
-          db
-            .prepare("SELECT DISTINCT content_id FROM pending_fs_ops WHERE op = 'activate' AND content_id IS NOT NULL")
-            .all() as unknown as Array<{ content_id: string }>
-        ).map((row) => row.content_id),
-      );
-      const pendingToPaths = new Set(
-        (db.prepare("SELECT to_path FROM pending_fs_ops").all() as unknown as Array<{ to_path: string }>).map(
-          (row) => row.to_path,
-        ),
-      );
       const row = readContentRow(recordId);
       if (row === null) {
         return err(appError("CONTENT_CORRUPTED", "The referenced content record is missing.", { recordId }));
       }
+      // Point-lookup reference proof (TASK-154): checks only references to this
+      // single record via indexed EXISTS queries instead of scanning all
+      // cross-domain tables on every Handoff revise or tombstone deletion. Full
+      // cross-domain link audits remain in Vault GC (`cleanup`), `doctor`,
+      // `vault verify`, `backup verify/export`, and daemon sweep.
+      const domainReferenced =
+        options.references.isDomainReferenced !== undefined
+          ? options.references.isDomainReferenced(recordId)
+          : (() => {
+              const all = options.references.domainReferencedRecordIds();
+              return all.ok ? ok(all.value.includes(recordId)) : all;
+            })();
+      if (!domainReferenced.ok) return domainReferenced;
+      const receiptReferenced =
+        options.references.isReceiptReferenced !== undefined
+          ? options.references.isReceiptReferenced(recordId, options.now)
+          : (() => {
+              const all = options.references.receiptReferencedRecordIds(options.now);
+              return all.ok ? ok(all.value.includes(recordId)) : all;
+            })();
+      if (!receiptReferenced.ok) return receiptReferenced;
+      const hasPendingActivation = Boolean(
+        db.prepare("SELECT 1 FROM pending_fs_ops WHERE op = 'activate' AND content_id = ? LIMIT 1").get(recordId),
+      );
+      const hasPendingToPath =
+        row.storage_key !== null &&
+        Boolean(
+          db
+            .prepare("SELECT 1 FROM pending_fs_ops WHERE op IN ('activate', 'unlink') AND to_path = ? LIMIT 1")
+            .get(row.storage_key),
+        );
       const plan = planContentRecordRemoval(toRecord(row), {
-        domainReferencedRecordIds: new Set(domainIds.value),
-        receiptReferencedRecordIds: new Set(receiptIds.value),
-        pendingCommonActivationContentIds: pendingActivations,
-        pendingPhysicalToPaths: pendingToPaths,
+        domainReferencedRecordIds: domainReferenced.value ? new Set([recordId]) : new Set(),
+        receiptReferencedRecordIds: receiptReferenced.value ? new Set([recordId]) : new Set(),
+        pendingCommonActivationContentIds: hasPendingActivation ? new Set([recordId]) : new Set(),
+        pendingPhysicalToPaths: hasPendingToPath && row.storage_key !== null ? new Set([row.storage_key]) : new Set(),
         moveFencePaused: false,
       });
       // A planner refusal (a malformed stored key) or a common-ownership proof
@@ -1340,9 +1354,12 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
     }
     let stagingPath = join(vaultPath, "staging", ids.next());
     let staged: number | undefined;
+    let created = false;
+    let committed = false;
     try {
       stagingPath = managedPath(vaultPath, relative(vaultPath, stagingPath));
       staged = openSync(stagingPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW);
+      created = true;
       let written = 0;
       while (written < bytes.byteLength) {
         const count = writeSync(staged, bytes, written, bytes.byteLength - written);
@@ -1353,6 +1370,7 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
       fsyncSync(staged);
       closeSync(staged);
       staged = undefined;
+      committed = true;
       return ok({
         stagingPath,
         sizeBytes: bytes.byteLength,
@@ -1371,6 +1389,14 @@ export function createSqliteContentStore(options: SqliteContentStoreOptions): Sq
           closeSync(staged);
         } catch {
           // Best effort on the abort path.
+        }
+      }
+      if (created && !committed) {
+        try {
+          const partial = managedFile(vaultPath, relative(managedRoot(vaultPath), stagingPath));
+          if (partial.stat !== undefined) unlinkSync(partial.path);
+        } catch {
+          // Best effort cleanup; the staging sweep after the grace window removes any survivor.
         }
       }
     }
@@ -2474,6 +2500,99 @@ export function sqliteContentReferences(db: SorageSqlite): ContentReferences {
           if (receipt.value.memo.body === null) ids.push(receipt.value.memo.bodyRef.recordId);
         }
         return ok(ids);
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading the retained Memo receipt references failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+    isDomainReferenced(recordId: string) {
+      try {
+        const layout = inspectArtifactStorageLayout(db);
+        if (layout === "inconsistent") {
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The applied schema is at or above version ${String(HANDOFF_CONTENT_ADOPTION_SCHEMA_VERSION)} but the artifacts table is missing or has no content_record_id column; the Artifact content references could not be read.`,
+              { cause: "artifacts-storage-layout-inconsistent" },
+            ),
+          );
+        }
+        const memoLayout = inspectMemoStorageLayout(db);
+        if (memoLayout === "inconsistent") {
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The applied schema is at or above version ${String(MEMO_CONTENT_ADOPTION_SCHEMA_VERSION)} but the project_memos table is missing or has no content_record_id column; the Memo content references could not be read.`,
+              { cause: "memo-storage-layout-inconsistent" },
+            ),
+          );
+        }
+        const channelLayout = inspectChannelStorageLayout(db);
+        if (channelLayout === "inconsistent") {
+          return err(
+            appError(
+              "STORAGE_INTEGRITY_ERROR",
+              `The applied schema is at or above version ${String(CHANNEL_CONTENT_ADOPTION_SCHEMA_VERSION)} but the channel_messages table is missing or has no content_record_id column; the Channel content references could not be read.`,
+              { cause: "channel-storage-layout-inconsistent" },
+            ),
+          );
+        }
+        if (
+          layout === "content-records" &&
+          Boolean(db.prepare("SELECT 1 FROM artifacts WHERE content_record_id = ? LIMIT 1").get(recordId))
+        ) {
+          return ok(true);
+        }
+        if (
+          memoLayout === "content-records" &&
+          Boolean(db.prepare("SELECT 1 FROM project_memos WHERE content_record_id = ? LIMIT 1").get(recordId))
+        ) {
+          return ok(true);
+        }
+        if (
+          channelLayout === "channel-records" &&
+          Boolean(db.prepare("SELECT 1 FROM channel_messages WHERE content_record_id = ? LIMIT 1").get(recordId))
+        ) {
+          return ok(true);
+        }
+        return ok(false);
+      } catch (error) {
+        return err(
+          appError("INTERNAL_ERROR", `Reading the content references failed: ${messageOf(error)}.`, {
+            cause: String(error),
+          }),
+        );
+      }
+    },
+    isReceiptReferenced(recordId: string, now: Date) {
+      try {
+        const rows = db
+          .prepare(
+            "SELECT scope, response_json FROM idempotency_keys WHERE scope >= 'memo:' AND scope < 'memo;' AND expires_at > ?",
+          )
+          .all(now.toISOString()) as unknown as Array<{ scope: string; response_json: string }>;
+        let referenced = false;
+        for (const row of rows) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(row.response_json);
+          } catch {
+            return err(
+              appError("STORAGE_INTEGRITY_ERROR", `A stored Memo receipt under scope ${row.scope} is not valid JSON.`, {
+                scope: row.scope,
+              }),
+            );
+          }
+          const receipt = parseStoredMemoReceipt(parsed);
+          if (!receipt.ok) return receipt;
+          if (receipt.value.memo.body === null && receipt.value.memo.bodyRef.recordId === recordId) {
+            referenced = true;
+          }
+        }
+        return ok(referenced);
       } catch (error) {
         return err(
           appError("INTERNAL_ERROR", `Reading the retained Memo receipt references failed: ${messageOf(error)}.`, {
