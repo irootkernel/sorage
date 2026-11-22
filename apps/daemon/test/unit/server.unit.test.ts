@@ -118,4 +118,31 @@ describe("the JSON body reader cap", () => {
     );
     expect(parsed).toEqual({ key: "ui.defaultPageSize", value: "30" });
   });
+
+  it("decodes empty streams as {} and rejects malformed or non-object JSON bodies (TASK-148 #11)", async () => {
+    expect(await readJsonBody(streamOf([]) as unknown as IncomingMessage)).toEqual({});
+    expect(await readJsonBody(streamOf([Buffer.alloc(0)]) as unknown as IncomingMessage)).toEqual({});
+
+    for (const bad of ["{bad", "{expectedRowVersion: 1}", "   ", "null", "[]", "[1, 2]", '"text"', "42", "true"]) {
+      await expect(
+        readJsonBody(streamOf([Buffer.from(bad)]) as unknown as IncomingMessage),
+        `default CONFIG_INVALID for ${bad}`,
+      ).rejects.toMatchObject({
+        code: "CONFIG_INVALID",
+        message: "the request body must be a valid JSON object",
+      });
+      await expect(
+        readJsonBody(streamOf([Buffer.from(bad)]) as unknown as IncomingMessage, {
+          maxBytes: 8192,
+          code: "UNAUTHENTICATED",
+          message: "the session exchange body is too large",
+          invalidMessage: "the session exchange body must be a valid JSON object",
+        }),
+        `custom UNAUTHENTICATED for ${bad}`,
+      ).rejects.toMatchObject({
+        code: "UNAUTHENTICATED",
+        message: "the session exchange body must be a valid JSON object",
+      });
+    }
+  });
 });

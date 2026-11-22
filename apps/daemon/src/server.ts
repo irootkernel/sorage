@@ -142,7 +142,10 @@ export interface DaemonConfigService {
     key: string;
     rawValue: string;
     etag: string;
-  }): { ok: true; value: { key: string; configRevision: number; etag: string } } | { ok: false; error: AppError };
+    expectedRevision?: number | undefined;
+  }):
+    | { ok: true; value: { key: string; value?: unknown; configRevision: number; etag: string } }
+    | { ok: false; error: AppError };
   /** Re-reads and re-validates the file, applying every reloadable field. */
   reload(): { ok: true; value: { applied: string[]; restartRequired: string[] } } | { ok: false; error: AppError };
   /** The runtime view of the running configuration versus the file. */
@@ -332,7 +335,25 @@ export function configRoutes(options: {
             appError("CONFIG_INVALID", "the configuration change must name exactly one key", { key: body.key ?? null }),
           );
         }
-        const changed = config.set({ key, rawValue, etag });
+        const expectedRevision = body.expectedRevision;
+        if (
+          expectedRevision !== undefined &&
+          (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+        ) {
+          return sendError(
+            response,
+            context.requestId,
+            appError("CONFIG_INVALID", "expectedRevision must be a non-negative safe integer", {
+              expectedRevision: expectedRevision ?? null,
+            }),
+          );
+        }
+        const changed = config.set({
+          key,
+          rawValue,
+          etag,
+          ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+        });
         if (!changed.ok) return sendError(response, context.requestId, changed.error);
         response.setHeader("ETag", changed.value.etag);
         sendJson(response, 200, context.requestId, successEnvelope(changed.value, context.requestId));
@@ -395,25 +416,37 @@ const MAX_JSON_BODY_BYTES = 1_048_576;
 
 export async function readJsonBody(
   request: IncomingMessage,
-  limits: { maxBytes?: number; code?: Parameters<typeof appError>[0]; message?: string } = {},
+  limits: {
+    maxBytes?: number;
+    code?: Parameters<typeof appError>[0];
+    message?: string;
+    invalidMessage?: string;
+  } = {},
 ): Promise<Record<string, unknown>> {
   const maxBytes = limits.maxBytes ?? MAX_JSON_BODY_BYTES;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
-    size += (chunk as Buffer).length;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
     if (size > maxBytes) {
       throw appError(limits.code ?? "CONFIG_INVALID", limits.message ?? "the request body is too large");
     }
-    chunks.push(chunk as Buffer);
+    if (buffer.length > 0) chunks.push(buffer);
   }
-  if (chunks.length === 0) return {};
+  if (size === 0) return {};
+  const invalidCode = limits.code ?? "CONFIG_INVALID";
+  const invalidMessage = limits.invalidMessage ?? "the request body must be a valid JSON object";
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    return {};
+    throw appError(invalidCode, invalidMessage);
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw appError(invalidCode, invalidMessage);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /**
@@ -511,6 +544,7 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
           maxBytes: 8192,
           code: "UNAUTHENTICATED",
           message: "the session exchange body is too large",
+          invalidMessage: "the session exchange body must be a valid JSON object",
         });
         const secret = typeof body.secret === "string" ? body.secret : "";
         const exchange = options.auth.exchange(secret);

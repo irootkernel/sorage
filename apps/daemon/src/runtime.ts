@@ -343,7 +343,12 @@ export function createDaemonConfigService(running: {
           }),
         };
       }
-      const changed = setConfigurationValue(ports, { key: input.key, rawValue: input.rawValue, asUser: true });
+      const changed = setConfigurationValue(ports, {
+        key: input.key,
+        rawValue: input.rawValue,
+        asUser: true,
+        ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
+      });
       if (!changed.ok) return changed;
       const snapshot = ports.store.readText();
       if (snapshot === null) {
@@ -353,6 +358,7 @@ export function createDaemonConfigService(running: {
         ok: true,
         value: {
           key: changed.value.key,
+          value: changed.value.value,
           configRevision: changed.value.configRevision,
           etag: `sha256:${createHash("sha256").update(snapshot).digest("hex")}`,
         },

@@ -79,7 +79,7 @@ import {
 } from "@sorage/core";
 import type { DaemonConfigService } from "./index";
 import type { RouteEntryInternal } from "./route-kit";
-import type { DaemonRequestContext } from "./server";
+import { readJsonBody, type DaemonRequestContext } from "./server";
 import { consumeMultipartUpload } from "./upload";
 import { createMemoRoutes } from "./memo-routes";
 import type { Clock } from "@sorage/core";
@@ -763,6 +763,7 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
     method: "POST",
     pattern: "/api/v1/handoffs/{id}/revise",
     idempotent: true,
+    idempotencyBodyLimit: uploadReplayLimit,
     handler: async (request, response, context) => {
       // Section 18.5: revise accepts a streaming multipart upload for the browser
       // session, a JSON body naming a local path for the CLI context, and the
@@ -1119,12 +1120,15 @@ export function createDomainRoutes(deps: DomainRouteDeps): RouteEntryInternal[] 
           : kind === "unpin"
             ? unpinHandoff(ports, base)
             : kind === "archive"
-              ? archiveHandoff(ports, { ...base, asUser: true })
+              ? archiveHandoff(ports, base)
               : kind === "unarchive"
-                ? unarchiveHandoff(ports, { ...base, asUser: true })
+                ? unarchiveHandoff(ports, base)
                 : kind === "deletion-request"
                   ? requestDeletion(ports, base)
-                  : rejectDeletion(ports, { ...base, asUser: true });
+                  : rejectDeletion(ports, {
+                      ...base,
+                      ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+                    });
       return void respond(response, context, result);
     };
   }
@@ -1326,23 +1330,6 @@ function securityHeaders(): Record<string, string> {
 }
 
 export { readJsonBody as readDomainJsonBody, respond, respondError, randomUUID as freshId };
-
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (size > 1_048_576) throw appError("CONFIG_INVALID", "the request body is too large");
-    chunks.push(chunk as Buffer);
-  }
-  if (chunks.length === 0) return {};
-  try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
 
 /** The new reporting JSON contract: fatal decoding, unique/closed fields and no server-local file input. */
 async function readReportJsonBody(request: IncomingMessage, commentSet: boolean): Promise<Record<string, unknown>> {

@@ -59,6 +59,8 @@ import {
   configureBackup,
   type DoctorReport,
   declineHandoff,
+  ERROR_CODES,
+  type ErrorCode,
   type Envelope,
   editConfiguration,
   err,
@@ -80,6 +82,7 @@ import {
   memoError,
   moveVault,
   ok,
+  parseLeafValue,
   pinHandoff,
   probeConfigurationPath,
   type Result,
@@ -465,11 +468,24 @@ export function buildProgram(
       const globals = command.optsWithGlobals();
       const json = globals.json === true;
       if (!requireInitialized(ports, json, reportExitCode)) return;
+      if (globals.asUser !== true) {
+        reportExitCode(
+          renderAppError(
+            appError(
+              "USER_CONTEXT_REQUIRED",
+              "config set and config edit are User-admin operations; re-run with --as-user",
+            ),
+            ports,
+            json,
+          ),
+        );
+        return;
+      }
       // While the daemon runs it is the only writer of config.yaml (CFG-016): the
       // change routes through PUT /api/v1/config instead of the file store.
       const owned = liveDaemonAddress();
       if (owned !== null) {
-        reportExitCode(routedConfigSet(owned, key, value, ports));
+        reportExitCode(routedConfigSet(owned, key, value, ports, { json, expectedRevision: options.expectedRevision }));
         return;
       }
       const result = setConfigurationValue(createNodeConfigCommandPorts(), {
@@ -2697,27 +2713,89 @@ function createNodeDaemonPortsForCli() {
   return daemonCommandPorts.createNodeDaemonPorts();
 }
 
+const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set(ERROR_CODES);
+
+function knownErrorCode(code: unknown): ErrorCode {
+  return typeof code === "string" && KNOWN_ERROR_CODES.has(code) ? (code as ErrorCode) : "INTERNAL_ERROR";
+}
+
 /** Runs one routed configuration change through the daemon as a subprocess (CFG-016). */
 function routedConfigSet(
   address: { host: string; port: number },
   key: string,
   value: string,
   ports: OutputPorts,
+  options: { json: boolean; expectedRevision?: number | undefined },
 ): number {
-  const scriptArgs = process.argv[1]?.endsWith("main.ts")
-    ? [process.argv[1] as string, "__config-put", address.host, String(address.port), key, value]
-    : ["__config-put", address.host, String(address.port), key, value];
+  const subArgs = ["__config-put", address.host, String(address.port), key, value];
+  if (options.expectedRevision !== undefined) subArgs.push(String(options.expectedRevision));
+  const scriptArgs = process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string, ...subArgs] : subArgs;
   const result = spawnSync(process.execPath, scriptArgs, { encoding: "utf8", timeout: 15000 });
-  if (result.stdout) ports.out(result.stdout);
-  if (result.stderr) ports.err(result.stderr);
-  if (result.status === null) {
-    return renderAppError(
+  const unavailable = () =>
+    renderAppError(
       appError("DAEMON_UNAVAILABLE", "the daemon did not answer the routed configuration change"),
       ports,
-      false,
+      options.json,
     );
+  if (result.status === null || !result.stdout.trim()) return unavailable();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return unavailable();
   }
-  return result.status;
+  if (typeof parsed !== "object" || parsed === null) return unavailable();
+  const envelope = parsed as {
+    ok?: unknown;
+    data?: Record<string, unknown>;
+    error?: {
+      code?: unknown;
+      message?: unknown;
+      details?: Record<string, unknown>;
+      recovery?: { suggestedCommand: string };
+    };
+    meta?: { requestId?: unknown };
+  };
+  if (envelope.ok === true && typeof envelope.data === "object" && envelope.data !== null) {
+    const data = envelope.data;
+    const resolvedKey = typeof data.key === "string" ? data.key : key;
+    const resolvedValue = Object.hasOwn(data, "value")
+      ? data.value
+      : (() => {
+          const parsedLeaf = parseLeafValue(resolvedKey, value);
+          return parsedLeaf.ok ? parsedLeaf.value : value;
+        })();
+    const resolvedRevision = typeof data.configRevision === "number" ? data.configRevision : undefined;
+    if (options.json) {
+      const reqId = typeof envelope.meta?.requestId === "string" ? envelope.meta.requestId : requestId();
+      ports.out(
+        `${JSON.stringify(
+          successEnvelope({ key: resolvedKey, value: resolvedValue, configRevision: resolvedRevision }, reqId),
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      ports.out(`Set ${resolvedKey} = ${String(resolvedValue)} (configRevision ${String(resolvedRevision)})\n`);
+    }
+    return 0;
+  }
+  const code = knownErrorCode(envelope.error?.code);
+  const message =
+    typeof envelope.error?.message === "string" && envelope.error.message.length > 0
+      ? envelope.error.message
+      : "the routed configuration change failed";
+  const error: AppError = {
+    code,
+    message,
+    ...(typeof envelope.error?.details === "object" && envelope.error.details !== null
+      ? { details: envelope.error.details }
+      : {}),
+    ...(typeof envelope.error?.recovery?.suggestedCommand === "string"
+      ? { recovery: { suggestedCommand: envelope.error.recovery.suggestedCommand } }
+      : {}),
+  };
+  return renderAppError(error, ports, options.json);
 }
 
 function runDaemonCommand(action: DaemonAction, ports: OutputPorts, options = { json: false }): number {
@@ -3387,14 +3465,14 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     const port = Number.parseInt(argv[2] ?? "46321", 10);
     const key = argv[3] ?? "";
     const value = argv[4] ?? "";
-    void configPutOnce(host, port, key, value).then((outcome) => {
+    const parsedRevision = argv[5] !== undefined ? Number.parseInt(argv[5], 10) : undefined;
+    const expectedRevision =
+      parsedRevision !== undefined && Number.isSafeInteger(parsedRevision) ? parsedRevision : undefined;
+    void configPutOnce(host, port, key, value, expectedRevision).then((outcome) => {
       if (outcome !== null) process.stdout.write(`${JSON.stringify(outcome.body, null, 2)}\n`);
+      const body = outcome?.body as { ok?: unknown; error?: { code?: unknown } } | undefined;
       process.exit(
-        outcome === null
-          ? 1
-          : (outcome.body as { ok: boolean }).ok
-            ? 0
-            : errorSpec((outcome.body as { error: { code: Parameters<typeof errorSpec>[0] } }).error.code).exitCode,
+        outcome === null ? 1 : body?.ok === true ? 0 : errorSpec(knownErrorCode(body?.error?.code)).exitCode,
       );
     });
     return -1;
@@ -3512,6 +3590,7 @@ export function configPutOnce(
   port: number,
   key: string,
   value: string,
+  expectedRevision?: number,
 ): Promise<ConfigPutOutcome | null> {
   const stateDir = join(createNodeHomePaths().stateDir);
   const { readApiToken } = webModule();
@@ -3522,8 +3601,9 @@ export function configPutOnce(
       body: { ok: false, error: { code: "TOKEN_INVALID", message: "the Installation API token is missing" } },
     });
   }
+  const hostHeader = host.includes(":") && !host.startsWith("[") ? `[${host}]:${port}` : `${host}:${port}`;
   const headersFor = (bearer: string) => ({
-    host: `127.0.0.1:${port}`,
+    host: hostHeader,
     authorization: `Bearer ${bearer}`,
     "content-type": "application/json",
   });
@@ -3545,6 +3625,17 @@ export function configPutOnce(
                 issue(fresh, true);
                 return;
               }
+            }
+            if (getResponse.statusCode !== 200) {
+              try {
+                resolve({
+                  ok: false,
+                  body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+                });
+              } catch {
+                resolve(null);
+              }
+              return;
             }
             const etag = String(getResponse.headers.etag ?? "");
             const putOutgoing = httpRequest(
@@ -3570,8 +3661,14 @@ export function configPutOnce(
                 });
               },
             );
+            putOutgoing.setTimeout(5000, () => {
+              putOutgoing.destroy();
+              resolve(null);
+            });
             putOutgoing.on("error", () => resolve(null));
-            putOutgoing.end(JSON.stringify({ key, value }));
+            putOutgoing.end(
+              JSON.stringify({ key, value, ...(expectedRevision !== undefined ? { expectedRevision } : {}) }),
+            );
           });
         },
       );

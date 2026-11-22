@@ -39,7 +39,7 @@ function freePort(): Promise<number> {
 
 function authed(
   path: string,
-  init?: { method?: string; bearer?: string; body?: unknown; extra?: Record<string, string> },
+  init?: { method?: string; bearer?: string; body?: unknown; rawBody?: string; extra?: Record<string, string> },
 ) {
   return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>(
     (resolve, reject) => {
@@ -48,7 +48,8 @@ function authed(
         ...(init?.bearer !== undefined ? { authorization: `Bearer ${init.bearer}` } : {}),
         ...(init?.extra ?? {}),
       };
-      const payload = init?.body === undefined ? null : JSON.stringify(init.body);
+      const payload =
+        init?.rawBody !== undefined ? init.rawBody : init?.body === undefined ? null : JSON.stringify(init.body);
       if (payload !== null) headers["content-type"] = "application/json";
       const outgoing = httpRequest(
         { host: "127.0.0.1", port, path, method: init?.method ?? "GET", headers },
@@ -132,8 +133,66 @@ describe("the configuration endpoints (CFG-016, CFG-019)", () => {
     const body = JSON.parse(response.body);
     expect(body.ok).toBe(true);
     expect(body.data.key).toBe("ui.defaultPageSize");
+    expect(body.data.value).toBe(25);
     expect(body.data.etag).not.toBe(etag);
     etag = body.data.etag;
+  });
+
+  it("enforces optional expectedRevision and rejects invalid values or malformed JSON (TASK-148 #10, #11)", async () => {
+    const snapshot = await authed("/api/v1/config", { bearer: apiToken });
+    const currentRevision = JSON.parse(snapshot.body).data.configRevision as number;
+
+    for (const rawBody of ["{bad", "   ", "null", "[]", "123"]) {
+      const badJson = await authed("/api/v1/config", {
+        method: "PUT",
+        bearer: apiToken,
+        extra: { "if-match": etag },
+        rawBody,
+      });
+      expect(badJson.status, rawBody).toBe(422);
+      expect(JSON.parse(badJson.body), rawBody).toMatchObject({ ok: false, error: { code: "CONFIG_INVALID" } });
+    }
+
+    for (const badRevision of ["2", -1, 1.5, null, true]) {
+      const invalid = await authed("/api/v1/config", {
+        method: "PUT",
+        bearer: apiToken,
+        extra: { "if-match": etag },
+        body: { key: "ui.defaultPageSize", value: "26", expectedRevision: badRevision },
+      });
+      expect(invalid.status, String(badRevision)).toBe(422);
+      expect(JSON.parse(invalid.body), String(badRevision)).toMatchObject({ error: { code: "CONFIG_INVALID" } });
+    }
+
+    const zeroStale = await authed("/api/v1/config", {
+      method: "PUT",
+      bearer: apiToken,
+      extra: { "if-match": etag },
+      body: { key: "ui.defaultPageSize", value: "26", expectedRevision: 0 },
+    });
+    expect(zeroStale.status).toBe(409);
+    expect(JSON.parse(zeroStale.body)).toMatchObject({ error: { code: "CONFIG_CONFLICT" } });
+
+    const stale = await authed("/api/v1/config", {
+      method: "PUT",
+      bearer: apiToken,
+      extra: { "if-match": etag },
+      body: { key: "ui.defaultPageSize", value: "26", expectedRevision: currentRevision + 5 },
+    });
+    expect(stale.status).toBe(409);
+    expect(JSON.parse(stale.body)).toMatchObject({ error: { code: "CONFIG_CONFLICT" } });
+
+    const matched = await authed("/api/v1/config", {
+      method: "PUT",
+      bearer: apiToken,
+      extra: { "if-match": etag },
+      body: { key: "ui.defaultPageSize", value: "26", expectedRevision: currentRevision },
+    });
+    expect(matched.status).toBe(200);
+    const matchedBody = JSON.parse(matched.body);
+    expect(matchedBody.data.value).toBe(26);
+    expect(matchedBody.data.configRevision).toBe(currentRevision + 1);
+    etag = matchedBody.data.etag;
   });
 
   it("rejects a stale If-Match with CONFIG_CONFLICT at 409", async () => {

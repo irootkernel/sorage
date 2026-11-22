@@ -70,11 +70,12 @@ interface TestResponse {
 
 function request(
   path: string,
-  init?: { method?: string; bearer?: string | null; body?: unknown },
+  init?: { method?: string; bearer?: string | null; body?: unknown; rawBody?: string },
 ): Promise<TestResponse> {
   const headers: Record<string, string> = { host: `127.0.0.1:${port}` };
   if (init?.bearer !== undefined && init?.bearer !== null) headers.authorization = `Bearer ${init.bearer}`;
-  const payload = init?.body === undefined ? null : JSON.stringify(init.body);
+  const payload =
+    init?.rawBody !== undefined ? init.rawBody : init?.body === undefined ? null : JSON.stringify(init.body);
   if (payload !== null) headers["content-type"] = "application/json";
   return new Promise((resolve, reject) => {
     const outgoing = httpRequest(
@@ -164,6 +165,17 @@ describe("the session exchange (SEC-019)", () => {
     const response = await request("/api/v1/session", { method: "POST", body: {} });
     expect(response.status).toBe(401);
     expect(json(response)).toMatchObject({ error: { code: "UNAUTHENTICATED" } });
+  });
+
+  it("rejects malformed and non-object JSON on POST /api/v1/session with UNAUTHENTICATED 401 (TASK-148 #11)", async () => {
+    for (const rawBody of ["{bad", "   ", "null", "[]", '"secret"', "42"]) {
+      const response = await request("/api/v1/session", { method: "POST", rawBody });
+      expect(response.status, rawBody).toBe(401);
+      const parsed = json(response);
+      expect(parsed, rawBody).toMatchObject({ ok: false, error: { code: "UNAUTHENTICATED" } });
+      expect(parsed.error.message, rawBody).toContain("valid JSON object");
+      expect(parsed.error.message, rawBody).not.toContain("too large");
+    }
   });
 });
 

@@ -25,6 +25,8 @@ let tokenOnFile = STALE;
 let getCount = 0;
 let putCount = 0;
 let refusePut = false;
+let failGetStatus: number | null = null;
+let lastPutBody: Record<string, unknown> | null = null;
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -48,6 +50,11 @@ beforeAll(async () => {
     const bearer = String(request.headers.authorization ?? "");
     if (request.method === "GET") {
       getCount += 1;
+      if (failGetStatus !== null) {
+        response.writeHead(failGetStatus, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: { code: "SERVICE_PAUSED", message: "draining" } }));
+        return;
+      }
       if (bearer !== `Bearer ${FRESH}`) {
         // A completed rotation left the fresh value on disk: hand it to the
         // retry exactly as the token file would.
@@ -62,9 +69,18 @@ beforeAll(async () => {
       return;
     }
     putCount += 1;
-    const accepted = !refusePut && bearer === `Bearer ${FRESH}`;
-    response.writeHead(accepted ? 200 : 401, { "content-type": "application/json" });
-    response.end(JSON.stringify(accepted ? { ok: true } : { ok: false, error: { code: "TOKEN_INVALID" } }));
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      try {
+        lastPutBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      } catch {
+        lastPutBody = null;
+      }
+      const accepted = !refusePut && bearer === `Bearer ${FRESH}`;
+      response.writeHead(accepted ? 200 : 401, { "content-type": "application/json" });
+      response.end(JSON.stringify(accepted ? { ok: true } : { ok: false, error: { code: "TOKEN_INVALID" } }));
+    });
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
 });
@@ -105,5 +121,29 @@ describe("the routed read's rotation retry", () => {
     const body = outcome.body as { error?: { code?: string } };
     expect(body.error?.code).toBe("TOKEN_INVALID");
     refusePut = false;
+  });
+
+  it("forwards expectedRevision in the PUT payload and skips PUT on non-200 GET (TASK-148 #10)", async () => {
+    getCount = 0;
+    putCount = 0;
+    lastPutBody = null;
+    const forwarded = await configPutOnce("127.0.0.1", port, "ui.defaultPageSize", "30", 7);
+    expect(forwarded?.ok).toBe(true);
+    expect(getCount).toBe(1);
+    expect(putCount).toBe(1);
+    expect(lastPutBody).toEqual({ key: "ui.defaultPageSize", value: "30", expectedRevision: 7 });
+
+    getCount = 0;
+    putCount = 0;
+    failGetStatus = 423;
+    try {
+      const failedGet = await configPutOnce("127.0.0.1", port, "ui.defaultPageSize", "30");
+      expect(failedGet?.ok).toBe(false);
+      expect(getCount).toBe(1);
+      expect(putCount).toBe(0);
+      expect((failedGet?.body as { error?: { code?: string } }).error?.code).toBe("SERVICE_PAUSED");
+    } finally {
+      failGetStatus = null;
+    }
   });
 });

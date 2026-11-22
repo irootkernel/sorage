@@ -4,6 +4,13 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.1.6 - Unreleased
 
+### Fixed
+
+- Enforce User-admin context (`asUser: true`) on HTTP Handoff `archive`, `unarchive`, and `deletion-reject` routes and forward optional `reason` on `deletion-reject`.
+- Align the HTTP multipart `revise` replay-spool ceiling with configured `artifact.maxBytes` instead of the 1 MiB JSON default.
+- Restore `--as-user` enforcement, `--expected-revision` forwarding, and human/JSON output parity when `sorage config set` routes through a running daemon.
+- Reject non-empty malformed or non-object JSON request bodies on daemon HTTP routes (`CONFIG_INVALID` 422 on general routes, `UNAUTHENTICATED` 401 on `/api/v1/session`) instead of silently falling back to `{}`.
+
 ## v0.1.5 - 2026-11-22
 
 ### Added

@@ -1644,3 +1644,337 @@ describe("the SHR-015 shared-adapter classification on daemon routes", () => {
     },
   );
 });
+
+describe("TASK-148 HTTP contract defect fixes (#1, #2, #11)", () => {
+  function multipartReviseBody(
+    boundary: string,
+    expectedRowVersion: number,
+    filename: string,
+    content: Buffer,
+  ): Buffer {
+    return Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="expectedRowVersion"\r\n\r\n${expectedRowVersion}\r\n`,
+      ),
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: text/markdown\r\n\r\n`,
+      ),
+      content,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+  }
+
+  async function issueBrowserToken(): Promise<string> {
+    const secret = createNodeWebSecretStore({
+      stateDir: join(home, "state"),
+      clock: { now: () => new Date() },
+    }).issue();
+    expect(secret.ok).toBe(true);
+    if (!secret.ok) throw new Error("secret issue failed");
+    const exchanged = await call("/api/v1/session", { method: "POST", body: { secret: secret.value.secret } });
+    expect(exchanged.status).toBe(200);
+    return json(exchanged).data.token as string;
+  }
+
+  it("enforces asUser: true on archive, unarchive and deletion-reject and records deletion-reject reason (#1)", async () => {
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Retention gate", body: "initial", asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+
+    const accepted = await call(`/api/v1/handoffs/${id}/accept`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { expectedRevision: 1, expectedRowVersion: 1, as: "web-app" },
+    });
+    expect(accepted.status).toBe(200);
+
+    // ?as=web-app (and body { as: "web-app" }) must be refused with 403 USER_CONTEXT_REQUIRED on archive.
+    const archiveAsQuery = await call(`/api/v1/handoffs/${id}/archive?as=web-app`, {
+      method: "POST",
+      bearer: apiToken,
+    });
+    expect(archiveAsQuery.status).toBe(403);
+    expect(json(archiveAsQuery)).toMatchObject({ ok: false, error: { code: "USER_CONTEXT_REQUIRED" } });
+
+    const archiveAsBody = await call(`/api/v1/handoffs/${id}/archive`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app" },
+    });
+    expect(archiveAsBody.status).toBe(403);
+    expect(json(archiveAsBody)).toMatchObject({ ok: false, error: { code: "USER_CONTEXT_REQUIRED" } });
+
+    // Authorized User archives cleanly.
+    const archived = await call(`/api/v1/handoffs/${id}/archive?asUser=true`, { method: "POST", bearer: apiToken });
+    expect(archived.status).toBe(200);
+    expect(json(archived).data.archived).toBe(true);
+
+    // ?as=web-app must be refused on unarchive.
+    const unarchiveAsQuery = await call(`/api/v1/handoffs/${id}/unarchive?as=web-app`, {
+      method: "POST",
+      bearer: apiToken,
+    });
+    expect(unarchiveAsQuery.status).toBe(403);
+    expect(json(unarchiveAsQuery)).toMatchObject({ ok: false, error: { code: "USER_CONTEXT_REQUIRED" } });
+
+    // Authorized User unarchives cleanly.
+    const unarchived = await call(`/api/v1/handoffs/${id}/unarchive`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { asUser: true },
+    });
+    expect(unarchived.status).toBe(200);
+    expect(json(unarchived).data.archived).toBe(false);
+
+    // Participant requests deletion.
+    const requested = await call(`/api/v1/handoffs/${id}/deletion-request`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app" },
+    });
+    expect(requested.status).toBe(200);
+
+    // ?as=web-app must be refused on deletion-reject.
+    const rejectAsProject = await call(`/api/v1/handoffs/${id}/deletion-reject?as=web-app`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { reason: "Project should not reject" },
+    });
+    expect(rejectAsProject.status).toBe(403);
+    expect(json(rejectAsProject)).toMatchObject({ ok: false, error: { code: "USER_CONTEXT_REQUIRED" } });
+
+    // Authorized User rejects deletion with reason and persists it in event metadata and deletion_requests.resolution_note.
+    const rejected = await call(`/api/v1/handoffs/${id}/deletion-reject`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { asUser: true, reason: "Keep for audit trail" },
+    });
+    expect(rejected.status).toBe(200);
+
+    const timeline = await call(`/api/v1/handoffs/${id}/events?asUser=true`, { bearer: apiToken });
+    expect(timeline.status).toBe(200);
+    const rejectedEvent = (json(timeline).data as Array<{ eventType: string }>).find(
+      (entry) => entry.eventType === "DELETION_REJECTED",
+    );
+    expect(rejectedEvent).toBeDefined();
+
+    const db = new DatabaseSync(join(home, "state/sorage.sqlite3"));
+    try {
+      const eventRow = db
+        .prepare(
+          "SELECT metadata_json FROM events WHERE handoff_id = ? AND event_type = 'DELETION_REJECTED' ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(id) as { metadata_json: string } | undefined;
+      expect(eventRow).toBeDefined();
+      expect(JSON.parse(eventRow?.metadata_json ?? "{}")).toEqual({ reason: "Keep for audit trail" });
+      const row = db
+        .prepare(
+          "SELECT status, resolution_note FROM deletion_requests WHERE handoff_id = ? ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(id) as { status: string; resolution_note: string | null } | undefined;
+      expect(row).toEqual({ status: "rejected", resolution_note: "Keep for audit trail" });
+    } finally {
+      db.close();
+    }
+
+    // Rejecting a second request without reason still succeeds with null resolution_note.
+    const requestedAgain = await call(`/api/v1/handoffs/${id}/deletion-request`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app" },
+    });
+    expect(requestedAgain.status).toBe(200);
+    const rejectedWithoutReason = await call(`/api/v1/handoffs/${id}/deletion-reject?asUser=true`, {
+      method: "POST",
+      bearer: apiToken,
+    });
+    expect(rejectedWithoutReason.status).toBe(200);
+    const db2 = new DatabaseSync(join(home, "state/sorage.sqlite3"));
+    try {
+      const eventRow = db2
+        .prepare(
+          "SELECT metadata_json FROM events WHERE handoff_id = ? AND event_type = 'DELETION_REJECTED' ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(id) as { metadata_json: string } | undefined;
+      expect(JSON.parse(eventRow?.metadata_json ?? "{}")).toEqual({ reason: null });
+      const row = db2
+        .prepare(
+          "SELECT status, resolution_note FROM deletion_requests WHERE handoff_id = ? ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(id) as { status: string; resolution_note: string | null } | undefined;
+      expect(row).toEqual({ status: "rejected", resolution_note: null });
+    } finally {
+      db2.close();
+    }
+  });
+
+  it("allows multipart revise above 1 MiB up to artifact.maxBytes with and without Idempotency-Key and aborts oversized files (#2)", async () => {
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Large revise", body: "v1", asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+
+    const note1 = await call(`/api/v1/handoffs/${id}/review-note`, {
+      method: "PUT",
+      bearer: apiToken,
+      body: { text: "Need larger body", as: "web-app", targetRevision: 1, expectedRowVersion: 1 },
+    });
+    expect(note1.status).toBe(200);
+
+    const browser = await issueBrowserToken();
+    const payloadA = Buffer.from(`# Large revision A\n${"a".repeat(1_200_000)}\n`);
+    const boundaryA = "revise-large-no-key";
+    const revisedNoKey = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
+      method: "POST",
+      bearer: browser,
+      rawBody: multipartReviseBody(boundaryA, 2, "large-a.md", payloadA),
+      extra: { "content-type": `multipart/form-data; boundary=${boundaryA}` },
+    });
+    expect(revisedNoKey.status, revisedNoKey.body).toBe(200);
+    expect(json(revisedNoKey).data.revision).toBe(2);
+    const storedA = await call(`/api/v1/handoffs/${id}/artifact/content?asUser=true`, { bearer: apiToken });
+    expect(storedA.status).toBe(200);
+    expect(Buffer.byteLength(storedA.body, "utf8")).toBe(payloadA.byteLength);
+    expect(storedA.body).toBe(payloadA.toString("utf8"));
+
+    // Second revision > 1 MiB WITH Idempotency-Key: replay succeeds and altered payload conflicts.
+    const note2 = await call(`/api/v1/handoffs/${id}/review-note`, {
+      method: "PUT",
+      bearer: apiToken,
+      body: { text: "Need idempotent larger body", as: "web-app", targetRevision: 2, expectedRowVersion: 3 },
+    });
+    expect(note2.status).toBe(200);
+
+    const key = "14800002-1111-4222-8333-444444444444";
+    const payloadB = Buffer.from(`# Large revision B\n${"b".repeat(1_250_000)}\n`);
+    const boundaryB = "revise-large-with-key";
+    const bodyB = multipartReviseBody(boundaryB, 4, "large-b.md", payloadB);
+    const revisedWithKey = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
+      method: "POST",
+      bearer: browser,
+      rawBody: bodyB,
+      extra: { "content-type": `multipart/form-data; boundary=${boundaryB}`, "idempotency-key": key },
+    });
+    expect(revisedWithKey.status, revisedWithKey.body).toBe(200);
+    expect(json(revisedWithKey).data.revision).toBe(3);
+
+    const replayed = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
+      method: "POST",
+      bearer: browser,
+      rawBody: bodyB,
+      extra: { "content-type": `multipart/form-data; boundary=${boundaryB}`, "idempotency-key": key },
+    });
+    expect(replayed.status).toBe(200);
+    expect(json(replayed).data.revision).toBe(3);
+
+    const conflicted = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
+      method: "POST",
+      bearer: browser,
+      rawBody: multipartReviseBody(boundaryB, 4, "large-b.md", Buffer.from(`# Different\n${"c".repeat(1_250_000)}\n`)),
+      extra: { "content-type": `multipart/form-data; boundary=${boundaryB}`, "idempotency-key": key },
+    });
+    expect(conflicted.status).toBe(409);
+    expect(json(conflicted)).toMatchObject({ ok: false, error: { code: "IDEMPOTENCY_CONFLICT" } });
+
+    // Lower artifact.maxBytes temporarily to verify oversized revise aborts with 413 ARTIFACT_TOO_LARGE and cleans spools.
+    const cfgBefore = await call("/api/v1/config", { bearer: apiToken });
+    const origMaxBytes = String(json(cfgBefore).data.config.artifact.maxBytes);
+    let currentEtag = String(cfgBefore.headers.etag);
+    try {
+      const lowered = await call("/api/v1/config", {
+        method: "PUT",
+        bearer: apiToken,
+        extra: { "if-match": currentEtag },
+        body: { key: "artifact.maxBytes", value: "1100000" },
+      });
+      expect(lowered.status).toBe(200);
+      currentEtag = String(lowered.headers.etag);
+
+      const note3 = await call(`/api/v1/handoffs/${id}/review-note`, {
+        method: "PUT",
+        bearer: apiToken,
+        body: { text: "Try too big", as: "web-app", targetRevision: 3, expectedRowVersion: 5 },
+      });
+      expect(note3.status).toBe(200);
+
+      const tooBig = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
+        method: "POST",
+        bearer: browser,
+        rawBody: multipartReviseBody("revise-too-big", 6, "too-big.md", Buffer.alloc(1_200_000, 0x78)),
+        extra: { "content-type": "multipart/form-data; boundary=revise-too-big" },
+      });
+      expect(tooBig.status).toBe(413);
+      expect(json(tooBig)).toMatchObject({ ok: false, error: { code: "ARTIFACT_TOO_LARGE" } });
+      const uploadsDir = join(home, "state", "uploads");
+      expect(existsSync(uploadsDir) ? readdirSync(uploadsDir) : []).toEqual([]);
+    } finally {
+      await call("/api/v1/config", {
+        method: "PUT",
+        bearer: apiToken,
+        extra: { "if-match": currentEtag },
+        body: { key: "artifact.maxBytes", value: origMaxBytes },
+      });
+    }
+  });
+
+  it("rejects malformed and non-object JSON without dropping expectedRowVersion or pinning Idempotency-Key (#11)", async () => {
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Strict JSON", body: "initial", asUser: true },
+    });
+    expect(created.status).toBe(201);
+    const id = json(created).data.handoffs[0].handoffId as string;
+
+    // Malformed JSON carrying a stale expectedRowVersion must fail with 422 CONFIG_INVALID, NOT fall back to {} and mutate.
+    for (const bad of ['{"expectedRowVersion": 999', "   ", "null", "[]", '"str"', "42"]) {
+      const pinned = await call(`/api/v1/handoffs/${id}/pin?asUser=true`, {
+        method: "POST",
+        bearer: apiToken,
+        rawBody: Buffer.from(bad, "utf8"),
+        extra: { "content-type": "application/json" },
+      });
+      expect(pinned.status, bad).toBe(422);
+      expect(json(pinned), bad).toMatchObject({ ok: false, error: { code: "CONFIG_INVALID" } });
+    }
+
+    const unchanged = await call(`/api/v1/handoffs/${id}?asUser=true`, { bearer: apiToken });
+    expect(json(unchanged).data.pinned).toBe(false);
+    expect(json(unchanged).data.rowVersion).toBe(1);
+
+    // Empty body continues to decode as {} on optional-body routes.
+    const emptyPin = await call(`/api/v1/handoffs/${id}/pin?asUser=true`, {
+      method: "POST",
+      bearer: apiToken,
+    });
+    expect(emptyPin.status).toBe(200);
+    expect(json(emptyPin).data.pinned).toBe(true);
+
+    // Malformed JSON on an idempotent route fails with 422 CONFIG_INVALID and discards the in-flight key so retry succeeds.
+    const key = "14800011-1111-4222-8333-444444444444";
+    const badImport = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      rawBody: Buffer.from('{"to":["web-app"', "utf8"),
+      extra: { "content-type": "application/json", "idempotency-key": key },
+    });
+    expect(badImport.status).toBe(422);
+    expect(json(badImport)).toMatchObject({ ok: false, error: { code: "CONFIG_INVALID" } });
+
+    const goodRetry = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Recovered after bad JSON", body: "valid", asUser: true },
+      extra: { "idempotency-key": key },
+    });
+    expect(goodRetry.status).toBe(201);
+    expect(json(goodRetry).data.handoffs).toHaveLength(1);
+  });
+});

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import {
   chmodSync,
   existsSync,
@@ -17,6 +18,8 @@ import { runCli } from "../../src/main";
 
 const homes: string[] = [];
 const cliEntry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
+// make test-int builds this current-source executable; make test shares its signed candidate.
+const compiledBinary = fileURLToPath(new URL("../../../../dist/sorage", import.meta.url));
 /** A FIFO needs `mkfifo`; the platform-skipped cases state that reason. */
 const mkfifoAvailable = spawnSync("mkfifo", [], { encoding: "utf8" }).error === undefined;
 
@@ -488,4 +491,119 @@ describe("the operational configuration-access refusal (TASK-118 F3/K9)", () => 
     chmodSync(fixture.configPath, 0o600);
     expect(runCli(["project", "list", "--json"], capture().ports)).toBe(0);
   });
+});
+
+describe("daemon-routed sorage config set parity (TASK-148 #10)", () => {
+  function freePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const probe = createNetServer();
+      probe.listen(0, "127.0.0.1", () => {
+        const port = (probe.address() as AddressInfo).port;
+        probe.close(() => resolve(port));
+      });
+      probe.on("error", reject);
+    });
+  }
+
+  function runBinary(args: string[], home: string) {
+    const result = spawnSync(compiledBinary, args, {
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, SORAGE_HOME: home },
+    });
+    if (result.error) throw result.error;
+    return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  }
+
+  it("enforces --as-user, forwards --expected-revision, and matches human/JSON parity while daemon runs", async () => {
+    const home = tempHome("sorage-cli-routed-config-");
+    const port = await freePort();
+    expect(runBinary(["init", "--vault", join(home, "vault"), "--non-interactive", "--json"], home).status).toBe(0);
+    expect(runBinary(["config", "set", "server.port", String(port), "--as-user", "--json"], home).status).toBe(0);
+    expect(runBinary(["daemon", "start", "--json"], home).status).toBe(0);
+    try {
+      const beforeNoUser = readFileSync(join(home, "config.yaml"), "utf8");
+
+      // Missing --as-user fails with exit 77 USER_CONTEXT_REQUIRED in both human and JSON modes, stderr only.
+      const noUserHuman = runBinary(["config", "set", "ui.defaultPageSize", "35"], home);
+      expect(noUserHuman.status).toBe(77);
+      expect(noUserHuman.stdout).toBe("");
+      expect(noUserHuman.stderr).toContain("USER_CONTEXT_REQUIRED");
+
+      const noUserJson = runBinary(["config", "set", "ui.defaultPageSize", "35", "--json"], home);
+      expect(noUserJson.status).toBe(77);
+      expect(noUserJson.stdout).toBe("");
+      expect(JSON.parse(noUserJson.stderr)).toMatchObject({ ok: false, error: { code: "USER_CONTEXT_REQUIRED" } });
+      expect(readFileSync(join(home, "config.yaml"), "utf8")).toBe(beforeNoUser);
+
+      // Human output parity for integer value.
+      const humanInt = runBinary(["config", "set", "ui.defaultPageSize", "35", "--as-user"], home);
+      expect(humanInt.status, humanInt.stderr).toBe(0);
+      expect(humanInt.stderr).toBe("");
+      expect(humanInt.stdout).toBe("Set ui.defaultPageSize = 35 (configRevision 3)\n");
+
+      // JSON output parity strips HTTP etag and returns exact { key, value, configRevision } for false, null, and string.
+      const jsonBool = runBinary(["config", "set", "handoff.inboxMarker", "false", "--as-user", "--json"], home);
+      expect(jsonBool.status, jsonBool.stderr).toBe(0);
+      expect(jsonBool.stderr).toBe("");
+      const boolEnvelope = JSON.parse(jsonBool.stdout) as { ok: boolean; data: Record<string, unknown> };
+      expect(boolEnvelope.ok).toBe(true);
+      expect(boolEnvelope.data).toEqual({ key: "handoff.inboxMarker", value: false, configRevision: 4 });
+      expect(Object.hasOwn(boolEnvelope.data, "etag")).toBe(false);
+
+      const humanNull = runBinary(["config", "set", "ui.timezone", "null", "--as-user"], home);
+      expect(humanNull.status, humanNull.stderr).toBe(0);
+      expect(humanNull.stderr).toBe("");
+      expect(humanNull.stdout).toBe("Set ui.timezone = null (configRevision 5)\n");
+
+      const jsonNull = runBinary(["config", "set", "ui.timezone", "null", "--as-user", "--json"], home);
+      expect(jsonNull.status, jsonNull.stderr).toBe(0);
+      expect(jsonNull.stderr).toBe("");
+      expect(JSON.parse(jsonNull.stdout).data).toEqual({ key: "ui.timezone", value: null, configRevision: 6 });
+
+      const jsonString = runBinary(["config", "set", "logging.level", "info", "--as-user", "--json"], home);
+      expect(jsonString.status, jsonString.stderr).toBe(0);
+      expect(jsonString.stderr).toBe("");
+      expect(JSON.parse(jsonString.stdout).data).toEqual({ key: "logging.level", value: "info", configRevision: 7 });
+
+      // Stale --expected-revision fails with exit 75 CONFIG_CONFLICT on stderr in both human and JSON modes.
+      const staleHuman = runBinary(
+        ["config", "set", "ui.defaultPageSize", "40", "--as-user", "--expected-revision", "99"],
+        home,
+      );
+      expect(staleHuman.status).toBe(75);
+      expect(staleHuman.stdout).toBe("");
+      expect(staleHuman.stderr).toContain("CONFIG_CONFLICT");
+
+      const staleJson = runBinary(
+        ["config", "set", "ui.defaultPageSize", "40", "--as-user", "--expected-revision", "99", "--json"],
+        home,
+      );
+      expect(staleJson.status).toBe(75);
+      expect(staleJson.stdout).toBe("");
+      expect(JSON.parse(staleJson.stderr)).toMatchObject({ ok: false, error: { code: "CONFIG_CONFLICT" } });
+
+      // Matching --expected-revision succeeds and advances revision.
+      const matched = runBinary(
+        ["config", "set", "ui.defaultPageSize", "40", "--as-user", "--expected-revision", "7", "--json"],
+        home,
+      );
+      expect(matched.status, matched.stderr).toBe(0);
+      expect(matched.stderr).toBe("");
+      expect(JSON.parse(matched.stdout).data).toEqual({ key: "ui.defaultPageSize", value: 40, configRevision: 8 });
+
+      // Unknown key fails with exit 78 CONFIG_INVALID on stderr (empty stdout) in both modes.
+      const invalidHuman = runBinary(["config", "set", "not.a.key", "1", "--as-user"], home);
+      expect(invalidHuman.status).toBe(78);
+      expect(invalidHuman.stdout).toBe("");
+      expect(invalidHuman.stderr).toContain("CONFIG_INVALID");
+
+      const invalidJson = runBinary(["config", "set", "not.a.key", "1", "--as-user", "--json"], home);
+      expect(invalidJson.status).toBe(78);
+      expect(invalidJson.stdout).toBe("");
+      expect(JSON.parse(invalidJson.stderr)).toMatchObject({ ok: false, error: { code: "CONFIG_INVALID" } });
+    } finally {
+      runBinary(["daemon", "stop", "--json"], home);
+    }
+  }, 30_000);
 });
