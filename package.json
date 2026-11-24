@@ -20,6 +20,7 @@
     "check:lint": "/bin/sh scripts/toolchain.sh script check:lint",
     "check:typecheck": "/bin/sh scripts/toolchain.sh script check:typecheck",
     "check:import-boundaries": "/bin/sh scripts/toolchain.sh script check:import-boundaries",
+    "check:cycles": "/bin/sh scripts/toolchain.sh script check:cycles",
     "check:dependency-boundaries": "/bin/sh scripts/toolchain.sh script check:dependency-boundaries",
     "test:unit": "/bin/sh scripts/toolchain.sh script test:unit",
     "test:int": "/bin/sh scripts/toolchain.sh script test:int",

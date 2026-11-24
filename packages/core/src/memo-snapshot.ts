@@ -1,17 +1,17 @@
 import { createHash } from "node:crypto";
 import {
-  canonicalJson,
-  canonicalJsonLine,
   type SnapshotData,
   type SnapshotEvent,
   type SnapshotFile,
   snapshotFiles,
   snapshotManifest,
 } from "./backup-snapshot";
-import { appError, err, ok, type Result } from "./errors";
+import { type AppError, appError, err, ok, type Result } from "./errors";
 import { isActorKind, isMemoEventType, type MemoEventType, snapshotEventTypeAllowed } from "./events";
-import { memoObject, parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
+import { parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
 import { isMemoRowVersion, isMemoTimestamp, isMemoUuid, type Memo } from "./memos";
+import { canonicalJson, canonicalJsonLine, parseUniqueSnapshotJson } from "./primitives/json";
+import { memoObject } from "./primitives/validation";
 
 /** Format 2 extends the legacy snapshot families with independently validated Memo shards. */
 export interface MemoSnapshotManifest {
@@ -67,37 +67,55 @@ function corrupt(message: string): Result<never> {
   return err(appError("VAULT_INTEGRITY_ERROR", message));
 }
 
-/** JSON.parse validates grammar first; this scan then checks decoded keys at every nesting level. */
-export function parseUniqueSnapshotJson(text: string): Result<unknown> {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return corrupt("Snapshot JSON is invalid");
+/** The closed `BodyContent` union of section 38.8: exactly `inline`, or exactly the file-backed triple. */
+export type SnapshotBodyContent = { inline: string } | { contentPath: string; sizeBytes: number; sha256: string };
+
+export type ParsedBodyContent =
+  | { kind: "inline"; text: string }
+  | { kind: "file-backed"; contentPath: string; sizeBytes: number; sha256: string };
+
+/**
+ * Parses one `BodyContent` value: the inline form carries exactly the key
+ * `inline` with the exact body text, the file-backed form carries exactly
+ * `contentPath`, `sizeBytes`, and `sha256`, and any other shape is an integrity
+ * failure. Which of the two valid forms this build may import is the caller's
+ * classification; parsing only establishes that the shape is one of them.
+ */
+export function parseSnapshotBodyContent(value: unknown): Result<ParsedBodyContent, AppError> {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return corrupt("A bodyContent value is not an object");
+  const keys = Object.keys(value).sort();
+  if (keys.length === 1 && keys[0] === "inline") {
+    if (typeof (value as { inline: unknown }).inline !== "string")
+      return corrupt("An inline bodyContent value is not a string");
+    return ok({ kind: "inline", text: (value as { inline: string }).inline });
   }
-  const stack: (Set<string> | null)[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (char === "{") stack.push(new Set());
-    else if (char === "[") stack.push(null);
-    else if (char === "}" || char === "]") stack.pop();
-    else if (char === '"') {
-      const start = i;
-      while (++i < text.length) {
-        if (text[i] === "\\") i++;
-        else if (text[i] === '"') break;
-      }
-      let next = i + 1;
-      while (/\s/.test(text[next] ?? "") && next < text.length) next++;
-      if (text[next] === ":") {
-        const key: string = JSON.parse(text.slice(start, i + 1));
-        const keys = stack[stack.length - 1];
-        if (keys?.has(key)) return corrupt("Snapshot contains duplicate JSON keys");
-        keys?.add(key);
-      }
-    }
+  if (keys.length === 3 && keys[0] === "contentPath" && keys[1] === "sha256" && keys[2] === "sizeBytes") {
+    const record = value as { contentPath: unknown; sizeBytes: unknown; sha256: unknown };
+    if (
+      typeof record.contentPath !== "string" ||
+      !isCanonicalContentFilePath(record.contentPath) ||
+      typeof record.sizeBytes !== "number" ||
+      !Number.isSafeInteger(record.sizeBytes) ||
+      record.sizeBytes < 0 ||
+      typeof record.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(record.sha256)
+    )
+      return corrupt("A file-backed bodyContent value is malformed");
+    return ok({
+      kind: "file-backed",
+      contentPath: record.contentPath,
+      sizeBytes: record.sizeBytes,
+      sha256: record.sha256,
+    });
   }
-  return ok(value);
+  return corrupt("A bodyContent value does not match its closed union");
+}
+
+/** The canonical snapshots/-relative content-file path for one file-backed Memo body. */
+export function memoContentFilePath(memoId: string, contentId: string): Result<string> {
+  if (!isMemoUuid(memoId) || !isMemoUuid(contentId)) return corrupt("The Memo content file identity is not canonical");
+  return ok(`content/memo/${memoId}/${contentId}`);
 }
 
 export function memoSnapshotPath(id: string): Result<string> {

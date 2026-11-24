@@ -1,8 +1,9 @@
-import { canonicalJson } from "./backup-snapshot";
-import { sha256OfText } from "./content";
 import { type AppError, err, ok, type Result } from "./errors";
 import { exchangeCount, exchangeInvalid, type ExchangeWaitPage, type ExchangeWaitResult } from "./exchanges";
-import { isMemoUuid } from "./memos";
+import { isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson } from "./primitives/json";
+import { sleepWithinDeadline } from "./primitives/polling";
+import { sha256OfText } from "./primitives/validation";
 
 export interface ExchangeHistoryCursor {
   version: 1;
@@ -33,7 +34,7 @@ export function readExchangeHistoryCursor(
     if (
       !cursor ||
       cursor.version !== 1 ||
-      !isMemoUuid(cursor.exchangeId) ||
+      !isCanonicalUuid(cursor.exchangeId) ||
       cursor.exchangeId !== exchangeId ||
       cursor.projectId !== projectId ||
       !exchangeCount(cursor.seq) ||
@@ -78,11 +79,9 @@ export function waitForExchangeActivity(options: ExchangePollOptions): Result<Ex
     } else {
       return page;
     }
-    const remaining = deadline - now();
-    if (remaining <= 0) {
+    if (!sleepWithinDeadline(deadline, now(), intervalSeconds * 1_000, sleep)) {
       if (lastFailure) return err(lastFailure);
       if (lastPage) return ok({ ...lastPage, timedOut: true });
     }
-    sleep(Math.min(intervalSeconds * 1_000, Math.max(remaining, 0)));
   }
 }

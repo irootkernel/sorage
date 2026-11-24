@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import { isValidStorageKeySegment } from "./artifacts";
 import {
-  canonicalJson,
-  canonicalJsonLine,
   compareSnapshotStrings,
   handoffShardPath,
   redactEventMetadata,
@@ -18,27 +16,25 @@ import {
   proveChannelContentBytes,
   validateSnapshotChannelShard,
 } from "./channel-snapshot";
-import {
-  CONTENT_INLINE_MAX_UTF8_BYTES,
-  isUtf8ExactText,
-  sha256OfText,
-  utf8ByteLength,
-  validateCommonContentEventMetadata,
-} from "./content";
+import { CONTENT_INLINE_MAX_UTF8_BYTES, isUtf8ExactText, validateCommonContentEventMetadata } from "./content";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { isCommonContentEventType, snapshotEventTypeAllowed } from "./events";
 import { REVIEW_STATES } from "./handoffs";
-import { memoObject, parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
+import { parseMemoDetail, parseMemoMetadata } from "./memo-protocol";
 import {
   type ContentSnapshotManifest,
-  isCanonicalContentFilePath,
   type MemoSnapshotShard,
+  memoContentFilePath,
   memoIdFromSnapshotPath,
   memoSnapshotPath,
-  parseUniqueSnapshotJson,
+  type ParsedBodyContent,
+  parseSnapshotBodyContent,
+  type SnapshotBodyContent,
 } from "./memo-snapshot";
 import type { Memo } from "./memos";
-import { isMemoTimestamp, isMemoUuid } from "./memos";
+import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson, canonicalJsonLine, parseUniqueSnapshotJson } from "./primitives/json";
+import { memoObject, sha256OfText, utf8ByteLength } from "./primitives/validation";
 
 /**
  * The format-3 snapshot generation of M9 (SHR-010, interface section 38.8): one
@@ -53,51 +49,6 @@ import { isMemoTimestamp, isMemoUuid } from "./memos";
 
 function corrupt(message: string): Result<never, AppError> {
   return err(appError("VAULT_INTEGRITY_ERROR", message));
-}
-
-/** The closed `BodyContent` union of section 38.8: exactly `inline`, or exactly the file-backed triple. */
-export type SnapshotBodyContent = { inline: string } | { contentPath: string; sizeBytes: number; sha256: string };
-
-export type ParsedBodyContent =
-  | { kind: "inline"; text: string }
-  | { kind: "file-backed"; contentPath: string; sizeBytes: number; sha256: string };
-
-/**
- * Parses one `BodyContent` value: the inline form carries exactly the key
- * `inline` with the exact body text, the file-backed form carries exactly
- * `contentPath`, `sizeBytes`, and `sha256`, and any other shape is an integrity
- * failure. Which of the two valid forms this build may import is the caller's
- * classification; parsing only establishes that the shape is one of them.
- */
-export function parseSnapshotBodyContent(value: unknown): Result<ParsedBodyContent, AppError> {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    return corrupt("A bodyContent value is not an object");
-  const keys = Object.keys(value).sort();
-  if (keys.length === 1 && keys[0] === "inline") {
-    if (typeof (value as { inline: unknown }).inline !== "string")
-      return corrupt("An inline bodyContent value is not a string");
-    return ok({ kind: "inline", text: (value as { inline: string }).inline });
-  }
-  if (keys.length === 3 && keys[0] === "contentPath" && keys[1] === "sha256" && keys[2] === "sizeBytes") {
-    const record = value as { contentPath: unknown; sizeBytes: unknown; sha256: unknown };
-    if (
-      typeof record.contentPath !== "string" ||
-      !isCanonicalContentFilePath(record.contentPath) ||
-      typeof record.sizeBytes !== "number" ||
-      !Number.isSafeInteger(record.sizeBytes) ||
-      record.sizeBytes < 0 ||
-      typeof record.sha256 !== "string" ||
-      !/^[0-9a-f]{64}$/.test(record.sha256)
-    )
-      return corrupt("A file-backed bodyContent value is malformed");
-    return ok({
-      kind: "file-backed",
-      contentPath: record.contentPath,
-      sizeBytes: record.sizeBytes,
-      sha256: record.sha256,
-    });
-  }
-  return corrupt("A bodyContent value does not match its closed union");
 }
 
 export type SnapshotArtifactBodyClassification = "file-backed-baseline" | "inline-supported" | "integrity";
@@ -148,26 +99,26 @@ export function validateSnapshotProjectV3(value: unknown): Result<void, AppError
     input !== null && typeof input === "object" && !Array.isArray(input);
   if (
     !object(value) ||
-    !isMemoUuid(value.id) ||
+    !isCanonicalUuid(value.id) ||
     typeof value.slug !== "string" ||
     value.slug.includes("\0") ||
     typeof value.displayName !== "string" ||
     (value.description !== null && typeof value.description !== "string") ||
     (value.status !== "active" && value.status !== "archived") ||
-    !isMemoTimestamp(value.createdAt) ||
-    !isMemoTimestamp(value.updatedAt) ||
+    !isCanonicalUtcTimestamp(value.createdAt) ||
+    !isCanonicalUtcTimestamp(value.updatedAt) ||
     !Array.isArray(value.bindings)
   )
     return corrupt("Format-3 Project fields or values are invalid");
   for (const binding of value.bindings) {
     if (
       !object(binding) ||
-      !isMemoUuid(binding.id) ||
-      !isMemoUuid(binding.installationId) ||
+      !isCanonicalUuid(binding.id) ||
+      !isCanonicalUuid(binding.installationId) ||
       (binding.bindingKind !== "directory" && binding.bindingKind !== "git_repository") ||
       (Object.hasOwn(binding, "directory") && typeof binding.directory !== "string") ||
-      !isMemoTimestamp(binding.createdAt) ||
-      !isMemoTimestamp(binding.updatedAt)
+      !isCanonicalUtcTimestamp(binding.createdAt) ||
+      !isCanonicalUtcTimestamp(binding.updatedAt)
     )
       return corrupt("Format-3 Binding fields or values are invalid");
   }
@@ -178,7 +129,7 @@ export function validateSnapshotProjectV3(value: unknown): Result<void, AppError
 export function validateSnapshotHandoffV3(value: unknown): Result<void, AppError> {
   const text = (value: unknown): value is string => typeof value === "string";
   const nullableText = (value: unknown) => value === null || text(value);
-  const identifier = isMemoUuid;
+  const identifier = isCanonicalUuid;
   const nullableIdentifier = (value: unknown) => value === null || identifier(value);
   // ADR-0031: only the two Artifact identity fields accept the legacy short
   // form — exactly `a` followed by eight lowercase hexadecimal characters —
@@ -192,10 +143,10 @@ export function validateSnapshotHandoffV3(value: unknown): Result<void, AppError
     (candidate.length === 9
       ? /^a[0-9a-f]{8}$/.test(candidate)
       : candidate.length === 36
-        ? isMemoUuid(candidate)
+        ? isCanonicalUuid(candidate)
         : false);
   const nullableArtifactIdentity = (value: unknown) => value === null || artifactIdentity(value);
-  const timestamp = (value: unknown) => isMemoTimestamp(value);
+  const timestamp = (value: unknown) => isCanonicalUtcTimestamp(value);
   const nullableTimestamp = (value: unknown) => value === null || timestamp(value);
   const integer = (value: unknown, minimum = 0) =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= minimum;
@@ -520,12 +471,6 @@ export function serializeMemoSnapshotV3(record: SnapshotMemoV3): Result<MemoSnap
   return ok({ path: path.value, bytes, digest: createHash("sha256").update(bytes).digest("hex") });
 }
 
-/** The canonical snapshots/-relative content-file path for one file-backed Memo body. */
-export function memoContentFilePath(memoId: string, contentId: string): Result<string> {
-  if (!isMemoUuid(memoId) || !isMemoUuid(contentId)) return corrupt("The Memo content file identity is not canonical");
-  return ok(`content/memo/${memoId}/${contentId}`);
-}
-
 /** One parsed format-3 Memo: its metadata plus the closed bodyContent union. */
 export interface MemoSnapshotV3Import {
   meta: Omit<Memo, "body">;
@@ -569,7 +514,7 @@ export function parseMemoSnapshotV3(path: string, bytes: Uint8Array, digest: str
     return ok({ meta: checkedMeta, bodyContent: { kind: "inline", text: body.value.text } });
   }
   // Lifecycle and provenance are validated without fabricating body text.
-  if (!isMemoUuid(meta.id) || meta.id !== id.value) return corrupt("Memo snapshot record does not match its path");
+  if (!isCanonicalUuid(meta.id) || meta.id !== id.value) return corrupt("Memo snapshot record does not match its path");
   const ownedContent = memoContentFilePath(meta.id, body.value.contentPath.split("/")[3] as string);
   if (!ownedContent.ok || ownedContent.value !== body.value.contentPath)
     return corrupt("Memo snapshot content path does not match its owner");

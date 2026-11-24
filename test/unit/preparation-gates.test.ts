@@ -124,3 +124,93 @@ describe("dependency-boundary gate", () => {
     expect(result.stderr).toContain("must not import the @sorage/adapters index");
   });
 });
+
+describe("cycle gate", () => {
+  it("passes on an acyclic multi-package layout and ignores type-only cycles", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(
+        join(r, "packages/core/src/a.ts"),
+        'import type { B } from "./b";\nimport { type B2 } from "./b";\nexport type A = { b?: B; b2?: B2; c?: import("./b").B };\nexport const a = 1;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/b.ts"),
+        'import { a } from "./a";\nexport type { A } from "./a";\nexport type B = { a: number };\nexport type B2 = B;\nexport const b = a + 1;\n',
+      );
+      writeFileSync(join(r, "packages/core/src/index.ts"), 'export * from "./a";\nexport * from "./b";\n');
+      writeFileSync(
+        join(r, "packages/adapters/src/entry.ts"),
+        'import { b } from "@sorage/core";\nexport const value = b;\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("fails with exit 1 and named diagnostics on a two-file intra-package runtime cycle", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(join(r, "packages/core/src/a.ts"), 'import { b } from "./b";\nexport const a = () => b;\n');
+      writeFileSync(join(r, "packages/core/src/b.ts"), 'import { a } from "./a";\nexport const b = () => a;\n');
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("runtime cycle:");
+    expect(result.stderr).toContain("packages/core/src/a.ts");
+    expect(result.stderr).toContain("packages/core/src/b.ts");
+  });
+
+  it("fails with exit 1 and named diagnostics on a cross-package cycle via an @sorage subpath", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(
+        join(r, "packages/adapters/src/bridge.ts"),
+        'import { entry } from "@sorage/cli/src/entry";\nexport const bridge = () => entry;\n',
+      );
+      writeFileSync(
+        join(r, "apps/cli/src/entry.ts"),
+        'import { bridge } from "@sorage/adapters/src/bridge";\nexport const entry = () => bridge;\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("runtime cycle:");
+    expect(result.stderr).toContain("packages/adapters/src/bridge.ts");
+    expect(result.stderr).toContain("apps/cli/src/entry.ts");
+  });
+
+  it("fails with exit 1 and named diagnostics on unresolved relative or internal @sorage specifiers", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(join(r, "packages/core/src/a.ts"), 'import { x } from "./missing";\nexport const a = x;\n');
+      writeFileSync(
+        join(r, "apps/cli/src/entry.ts"),
+        'import { y } from "@sorage/adapters/src/missing-port";\nexport const e = y;\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unresolved internal specifier "./missing"');
+    expect(result.stderr).toContain('unresolved internal specifier "@sorage/adapters/src/missing-port"');
+  });
+
+  it("detects runtime cycles through export *, mixed default+type, side-effect, and dynamic template imports", () => {
+    const root = makeFixture((r) => {
+      writeFileSync(
+        join(r, "packages/core/src/default-cycle-a.ts"),
+        'import defB, { type UnusedType } from "./default-cycle-b";\nexport type Keep = UnusedType;\nexport default defB;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/default-cycle-b.ts"),
+        'import "./default-cycle-a";\nexport type UnusedType = string;\nexport default 1;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/dyn-a.ts"),
+        'export * from "./dyn-b";\nexport const loadB = () => import(`./dyn-b`);\n',
+      );
+      writeFileSync(join(r, "packages/core/src/dyn-b.ts"), "export const loadA = () => import(`./dyn-a`);\n");
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("packages/core/src/default-cycle-a.ts");
+    expect(result.stderr).toContain("packages/core/src/default-cycle-b.ts");
+    expect(result.stderr).toContain("packages/core/src/dyn-a.ts");
+    expect(result.stderr).toContain("packages/core/src/dyn-b.ts");
+  });
+});

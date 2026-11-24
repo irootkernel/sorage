@@ -17,7 +17,7 @@ import { requestDeletion, type RetentionPorts } from "../../src/retention-comman
 import { setReviewNote, type ReviewPorts } from "../../src/review-commands";
 import { reviseHandoff, type RevisionPorts } from "../../src/revision-commands";
 import { acceptHandoff, declineHandoff, withdrawHandoff, type TerminalPorts } from "../../src/terminal-commands";
-import { workspaceKey } from "../../src/workspace-identity";
+import { workspaceKey } from "../../src/primitives/identity";
 
 const INSTALLATION = "00000000-0000-4000-8000-0000000000i1";
 const ALPHA_ID = "00000000-0000-4000-8000-0000000000a1";

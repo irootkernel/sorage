@@ -1,4 +1,3 @@
-import { utf8ByteLength } from "./content";
 import { appError, err, ok, type Result } from "./errors";
 import {
   EXCHANGE_WORKFLOW_BYTES,
@@ -10,7 +9,8 @@ import {
   exchangeText,
   validateExchangeAcceptances,
 } from "./exchanges";
-import { isMemoUuid } from "./memos";
+import { isCanonicalUuid } from "./primitives/identity";
+import { utf8ByteLength } from "./primitives/validation";
 
 export type ExchangeState = "active" | "paused" | "completed";
 export type ExchangeDisposition = { kind: "cancel" | "transfer"; reason: string; followUpProjectId: string | null };
@@ -332,7 +332,7 @@ export function exchangeControlOutcome(
 
 function exactRequest<T extends { requestId: string }>(items: T[]): boolean {
   return (
-    items.every((item) => isMemoUuid(item.requestId)) &&
+    items.every((item) => isCanonicalUuid(item.requestId)) &&
     new Set(items.map((item) => item.requestId)).size === items.length
   );
 }
@@ -543,7 +543,7 @@ export function planExchangeControl(
       });
     }
     case "material-revalidate":
-      return isMemoUuid(input.materialId)
+      return isCanonicalUuid(input.materialId)
         ? ok({ kind: input.kind, materialId: input.materialId })
         : invalid("Name a registered local material ID.");
   }

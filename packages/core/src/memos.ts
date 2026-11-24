@@ -1,6 +1,7 @@
 import { appError, err, ok, type AppError, type Result } from "./errors";
 import type { MemoEventType } from "./events";
-import { sha256OfText, utf8ByteLength } from "./content";
+import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
+import { sha256OfText, utf8ByteLength } from "./primitives/validation";
 
 export const MEMO_STATES = ["open", "done", "dismissed"] as const;
 export type MemoState = (typeof MEMO_STATES)[number];
@@ -111,7 +112,7 @@ export interface MemoTransition {
 }
 
 export function isMemoUuid(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  return isCanonicalUuid(value);
 }
 
 export function isMemoRowVersion(value: unknown): value is number {
@@ -158,9 +159,7 @@ export function validateMemoQuery(value: unknown): Result<string> {
 
 /** Clock values use the same canonical UTC representation as Date.toISOString(). */
 export function isMemoTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const time = Date.parse(value);
-  return Number.isFinite(time) && new Date(time).toISOString() === value;
+  return isCanonicalUtcTimestamp(value);
 }
 
 export function createMemo(id: string, projectId: string, content: MemoContent, now: string): Result<MemoTransition> {

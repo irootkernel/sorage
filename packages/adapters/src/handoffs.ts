@@ -12,7 +12,7 @@ import {
   type Result,
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
-import { liveFencePaused } from "./intent-log";
+import { liveFencePaused } from "./sqlite/move-fence";
 import type { SorageSqlite } from "./sqlite/connection";
 import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 

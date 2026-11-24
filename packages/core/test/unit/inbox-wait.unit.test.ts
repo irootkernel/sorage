@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appError, err, ok } from "../../src/errors";
-import type { HandoffReadPorts, HandoffView, ListQuery } from "../../src/handoff-read";
-import { waitForNewInboxItems } from "../../src/handoff-read";
+import type { HandoffListFilters, HandoffReadPorts, HandoffView, ListQuery } from "../../src/handoff-read";
+import { listInbox, waitForNewInboxItems } from "../../src/handoff-read";
 
 /**
  * The `inbox --wait` semantics of CLI-020 at the use-case level: the wait wakes only
@@ -694,5 +694,94 @@ describe("waitForNewInboxItems", () => {
       expect(recovered.value.handoffs.map((h) => h.id)).toEqual(["h-after-transient"]);
     }
     expect(calls).toBe(3);
+  });
+
+  it("normalizes date bounds without mutating caller filters while preserving cursor identity and whole-second inclusivity", () => {
+    resetClock();
+    const seenFilters: HandoffListFilters[] = [];
+    const items = [
+      view("h-after", Date.parse("2026-03-01T12:00:00.500Z")),
+      view("h-1", Date.parse("2026-03-01T12:00:00.000Z")),
+      view("h-2", Date.parse("2026-03-01T11:59:59.000Z")),
+    ];
+    const ports = portsOf(() => items);
+    ports.handoffs.listPage = (_scope, filters, limit, afterSortKey) => {
+      seenFilters.push({ ...filters });
+      const filtered = items.filter((item) => {
+        if (filters.updatedSince !== undefined && item.updatedAt < filters.updatedSince) return false;
+        if (filters.updatedUntil !== undefined && item.updatedAt > filters.updatedUntil) return false;
+        return true;
+      });
+      const start =
+        afterSortKey === null ? 0 : filtered.findIndex((item) => `${item.updatedAt}|${item.id}` === afterSortKey) + 1;
+      const slice = filtered.slice(start, start + limit);
+      const last = slice[slice.length - 1];
+      return ok({
+        items: slice.map((item) => ({ view: item, contentIntegrity: "ok" as const })),
+        lastSortKey: last !== undefined ? `${last.updatedAt}|${last.id}` : null,
+      });
+    };
+
+    const callerFilters: HandoffListFilters = {
+      includeArchived: false,
+      includeDeleted: false,
+      updatedSince: "2026-03-01T11:59:59Z",
+      updatedUntil: "2026-03-01T12:00:00Z",
+    };
+    const snapshot = { ...callerFilters };
+
+    const first = listInbox(ports, userActor, { filters: callerFilters, limit: 1 });
+    expect(first.ok).toBe(true);
+    expect(callerFilters).toEqual(snapshot);
+    expect(seenFilters[0]).toEqual({
+      includeArchived: false,
+      includeDeleted: false,
+      updatedSince: "2026-03-01T11:59:59.000Z",
+      updatedUntil: "2026-03-01T12:00:00.000Z",
+    });
+
+    // Cursor minted from normalized bounds continues cleanly with both unmutated and canonical bounds.
+    if (first.ok) {
+      expect(first.value.handoffs.map((h) => h.id)).toEqual(["h-1"]);
+      expect(first.value.nextCursor).not.toBeNull();
+      const second = listInbox(ports, userActor, {
+        filters: {
+          includeArchived: false,
+          includeDeleted: false,
+          updatedSince: "2026-03-01T11:59:59.000Z",
+          updatedUntil: "2026-03-01T12:00:00.000Z",
+        },
+        limit: 1,
+        cursor: first.value.nextCursor ?? undefined,
+      });
+      expect(second.ok).toBe(true);
+      expect(callerFilters).toEqual(snapshot);
+      if (second.ok) {
+        expect(second.value.handoffs.map((h) => h.id)).toEqual(["h-2"]);
+      }
+    }
+
+    // waitForNewInboxItems also preserves the caller's filters without mutation.
+    const waitFilters: HandoffListFilters = {
+      includeArchived: false,
+      includeDeleted: false,
+      updatedSince: "2026-03-01T11:59:59Z",
+      updatedUntil: "2026-03-01T12:00:00Z",
+    };
+    const waitSnapshot = { ...waitFilters };
+    const waited = waitForNewInboxItems(
+      ports,
+      userActor,
+      { filters: waitFilters, limit: 10 },
+      { intervalSeconds: 1, timeoutSeconds: 0, sleepMs: () => undefined },
+    );
+    expect(waited.ok).toBe(true);
+    expect(waitFilters).toEqual(waitSnapshot);
+    expect(seenFilters[seenFilters.length - 1]).toEqual({
+      includeArchived: false,
+      includeDeleted: false,
+      updatedSince: "2026-03-01T11:59:59.000Z",
+      updatedUntil: "2026-03-01T12:00:00.000Z",
+    });
   });
 });

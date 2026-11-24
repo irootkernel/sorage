@@ -1,5 +1,5 @@
 import type { SnapshotEvent } from "./backup-snapshot";
-import { canonicalJson, handoffShardPath, type SnapshotFile, type SnapshotReviewNote } from "./backup-snapshot";
+import { handoffShardPath, type SnapshotFile, type SnapshotReviewNote } from "./backup-snapshot";
 import { isUtf8ExactText } from "./content";
 import {
   redactSnapshotDataV3,
@@ -10,9 +10,11 @@ import {
 } from "./content-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { HANDOFF_REPORTING_EVENT_TYPES } from "./events";
-import { memoObject } from "./memo-protocol";
 import type { HandoffReportingSnapshotManifest } from "./memo-snapshot";
-import { isMemoRowVersion, isMemoTimestamp } from "./memos";
+import { isMemoRowVersion } from "./memos";
+import { isCanonicalUtcTimestamp } from "./primitives/identity";
+import { canonicalJson } from "./primitives/json";
+import { memoObject } from "./primitives/validation";
 
 /** Format 4 owns reporting fields; the format-3 representation stays frozen. */
 export interface SnapshotReadEvidence {
@@ -126,7 +128,7 @@ export function validateSnapshotHandoffV4(value: unknown): Result<void, AppError
     !memoObject(read, ["revision", "status", "readAt"]) ||
     read.revision !== record.revision ||
     !(read.status === "unrecorded" || read.status === "unconfirmed" || read.status === "read") ||
-    (read.status === "read" ? !isMemoTimestamp(read.readAt) : read.readAt !== null)
+    (read.status === "read" ? !isCanonicalUtcTimestamp(read.readAt) : read.readAt !== null)
   )
     return corrupt("Format-4 current-Revision read evidence is invalid");
   if (
@@ -136,9 +138,9 @@ export function validateSnapshotHandoffV4(value: unknown): Result<void, AppError
     (processing.status === "unrecorded" || processing.status === "not_started"
       ? processing.startedAt !== null || processing.completedAt !== null
       : processing.status === "in_progress"
-        ? !isMemoTimestamp(processing.startedAt) || processing.completedAt !== null
-        : !isMemoTimestamp(processing.completedAt) ||
-          (processing.startedAt !== null && !isMemoTimestamp(processing.startedAt)))
+        ? !isCanonicalUtcTimestamp(processing.startedAt) || processing.completedAt !== null
+        : !isCanonicalUtcTimestamp(processing.completedAt) ||
+          (processing.startedAt !== null && !isCanonicalUtcTimestamp(processing.startedAt)))
   )
     return corrupt("Format-4 current-Revision processing evidence is invalid");
   if (

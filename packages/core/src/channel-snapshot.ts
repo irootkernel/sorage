@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalJson, type SnapshotEvent } from "./backup-snapshot";
+import type { SnapshotEvent } from "./backup-snapshot";
 import {
   compareHandles,
   isChannelUuid,
@@ -10,21 +10,20 @@ import {
   validateHandleNote,
   validateMessageRef,
 } from "./channels";
-import { CONTENT_INLINE_MAX_UTF8_BYTES, isUtf8ExactText, utf8ByteLength } from "./content";
-import {
-  type ChannelContentFileExport,
-  memoContentFilePath,
-  parseSnapshotBodyContent,
-  type SnapshotChannelMessage,
-  type SnapshotChannelParticipant,
-  type SnapshotChannelShard,
-  type SnapshotDataV3,
+import { CONTENT_INLINE_MAX_UTF8_BYTES, isUtf8ExactText } from "./content";
+import type {
+  ChannelContentFileExport,
+  SnapshotChannelMessage,
+  SnapshotChannelParticipant,
+  SnapshotChannelShard,
+  SnapshotDataV3,
 } from "./content-snapshot";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { isChannelDomainEventType } from "./events";
-import { memoObject } from "./memo-protocol";
-import { type ContentSnapshotManifest, parseUniqueSnapshotJson } from "./memo-snapshot";
-import { isMemoTimestamp } from "./memos";
+import { type ContentSnapshotManifest, memoContentFilePath, parseSnapshotBodyContent } from "./memo-snapshot";
+import { isCanonicalUtcTimestamp } from "./primitives/identity";
+import { canonicalJson, parseUniqueSnapshotJson } from "./primitives/json";
+import { memoObject, utf8ByteLength } from "./primitives/validation";
 
 /**
  * The format-3 Channel snapshot family rebuilt under ADR-0034 (CHN-009,
@@ -118,7 +117,7 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
   if (
     !isChannelUuid(shard.id) ||
     (shard.state !== "open" && shard.state !== "closed") ||
-    !isMemoTimestamp(shard.createdAt)
+    !isCanonicalUtcTimestamp(shard.createdAt)
   )
     return corrupt("Format-3 Channel shard identity or lifecycle fields are invalid");
   const name = validateChannelName(shard.name);
@@ -131,7 +130,7 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
   if (typeof shard.main !== "string") return corrupt("A Channel shard carries no main handle");
   if (shard.state === "open") {
     if (shard.closedAt !== null) return corrupt("An open Channel shard carries a closure time");
-  } else if (!isMemoTimestamp(shard.closedAt)) {
+  } else if (!isCanonicalUtcTimestamp(shard.closedAt)) {
     return corrupt("A closed Channel shard does not carry its closure time");
   }
   if (!Array.isArray(shard.participants) || !Array.isArray(shard.messages))
@@ -146,12 +145,12 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
     if (!handle.ok) return corrupt("A Channel participant handle is outside the recorded handle rules");
     if (
       (participant.role !== "main" && participant.role !== "worker" && participant.role !== "judge") ||
-      !isMemoTimestamp(participant.addedAt)
+      !isCanonicalUtcTimestamp(participant.addedAt)
     )
       return corrupt("Format-3 Channel participant identity fields are invalid");
     if (participant.removedAt === null) {
       // registered: nothing more to carry
-    } else if (!isMemoTimestamp(participant.removedAt)) {
+    } else if (!isCanonicalUtcTimestamp(participant.removedAt)) {
       return corrupt("A removed Channel participant carries a malformed removal time");
     }
     if (handles.has(handle.value)) return corrupt("A Channel shard repeats a participant handle");
@@ -188,7 +187,7 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
       !Number.isSafeInteger(message.seq) ||
       message.seq < 1 ||
       !isMessageKind(message.kind) ||
-      !isMemoTimestamp(message.createdAt)
+      !isCanonicalUtcTimestamp(message.createdAt)
     )
       return corrupt("Format-3 Channel message identity fields are invalid");
     if (message.seq <= previousSeq) return corrupt("A Channel shard's messages are not in their deterministic order");
@@ -212,7 +211,7 @@ export function validateSnapshotChannelShard(value: unknown): Result<SnapshotCha
     if (!message.handled) {
       if (message.handledAt !== null || message.handleNote !== null)
         return corrupt("An unhandled Channel message carries handling state");
-    } else if (!isMemoTimestamp(message.handledAt)) {
+    } else if (!isCanonicalUtcTimestamp(message.handledAt)) {
       return corrupt("A handled Channel message carries no handling time");
     }
     if (message.handleNote !== null && !validateHandleNote(message.handleNote).ok)

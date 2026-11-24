@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { contentionKindOf } from "@sorage/adapters/src/exchange-command-ports";
-import { EXCHANGE_RENEW_SECONDS, isMemoUuid } from "@sorage/core";
+import { EXCHANGE_RENEW_SECONDS, isCanonicalUuid } from "@sorage/core";
 import type { ExchangeLifecycleInput } from "@sorage/core";
 
 export interface ExchangePair {
@@ -33,7 +33,7 @@ export function selfInvocationArgv(argv: string[]): string[] {
 export function exchangePairOf(value: unknown): ExchangePair | undefined {
   if (typeof value !== "object" || value === null) return;
   const row = value as Record<string, unknown>;
-  if (isMemoUuid(row.exchangeId) && isMemoUuid(row.projectId)) {
+  if (isCanonicalUuid(row.exchangeId) && isCanonicalUuid(row.projectId)) {
     return { exchangeId: row.exchangeId, projectId: row.projectId };
   }
 }
@@ -44,7 +44,7 @@ export function ownedLeaseOf(data: unknown, cwd: string): OwnedExchangeLease | u
   const row = data as Record<string, unknown>;
   if (
     row.state === "active" &&
-    isMemoUuid(row.claimId) &&
+    isCanonicalUuid(row.claimId) &&
     typeof row.expiresAt === "string" &&
     Number.isFinite(Date.parse(row.expiresAt))
   ) {

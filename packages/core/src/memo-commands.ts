@@ -1,6 +1,11 @@
 import { decodeCursor, encodeCursor, filterHash } from "./cursor";
 import { appError, err, ok, type AppError, type Result } from "./errors";
-import { buildContentStorageKey, CONTENT_INLINE_MAX_UTF8_BYTES, sha256OfText, utf8ByteLength } from "./content";
+import { buildContentStorageKey, CONTENT_INLINE_MAX_UTF8_BYTES } from "./content";
+import {
+  discloseLargeContent as emitLargeContentDisclosure,
+  type LargeContentDisclosurePorts,
+} from "./primitives/disclosures";
+import { sha256OfText, utf8ByteLength } from "./primitives/validation";
 import type { Clock, IdGenerator } from "./ids";
 import {
   changeMemoSnapshot,
@@ -145,11 +150,7 @@ export interface MemoCommandPorts {
    * never changes the committed outcome, the activation path, or the exit
    * code (WR2).
    */
-  disclosures?: {
-    backupEnabled: boolean;
-    thresholdBytes: number;
-    largeContent(sizeBytes: number, thresholdBytes: number): void;
-  };
+  disclosures?: LargeContentDisclosurePorts;
 }
 
 /** The finite preparation-coherence budget and list-restart bound of ADR-0032. */
@@ -435,16 +436,8 @@ export function largeContentDisclosureMessage(sizeBytes: number, thresholdBytes:
 
 /** Fires the post-commit disclosure exactly when a fresh changed outcome committed a new body plan (WR2). */
 function discloseLargeContent(ports: MemoCommandPorts, outcome: MemoWriteOutcome): void {
-  const disclosures = ports.disclosures;
-  if (disclosures === undefined || !disclosures.backupEnabled) return;
   if (!outcome.changed || outcome.content.kind === "keep") return;
-  const sizeBytes = outcome.content.sizeBytes;
-  if (!(sizeBytes > disclosures.thresholdBytes)) return;
-  try {
-    disclosures.largeContent(sizeBytes, disclosures.thresholdBytes);
-  } catch {
-    // A diagnostic sink failure never changes the committed outcome.
-  }
+  emitLargeContentDisclosure(ports.disclosures, outcome.content.sizeBytes);
 }
 
 /** The post-commit half: disclosure, activation gate, shared completion, and the fresh outcome handoff. */

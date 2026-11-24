@@ -10,8 +10,10 @@ import {
 } from "./handoff-commands";
 import type { Clock } from "./ids";
 import { checkExternalSource } from "./import-policy";
+import { workspaceKey } from "./primitives/identity";
+import { isPlainObject } from "./primitives/validation";
 import { type ProjectResolutionPorts, validateProjectSlug } from "./project-commands";
-import { resolveSenderIdentity, workspaceKey } from "./workspace-identity";
+import { resolveSenderIdentity } from "./workspace-identity";
 
 /** Original CLI send material; recovery never accepts an HTTP body spool. */
 export type SendRecoveryInput = Omit<SendInput, "bodyFile" | "originalName" | "idempotencyKey"> & {
@@ -55,8 +57,6 @@ export interface SendRecoveryPorts extends Pick<SendPorts, "inspectSource" | "di
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
 const isUuid = (value: unknown): value is string => typeof value === "string" && UUID.test(value);
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 const integrity = (message: string): Result<never, AppError> => err(appError("STORAGE_INTEGRITY_ERROR", message));
 
 /** Decode historical creation data, never current Artifact availability or Handoff state. */
@@ -68,7 +68,7 @@ export function parseSendRecoveryOutcome(responseJson: string): Result<SendOutco
     return integrity("the retained send outcome is not valid JSON");
   }
   if (
-    !isRecord(value) ||
+    !isPlainObject(value) ||
     !Array.isArray(value.handoffs) ||
     value.handoffs.length === 0 ||
     value.replayed !== false ||
@@ -83,7 +83,7 @@ export function parseSendRecoveryOutcome(responseJson: string): Result<SendOutco
   const recipients = new Set<string>();
   for (const entry of value.handoffs) {
     if (
-      !isRecord(entry) ||
+      !isPlainObject(entry) ||
       !isUuid(entry.handoffId) ||
       !isUuid(entry.artifactId) ||
       typeof entry.recipientSlug !== "string" ||

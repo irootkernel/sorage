@@ -6,7 +6,13 @@ import { isUtf8ExactText, type ArtifactBodyPrepareRequest, type PreparedArtifact
 import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
 import { type ProjectCommandPorts, checkRecipientEligibility } from "./project-commands";
 import type { NewPendingFsOp } from "./intent-log";
-import { resolveSenderIdentity, type SenderIdentity, workspaceKey } from "./workspace-identity";
+import { resolveSenderIdentity, type SenderIdentity } from "./workspace-identity";
+import {
+  discloseLargeContent,
+  emitCompletionWarning,
+  type LargeContentDisclosurePorts,
+} from "./primitives/disclosures";
+import { workspaceKey } from "./primitives/identity";
 import type { Clock, IdGenerator } from "./ids";
 
 /**
@@ -160,27 +166,7 @@ export interface SendPorts {
    * so a later activation failure still disclosed the growth. Metadata-only;
    * a failing sink never changes the outcome (WR2).
    */
-  disclosures?: {
-    backupEnabled: boolean;
-    thresholdBytes: number;
-    largeContent(sizeBytes: number, thresholdBytes: number): void;
-    /**
-     * The post-commit completion warning sink of SHR-015's category (i): a
-     * physical activation or completion failure after the committed fan-out is
-     * disclosed here and never fails the command; a throwing sink changes
-     * nothing.
-     */
-    completionWarning?(text: string): void;
-  };
-}
-
-/** Discloses one post-commit completion warning; a throwing sink never changes the committed outcome (SHR-015). */
-function warnCompletion(disclosures: SendPorts["disclosures"] | undefined, text: string): void {
-  try {
-    disclosures?.completionWarning?.(text);
-  } catch {
-    // A diagnostic sink failure never changes the committed outcome.
-  }
+  disclosures?: LargeContentDisclosurePorts;
 }
 
 /** Derives the stored-name slug of a title: the same folding rule a Project slug uses. */
@@ -705,15 +691,9 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
   // per fan-out copy — before any activation runs, so a later activation
   // failure still disclosed the growth (SHR-011, WR2). A racing-replay return
   // above never reaches this point, so a replayed send never notifies.
-  if (ports.disclosures?.backupEnabled) {
-    const sourceBytes = preparedBodies[0]?.prepared.sizeBytes;
-    if (sourceBytes !== undefined && sourceBytes > ports.disclosures.thresholdBytes) {
-      try {
-        ports.disclosures.largeContent(sourceBytes, ports.disclosures.thresholdBytes);
-      } catch {
-        // A diagnostic sink failure never changes the committed outcome.
-      }
-    }
+  const sourceBytes = preparedBodies[0]?.prepared.sizeBytes;
+  if (sourceBytes !== undefined) {
+    discloseLargeContent(ports.disclosures, sourceBytes);
   }
 
   // Execute the committed file intents outside any transaction, then complete
@@ -735,7 +715,7 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
     // committed, so a failed activation is disclosed as a warning and the
     // pending intent is left to the next process start's drain.
     if (!activated.ok) {
-      warnCompletion(
+      emitCompletionWarning(
         ports.disclosures,
         `The Handoff fan-out committed, but activating ${entry.prepared.storageKey} failed: ${activated.error.message}. The pending activation intent remains for the next process start.`,
       );
@@ -758,7 +738,7 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
   if (completions.length > 0) {
     const completed = ports.handoffs.completeActivations(completions);
     if (!completed.ok) {
-      warnCompletion(
+      emitCompletionWarning(
         ports.disclosures,
         `The Handoff fan-out committed, but recording its activation completions failed: ${completed.error.message}. The pending activation intents remain for the next process start.`,
       );

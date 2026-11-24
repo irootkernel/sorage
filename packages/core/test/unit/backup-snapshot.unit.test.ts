@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  canonicalJson,
-  canonicalJsonLine,
   handoffShardPath,
   parseSnapshotManifest,
   redactEventMetadata,
@@ -10,6 +8,7 @@ import {
   snapshotFiles,
   snapshotManifest,
 } from "../../src/backup-snapshot";
+import { canonicalJson, canonicalJsonLine } from "../../src/primitives/json";
 
 /**
  * The determinism and redaction contract of sections 26 and 27 (BKP-003,

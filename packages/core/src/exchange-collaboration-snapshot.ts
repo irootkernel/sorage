@@ -1,5 +1,4 @@
 import { isAbsolute } from "node:path";
-import { canonicalJson } from "./backup-snapshot";
 import { isLowercaseSha256 } from "./content";
 import {
   applyExchangeTransition,
@@ -21,8 +20,9 @@ import {
   exchangeWorkflowText,
   validateExchangeExternal,
 } from "./exchanges";
-import { memoObject } from "./memo-protocol";
-import { isMemoTimestamp, isMemoUuid } from "./memos";
+import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson } from "./primitives/json";
+import { memoObject } from "./primitives/validation";
 
 type Row = Record<string, unknown>;
 type AcceptanceBatch = { kind: ExchangeAcceptanceReceipt["kind"]; sequences: number[]; lastRequestId: string };
@@ -59,7 +59,8 @@ function digest(value: unknown): boolean {
 }
 
 function validMaterial(row: Row, projects: Set<string>): row is Row & ExchangeMaterial {
-  if (!isMemoUuid(row.id) || !isMemoUuid(row.ownerProjectId) || !projects.has(row.ownerProjectId)) return false;
+  if (!isCanonicalUuid(row.id) || !isCanonicalUuid(row.ownerProjectId) || !projects.has(row.ownerProjectId))
+    return false;
   if (row.kind === "external") {
     return (
       row.sizeBytes === null &&
@@ -231,11 +232,11 @@ export function validateExchangeCollaboration(
     if (!validMaterial(material, members) || materialById.has(material.id)) return false;
     materialById.set(material.id, material);
   }
-  const project = (id: unknown): id is string => isMemoUuid(id) && members.has(id);
+  const project = (id: unknown): id is string => isCanonicalUuid(id) && members.has(id);
   const requestById = new Map<string, Row>();
   for (const request of requests) {
     if (
-      !isMemoUuid(request.id) ||
+      !isCanonicalUuid(request.id) ||
       requestById.has(request.id) ||
       !project(request.requesterId) ||
       !project(request.assigneeId) ||
@@ -277,7 +278,7 @@ export function validateExchangeCollaboration(
       accepted.has(key) ||
       (!lifecycle && row.requesterId !== request.requesterId) ||
       !project(row.requesterId) ||
-      !isMemoTimestamp(row.acceptedAt) ||
+      !isCanonicalUtcTimestamp(row.acceptedAt) ||
       !memoObject(row.receipt, ["operationId", "kind"]) ||
       !exchangeOperationId(row.receipt.operationId) ||
       (row.receipt.kind !== "accept" &&
@@ -305,7 +306,7 @@ export function validateExchangeCollaboration(
       messageBySeq.has(message.seq) ||
       !project(message.senderId) ||
       (message.recipientId !== null && !project(message.recipientId)) ||
-      !isMemoTimestamp(message.createdAt) ||
+      !isCanonicalUtcTimestamp(message.createdAt) ||
       (message.replyTo !== null && (!exchangeCount(message.replyTo, 1) || !messageBySeq.has(message.replyTo)))
     )
       return false;

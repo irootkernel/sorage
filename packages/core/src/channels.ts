@@ -1,4 +1,11 @@
-import { buildContentStorageKey, CONTENT_INLINE_MAX_UTF8_BYTES, utf8ByteLength } from "./content";
+import { buildContentStorageKey, CONTENT_INLINE_MAX_UTF8_BYTES } from "./content";
+import {
+  discloseLargeContent as emitLargeContentDisclosure,
+  emitCompletionWarning,
+  type LargeContentDisclosurePorts,
+} from "./primitives/disclosures";
+import { sleepWithinDeadline } from "./primitives/polling";
+import { utf8ByteLength } from "./primitives/validation";
 import { type AppError, appError, err, isRetryableWaitListingFailure, ok, type Result } from "./errors";
 import { type ChannelDomainEventType, type NewDomainEvent, USER_ACTOR } from "./events";
 import type { Clock, IdGenerator } from "./ids";
@@ -615,12 +622,7 @@ export interface ChannelCommandPorts {
   clock: Clock;
   ids: IdGenerator;
   /** The SHR-011 large-content disclosure seam and the contained post-commit warning sink: firing never changes the outcome. */
-  disclosures?: {
-    backupEnabled: boolean;
-    thresholdBytes: number;
-    largeContent(sizeBytes: number, thresholdBytes: number): void;
-    completionWarning?(text: string): void;
-  };
+  disclosures?: LargeContentDisclosurePorts;
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,25 +1301,12 @@ export function postMessage(
 
 /** The SHR-011 large-content Git-history disclosure, fired once after the fresh body's SQL commit. */
 function discloseLargeContent(ports: ChannelCommandPorts, sizeBytes: number): void {
-  const disclosures = ports.disclosures;
-  if (disclosures === undefined || !disclosures.backupEnabled) return;
-  if (!(sizeBytes > disclosures.thresholdBytes)) return;
-  try {
-    disclosures.largeContent(sizeBytes, disclosures.thresholdBytes);
-  } catch {
-    // A diagnostic sink failure never changes the committed outcome.
-  }
+  emitLargeContentDisclosure(ports.disclosures, sizeBytes);
 }
 
 /** The contained post-commit warning sink (SHR-015): a throwing sink never changes the result. */
 function emitContainedWarning(ports: ChannelCommandPorts, text: string): void {
-  const sink = ports.disclosures?.completionWarning;
-  if (sink === undefined) return;
-  try {
-    sink(text);
-  } catch {
-    // A diagnostic sink failure never changes the committed outcome.
-  }
+  emitCompletionWarning(ports.disclosures, text);
 }
 
 export interface AckMessagesInput {
@@ -1577,12 +1566,10 @@ export function waitForChannelMessages<T>(options: ChannelWaitOptions<T>): Resul
     } else {
       return err(page.error);
     }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
+    if (!sleepWithinDeadline(deadline, Date.now(), options.intervalSeconds * 1000, options.sleepMs)) {
       if (tracked !== null) return err(tracked);
       return ok({ timedOut: true, items: [] });
     }
-    options.sleepMs(Math.min(options.intervalSeconds * 1000, remaining));
   }
 }
 

@@ -1,5 +1,5 @@
-import { canonicalJson, type SnapshotFile, type SnapshotProject } from "./backup-snapshot";
-import { isLowercaseSha256, isUtf8ExactText, sha256OfText, utf8ByteLength } from "./content";
+import type { SnapshotFile, SnapshotProject } from "./backup-snapshot";
+import { isLowercaseSha256, isUtf8ExactText } from "./content";
 import { appError, err, ok, type Result } from "./errors";
 import { canonicalExchangeCollaboration, validateExchangeCollaboration } from "./exchange-collaboration-snapshot";
 import type { ExchangeLifecycle } from "./exchange-lifecycle";
@@ -13,9 +13,10 @@ import { validateExchangeNoticeInventory } from "./exchange-notice-snapshot";
 import type { ExchangeNoticeInventory } from "./exchange-notices";
 import type { ExchangeCollaboration } from "./exchanges";
 import { type SnapshotDataV4, snapshotFilesV4 } from "./handoff-reporting-snapshot";
-import { memoObject } from "./memo-protocol";
-import { type ExchangeSnapshotManifest, parseUniqueSnapshotJson } from "./memo-snapshot";
-import { isMemoTimestamp, isMemoUuid } from "./memos";
+import type { ExchangeSnapshotManifest } from "./memo-snapshot";
+import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson, parseUniqueSnapshotJson } from "./primitives/json";
+import { memoObject, sha256OfText, utf8ByteLength } from "./primitives/validation";
 
 export const EXCHANGE_SNAPSHOT_FILE = "exchanges.json";
 
@@ -123,9 +124,9 @@ export function validateExchangeInventory(
         ["id", "openingProjectId", "goal", "criteria", "createdAt", "members", "readRanges", "creationOutcomes"],
         ["collaboration", "lifecycle", "notices"],
       ) ||
-      !isMemoUuid(record.id) ||
-      !isMemoUuid(record.openingProjectId) ||
-      !isMemoTimestamp(record.createdAt) ||
+      !isCanonicalUuid(record.id) ||
+      !isCanonicalUuid(record.openingProjectId) ||
+      !isCanonicalUtcTimestamp(record.createdAt) ||
       !nonemptyText(record.goal) ||
       !Array.isArray(record.criteria) ||
       record.criteria.length === 0 ||
@@ -154,7 +155,7 @@ export function validateExchangeInventory(
     exchangeIds.add(record.id);
     const members = new Set<string>();
     for (const member of record.members) {
-      if (!isMemoUuid(member) || !projectsById.has(member) || members.has(member)) {
+      if (!isCanonicalUuid(member) || !projectsById.has(member) || members.has(member)) {
         return corrupt("An Exchange member is repeated or does not identify an exported Project.");
       }
       members.add(member);
@@ -202,7 +203,7 @@ export function validateExchangeInventory(
     for (const range of record.readRanges) {
       if (
         !memoObject(range, ["projectId", "firstSeq", "lastSeq"]) ||
-        !isMemoUuid(range.projectId) ||
+        !isCanonicalUuid(range.projectId) ||
         !members.has(range.projectId) ||
         !positiveSequence(range.firstSeq) ||
         !positiveSequence(range.lastSeq) ||

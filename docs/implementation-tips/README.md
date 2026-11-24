@@ -54,11 +54,11 @@ Bun does not use libuv, so `F_FULLFSYNC` durability MUST be verified empirically
 
 For focused work, select existing checks and relevant failure paths under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review); no automatic impact selector is needed. Avoid repeating frozen installation for unchanged dependencies. Record exact changed boundaries, commands/results, reused evidence and its applicability in the existing handoff. TASK-138 owns the complete `make test` on the integrated EPIC-020 candidate; reuse that result for overlapping consumers and rerun evidence invalidated by later changes. Raw `bun run test:int` and `bun run test:e2e` require a current `make build` or packaged executable; raw `bun run test:release` requires current `make package` outputs and selects only AJ-16. Use them for a prepared focused selection or inside the aggregate, without an intervening build that withdraws release metadata. Packaging uses unique physical temporary scratch, deletes the second compilation after comparison and cleans scratch/staged/candidate files on failure; a successful package retains its final outputs. Independent reproducibility builds and signed-candidate checks remain.
 
-The workspace contains four implementation packages. The unused Web placeholder is removed; the actual Web UI ships from the daemon. Import/dependency guards run inside `make test-prepare` (NFR-014); fixed package count is not a product invariant:
+The workspace contains four implementation packages. The unused Web placeholder is removed; the actual Web UI ships from the daemon. Import-boundary, runtime circular-dependency (`check:cycles`), and dependency-boundary guards run inside `make test-prepare` (NFR-014); fixed package count is not a product invariant:
 
 | Package | Contents | May import |
 |---|---|---|
-| `core` | Domain model, application use cases, versioned protocol DTOs | Nothing in this repository |
+| `core` | Domain model, zero-cycle shared primitives (`packages/core/src/primitives/`), application use cases, versioned protocol DTOs | Nothing in this repository |
 | `adapters` | SQLite, filesystem, git, macOS, HTTP, and `testkit` implementations of `core` ports | `core` |
 | `cli` | `apps/cli`, argument parsing, output rendering, process wiring | `core`, allowed adapter composition modules, daemon entrypoint |
 | `daemon` | `apps/daemon`, HTTP server, scheduler, garbage collection | `core`, `adapters` |
@@ -337,7 +337,7 @@ Use an isolated temporary home, Vault, git repository, and database per test, cr
 
 `testkit` lives in `adapters` and is owned by the foundation Epic before any test depends on it; it provides the fake `Clock` and `IdGenerator`, the fault-injection filesystem adapter that reproduces the enumerated crash points, the fault-injection git adapter, disk-full and read-only-Vault injection, bare-remote plus clone git fixtures, and the ten-thousand-Handoff seed generator.
 
-Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun and product version assertions, and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; `make test-release`; and `make test` as the single gate. The lint step runs Biome with `--error-on-warnings`, so a lint warning fails `make test-prepare` and stops `make test` before any test stage runs.
+Use the `make` targets rather than inventing parallel commands: `make test-prepare` for format, lint, typecheck, the Bun and product version assertions, the runtime circular-dependency guard (`check:cycles`), and the dependency-boundary guard; `make test-unit`; `make test-int`; `make test-contract`; `make test-e2e`; `make test-release`; and `make test` as the single gate. The lint step runs Biome with `--error-on-warnings`, so a lint warning fails `make test-prepare` and stops `make test` before any test stage runs.
 
 Those same targets run on the developer's macOS machine, so a check that cannot run on macOS cannot be a gate.
 

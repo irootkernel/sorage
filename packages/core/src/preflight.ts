@@ -1,3 +1,4 @@
+import { memoObject } from "./primitives/validation";
 import { successEnvelope, type SuccessEnvelope } from "./protocol";
 
 /**
@@ -169,9 +170,8 @@ export function assessPreflight(facts: PreflightFacts): PreflightReport {
 
 export function parsePreflightReport(value: unknown): ParsedPreflightReport {
   if (
-    !isRecord(value) ||
-    value.contractVersion !== PREFLIGHT_CONTRACT_VERSION ||
-    !exactKeys(value, ["contractVersion", "status", "checks"])
+    !memoObject(value, ["contractVersion", "status", "checks"]) ||
+    value.contractVersion !== PREFLIGHT_CONTRACT_VERSION
   ) {
     return { ok: false, issue: "contract-version" };
   }
@@ -609,7 +609,7 @@ function parseCheck(
   value: unknown,
   expectedId: PreflightCheckId,
 ): { ok: true; check: PreflightCheck } | { ok: false; issue: PreflightReportIssue } {
-  if (!isRecord(value) || value.id !== expectedId || !exactKeys(value, ["id", "severity", "message"], ["recovery"])) {
+  if (!memoObject(value, ["id", "severity", "message"], ["recovery"]) || value.id !== expectedId) {
     return { ok: false, issue: "catalog" };
   }
   if (!isSeverity(value.severity)) return { ok: false, issue: "severity" };
@@ -623,8 +623,7 @@ function parseCheck(
 }
 
 function parseRecovery(value: unknown): PreflightRecovery | null {
-  if (!isRecord(value) || !exactKeys(value, ["message"], ["suggestedCommand"]) || !explainedMessage(value.message))
-    return null;
+  if (!memoObject(value, ["message"], ["suggestedCommand"]) || !explainedMessage(value.message)) return null;
   if (value.suggestedCommand === undefined) return { message: value.message };
   if (typeof value.suggestedCommand !== "string" || value.suggestedCommand.trim() === "") return null;
   return { message: value.message, suggestedCommand: value.suggestedCommand };
@@ -640,20 +639,4 @@ function isSeverity(value: unknown): value is PreflightSeverity {
 
 function isPreflightStatus(value: unknown): value is PreflightStatus {
   return typeof value === "string" && (PREFLIGHT_STATUSES as readonly string[]).includes(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const keys = Object.keys(value);
-  return (
-    required.every((key) => Object.hasOwn(value, key)) &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateSnapshot } from "../../src/backup-commands";
-import { canonicalJson } from "../../src/backup-snapshot";
-import { sha256OfText } from "../../src/content";
+import { canonicalJson } from "../../src/primitives/json";
+import { sha256OfText } from "../../src/primitives/validation";
 import { snapshotFilesV3, validateSnapshotHandoffV3 } from "../../src/content-snapshot";
 import { snapshotEventTypeAllowed } from "../../src/events";
 import {

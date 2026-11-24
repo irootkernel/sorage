@@ -1,5 +1,4 @@
-import { canonicalJson } from "./backup-snapshot";
-import { isUtf8ExactText, sha256OfText, utf8ByteLength } from "./content";
+import { isUtf8ExactText } from "./content";
 import { appError, err, type ErrorCode, type Result, ok } from "./errors";
 import type {
   ExchangeControlInput,
@@ -15,7 +14,9 @@ import type {
   ExchangeNoticeOutcome,
   ExchangeReportingClaim,
 } from "./exchange-notices";
-import { isMemoUuid } from "./memos";
+import { isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson } from "./primitives/json";
+import { sha256OfText, utf8ByteLength } from "./primitives/validation";
 
 export const EXCHANGE_LEASE_SECONDS = 40;
 export const EXCHANGE_RENEW_SECONDS = 10;
@@ -406,7 +407,7 @@ export function isExchangeControl(input: ExchangeInput): input is ExchangeContro
 
 /** A composed command must inspect coherent current authority and receipts before opening a writer. */
 export function runExchangeCommand(ports: ExchangeCommandPorts, input: ExchangeInput): Result<ExchangeActionData> {
-  if ("exchangeId" in input && input.exchangeId !== undefined && !isMemoUuid(input.exchangeId)) {
+  if ("exchangeId" in input && input.exchangeId !== undefined && !isCanonicalUuid(input.exchangeId)) {
     return err(exchangeInvalid("Supply an Exchange UUID."));
   }
   if ("operationId" in input && input.operationId !== undefined && !exchangeOperationId(input.operationId)) {
@@ -548,7 +549,7 @@ export function exchangeFingerprint(normalized: object): string {
 
 export function validateExchangeAcceptances(accept: ExchangeAcceptanceInput[]): boolean {
   return (
-    accept.every((entry) => isMemoUuid(entry.requestId) && exchangeCount(entry.reportVersion, 1)) &&
+    accept.every((entry) => isCanonicalUuid(entry.requestId) && exchangeCount(entry.reportVersion, 1)) &&
     new Set(accept.map((entry) => entry.requestId)).size === accept.length
   );
 }

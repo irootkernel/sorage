@@ -1,6 +1,8 @@
 import type { AppError } from "./errors";
 import { appError, err, ok, type Result } from "./errors";
 import type { Memo } from "./memos";
+import { canonicalJson, canonicalJsonLine } from "./primitives/json";
+import { isPlainObject } from "./primitives/validation";
 
 /**
  * The deterministic snapshot model of sections 26 and 27 of
@@ -172,30 +174,6 @@ export function redactEventMetadata(metadata: Record<string, unknown>): Record<s
     redacted[key] = isPlainObject(value) ? redactEventMetadata(value) : value;
   }
   return redacted;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Sorts object keys lexicographically at every level and prints two-space JSON with a trailing LF. */
-export function canonicalJson(value: unknown): string {
-  return `${JSON.stringify(sortKeys(value), null, 2)}\n`;
-}
-
-/** The one-line form `events.jsonl` uses: sorted keys, compact separators, LF-terminated. */
-export function canonicalJsonLine(value: unknown): string {
-  return `${JSON.stringify(sortKeys(value))}\n`;
-}
-
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (!isPlainObject(value)) return value;
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(value).sort()) {
-    sorted[key] = sortKeys(value[key]);
-  }
-  return sorted;
 }
 
 /**

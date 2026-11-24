@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { HandoffContentIntegrity, HandoffListCandidate, LoadedHandoff } from "@sorage/core";
 import { appError, err, type HandoffReadPort, type HandoffView, type ListingScope, ok } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
-import { liveFencePaused } from "./intent-log";
+import { liveFencePaused } from "./sqlite/move-fence";
 import { vaultMoveLockHeld } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
 import { type ContentionSurface, storageContentionOf } from "./storage-contention";

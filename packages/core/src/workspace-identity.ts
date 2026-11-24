@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { type AppError, appError, err, ok, type Result } from "./errors";
+import { workspaceKey } from "./primitives/identity";
 import { type ProjectResolutionPorts, resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
 
 /**
@@ -9,15 +9,6 @@ import { type ProjectResolutionPorts, resolveWorkspaceActor, workspaceRootOf } f
  * snapshot stay historically accurate (PRJ-015, PRJ-020); the snapshot storage itself
  * is the handoffs table of EPIC-005.
  */
-
-/**
- * The stable key of one unregistered Workspace: the Installation identity and the
- * normalized real path hashed together, so the same directory under another
- * Installation is a different Workspace (PRJ-014).
- */
-export function workspaceKey(installationId: string, normalizedPath: string): string {
-  return createHash("sha256").update(`${installationId}\n${normalizedPath}`).digest("hex");
-}
 
 export type SenderIdentity =
   | { kind: "registered_project"; project: import("./projects").Project; binding: import("./projects").ProjectBinding }

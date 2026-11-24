@@ -12,8 +12,8 @@ import {
 } from "node:fs";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
-import { isMemoUuid } from "@sorage/core";
-import { fsyncDirectory } from "./intent-log";
+import { isCanonicalUuid } from "@sorage/core";
+import { fsyncDirectory } from "./fs-atomic";
 import { managedDirectory, managedFile, managedPath, openManagedFile } from "./managed-paths";
 
 interface StageOwner {
@@ -30,7 +30,7 @@ function localProcessRealm(): string | null {
   try {
     if (process.platform === "linux") {
       const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-      if (isMemoUuid(boot)) knownRealm = `${hostname()}:${boot}:${readlinkSync("/proc/self/ns/pid")}`;
+      if (isCanonicalUuid(boot)) knownRealm = `${hostname()}:${boot}:${readlinkSync("/proc/self/ns/pid")}`;
     } else if (process.platform === "darwin") {
       const boot = spawnSync("/usr/sbin/sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 1_000 });
       const stamp = boot.stdout?.match(/sec\s*=\s*(\d+),\s*usec\s*=\s*(\d+)/);
@@ -74,7 +74,7 @@ export function reclaimExchangeStages(root: string, exchangeId: string, unowned:
   if (directory === undefined || realm === null) return 0;
   let reclaimed = 0;
   for (const id of readdirSync(directory)) {
-    if (!isMemoUuid(id)) continue;
+    if (!isCanonicalUuid(id)) continue;
     try {
       const marker = managedFile(root, `owners/${id}`);
       if (marker.stat === undefined || marker.stat.size > 4096) continue;

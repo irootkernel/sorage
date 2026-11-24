@@ -41,7 +41,7 @@ import {
   validateSnapshotHandoffV4,
 } from "./handoff-reporting-snapshot";
 import { parseMemoEventAssociation, type VersionedSnapshotManifest, validateMemoInventory } from "./memo-snapshot";
-import { isMemoUuid } from "./memos";
+import { isCanonicalUuid } from "./primitives/identity";
 import type { VaultMarker } from "./vault";
 import { type VaultVerifyPorts, vaultVerify } from "./vault-commands";
 
@@ -323,7 +323,7 @@ export function validateSnapshot(
       if (!row.ok) return row;
       if (
         event.actorKind === "registered_project"
-          ? !isMemoUuid(event.actorId)
+          ? !isCanonicalUuid(event.actorId)
           : event.actorKind === "unregistered_workspace"
             ? typeof event.actorId !== "string"
             : event.actorId !== null

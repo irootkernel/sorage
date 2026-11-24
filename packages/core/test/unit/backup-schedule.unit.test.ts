@@ -135,4 +135,63 @@ describe("backupTickDecision", () => {
     expect(decision.action).toBe("none");
     expect(decision.nextDueAt).toBeNull();
   });
+
+  it("returns identical results across repeated calls and multiple timezones including DST gaps", () => {
+    const cases: Array<{
+      spec: Parameters<typeof backupTickDecision>[0];
+      now: string;
+      lastRunAt: string | null;
+      expectedAction: "run" | "none";
+      expectedNextDueAt: string | null;
+    }> = [
+      {
+        spec: specOf({ at: "02:30", timezone: NEW_YORK }),
+        now: "2026-03-07T12:00:00.000Z",
+        lastRunAt: "2026-03-07T07:35:00.000Z",
+        expectedAction: "none",
+        expectedNextDueAt: "2026-03-08T07:00:00.000Z",
+      },
+      {
+        spec: specOf({ at: "01:30", timezone: NEW_YORK }),
+        now: "2026-11-01T07:00:00.000Z",
+        lastRunAt: "2026-11-01T05:35:00.000Z",
+        expectedAction: "none",
+        expectedNextDueAt: "2026-11-02T06:30:00.000Z",
+      },
+      {
+        spec: specOf({ at: "02:30", timezone: "Europe/London" }),
+        now: "2026-03-28T12:00:00.000Z",
+        lastRunAt: "2026-03-28T02:35:00.000Z",
+        expectedAction: "none",
+        expectedNextDueAt: "2026-03-29T01:30:00.000Z",
+      },
+      {
+        spec: specOf({ at: "03:00", timezone: "Asia/Seoul" }),
+        now: "2026-08-30T04:00:00.000Z",
+        lastRunAt: "2026-08-29T18:05:00.000Z",
+        expectedAction: "none",
+        expectedNextDueAt: "2026-08-30T18:00:00.000Z",
+      },
+      {
+        spec: specOf({ at: "02:30", timezone: "Australia/Lord_Howe" }),
+        now: "2026-10-03T12:00:00.000Z",
+        lastRunAt: "2026-10-02T16:05:00.000Z",
+        expectedAction: "none",
+        expectedNextDueAt: "2026-10-03T15:30:00.000Z",
+      },
+    ];
+    for (let pass = 0; pass < 3; pass += 1) {
+      for (const entry of cases) {
+        const decision = backupTickDecision(entry.spec, new Date(entry.now), entry.lastRunAt);
+        expect(decision.action).toBe(entry.expectedAction);
+        expect(decision.nextDueAt).toBe(entry.expectedNextDueAt);
+      }
+      // Interleave DST gap/fall-back direct lookups to exercise cached formatters across zones.
+      expect(localWallInstants(NEW_YORK, { year: 2026, month: 3, day: 8, hour: 2, minute: 30 })).toHaveLength(0);
+      expect(localWallInstants(NEW_YORK, { year: 2026, month: 11, day: 1, hour: 1, minute: 30 })).toHaveLength(2);
+      expect(localWallInstants("Europe/Berlin", { year: 2026, month: 3, day: 29, hour: 2, minute: 30 })).toHaveLength(
+        0,
+      );
+    }
+  });
 });

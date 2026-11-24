@@ -25,7 +25,7 @@ import {
   validateExchangeAcceptances,
   validateExchangeExternal,
 } from "./exchanges";
-import { isMemoUuid } from "./memos";
+import { isCanonicalUuid } from "./primitives/identity";
 import type { Project } from "./projects";
 
 export interface ExchangeCapturedBody {
@@ -261,10 +261,10 @@ export function planExchangeBusiness(
   if (kind === "report") {
     const { requestId, assignmentVersion } = input;
     if (
-      !isMemoUuid(requestId) ||
+      !isCanonicalUuid(requestId) ||
       !exchangeCount(assignmentVersion, 1) ||
       !validateExchangeAcceptances(input.accept) ||
-      !input.evidence.every(isMemoUuid) ||
+      !input.evidence.every(isCanonicalUuid) ||
       new Set(input.evidence).size !== input.evidence.length ||
       input.accept.some((choice) => choice.requestId === requestId)
     )

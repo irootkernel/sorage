@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ok, type AppError, type Result } from "./errors";
-import { utf8ByteLength } from "./content";
+import { utf8ByteLength } from "./primitives/validation";
 
 /**
  * The one canonical Memo request-hash composer (MEM-007, ADR-0032 plan): it

@@ -15,13 +15,11 @@ import {
   mapLegacyDrainOutcome,
   planContentRecordRemoval,
   planLegacyUnlinkEligibility,
-  sha256OfBytes,
-  sha256OfText,
-  utf8ByteLength,
   validateCommonContentEventMetadata,
   validateContentRecord,
   type ContentRecord,
 } from "../../src/content";
+import { sha256OfBytes, sha256OfText, utf8ByteLength } from "../../src/primitives/validation";
 import { ok } from "../../src/errors";
 import { buildStorageKey } from "../../src/artifacts";
 

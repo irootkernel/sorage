@@ -1,4 +1,3 @@
-import { canonicalJson } from "./backup-snapshot";
 import { isLowercaseSha256 } from "./content";
 import { type ExchangeLifecycle, exchangeLifecycleHead, exchangeRequiresParticipantClaim } from "./exchange-lifecycle";
 import {
@@ -8,8 +7,9 @@ import {
   exchangeResponseObligations,
 } from "./exchange-notices";
 import { type ExchangeCollaboration, exchangeCount } from "./exchanges";
-import { memoObject } from "./memo-protocol";
-import { isMemoTimestamp, isMemoUuid } from "./memos";
+import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson } from "./primitives/json";
+import { memoObject } from "./primitives/validation";
 
 export function validExchangeNoticeOutcome(value: unknown): value is ExchangeNoticeOutcome {
   if (
@@ -29,18 +29,18 @@ export function validExchangeNoticeOutcome(value: unknown): value is ExchangeNot
   const { obligation } = value;
   return (
     value.kind === "notice-ack" &&
-    isMemoUuid(value.exchangeId) &&
+    isCanonicalUuid(value.exchangeId) &&
     typeof value.incidentId === "string" &&
     isLowercaseSha256(value.incidentId) &&
     (value.noticeKind === "connection-check" || value.noticeKind === "unread-delivery") &&
-    isMemoUuid(value.affectedProjectId) &&
-    isMemoUuid(value.projectId) &&
+    isCanonicalUuid(value.affectedProjectId) &&
+    isCanonicalUuid(value.projectId) &&
     (value.noticeKind !== "connection-check" || value.projectId !== value.affectedProjectId) &&
     exchangeCount(value.observedThroughSeq, 1) &&
-    isMemoTimestamp(value.issuedAt) &&
+    isCanonicalUtcTimestamp(value.issuedAt) &&
     memoObject(obligation, ["response", "requestId", "version", "sourceSeq", "responsibilitySeq", "resumeSeq"]) &&
     (obligation.response === "report" || obligation.response === "acceptance") &&
-    isMemoUuid(obligation.requestId) &&
+    isCanonicalUuid(obligation.requestId) &&
     exchangeCount(obligation.version, 1) &&
     exchangeCount(obligation.sourceSeq, 1) &&
     exchangeCount(obligation.responsibilitySeq) &&
@@ -57,7 +57,7 @@ export function validateExchangeNoticeInventory(
 ): boolean {
   if (
     !memoObject(value, ["compatibilityAt", "openConnectionIssues"]) ||
-    (value.compatibilityAt !== null && !isMemoTimestamp(value.compatibilityAt)) ||
+    (value.compatibilityAt !== null && !isCanonicalUtcTimestamp(value.compatibilityAt)) ||
     !Array.isArray(value.openConnectionIssues)
   )
     return false;

@@ -26,8 +26,8 @@ import {
   type StoredMemoReceiptLookup,
   type SnapshotMemoV3,
 } from "@sorage/core";
-import { fsyncDirectory, isSafeVaultRelativePath } from "./intent-log";
-import { digestManagedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
+import { fsyncDirectory } from "./fs-atomic";
+import { digestManagedFile, isSafeVaultRelativePath, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import type { SqliteContentStore } from "./content-store";
 import type { SorageSqlite } from "./sqlite/connection";
 import { runInTransaction } from "./sqlite/transaction";

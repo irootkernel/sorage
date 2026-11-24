@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { canonicalJson, type SnapshotEvent } from "../../src/backup-snapshot";
+import type { SnapshotEvent } from "../../src/backup-snapshot";
+import { canonicalJson } from "../../src/primitives/json";
 import {
   channelContentFilePath,
   channelIdFromSnapshotPath,

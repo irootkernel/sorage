@@ -54,7 +54,7 @@ import {
   type GitClient,
   isManagedContentStorageKey,
   isManagedStorageKey,
-  isMemoUuid,
+  isCanonicalUuid,
   legacyReportingEvidence,
   type Memo,
   type MemoContentFileExport,
@@ -112,9 +112,10 @@ import {
   readExchangeCollaborationRecords,
   restoreExchangeRecords,
 } from "./exchange-records";
+import { fsyncDirectory } from "./fs-atomic";
 import { createNodeAsyncGitClient, createNodeGitClient } from "./git-client";
 import { createHomePaths, type HomeEnvironment } from "./home";
-import { collectVaultGarbage, createSqliteIntentLog, fsyncDirectory } from "./intent-log";
+import { collectVaultGarbage, createSqliteIntentLog } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
 import {
   digestManagedFile,
@@ -1024,7 +1025,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           );
         }
         const handoff = sharedContent ? (value as unknown as SnapshotHandoffV3) : (value as unknown as SnapshotHandoff);
-        if (sharedContent && !isMemoUuid(handoff.id)) {
+        if (sharedContent && !isCanonicalUuid(handoff.id)) {
           return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
         }
         const expected = `${handoff.id}.json`;

@@ -64,7 +64,7 @@ import {
   exchangeView,
   type ExchangeReadDecision,
   expandConfigurationPath,
-  isMemoUuid,
+  isCanonicalUuid,
   isExchangeBusiness,
   isExchangeRead,
   matchExchangeFingerprint,
@@ -334,7 +334,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
   }
 
   project(value: string) {
-    if (!isMemoUuid(value)) return this.projects.findProjectBySlug(value);
+    if (!isCanonicalUuid(value)) return this.projects.findProjectBySlug(value);
     const projects = this.projects.listProjects();
     return projects.ok ? ok(projects.value.find((project) => project.id === value) ?? null) : projects;
   }
@@ -1183,7 +1183,7 @@ class ExchangeStore implements ExchangeBusinessRepository {
     }
     if (input.kind === "wait") return invalid("Wait requires the Exchange polling path.");
     if (
-      !isMemoUuid(input.materialId) ||
+      !isCanonicalUuid(input.materialId) ||
       !exchangeCount(input.offset) ||
       !exchangeCount(input.limit, 1) ||
       input.limit > EXCHANGE_READ_BYTES
@@ -1738,7 +1738,7 @@ export function admitExchangeJoin(
 ): Result<ExchangeJoinAdmission> {
   try {
     if (options.asUser === true) return err(exchangeAccessDenied());
-    if (!isMemoUuid(input.exchangeId)) return err(exchangeInvalid("Supply an Exchange UUID."));
+    if (!isCanonicalUuid(input.exchangeId)) return err(exchangeInvalid("Supply an Exchange UUID."));
     const context = contextOf(options);
     const resolve = () =>
       readSnapshot(context, (store) => {

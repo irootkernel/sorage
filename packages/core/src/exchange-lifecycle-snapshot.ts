@@ -1,5 +1,3 @@
-import { canonicalJson } from "./backup-snapshot";
-import { utf8ByteLength } from "./content";
 import {
   applyExchangeTransition,
   type ExchangeLifecycle,
@@ -21,8 +19,9 @@ import {
   exchangeOperationId,
   exchangeText,
 } from "./exchanges";
-import { memoObject } from "./memo-protocol";
-import { isMemoTimestamp, isMemoUuid } from "./memos";
+import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
+import { canonicalJson } from "./primitives/json";
+import { memoObject, utf8ByteLength } from "./primitives/validation";
 
 export function canonicalExchangeLifecycle(lifecycle: ExchangeLifecycle): ExchangeLifecycle {
   return {
@@ -35,7 +34,7 @@ export function canonicalExchangeLifecycle(lifecycle: ExchangeLifecycle): Exchan
 function ids(value: unknown, allowed: Set<string>): value is string[] {
   return (
     Array.isArray(value) &&
-    value.every((id) => isMemoUuid(id) && allowed.has(id)) &&
+    value.every((id) => isCanonicalUuid(id) && allowed.has(id)) &&
     new Set(value).size === value.length
   );
 }
@@ -50,11 +49,11 @@ function ownership(value: unknown, members: Set<string>): value is ExchangeReque
       "assignmentVersion",
       "disposition",
     ]) ||
-    !isMemoUuid(value.requestId) ||
+    !isCanonicalUuid(value.requestId) ||
     !exchangeCount(value.version, 2) ||
     !exchangeCount(value.assignmentVersion, 1) ||
     ![value.assignedProjectId, value.acceptanceOwnerId].every(
-      (id) => id === null || (isMemoUuid(id) && members.has(id)),
+      (id) => id === null || (isCanonicalUuid(id) && members.has(id)),
     )
   )
     return false;
@@ -65,7 +64,9 @@ function ownership(value: unknown, members: Set<string>): value is ExchangeReque
       exchangeText(choice.reason) &&
       exchangeDecisionText(choice.reason) &&
       ((choice.kind === "cancel" && choice.followUpProjectId === null) ||
-        (choice.kind === "transfer" && isMemoUuid(choice.followUpProjectId) && members.has(choice.followUpProjectId))))
+        (choice.kind === "transfer" &&
+          isCanonicalUuid(choice.followUpProjectId) &&
+          members.has(choice.followUpProjectId))))
   );
 }
 
@@ -73,7 +74,7 @@ function versions(value: unknown, key: string): boolean {
   return (
     Array.isArray(value) &&
     value.every(
-      (row) => memoObject(row, ["requestId", key]) && isMemoUuid(row.requestId) && exchangeCount(row[key], 1),
+      (row) => memoObject(row, ["requestId", key]) && isCanonicalUuid(row.requestId) && exchangeCount(row[key], 1),
     ) &&
     new Set(value.map((row) => row.requestId)).size === value.length
   );
@@ -141,7 +142,7 @@ function validTransition(input: unknown, members: Set<string>): input is Exchang
       const proposal = value.proposal;
       return (
         exchangeCount(proposal.version, 1) &&
-        isMemoUuid(proposal.proposerId) &&
+        isCanonicalUuid(proposal.proposerId) &&
         members.has(proposal.proposerId) &&
         ids(proposal.members, members) &&
         exchangeCount(proposal.rosterVersion, 1) &&
@@ -176,7 +177,7 @@ function validTransition(input: unknown, members: Set<string>): input is Exchang
             value.acceptanceSequences.length === 0)
       );
     case "material-revalidate":
-      return memoObject(value, ["kind", "materialId"]) && isMemoUuid(value.materialId);
+      return memoObject(value, ["kind", "materialId"]) && isCanonicalUuid(value.materialId);
     default:
       return false;
   }
@@ -207,12 +208,12 @@ export function openExchangeLifecycle(
         ["seq", "workRevision", "actorId", "operationId", "transition"],
         noticeTiming ? ["recordedAt"] : [],
       ) ||
-      (Object.hasOwn(record, "recordedAt") && !isMemoTimestamp(record.recordedAt)) ||
+      (Object.hasOwn(record, "recordedAt") && !isCanonicalUtcTimestamp(record.recordedAt)) ||
       !exchangeCount(record.seq, previous + 1) ||
       record.seq > lastSeq ||
       !exchangeCount(record.workRevision, 1) ||
       record.workRevision > value.workRevision ||
-      !isMemoUuid(record.actorId) ||
+      !isCanonicalUuid(record.actorId) ||
       !historical.has(record.actorId) ||
       !exchangeOperationId(record.operationId) ||
       !validTransition(record.transition, historical)

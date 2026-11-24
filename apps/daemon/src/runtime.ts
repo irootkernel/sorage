@@ -6,6 +6,7 @@ import {
   runBackupOnceAsync,
   setConfigurationValue,
   showConfiguration,
+  SORAGE_VERSION,
 } from "@sorage/core";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
 import { schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
@@ -24,8 +25,7 @@ import {
 } from "@sorage/adapters/src/token-store";
 import { createSessionService } from "./auth";
 import { createDomainRoutes } from "./domain-routes";
-import { createDaemonServer, DAEMON_VERSION } from "./index";
-import type { DaemonConfigService, DaemonServerOptions } from "./index";
+import { createDaemonServer, type DaemonConfigService, type DaemonServerOptions } from "./server";
 import { createHash } from "node:crypto";
 
 /**
@@ -143,7 +143,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
   const server = serverFactory({
     host,
     port,
-    endpoints: { installationId: config.value.installationId, version: DAEMON_VERSION },
+    endpoints: { installationId: config.value.installationId, version: SORAGE_VERSION },
     auth,
     tokenRotate: () => token.rotate(),
     config: configService,
@@ -342,7 +342,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
         host,
         port,
         startedAt: new Date().toISOString(),
-        version: DAEMON_VERSION,
+        version: SORAGE_VERSION,
         installationId: config.value.installationId,
       };
       // The record is the bind marker: written atomically only after listen succeeded.

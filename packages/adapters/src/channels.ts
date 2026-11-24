@@ -35,9 +35,8 @@ import {
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
-import { isSafeVaultRelativePath } from "./intent-log";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
-import { managedRoot } from "./managed-paths";
+import { isSafeVaultRelativePath, managedRoot } from "./managed-paths";
 import {
   type AcceptedBodyCaptureCodes,
   captureMemoBodyFile,

@@ -2,20 +2,20 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { validateSnapshot } from "../../src/backup-commands";
-import { canonicalJson, type SnapshotData } from "../../src/backup-snapshot";
+import type { SnapshotData } from "../../src/backup-snapshot";
 import {
   classifySnapshotArtifactBody,
   classifySnapshotEvent,
   parseMemoSnapshotV3,
-  parseSnapshotBodyContent,
   type SnapshotDataV3,
   serializeMemoSnapshotV3,
   snapshotFilesV3,
   validateSnapshotHandoffV3,
 } from "../../src/content-snapshot";
 import { ok } from "../../src/errors";
-import { parseVersionedSnapshotManifest, snapshotFilesV2 } from "../../src/memo-snapshot";
+import { parseSnapshotBodyContent, parseVersionedSnapshotManifest, snapshotFilesV2 } from "../../src/memo-snapshot";
 import type { Memo } from "../../src/memos";
+import { canonicalJson } from "../../src/primitives/json";
 
 const USER = { kind: "user" as const, id: null };
 

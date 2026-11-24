@@ -3,7 +3,7 @@ import { type ActorRef, projectActor, USER_ACTOR, workspaceActor } from "./event
 import type { Clock, IdGenerator } from "./ids";
 import { checkVaultContainment } from "./import-policy";
 import type { BindingKind, Project, ProjectBinding, ProjectRepositoryPort } from "./projects";
-import { workspaceKey } from "./workspace-identity";
+import { workspaceKey } from "./primitives/identity";
 
 /**
  * The application layer behind the `sorage project` commands of section 8 of

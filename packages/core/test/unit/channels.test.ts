@@ -30,7 +30,7 @@ import {
   validateHandleNote,
   validateMessageRef,
 } from "../../src/channels";
-import { utf8ByteLength } from "../../src/content";
+import { utf8ByteLength } from "../../src/primitives/validation";
 import { appError, err, ok } from "../../src/errors";
 
 const CHANNEL = "aaaaaaaa-0000-4000-8000-000000000001";

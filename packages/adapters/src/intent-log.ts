@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, existsSync, fsyncSync, openSync, readdirSync, renameSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type AppError,
@@ -18,10 +18,18 @@ import {
 import { createSqliteEventLedger, type SqliteEventLedger } from "./events";
 import { completeCommonIntentTx, executeCommonIntent } from "./content-store";
 import { classifyContentIntentOwnership, contentIntentIntegrityError } from "@sorage/core";
+import { fsyncDirectory } from "./fs-atomic";
 import { vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
+import { liveFencePaused } from "./sqlite/move-fence";
 import { openVault } from "./vault";
-import { UnsafeManagedPathError, managedDirectory, managedFile, type managedLstat } from "./managed-paths";
+import {
+  isSafeVaultRelativePath,
+  UnsafeManagedPathError,
+  managedDirectory,
+  managedFile,
+  type managedLstat,
+} from "./managed-paths";
 
 export interface SqliteIntentLogOptions {
   db: SorageSqlite;
@@ -472,33 +480,6 @@ export function createSqliteIntentLog(options: SqliteIntentLogOptions): IntentLo
   };
 }
 
-/** One intent's filesystem effect, evaluated from current state; never runs inside a transaction. */
-interface FenceRow {
-  move_fence_pid: number | null;
-  move_fence_at: string | null;
-}
-
-/** True when a process with this pid is alive; a dead fence pid is stale. */
-export function pidIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/** The live fence that must pause intent commits, or null when absent or stale. */
-export function liveFencePaused(db: SorageSqlite): { pid: number } | null {
-  const row = db.prepare("SELECT move_fence_pid, move_fence_at FROM vault_state WHERE id = 1").get() as
-    | FenceRow
-    | null
-    | undefined;
-  const pid = row?.move_fence_pid ?? null;
-  if (pid === null) return null;
-  return pidIsAlive(pid) ? { pid } : null;
-}
-
 /**
  * The mover's fence-and-count (TASK-029, the EPIC-004 accepted seam): one write
  * transaction sets the fence row and counts the outstanding intents, so an intent
@@ -821,23 +802,6 @@ export function collectVaultGarbage(
 
 function isSafeVaultRelative(path: string): boolean {
   return isSafeVaultRelativePath(path);
-}
-
-/** True when a path is a safe non-empty Vault-relative path with no traversal segments. */
-export function isSafeVaultRelativePath(path: string): boolean {
-  if (path === "" || path.startsWith("/")) return false;
-  const segments = path.split("/");
-  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
-}
-
-/** Durability order helper: fsync the parent directory after a rename or unlink (VLT-022). */
-export function fsyncDirectory(path: string): void {
-  const handle = openSync(path, "r");
-  try {
-    fsyncSync(handle);
-  } finally {
-    closeSync(handle);
-  }
 }
 
 function messageOf(error: unknown): string {

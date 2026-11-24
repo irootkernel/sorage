@@ -8,6 +8,11 @@ import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } 
 import { checkExternalSource, checkVaultContainment, sanitizeStoredName } from "./import-policy";
 import type { NewPendingFsOp } from "./intent-log";
 import { resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
+import {
+  discloseLargeContent,
+  emitCompletionWarning,
+  type LargeContentDisclosurePorts,
+} from "./primitives/disclosures";
 import { validateHandoffObservations } from "./reporting-commands";
 
 /**
@@ -88,18 +93,7 @@ export interface RevisionPorts extends HandoffReadPorts {
    * before activation, for the prepared replacement body's bytes only — a
    * `--no-change` resolution or a replayed revise never notifies.
    */
-  disclosures?: {
-    backupEnabled: boolean;
-    thresholdBytes: number;
-    largeContent(sizeBytes: number, thresholdBytes: number): void;
-    /**
-     * The post-commit completion warning sink of SHR-015's category (i): a
-     * physical activation, unlink, or completion failure after the committed
-     * revision is disclosed here and never fails the command; a throwing sink
-     * changes nothing.
-     */
-    completionWarning?(text: string): void;
-  };
+  disclosures?: LargeContentDisclosurePorts;
 }
 
 export interface ReviseInput extends ReadActorInput {
@@ -536,16 +530,7 @@ function reviseContent(
   // the prepared replacement body before any activation runs (SHR-011, WR2).
   // A `--no-change` resolution never prepared a body, and a replayed revise
   // returned earlier, so neither reaches this notification.
-  if (ports.disclosures?.backupEnabled) {
-    const replacementBytes = prepared.value.sizeBytes;
-    if (replacementBytes > ports.disclosures.thresholdBytes) {
-      try {
-        ports.disclosures.largeContent(replacementBytes, ports.disclosures.thresholdBytes);
-      } catch {
-        // A diagnostic sink failure never changes the committed outcome.
-      }
-    }
-  }
+  discloseLargeContent(ports.disclosures, prepared.value.sizeBytes);
 
   // Execute the committed file intents, then complete each with its system
   // event; an inline replacement has nothing physical to execute. Every step
@@ -558,7 +543,7 @@ function reviseContent(
       storageKey: prepared.value.storageKey,
     });
     if (!activated.ok) {
-      warnCompletion(
+      emitCompletionWarning(
         ports.disclosures,
         `The revision committed, but activating ${prepared.value.storageKey} failed: ${activated.error.message}. The pending activation intent remains for the next process start.`,
       );
@@ -579,7 +564,7 @@ function reviseContent(
         },
       ]);
       if (!completed.ok) {
-        warnCompletion(
+        emitCompletionWarning(
           ports.disclosures,
           `The revision committed, but recording its activation completion failed: ${completed.error.message}. The pending activation intent remains for the next process start.`,
         );
@@ -589,7 +574,7 @@ function reviseContent(
   if (unlinkIntent !== null && handoff.currentArtifact !== null && handoff.currentArtifact.storageKey !== null) {
     const removed = ports.artifactStore.remove(handoff.currentArtifact.storageKey);
     if (!removed.ok) {
-      warnCompletion(
+      emitCompletionWarning(
         ports.disclosures,
         `The revision committed, but unlinking the retired ${handoff.currentArtifact.storageKey} failed: ${removed.error.message}. The pending unlink intent remains for the next process start.`,
       );
@@ -612,7 +597,7 @@ function reviseContent(
         },
       ]);
       if (!completed.ok) {
-        warnCompletion(
+        emitCompletionWarning(
           ports.disclosures,
           `The revision committed, but recording its unlink completion failed: ${completed.error.message}. The pending unlink intent remains for the next process start.`,
         );
@@ -620,15 +605,6 @@ function reviseContent(
     }
   }
   return ok({ ...response, rowVersion: applied.value.rowVersion });
-}
-
-/** Discloses one post-commit completion warning; a throwing sink never changes the committed outcome (SHR-015). */
-function warnCompletion(disclosures: RevisionPorts["disclosures"] | undefined, text: string): void {
-  try {
-    disclosures?.completionWarning?.(text);
-  } catch {
-    // A diagnostic sink failure never changes the committed outcome.
-  }
 }
 
 function replay(ports: RevisionPorts, key: string, requestHash: string): Result<ReviseOutcome | null, AppError> {

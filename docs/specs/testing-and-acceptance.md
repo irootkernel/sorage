@@ -15,7 +15,7 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 
 | Target | Contents |
 |---|---|
-| `test-prepare` | Frozen dependency installation, automatic formatting with Biome, lint and the real import/dependency-boundary checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
+| `test-prepare` | Frozen dependency installation, automatic formatting with Biome, lint and the real import/dependency-boundary and runtime cycle (`check:cycles`) checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | Build a current `dist/sorage`, then run SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |

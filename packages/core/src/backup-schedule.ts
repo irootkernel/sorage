@@ -32,10 +32,37 @@ interface WallTime {
   minute: number;
 }
 
+const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
+const wallFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function offsetFormatterFor(timezone: string): Intl.DateTimeFormat {
+  let formatter = offsetFormatters.get(timezone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longOffset" });
+    offsetFormatters.set(timezone, formatter);
+  }
+  return formatter;
+}
+
+function wallFormatterFor(timezone: string): Intl.DateTimeFormat {
+  let formatter = wallFormatters.get(timezone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    wallFormatters.set(timezone, formatter);
+  }
+  return formatter;
+}
+
 function offsetOf(timezone: string, atMs: number): number {
-  const formatted = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longOffset" }).format(
-    new Date(atMs),
-  );
+  const formatted = offsetFormatterFor(timezone).format(new Date(atMs));
   const match = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(formatted);
   if (match === null) return 0;
   const sign = match[1] === "-" ? -1 : 1;
@@ -45,15 +72,7 @@ function offsetOf(timezone: string, atMs: number): number {
 }
 
 function wallOf(timezone: string, atMs: number): WallTime {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(atMs));
+  const parts = wallFormatterFor(timezone).formatToParts(new Date(atMs));
   const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? "0");
   return {
     year: read("year"),

@@ -8,11 +8,18 @@ import {
   SystemClock,
   UuidGenerator,
   decodeCursor,
+  discloseLargeContent,
+  emitCompletionWarning,
   encodeCursor,
   errorSpec,
   filterHash,
+  isCanonicalUtcTimestamp,
+  isCanonicalUuid,
+  isPlainObject,
   newRequestId,
+  remainingMs,
   renderInTimezone,
+  sleepWithinDeadline,
   toUtcIso,
 } from "../../src/index";
 
@@ -110,5 +117,70 @@ describe("identifiers and time", () => {
     const now = new SystemClock().now().getTime();
     expect(now).toBeGreaterThanOrEqual(before);
     expect(now).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+});
+
+describe("shared core primitives", () => {
+  it("validates canonical UUIDs, UTC timestamps, and plain objects", () => {
+    expect(isCanonicalUuid("0123abcd-0000-4000-8000-000000000001")).toBe(true);
+    expect(isCanonicalUuid("0123ABCD-0000-4000-8000-000000000001")).toBe(false);
+    expect(isCanonicalUuid(null)).toBe(false);
+    expect(isCanonicalUtcTimestamp("2026-08-24T03:04:05.678Z")).toBe(true);
+    expect(isCanonicalUtcTimestamp("2026-08-24T03:04:05Z")).toBe(false);
+    expect(isCanonicalUtcTimestamp("not-a-date")).toBe(false);
+    expect(isPlainObject({ a: 1 })).toBe(true);
+    expect(isPlainObject(null)).toBe(false);
+    expect(isPlainObject([])).toBe(false);
+  });
+
+  it("computes remaining polling budget and clamps sleeps to the deadline", () => {
+    expect(remainingMs(10_000, 7_500)).toBe(2_500);
+    expect(remainingMs(10_000, 12_000)).toBe(0);
+    const sleeps: number[] = [];
+    expect(sleepWithinDeadline(10_000, 7_500, 1_000, (ms) => sleeps.push(ms))).toBe(true);
+    expect(sleepWithinDeadline(10_000, 9_400, 1_000, (ms) => sleeps.push(ms))).toBe(true);
+    expect(sleepWithinDeadline(10_000, 10_000, 1_000, (ms) => sleeps.push(ms))).toBe(false);
+    expect(sleeps).toEqual([1_000, 600]);
+  });
+
+  it("contains sink errors in completion warnings and large-content disclosures", () => {
+    const warnings: string[] = [];
+    emitCompletionWarning({ completionWarning: (text) => warnings.push(text) }, "warn");
+    expect(warnings).toEqual(["warn"]);
+    expect(() =>
+      emitCompletionWarning(
+        {
+          completionWarning() {
+            throw new Error("boom");
+          },
+        },
+        "ignored",
+      ),
+    ).not.toThrow();
+
+    const disclosed: Array<[number, number]> = [];
+    const ports = {
+      backupEnabled: true,
+      thresholdBytes: 100,
+      largeContent(sizeBytes: number, thresholdBytes: number) {
+        disclosed.push([sizeBytes, thresholdBytes]);
+      },
+    };
+    discloseLargeContent(ports, 100);
+    discloseLargeContent(ports, 101);
+    discloseLargeContent({ ...ports, backupEnabled: false }, 200);
+    expect(disclosed).toEqual([[101, 100]]);
+    expect(() =>
+      discloseLargeContent(
+        {
+          backupEnabled: true,
+          thresholdBytes: 10,
+          largeContent() {
+            throw new Error("sink error");
+          },
+        },
+        20,
+      ),
+    ).not.toThrow();
   });
 });

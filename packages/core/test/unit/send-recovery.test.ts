@@ -11,7 +11,7 @@ import {
   type SendRecoveryReadPort,
   type SendRecoveryReceipt,
 } from "../../src/send-recovery";
-import { workspaceKey } from "../../src/workspace-identity";
+import { workspaceKey } from "../../src/primitives/identity";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const now = "2026-10-17T00:00:00.000Z";

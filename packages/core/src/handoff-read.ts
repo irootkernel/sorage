@@ -13,7 +13,8 @@ import type {
   RecipientCommentMetadata,
 } from "./reporting-commands";
 import type { ReviewNoteView } from "./review-commands";
-import { workspaceKey as deriveWorkspaceKey } from "./workspace-identity";
+import { workspaceKey as deriveWorkspaceKey } from "./primitives/identity";
+import { sleepWithinDeadline } from "./primitives/polling";
 
 /**
  * The read side of the Handoff surface (HND-010 to HND-012, HND-020, HND-024, VLT-009,
@@ -249,7 +250,7 @@ function parseBound(field: string, value: string): Result<string, AppError> {
   return ok(canonical);
 }
 
-function validateBounds(filters: HandoffListFilters): Result<null, AppError> {
+function validateBounds(filters: HandoffListFilters): Result<HandoffListFilters, AppError> {
   let since: string | null = null;
   let until: string | null = null;
   for (const [field, value] of [
@@ -261,10 +262,8 @@ function validateBounds(filters: HandoffListFilters): Result<null, AppError> {
     if (!parsed.ok) return parsed;
     if (field === "updatedSince") {
       since = parsed.value;
-      filters.updatedSince = parsed.value;
     } else {
       until = parsed.value;
-      filters.updatedUntil = parsed.value;
     }
   }
   if (until !== null && since !== null && Date.parse(since) > Date.parse(until)) {
@@ -275,7 +274,11 @@ function validateBounds(filters: HandoffListFilters): Result<null, AppError> {
       }),
     );
   }
-  return ok(null);
+  return ok({
+    ...filters,
+    ...(since !== null ? { updatedSince: since } : {}),
+    ...(until !== null ? { updatedUntil: until } : {}),
+  });
 }
 
 /** The honest integrity refusal for a living Handoff whose current Artifact's authoritative metadata is broken (section 4, SHR-004, SHR-014). */
@@ -297,7 +300,8 @@ function resolveCandidates(items: HandoffListCandidate[]): Result<HandoffView[],
 function runListing(ports: HandoffReadPorts, scope: ListingScope, query: ListQuery): Result<ListedHandoffs, AppError> {
   const bounds = validateBounds(query.filters);
   if (!bounds.ok) return bounds;
-  const identity = filterIdentity(query.filters, scope);
+  const filters = bounds.value;
+  const identity = filterIdentity(filters, scope);
   let afterSortKey: string | null = null;
   let limit = query.limit;
   if (query.cursor !== undefined) {
@@ -306,7 +310,7 @@ function runListing(ports: HandoffReadPorts, scope: ListingScope, query: ListQue
     afterSortKey = decoded.value.lastSortKey;
     limit = decoded.value.limit;
   }
-  const page = ports.handoffs.listPage(scope, query.filters, limit + 1, afterSortKey);
+  const page = ports.handoffs.listPage(scope, filters, limit + 1, afterSortKey);
   if (!page.ok) return err(page.error);
   // The visible page is trimmed before any content-error resolution, so an
   // overflow row's marker can neither leak a refusal nor fail the page; a
@@ -407,6 +411,7 @@ export function waitForNewInboxItems(
 ): Result<WaitedInbox, AppError> {
   const bounds = validateBounds(query.filters);
   if (!bounds.ok) return bounds;
+  const normalizedQuery: ListQuery = { ...query, filters: bounds.value };
   const runPoll =
     options.withPollPorts ?? (<T>(body: (pollPorts: HandoffReadPorts) => Result<T, AppError>) => body(ports));
 
@@ -431,7 +436,7 @@ export function waitForNewInboxItems(
     const startedAt = pollPorts.clock.now();
     startedAtIso = startedAt.toISOString();
     deadlineMs = startedAt.getTime() + options.timeoutSeconds * 1000;
-    return pageThrough(pollPorts, scope.value, query.filters, query.limit);
+    return pageThrough(pollPorts, scope.value, normalizedQuery.filters, normalizedQuery.limit);
   });
 
   if (resolvedScope === null) {
@@ -439,12 +444,8 @@ export function waitForNewInboxItems(
   }
   const scope: ListingScope = resolvedScope;
 
-  const sleepUntil = (): boolean => {
-    const remaining = deadlineMs - ports.clock.now().getTime();
-    if (remaining <= 0) return false;
-    options.sleepMs(Math.min(options.intervalSeconds * 1000, remaining));
-    return true;
-  };
+  const sleepUntil = (): boolean =>
+    sleepWithinDeadline(deadlineMs, ports.clock.now().getTime(), options.intervalSeconds * 1000, options.sleepMs);
 
   if (initial.ok) {
     seed = initial.value;
@@ -463,7 +464,9 @@ export function waitForNewInboxItems(
       if (tracked !== null) return err(tracked);
       return ok({ handoffs: [], timedOut: true });
     }
-    const attempt = runPoll((pollPorts) => pageThrough(pollPorts, scope, query.filters, query.limit));
+    const attempt = runPoll((pollPorts) =>
+      pageThrough(pollPorts, scope, normalizedQuery.filters, normalizedQuery.limit),
+    );
     if (!attempt.ok) {
       if (!isRetryableWaitListingFailure(attempt.error)) return err(attempt.error);
       tracked = attempt.error;
@@ -487,7 +490,7 @@ export function waitForNewInboxItems(
     }
     // A poll pages past churned known items, because enough of them can fill the
     // first page and hide a genuinely new item one page deeper until the timeout.
-    const poll = runPoll((pollPorts) => collectFreshInboxItems(pollPorts, scope, query, known, startedAtIso));
+    const poll = runPoll((pollPorts) => collectFreshInboxItems(pollPorts, scope, normalizedQuery, known, startedAtIso));
     if (!poll.ok) {
       if (!isRetryableWaitListingFailure(poll.error)) return poll;
       tracked = poll.error;
@@ -511,13 +514,15 @@ function collectFreshInboxItems(
   startedAtIso: string,
 ): Result<HandoffView[], AppError> {
   let afterSortKey: string | null = null;
-  let fresh: HandoffView[] = [];
+  const fresh: HandoffView[] = [];
   for (;;) {
     const page = ports.handoffs.listPage(scope, query.filters, query.limit, afterSortKey);
     if (!page.ok) return page;
     const views = resolveCandidates(page.value.items);
     if (!views.ok) return views;
-    fresh = fresh.concat(views.value.filter((handoff) => !known.has(handoff.id)));
+    for (const handoff of views.value) {
+      if (!known.has(handoff.id)) fresh.push(handoff);
+    }
     const last = views.value[views.value.length - 1];
     if (fresh.length > 0 || page.value.items.length < query.limit || page.value.lastSortKey === null) {
       break;

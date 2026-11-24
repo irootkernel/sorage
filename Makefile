@@ -37,6 +37,7 @@ test-prepare:
 	$(BUN) run check:lint
 	$(BUN) run check:typecheck
 	$(BUN) run check:import-boundaries
+	$(BUN) run check:cycles
 	$(BUN) run check:dependency-boundaries
 	$(BUN) run check:sot
 

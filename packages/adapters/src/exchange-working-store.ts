@@ -20,12 +20,12 @@ import {
   type ExchangeCleanupResult,
   type ExchangeActivationWarning,
   err,
-  isMemoUuid,
+  isCanonicalUuid,
   ok,
   type Result,
 } from "@sorage/core";
 import { reclaimExchangeStages, recordExchangeStageOwner, removeExchangeStageOwner } from "./exchange-stage-owners";
-import { fsyncDirectory } from "./intent-log";
+import { fsyncDirectory } from "./fs-atomic";
 import { vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
 import {
   digestManagedFile,
@@ -203,7 +203,7 @@ function verifyWithStat(root: string, key: string, intent: ActivationRow): Stage
 /** Finish a previously committed intent outside its transactions. Repeating after a crash is safe. */
 function activate(root: string, intent: ActivationRow, preverifiedStage?: StageInodeProof): void {
   if (
-    !isMemoUuid(intent.content_id) ||
+    !isCanonicalUuid(intent.content_id) ||
     intent.staging_key !== `staging/${intent.content_id}` ||
     intent.storage_key !== `content/${intent.content_id}`
   ) {
@@ -315,7 +315,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
   /** Prepare bytes without creating database authority. */
   function prepare(input: ExchangeWorkingBody): Result<PreparedExchangeBody> {
     if (paused()) return err(pauseRefusal());
-    if (!isMemoUuid(input.exchangeId) || !Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0) {
+    if (!isCanonicalUuid(input.exchangeId) || !Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0) {
       return err(appError("INTERNAL_ERROR", "Invalid Exchange working-content identity or byte bound."));
     }
     const id = randomUUID();
@@ -540,7 +540,7 @@ export function createExchangeWorkingStore(options: ExchangeWorkingStoreOptions)
     if (liveReference(item.id)) return settleItem(exchangeId, item, true);
     try {
       if (item.key !== null) {
-        if (!isMemoUuid(item.id) || item.key !== `content/${item.id}`)
+        if (!isCanonicalUuid(item.id) || item.key !== `content/${item.id}`)
           throw new UnsafeManagedPathError("Unexpected Exchange cleanup key");
         const activation = db
           .prepare("SELECT staging_key FROM exchange_activation_intents WHERE content_id = ?")

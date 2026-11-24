@@ -62,8 +62,8 @@ vi.mock("../../src/sqlite/migrator", async (original) => {
     },
   };
 });
-vi.mock("../../src/intent-log", async (original) => {
-  const actual = await original<typeof import("../../src/intent-log")>();
+vi.mock("../../src/fs-atomic", async (original) => {
+  const actual = await original<typeof import("../../src/fs-atomic")>();
   return {
     ...actual,
     fsyncDirectory(path: string) {

@@ -206,3 +206,10 @@ export async function digestManagedFileAsync(
     stream.destroy();
   }
 }
+
+/** True when a path is a safe non-empty Vault-relative path with no traversal segments. */
+export function isSafeVaultRelativePath(path: string): boolean {
+  if (path === "" || path.startsWith("/")) return false;
+  const segments = path.split("/");
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}

@@ -1,5 +1,5 @@
 import { type AppError, appError, err, type Result } from "@sorage/core";
-import { liveFencePaused } from "../intent-log";
+import { liveFencePaused } from "./move-fence";
 import type { SorageSqlite } from "./connection";
 
 /**

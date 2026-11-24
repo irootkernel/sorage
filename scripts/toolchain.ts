@@ -96,6 +96,7 @@ if (command === "sync") {
     "check:version": "check-version.ts",
     "check:typecheck": "check-typecheck.ts",
     "check:import-boundaries": "check-import-boundaries.ts",
+    "check:cycles": "check-cycles.ts",
     "check:dependency-boundaries": "check-dependency-boundaries.ts",
     "check:sot": "sot-check.ts",
     "build:cli": "build-cli.ts",

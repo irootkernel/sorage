@@ -26,7 +26,7 @@ import {
 } from "@sorage/core";
 import { isManagedStorageKey } from "@sorage/core";
 import { vaultMoveLockHeld } from "./lockfile";
-import { fsyncDirectory } from "./intent-log";
+import { fsyncDirectory } from "./fs-atomic";
 import { UnsafeManagedPathError, managedDirectory, managedFile, openManagedFile } from "./managed-paths";
 import { openVault } from "./vault";
 

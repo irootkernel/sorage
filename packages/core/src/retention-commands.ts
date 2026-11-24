@@ -3,6 +3,7 @@ import { type AppError, appError, err, ok, type Result } from "./errors";
 import { type NewDomainEvent, SYSTEM_ACTOR, USER_ACTOR } from "./events";
 import { type HandoffReadPorts, type ReadActorInput, resolveHandoffParticipantRole } from "./handoff-read";
 import { evaluateHandoffOperation, expectedRowVersionGuard, type HandoffFacts } from "./handoffs";
+import { type CompletionWarningSink, emitCompletionWarning } from "./primitives/disclosures";
 import { validateHandoffObservations } from "./reporting-commands";
 
 /**
@@ -67,20 +68,7 @@ export interface RetentionPorts extends HandoffReadPorts {
    * approval is disclosed here and never fails the command; a throwing sink
    * changes nothing.
    */
-  disclosures?:
-    | {
-        completionWarning?(text: string): void;
-      }
-    | undefined;
-}
-
-/** Discloses one post-commit completion warning; a throwing sink never changes the committed outcome (SHR-015). */
-function warnCompletion(ports: RetentionPorts, text: string): void {
-  try {
-    ports.disclosures?.completionWarning?.(text);
-  } catch {
-    // A diagnostic sink failure never changes the committed outcome.
-  }
+  disclosures?: CompletionWarningSink | undefined;
 }
 
 function factsOf(handoff: {
@@ -503,8 +491,8 @@ export function approveDeletion(
   if (retiredFile !== null) {
     const removed = ports.artifact.remove(retiredFile.storageKey as string);
     if (!removed.ok) {
-      warnCompletion(
-        ports,
+      emitCompletionWarning(
+        ports.disclosures,
         `The deletion approval committed, but unlinking the retired ${retiredFile.storageKey} failed: ${removed.error.message}. The pending unlink intent remains for the next process start.`,
       );
     } else {
@@ -524,8 +512,8 @@ export function approveDeletion(
         },
       });
       if (!completed.ok) {
-        warnCompletion(
-          ports,
+        emitCompletionWarning(
+          ports.disclosures,
           `The deletion approval committed, but recording its unlink completion failed: ${completed.error.message}. The pending unlink intent remains for the next process start.`,
         );
       }

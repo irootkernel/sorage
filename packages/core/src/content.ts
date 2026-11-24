@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
 import { buildStorageKey, isManagedStorageKey, isValidStorageKeySegment } from "./artifacts";
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import type { CommonContentEventType } from "./events";
 import { classifyMimeType } from "./import-policy";
+import { isCanonicalUuid } from "./primitives/identity";
+import { sha256OfBytes, utf8ByteLength } from "./primitives/validation";
 
 /**
  * The shared content model and port of M9 (SHR-001 to SHR-006, SHR-008, SHR-011,
@@ -180,11 +181,6 @@ export function contentOwnerFromStorageKey(record: {
   return ok({ domain: domain as ContentOwnerDomain, ownerId });
 }
 
-/** The exact UTF-8 byte length of a text body; the routing measure of SHR-002. */
-export function utf8ByteLength(text: string): number {
-  return Buffer.byteLength(text, "utf8");
-}
-
 /** Fatal UTF-8 decoding for text-only surfaces; null when the bytes are not valid UTF-8 (SHR-002). The decoder preserves a byte-order mark, exactly as the Memo body-file rules do, because a BOM is accepted body content rather than a decoder directive to discard bytes. */
 export function decodeStrictUtf8(bytes: Uint8Array): string | null {
   try {
@@ -205,16 +201,6 @@ export type ContentTextRouting = { kind: "inline" | "vault"; sizeBytes: number }
 export function classifyTextRouting(text: string): ContentTextRouting {
   const sizeBytes = utf8ByteLength(text);
   return { kind: sizeBytes <= CONTENT_INLINE_MAX_UTF8_BYTES ? "inline" : "vault", sizeBytes };
-}
-
-/** SHA-256 over the exact UTF-8 bytes of a text body, the digest an inline record stores. */
-export function sha256OfText(text: string): string {
-  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
-}
-
-/** SHA-256 over exact bytes; the digest every content record stores (SHR-003). */
-export function sha256OfBytes(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 /**
@@ -303,10 +289,6 @@ export function commonContentFailureMetadata(
   };
 }
 
-function isUuidShape(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-}
-
 /** Legacy ownership stays absent; common ownership must be complete before any filesystem effect. */
 export function classifyContentIntentOwnership(intent: {
   id: unknown;
@@ -319,10 +301,10 @@ export function classifyContentIntentOwnership(intent: {
   if (fields.every((field) => field === null || field === undefined)) return "legacy";
   if (
     intent.artifactId !== null ||
-    !isUuidShape(intent.id) ||
+    !isCanonicalUuid(intent.id) ||
     (intent.ownerDomain !== "memo" && intent.ownerDomain !== "channel") ||
-    !isUuidShape(intent.ownerId) ||
-    !isUuidShape(intent.contentId)
+    !isCanonicalUuid(intent.ownerId) ||
+    !isCanonicalUuid(intent.contentId)
   )
     return "invalid";
   return "common";
@@ -364,7 +346,7 @@ export function validateCommonContentEventMetadata(
   if (!allowed.every((key) => Object.hasOwn(value, key)) || keys.some((key) => !allowed.includes(key))) {
     return err(appError("VAULT_INTEGRITY_ERROR", `The ${eventType} event metadata does not carry its closed key set.`));
   }
-  if (!isUuidShape(value.contentId) || !isUuidShape(value.ownerId) || !isUuidShape(value.intentId)) {
+  if (!isCanonicalUuid(value.contentId) || !isCanonicalUuid(value.ownerId) || !isCanonicalUuid(value.intentId)) {
     return err(appError("VAULT_INTEGRITY_ERROR", `The ${eventType} event metadata carries a non-UUID identifier.`));
   }
   if (typeof value.ownerDomain !== "string" || !isContentOwnerDomain(value.ownerDomain)) {

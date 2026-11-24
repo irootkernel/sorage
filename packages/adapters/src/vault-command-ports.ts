@@ -51,14 +51,9 @@ import {
   validateMemoContentLinks,
 } from "./content-store";
 import { createSqliteEventLedger } from "./events";
+import { fsyncDirectory } from "./fs-atomic";
 import { createHomePaths, type HomeEnvironment } from "./home";
-import {
-  clearMoveFence,
-  collectVaultGarbage,
-  createSqliteIntentLog,
-  fsyncDirectory,
-  setMoveFenceAndCountPending,
-} from "./intent-log";
+import { clearMoveFence, collectVaultGarbage, createSqliteIntentLog, setMoveFenceAndCountPending } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts } from "./lockfile";
 import { asAppCommandError, storageContentionOf } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";

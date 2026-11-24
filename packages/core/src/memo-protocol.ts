@@ -16,14 +16,21 @@ import {
   validateMemoBody,
   validateMemoQuery,
 } from "./memos";
-import type { Project } from "./projects";
+import { isPlainObject, memoObject } from "./primitives/validation";
+
+export interface MemoProjectRef {
+  id: string;
+  slug: string;
+  displayName: string;
+  status: "active" | "archived";
+}
 
 export const MEMO_REQUEST_BYTES = 512 * 1024;
 export type MemoDetail = Memo;
 export interface MemoSummary extends Omit<Memo, "body" | "createdBy" | "updatedBy" | "closedBy"> {
   projectSlug: string;
   projectDisplayName: string;
-  projectStatus: Project["status"];
+  projectStatus: MemoProjectRef["status"];
   bodyPreview: string;
   bodyPreviewTruncated: boolean;
 }
@@ -82,20 +89,6 @@ export interface MemoCandidateDescriptor {
   /** Inline rows: the stored text's bounded head exactly as the SQL substr produced it; null for file rows. */
   previewSeed: string | null;
   project: { slug: string; displayName: string; status: "active" | "archived" };
-}
-
-/** Closed objects at the Memo boundary; JSON null and arrays are never records. */
-export function memoObject(
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const keys = Object.keys(value);
-  return (
-    required.every((key) => Object.hasOwn(value, key)) &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
 }
 
 function invalid(message: string): Result<never> {
@@ -321,10 +314,6 @@ function validMemoBodyRef(value: unknown): value is MemoBodyRef {
   );
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 /**
  * Parses a stored Memo receipt in either form (SHR-008): a legacy receipt
  * embeds its inline body verbatim under the frozen 65,536 cap, and a receipt
@@ -474,10 +463,7 @@ export function memoPreviewOf(
   };
 }
 
-export function summarizeMemo(
-  memo: Memo,
-  project: Pick<Project, "id" | "slug" | "displayName" | "status">,
-): Result<MemoSummary> {
+export function summarizeMemo(memo: Memo, project: MemoProjectRef): Result<MemoSummary> {
   if (memo.projectId !== project.id) return invalid("Memo summary Project does not match");
   let bodyPreview = "";
   let size = 0;

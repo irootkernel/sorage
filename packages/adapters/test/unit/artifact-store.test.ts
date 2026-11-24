@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNodeArtifactStore } from "../../src/artifact-store";
-import * as intentLog from "../../src/intent-log";
+import * as fsAtomic from "../../src/fs-atomic";
 import { FakeClock, makeTempVault } from "../../src/testkit";
 import { createVaultInitializer } from "../../src/vault";
 
@@ -34,7 +34,7 @@ describe("the ArtifactStore fast path", () => {
     const staged = join(stagingDirectory, "note.md");
     writeFileSync(staged, "# Note\n");
 
-    const fsync = vi.spyOn(intentLog, "fsyncDirectory");
+    const fsync = vi.spyOn(fsAtomic, "fsyncDirectory");
     try {
       const activated = store.activate({ stagingPath: staged, storageKey: "artifacts/h-1/a-1/note.md" });
       expect(activated.ok).toBe(true);
