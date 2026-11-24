@@ -1696,6 +1696,8 @@ Registration added milestone `M11` to `scripts/sot-check.ts`, `test/unit/sot-che
 
 Every Epic closes in a releasable state with measurable before/after baselines against unmodified `HEAD` (`f842225`), critical daemon blocking and migrator lock storms are eliminated first, self-handoff role ambiguity is closed without breaking existing v0.1.5 data or contract goldens, and internal code modularity improves without breaking existing users or historical Git backups.
 
+- **2026-11-24 non-material execution refinement:** Without changing `ADR-0038`'s product contracts or milestone `M11` scope, Master approved splitting `EPIC-023` across `TASK-155`–`TASK-160` and `TASK-165`–`TASK-167`, adding the fourth runtime cycle (`apps/daemon/src/index.ts <-> runtime.ts`) and permanent `check:cycles` gate in `TASK-155`, and moving daemon/Web CLI JSON alignment to [deferred feedback](../deferred-feedback/README.md#epic-023-execution-refinement); see [governance section 20](../governance/README.md#epic-023-execution-refinement-2026-11-24).
+
 ## ADR-0039: Daemon HTTP idempotency unification onto Core SQLite receipts
 
 - **Status:** Proposed

@@ -47,3 +47,43 @@ One pre-existing out-of-scope HTTP filter-key mismatch was surfaced during `TASK
 - **Impact:** `apps/daemon/src/domain-routes.ts` (`GET /api/v1/handoffs`) passes `filters.sender` and `filters.recipient` into `listInbox` / `listOutbox`, whereas `HandoffListFilters` reads `senderSlug` and `recipientSlug`. Querying `GET /api/v1/handoffs?sender=<slug>` or `?recipient=<slug>` therefore ignores those two optional filter parameters instead of filtering by project slug. Existing Web UI list views and CLI commands are unaffected because the Web UI does not expose sender/recipient filter inputs and the CLI populates `senderSlug`/`recipientSlug` directly.
 - **Owner:** `docs/deferred-feedback/README.md` (observed during `EPIC-022` validation; pre-existing in `apps/daemon/src/domain-routes.ts`)
 - **Re-entry:** Map `?sender=` and `?recipient=` to `senderSlug` and `recipientSlug` in `apps/daemon/src/domain-routes.ts` and add a focused `apps/daemon/test/int/domain-routes.int.test.ts` assertion verifying both filters narrow `GET /api/v1/handoffs` results. Do not reopen `EPIC-022` for this pre-existing item.
+
+## EPIC-023 execution refinement
+
+These items surfaced while the [2026-11-24 EPIC-023 execution refinement](../governance/README.md#epic-023-execution-refinement-2026-11-24) verified the plan against the code. Each one would change a contract or a behavior outside a golden-preserving refactor, so `EPIC-023` preserves the current behavior and records the item here instead.
+
+### Daemon and Web CLI JSON envelope alignment
+
+- **Impact:** `apps/cli/src/daemon-commands.ts` emits JSON envelopes whose `meta.requestId` is the hardcoded literal `"daemon"` instead of a per-invocation request identifier, and `apps/cli/src/web.ts` emits a bare `{ url, daemonStarted, expiresAt, note }` JSON object without the standard `{ ok, data, meta }` envelope. Changing either shape changes the CLI JSON contract, which a Standard `EPIC-023` Task may not do.
+- **Owner:** `docs/deferred-feedback/README.md` (removed from `TASK-160` by the EPIC-023 execution refinement)
+- **Re-entry:** A Contract Task classifies both output changes in interface section 42 or its successor, updates the affected goldens and tests, and aligns both modules onto the shared CLI output helper.
+
+### Full Result conversion of Exchange storage methods
+
+- **Impact:** Exchange storage methods behind the core `ExchangeBusinessRepository` port (`packages/core/src/exchange-use-cases.ts`) return plain values and abort by throwing a carried `AppError`, which `runInTransaction` turns into a rollback and a typed error. `TASK-158` converts only adapter-owned orchestration; a full conversion changes a core port and its use cases.
+- **Owner:** `docs/deferred-feedback/README.md` (scoped out of `TASK-158`)
+- **Re-entry:** Change the repository port methods to return `Result`, update `commitExchangeBusiness` and `planExchangeBusiness`, and prove rollback, `storageFailure` precedence and the `commitAttempted` cleanup path with focused failure tests.
+
+### Exchange claim revocation schema guard
+
+- **Impact:** `revokeExchangeClaims` in `packages/adapters/src/projects.ts` probes for `exchange_notice_claims` (schema 16) before deleting from both `exchange_claims` (schema 14) and `exchange_notice_claims`, so an injected schema-14 or schema-15 database would also skip `exchange_claims`. Production compositions always migrate to the current schema, so no shipped path reaches the gap. `TASK-158` moves the code behind a hook without changing the guard.
+- **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
+- **Re-entry:** Guard each table separately or remove the guard once no caller can open an unmigrated database, with a focused test.
+
+### Startup maintenance live-key queries
+
+- **Impact:** The Vault startup maintenance protects storage keys of materialized Artifacts only and checks table existence, while the backup startup maintenance protects every recorded storage key. `TASK-157` unifies the sequence in `maintenance.ts` but keeps each caller's query, so GC protection is unchanged.
+- **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
+- **Re-entry:** Decide whether one protected-key set (the unfiltered superset is the conservative choice) applies to both callers and prove the GC outcome with an integration test.
+
+### Atomic writes without fsync
+
+- **Impact:** `token-store.ts` and `inbox-marker-ports.ts` replace files by rename without `fsync`, and `daemon-command-ports.ts` treats the directory `fsync` as best effort. `TASK-157` preserves these semantics through explicit `fs-atomic.ts` options.
+- **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
+- **Re-entry:** Decide per file whether durability should be strengthened and add a crash-point test for each changed site.
+
+### Root-safe workspace containment in project resolution
+
+- **Impact:** The adapter's commit-time `atOrBelow` treats a `/` root correctly, while core `isAtOrBelow` in `project-commands.ts` does not. `TASK-158` moves revalidation into core with a root-safe helper and leaves `resolveWorkspaceActor` unchanged, so the two paths still differ for a binding at `/`.
+- **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
+- **Re-entry:** Switch `resolveWorkspaceActor` and `checkedBindingTarget` to the root-safe helper with a focused unit test for a `/` binding.
