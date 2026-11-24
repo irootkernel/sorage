@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, openSync, readSync, rmSync, writeSync } from "node:fs";
-import { dirname } from "node:path";
+import { closeSync, fstatSync, readSync } from "node:fs";
 import {
   appError,
   canonicalJsonLine,
@@ -26,7 +25,7 @@ import {
   type StoredMemoReceiptLookup,
   type SnapshotMemoV3,
 } from "@sorage/core";
-import { fsyncDirectory } from "./fs-atomic";
+import { placeExclusive } from "./fs-atomic";
 import { digestManagedFile, isSafeVaultRelativePath, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 import type { SqliteContentStore } from "./content-store";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -345,15 +344,15 @@ export function createSqliteMemoRepository(db: SorageSqlite, options: MemoReposi
   return {
     get: getSnapshot,
     captureListBatch: (filter, after, batchSize) =>
-      databaseResult(() => {
-        db.exec("BEGIN");
-        try {
+      runInTransaction(
+        db,
+        "BEGIN",
+        () => {
           const where: string[] = [];
           const params: unknown[] = [];
           if ("projectId" in filter.scope) {
             const exists = db.prepare("SELECT id FROM projects WHERE id = ?").get(filter.scope.projectId);
             if (!exists) {
-              db.exec("COMMIT");
               return err(appError("PROJECT_NOT_FOUND", "Memo Project does not exist"));
             }
             where.push("m.project_id = ?");
@@ -404,7 +403,6 @@ export function createSqliteMemoRepository(db: SorageSqlite, options: MemoReposi
             display_name: string;
             status: "active" | "archived";
           }>;
-          db.exec("COMMIT");
           // A captured row whose required record is missing is an honest
           // whole-page integrity failure — a LEFT JOIN must never let a
           // dangling Memo disappear from the page (SHR-004).
@@ -443,11 +441,12 @@ export function createSqliteMemoRepository(db: SorageSqlite, options: MemoReposi
             lastSortKey: last ? { createdAt: last.created_at, id: last.id } : null,
           };
           return ok(capture);
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
-      }),
+        },
+        {
+          checkFence: false,
+          failure: () => appError("INTERNAL_ERROR", "Accessing Memo storage failed"),
+        },
+      ),
     run: (work, options) => inTransaction("BEGIN IMMEDIATE", () => work(transaction), options),
     inspect: (work) =>
       inTransaction("BEGIN", () =>
@@ -608,47 +607,20 @@ export function placeMemoContentFile(
   if (!isManagedContentStorageKey(storageKey)) {
     return err(appError("INTERNAL_ERROR", "The Memo content restore target is not a managed key", { storageKey }));
   }
-  let destination: string | undefined;
-  let owned = false;
   try {
-    destination = managedPath(vaultPath, storageKey, true);
-    const handle = openSync(
-      destination,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o644,
-    );
-    owned = true;
-    try {
-      let written = 0;
-      const buffer = Buffer.from(bytes);
-      while (written < buffer.byteLength) {
-        written += writeSync(handle, buffer, written, buffer.byteLength - written, null);
-      }
-      fchmodSync(handle, 0o444);
-      fsyncSync(handle);
-    } finally {
-      closeSync(handle);
-    }
-    // Persist the entry and its ancestors before any SQL row claims that this
-    // file is materialized. The managed path already uses the canonical Vault.
-    const root = managedRoot(vaultPath);
-    for (let directory = dirname(destination); ; directory = dirname(directory)) {
-      fsyncDirectory(directory);
-      if (directory === root) break;
-    }
-    const identity = digestManagedFile(vaultPath, storageKey);
-    const expectedDigest = createHash("sha256").update(bytes).digest("hex");
-    if (identity.sizeBytes !== bytes.byteLength || identity.sha256 !== expectedDigest)
-      throw new Error("The placed Memo body changed identity");
+    const destination = managedPath(vaultPath, storageKey, true);
+    const identity = placeExclusive(destination, bytes, {
+      createMode: 0o644,
+      finalMode: 0o444,
+      noFollow: true,
+      fileFsync: true,
+      syncAncestorsTo: managedRoot(vaultPath),
+      verifyReadback: true,
+      readback: () => digestManagedFile(vaultPath, storageKey),
+      cleanupOwnedOnError: true,
+    });
     return ok({ storageKey, ...identity });
   } catch {
-    if (owned && destination !== undefined) {
-      try {
-        rmSync(destination, { force: true });
-      } catch {
-        /* Owned survivor remains unreachable. */
-      }
-    }
     return err(appError("INTERNAL_ERROR", "The Memo content restore file could not be placed", { memoId }));
   }
 }

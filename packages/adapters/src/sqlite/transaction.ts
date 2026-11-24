@@ -3,16 +3,11 @@ import { liveFencePaused } from "./move-fence";
 import type { SorageSqlite } from "./connection";
 
 /**
- * The one shared adapter transaction helper of CHN-014: the Memo domain's
- * fenced transaction runner, lifted from its private copy in `memos.ts` so
- * both domains run the identical sequence — `begin`, the read-only
- * vault-move fence check, the optional staged external-version coherence
- * check of MEM-011, the work, and `COMMIT`/`ROLLBACK` with a rollback and
- * rethrow on any thrown engine failure. Each domain supplies its own failure
- * classifier so the public envelopes stay byte-identical to the private
- * helpers this module replaces; the Memo domain additionally passes its
- * `expectedExternalVersion` and coherence marker, and the rebuilt Channel
- * domain passes neither (no `PRAGMA data_version` coherence loop exists).
+ * The one shared adapter transaction helper of CHN-014 and TASK-157: runs
+ * `begin`, the optional read-only vault-move fence check (`checkFence` defaults
+ * to `true`), the optional staged external-version coherence check of MEM-011,
+ * the caller's `work`, and `COMMIT`/`ROLLBACK`. A failing `ROLLBACK` on an
+ * error path is swallowed so the original error survives to `options.failure`.
  */
 
 /** The failure classifier of one invoking domain: the seam its old `databaseResult` owned. */
@@ -21,6 +16,14 @@ export type TransactionFailure = (error: unknown) => AppError;
 export interface SharedTransactionOptions {
   /** Maps a thrown engine failure onto the invoking domain's typed envelope. */
   failure: TransactionFailure;
+  /**
+   * Whether to check the SQLite vault-move fence before running `work`
+   * (default `true`). Set `false` for unfenced completions, ledgers, reviews,
+   * and plain read transactions.
+   */
+  checkFence?: boolean;
+  /** Builds the caller's typed refusal when a live move fence pauses the transaction. */
+  fenceError?: (pid: number) => AppError;
   /**
    * The Memo domain's staged external-version expectation (MEM-011): checked
    * on `BEGIN IMMEDIATE` only, and a mismatch rolls back through
@@ -37,6 +40,15 @@ export function externalDataVersion(db: SorageSqlite): number {
   return Number(row?.data_version ?? 0);
 }
 
+function rollbackQuietly(db: SorageSqlite): void {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    // The transaction never opened or the connection already rolled back;
+    // swallowing preserves the original error or typed refusal.
+  }
+}
+
 export function runInTransaction<T>(
   db: SorageSqlite,
   begin: "BEGIN" | "BEGIN IMMEDIATE",
@@ -46,13 +58,20 @@ export function runInTransaction<T>(
   try {
     db.exec(begin);
     try {
-      if (liveFencePaused(db)) {
-        db.exec("ROLLBACK");
-        return err(appError("SERVICE_PAUSED", "A Vault move or restore is in progress"));
+      if (options.checkFence !== false) {
+        const paused = liveFencePaused(db);
+        if (paused) {
+          rollbackQuietly(db);
+          return err(
+            options.fenceError !== undefined
+              ? options.fenceError(paused.pid)
+              : appError("SERVICE_PAUSED", "A Vault move or restore is in progress"),
+          );
+        }
       }
       if (options.expectedExternalVersion !== undefined && begin === "BEGIN IMMEDIATE") {
         if (externalDataVersion(db) !== options.expectedExternalVersion) {
-          db.exec("ROLLBACK");
+          rollbackQuietly(db);
           return options.coherenceMarker === undefined
             ? err(
                 appError(
@@ -65,10 +84,14 @@ export function runInTransaction<T>(
         }
       }
       const result = work();
-      db.exec(result.ok ? "COMMIT" : "ROLLBACK");
+      if (result.ok) {
+        db.exec("COMMIT");
+      } else {
+        rollbackQuietly(db);
+      }
       return result;
     } catch (error) {
-      db.exec("ROLLBACK");
+      rollbackQuietly(db);
       throw error;
     }
   } catch (error) {

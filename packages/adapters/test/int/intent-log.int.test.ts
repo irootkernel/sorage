@@ -11,7 +11,9 @@ import {
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SYSTEM_ACTOR, type NewPendingFsOp, type PendingFsOp } from "@sorage/core";
-import { collectVaultGarbage, createSqliteIntentLog, executeIntent } from "../../src/intent-log";
+import { createSqliteIntentLog } from "../../src/intent-log";
+import { executeIntent } from "../../src/legacy-intent";
+import { collectVaultGarbage } from "../../src/maintenance";
 import { createSqliteEventLedger } from "../../src/events";
 import {
   createSqliteHandoffWriteStore,

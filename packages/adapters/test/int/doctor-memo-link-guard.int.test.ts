@@ -40,8 +40,8 @@ vi.mock("../../src/sqlite/connection", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/content-store", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/content-store")>();
+vi.mock("../../src/content-layout", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/content-layout")>();
   return {
     ...actual,
     validateMemoContentLinks: (db: Parameters<typeof actual.validateMemoContentLinks>[0]) => {

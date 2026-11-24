@@ -4,7 +4,7 @@ import { SystemClock } from "@sorage/core";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffReadStore } from "../../src/handoff-read-store";
 import { createSqliteRetentionStore, createSqliteRevisionStore, createSqliteTerminalStore } from "../../src/handoffs";
-import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/intent-log";
+import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/sqlite/move-fence";
 import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { makeArtifactContentBindings, makeTempDatabase } from "../../src/testkit";

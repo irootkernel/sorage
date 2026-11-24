@@ -24,7 +24,8 @@ import {
   vaultVerify,
 } from "@sorage/core";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
-import { createSqliteContentStore, sqliteContentReferences } from "../../src/content-store";
+import { sqliteContentReferences } from "../../src/content-references";
+import { createSqliteContentStore } from "../../src/content-store";
 import { createNodeDaemonPorts } from "../../src/daemon-command-ports";
 import { createNodeDoctorPorts } from "../../src/doctor";
 import { createNodeInitPorts } from "../../src/init-ports";

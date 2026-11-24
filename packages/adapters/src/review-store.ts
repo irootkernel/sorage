@@ -1,6 +1,7 @@
 import { appError, err, ok, type RecipientComment, type ReviewMutationPort, type ReviewNoteView } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import type { SorageSqlite } from "./sqlite/connection";
+import { runInTransaction } from "./sqlite/transaction";
 import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 
 /**
@@ -65,9 +66,10 @@ export function createSqliteReviewStore(
       }
     },
     applyReportMutation(input) {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           const assignments: string[] = ["review_state = ?", "updated_at = ?"];
           const values: unknown[] = [input.reviewState, input.now];
           if (input.engage) {
@@ -85,7 +87,8 @@ export function createSqliteReviewStore(
             )
             .run(...(values as never[])) as { changes: number };
           if (changed.changes !== 1) {
-            db.exec("ROLLBACK");
+            // Query inside work and let runInTransaction execute ROLLBACK on err(...);
+            // preserve exact HANDOFF_NOT_FOUND -> REVISION_CONFLICT -> ROW_VERSION_CONFLICT precedence.
             const row = db.prepare("SELECT revision, row_version FROM handoffs WHERE id = ?").get(input.handoffId) as
               | { revision: number; row_version: number }
               | null
@@ -143,27 +146,17 @@ export function createSqliteReviewStore(
             );
           }
           for (const event of input.events) ledger.append(event);
-          db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        if (options.contentionSurface !== undefined) {
-          const contention = storageContentionOf(error, options.contentionSurface);
-          if (contention !== null) return err(contention);
-        }
-        return err(
-          appError("INTERNAL_ERROR", `Applying the review mutation failed: ${messageOf(error)}`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            (options.contentionSurface !== undefined ? storageContentionOf(error, options.contentionSurface) : null) ??
+            appError("INTERNAL_ERROR", `Applying the review mutation failed: ${messageOf(error)}`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
   };
 }

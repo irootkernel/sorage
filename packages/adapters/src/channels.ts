@@ -26,13 +26,10 @@ import {
   UuidGenerator,
   validateChannelEventMetadata,
 } from "@sorage/core";
+import { composeAdapterContext, openAdapterContext } from "./adapter-context";
 import { createConfigStore } from "./config-store";
-import {
-  activateCommonFile,
-  completeCommonIntentTx,
-  createSqliteContentStore,
-  type SqliteContentStore,
-} from "./content-store";
+import { activateCommonFile, completeCommonIntentTx } from "./common-intent";
+import { createSqliteContentStore, type SqliteContentStore } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
@@ -45,10 +42,9 @@ import {
 } from "./memo-body-file";
 import { releaseMemoInputSpool, sweepMemoInputSpool } from "./memo-input-spool";
 import type { SorageSqlite } from "./sqlite/connection";
-import { productionMigrationPlan } from "./sqlite/migrations";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission } from "./sqlite/migrator";
 import { runInTransaction } from "./sqlite/transaction";
-import { AppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
+import { AppCommandError, storageContentionOf } from "./storage-contention";
 
 /**
  * The TASK-123 rebuilt Channel storage adapter (CHN-001 to CHN-014, interface
@@ -493,18 +489,19 @@ export function createSqliteChannelRepository(
           ),
       }),
     read: (work) =>
-      databaseResult(() => {
-        // A plain deferred read: no SQL fence check, because the covered read's
-        // admission already checked the vault-move fence once (plan §3).
-        db.exec("BEGIN");
-        try {
-          const result = work(reader);
-          db.exec("COMMIT");
-          return result;
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
+      // A plain deferred read: no SQL fence check, because the covered read's
+      // admission already checked the vault-move fence once (plan §3).
+      runInTransaction(db, "BEGIN", () => work(reader), {
+        checkFence: false,
+        failure: (error) =>
+          storageContentionOf(error, "channel") ??
+          appError(
+            "INTERNAL_ERROR",
+            `The Channel storage operation failed: ${error instanceof Error ? error.message : String(error)}.`,
+            {
+              cause: String(error),
+            },
+          ),
       }),
   };
 }
@@ -566,35 +563,17 @@ export interface NodeChannelPorts extends ChannelCommandPorts {
 }
 
 export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): NodeChannelPorts {
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths(options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME }, userHome);
-  const plan = productionMigrationPlan();
-  let db: SorageSqlite;
-  try {
-    db =
-      options.database ??
-      openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-        rebuilds: plan.rebuilds,
-      }).db;
-  } catch (error) {
-    // A schema admission refusal keeps its public code; contention becomes the
-    // stamped Channel refusal (SHR-015).
-    if (asSchemaAdmission(error) !== null || error instanceof AppCommandError) throw error;
-    const contention = storageContentionOf(error, "channel");
-    if (contention !== null) throw carriedAppError(contention);
-    throw error;
-  }
-  try {
-    const configStore = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-    const read = configStore.readForOperation();
-    if (!read.ok || read.value === null) {
-      throw carriedAppError(
-        read.ok
-          ? appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile })
-          : read.error,
-      );
-    }
-    const config = read.value.config;
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "operation",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    contentionSurface: "channel",
+  });
+  return composeAdapterContext(context, ({ home, configStore, db, configuration, close }) => {
+    const config = configuration.config;
     const clock = options.clock ?? new SystemClock();
     const ledger = createSqliteEventLedger(db);
     const contentStore = createSqliteContentStore({
@@ -741,16 +720,11 @@ export function createNodeChannelPorts(options: NodeChannelPortsOptions = {}): N
           return ok({ status: "completed" as const });
         },
       },
-      close: () => {
-        if (!options.database) db.close();
-      },
+      close,
       releaseAcceptedBody: (accepted) => releaseAcceptedChannelBody(accepted),
       stateDir: home.stateDir,
     };
-  } catch (error) {
-    if (!options.database) db.close();
-    throw error;
-  }
+  });
 }
 
 /**

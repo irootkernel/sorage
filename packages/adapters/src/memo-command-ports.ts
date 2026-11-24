@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { relative, resolve } from "node:path";
+import { relative } from "node:path";
 import {
   appError,
   CONTENT_INLINE_MAX_UTF8_BYTES,
@@ -18,14 +18,11 @@ import {
   type Result,
   ERROR_CODES,
 } from "@sorage/core";
+import { composeAdapterContext, openAdapterContext } from "./adapter-context";
 import { createConfigStore } from "./config-store";
 import { managedRoot } from "./managed-paths";
-import {
-  activateCommonFile,
-  completeCommonIntentTx,
-  createSqliteContentStore,
-  type SqliteContentStore,
-} from "./content-store";
+import { activateCommonFile, completeCommonIntentTx } from "./common-intent";
+import { createSqliteContentStore, type SqliteContentStore } from "./content-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
 import { createAcceptedBodyCapture, streamMemoSpool } from "./memo-body-file";
@@ -34,8 +31,7 @@ import { createSqliteMemoRepository } from "./memos";
 import { appendStructuredLog } from "./structured-log";
 import { createNodeProjectPorts } from "./project-command-ports";
 import type { SorageSqlite } from "./sqlite/connection";
-import { productionMigrationPlan } from "./sqlite/migrations";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission } from "./sqlite/migrator";
 import { createSqliteEventLedger } from "./events";
 import { asAppCommandError, storageContentionOf } from "./storage-contention";
 
@@ -125,20 +121,19 @@ export function createNodeMemoPorts(options: NodeMemoPortsOptions = {}): MemoCom
   /** The configured `gc.graceHours` window the spool backstop sweep honors. */
   graceHours: number;
 } {
-  const env: HomeEnvironment = options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME };
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const plan = productionMigrationPlan();
-  const db =
-    options.database ??
-    openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-      rebuilds: plan.rebuilds,
-    }).db;
-  try {
-    const configStore = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-    const read = configStore.read();
-    if (!read.ok || !read.value) throw new Error("Memo configuration could not be read");
-    const config = read.value.config;
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "read",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    onConfigurationFailure: () => {
+      throw new Error("Memo configuration could not be read");
+    },
+  });
+  return composeAdapterContext(context, ({ env, userHome, home, configStore, db, configuration, close }) => {
+    const config = configuration.config;
     const clock = options.clock ?? new SystemClock();
     const ledger = createSqliteEventLedger(db);
     const contentStore = createSqliteContentStore({
@@ -283,19 +278,14 @@ export function createNodeMemoPorts(options: NodeMemoPortsOptions = {}): MemoCom
         },
       },
       projectPorts: createNodeProjectPorts({ env, userHome, database: db }),
-      close: () => {
-        if (!options.database) db.close();
-      },
+      close,
       releaseAcceptedBody: (accepted) => {
         if (accepted.kind === "spool") releaseMemoInputSpool(accepted.spoolPath);
       },
       stateDir: home.stateDir,
       graceHours: config.gc.graceHours,
     };
-  } catch (error) {
-    if (!options.database) db.close();
-    throw error;
-  }
+  });
 }
 
 function relativeStaged(

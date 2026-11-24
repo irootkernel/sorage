@@ -1,5 +1,6 @@
 import { UuidGenerator } from "@sorage/core";
-import { createSqliteContentStore, sqliteContentReferences } from "../content-store";
+import { sqliteContentReferences } from "../content-references";
+import { createSqliteContentStore } from "../content-store";
 import type { SqliteEventLedger } from "../events";
 import type { ArtifactContentBindings } from "../handoffs";
 import type { SorageSqlite } from "../sqlite/connection";

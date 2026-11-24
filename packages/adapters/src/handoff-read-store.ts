@@ -2,9 +2,9 @@ import { join } from "node:path";
 import type { HandoffContentIntegrity, HandoffListCandidate, LoadedHandoff } from "@sorage/core";
 import { appError, err, type HandoffReadPort, type HandoffView, type ListingScope, ok } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
-import { liveFencePaused } from "./sqlite/move-fence";
 import { vaultMoveLockHeld } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
+import { runInTransaction } from "./sqlite/transaction";
 import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 
 /**
@@ -358,24 +358,10 @@ export function createSqliteHandoffReadStore(
           ),
         );
       }
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          // Inside the writer transaction the database move fence serializes
-          // against the mover's fence-and-count transaction: the settlement
-          // either lands before the fence or waits on the write lock and then
-          // sees the fence and pauses (RUN-014, SHR-011).
-          const fence = liveFencePaused(db);
-          if (fence !== null) {
-            db.exec("ROLLBACK");
-            return err(
-              appError(
-                "SERVICE_PAUSED",
-                "A Vault move or restore is in progress; this first-fetch settlement paused instead of racing it.",
-                { moveFencePid: fence.pid },
-              ),
-            );
-          }
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           {
             const current = db
               .prepare(
@@ -386,7 +372,6 @@ export function createSqliteHandoffReadStore(
               | null
               | undefined;
             if (!current) {
-              db.exec("ROLLBACK");
               return ok(undefined);
             }
             if (
@@ -409,23 +394,21 @@ export function createSqliteHandoffReadStore(
             .prepare("UPDATE handoffs SET first_fetched_at = ? WHERE id = ? AND first_fetched_at IS NULL")
             .run(event.createdAt, handoffId) as { changes: number };
           if (changed.changes === 1) ledger.append(event);
-          db.exec("COMMIT");
           return ok(undefined);
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        if (options.contentionSurface !== undefined) {
-          const contention = storageContentionOf(error, options.contentionSurface);
-          if (contention !== null) return err(contention);
-        }
-        return err(appError("INTERNAL_ERROR", `Recording the first fetch failed: ${messageOf(error)}`, { handoffId }));
-      }
+        },
+        {
+          checkFence: true,
+          fenceError: (pid) =>
+            appError(
+              "SERVICE_PAUSED",
+              "A Vault move or restore is in progress; this first-fetch settlement paused instead of racing it.",
+              { moveFencePid: pid },
+            ),
+          failure: (error) =>
+            (options.contentionSurface !== undefined ? storageContentionOf(error, options.contentionSurface) : null) ??
+            appError("INTERNAL_ERROR", `Recording the first fetch failed: ${messageOf(error)}`, { handoffId }),
+        },
+      );
     },
   };
 }

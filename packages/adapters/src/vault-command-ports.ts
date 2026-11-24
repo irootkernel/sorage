@@ -6,22 +6,8 @@ import {
   managedRoot,
   openManagedFile,
 } from "./managed-paths";
-import { createHash, randomUUID } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeSync,
-} from "node:fs";
-import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   type AppError,
@@ -39,26 +25,18 @@ import {
   type VaultStatusPorts,
   type VaultVerifyPorts,
 } from "@sorage/core";
+import { openAdapterContext } from "./adapter-context";
 import { createNodeArtifactStore } from "./artifact-store";
-import { type ConfigStore, createConfigStore, type ReadConfiguration } from "./config-store";
-import {
-  createSqliteContentStore,
-  receiptReferencedContentKeys,
-  sqliteContentReferences,
-  sweepFetchCache,
-  validateArtifactContentLinks,
-  validateChannelContentLinks,
-  validateMemoContentLinks,
-} from "./content-store";
+import type { ReadConfiguration } from "./config-store";
+import { validateArtifactContentLinks, validateChannelContentLinks, validateMemoContentLinks } from "./content-layout";
 import { createSqliteEventLedger } from "./events";
-import { fsyncDirectory } from "./fs-atomic";
-import { createHomePaths, type HomeEnvironment } from "./home";
-import { clearMoveFence, collectVaultGarbage, createSqliteIntentLog, setMoveFenceAndCountPending } from "./intent-log";
-import { acquireLock, createNodeLockProbePorts } from "./lockfile";
-import { asAppCommandError, storageContentionOf } from "./storage-contention";
+import { copyFileHashed, fsyncDirectory, placeExclusive } from "./fs-atomic";
+import type { HomeEnvironment } from "./home";
+import { createSqliteIntentLog } from "./intent-log";
+import { acquireVaultMoveLock, runStartupMaintenance } from "./maintenance";
+import { storageContentionOf } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
-import { productionMigrationPlan } from "./sqlite/migrations";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { clearMoveFence, setMoveFenceAndCountPending } from "./sqlite/move-fence";
 import { appendStructuredLog } from "./structured-log";
 import { createVaultInitializer, openVault } from "./vault";
 
@@ -112,30 +90,21 @@ interface InstallationView {
  * storage mutation into SERVICE_PAUSED (RUN-014).
  */
 export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOptions = {}): NodeVaultCommandPorts {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const clock = options.clock ?? { now: () => new Date() };
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const store: ConfigStore = createConfigStore({
-    home,
-    lockPorts: createNodeLockProbePorts(clock),
-    userHome,
+  const context = openAdapterContext({
+    order: "config-first",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    configuration: options.configuration,
+    contentionSurface: options.contentionSurface,
   });
+  const { userHome, clock, home, configStore: store } = context;
 
   function installation(fresh = false): Result<InstallationView, AppError> {
-    if (!fresh && options.configuration !== undefined) {
-      const config = options.configuration.config;
-      return ok({
-        vaultPath: expandConfigurationPath(config.vault.path, userHome, home.home),
-        installationId: config.installationId,
-        etag: options.configuration.etag,
-        graceHours: config.gc.graceHours,
-        logging: config.logging,
-      });
-    }
     // A surfaced composition reads operationally: an unreadable configuration
     // is CONFIG_INVALID rather than the swallowed-absence NOT_INITIALIZED.
-    const read = options.contentionSurface !== undefined ? store.readForOperation() : store.read();
+    const read = context.readConfiguration(options.contentionSurface !== undefined ? "operation" : "read", fresh);
     if (!read.ok) return err(read.error);
     if (read.value === null) {
       return err(
@@ -154,40 +123,8 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     });
   }
 
-  function withDatabase<T>(
-    body: (db: ReturnType<typeof openAndMigrate>["db"]) => Result<T, AppError>,
-  ): Result<T, AppError> {
-    try {
-      if (options.database !== undefined) {
-        return body(options.database);
-      }
-      const plan = productionMigrationPlan();
-      const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-        rebuilds: plan.rebuilds,
-      });
-      try {
-        return body(migrated.db);
-      } finally {
-        migrated.db.close();
-      }
-    } catch (error) {
-      // A schema admission refusal keeps its public code instead of collapsing
-      // into INTERNAL_ERROR (SHR-009); a surfaced composition additionally
-      // classifies storage-preparation contention (SHR-015).
-      const admission = asSchemaAdmission(error);
-      if (admission !== null) return err(admission);
-      if (options.contentionSurface !== undefined) {
-        const carried = asAppCommandError(error);
-        if (carried !== null) return err(carried.error);
-        const contention = storageContentionOf(error, options.contentionSurface);
-        if (contention !== null) return err(contention);
-      }
-      return err({
-        ...appError("INTERNAL_ERROR", `Reading the database failed: ${messageOf(error)}.`, { cause: String(error) }),
-        // Keep the original kind for downstream classification; envelopes omit this internal field.
-        cause: error,
-      });
-    }
+  function withDatabase<T>(body: (db: SorageSqlite) => Result<T, AppError>): Result<T, AppError> {
+    return context.withDatabase(body, { errorPrefix: "Reading the database failed", attachRawCause: true });
   }
 
   function pendingIntentCount(): Result<number, AppError> {
@@ -199,9 +136,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     });
   }
 
-  function recordedArtifactsOn(
-    db: ReturnType<typeof openAndMigrate>["db"],
-  ): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
+  function recordedArtifactsOn(db: SorageSqlite): Result<Array<{ storageKey: string; sha256: string }>, AppError> {
     try {
       // The shared content-link guard runs before the missing-table empty
       // branch: a normalized database whose artifacts table or referenced
@@ -274,23 +209,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
     isFile(): boolean;
   }
 
-  function acquireVaultMoveLock(): Result<{ release: () => void }, AppError> {
-    const acquired = acquireLock({
-      path: home.lockFile("vault-move"),
-      lock: "vault-move",
-      ports: createNodeLockProbePorts(clock),
-    });
-    if (acquired.ok) return ok({ release: acquired.release });
-    return err(
-      appError(
-        "SERVICE_PAUSED",
-        `A Vault move or restore is in progress (vault-move.lock held by pid ${String(
-          acquired.error.record?.pid,
-        )}); this operation paused instead of racing it.`,
-        { lockPath: home.lockFile("vault-move") },
-      ),
-    );
-  }
+  const acquireMoveLock = (): Result<{ release: () => void }, AppError> => acquireVaultMoveLock(home, clock);
 
   return {
     statusPorts(): Result<VaultStatusPorts, AppError> {
@@ -425,7 +344,7 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
             }>;
             return ok(rows.map((row) => resolvePhysicalPath(row.directory)));
           }),
-        lock: { acquire: acquireVaultMoveLock },
+        lock: { acquire: acquireMoveLock },
         target: {
           prepare(): Result<{ reusedScratch: boolean }, AppError> {
             try {
@@ -607,88 +526,22 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
           : error;
       const view = installation();
       if (!view.ok) return err(view.error);
-      return withDatabase((db) => {
-        const log = createSqliteIntentLog({
-          db,
-          installationId: view.value.installationId,
-          runDir: home.runDir,
-          events: createSqliteEventLedger(db),
-        });
-        const drained = log.drain(view.value.vaultPath);
-        if (!drained.ok) return err(classifyDrainError(drained.error));
-        // The reference-proof cleanup runs in its own single BEGIN IMMEDIATE
-        // transaction after the drain and before the protection set is
-        // recomputed, so a record the shared proof legitimately removes can no
-        // longer keep protecting a dead file, while a record the proof still
-        // protects survives untouched (SHR-004, SHR-011). The cleanup is SQL
-        // only — file-backed Artifact rows leave through it while their bytes
-        // stay owed to the already-cleared or durable legacy unlink intents.
-        // A failed cleanup — including a live fence that aborts it atomically
-        // — skips the physical GC for this run: a failed proof can never
-        // authorize unsafe deletion; the exact cleanup error is returned.
-        const cleanup = createSqliteContentStore({
-          db,
+      return withDatabase((db) =>
+        runStartupMaintenance(db, {
+          home,
           vaultPath: view.value.vaultPath,
           installationId: view.value.installationId,
-          // The cleanup's own entry guard must see a vault-move.lock acquired
-          // after the successful drain, before the cleanup transaction opens:
-          // the file lock precedes the mover's copy while the SQL fence is
-          // only set later at switch time, so the store's runDir is the only
-          // entry check that covers this handoff window (RUN-014).
-          runDir: home.runDir,
-        }).cleanup(sqliteContentReferences(db), clock.now());
-        if (!cleanup.ok) {
-          // A failed proof surfaces its exact error — a live fence aborting
-          // the cleanup atomically included — and neither the physical GC nor
-          // the cache sweep runs afterward: a failed proof can never
-          // authorize unsafe deletion (SHR-004, SHR-011).
-          return err(classifyDrainError(cleanup.error));
-        }
-        // Garbage collection runs only after the drain, over the surviving
-        // intents and the recorded storage keys (VLT-013, VLT-014); the M9
-        // guard set gains the live content keys and the keys unexpired
-        // retained responses reference, and the sweep covers content/ while the
-        // fetch-cache sweeps under the same grace window (SHR-006, SHR-011). A
-        // failed sweep never fails the command: doctor's vault.writable reports
-        // the underlying condition.
-        const surviving = log.pending();
-        const recorded = recordedArtifactsOn(db);
-        const contentKeys = recordedContentKeys(db);
-        const receiptKeys = receiptReferencedContentKeys(db, clock.now());
-        if (surviving.ok && recorded.ok && contentKeys.ok && receiptKeys.ok) {
-          void collectVaultGarbage(view.value.vaultPath, surviving.value, {
-            liveStorageKeys: recorded.value.map((row) => row.storageKey),
-            liveContentKeys: contentKeys.value,
-            receiptReferencedKeys: receiptKeys.value,
-            graceHours: view.value.graceHours,
-            now: clock.now(),
-          });
-        }
-        sweepFetchCache(home.stateDir, { graceHours: view.value.graceHours, now: clock.now() });
-        return drained;
-      });
+          graceHours: view.value.graceHours,
+          clock,
+          liveStorageKeys: (database) => {
+            const recorded = recordedArtifactsOn(database);
+            return recorded.ok ? ok(recorded.value.map((row) => row.storageKey)) : recorded;
+          },
+          classify: classifyDrainError,
+        }),
+      );
     },
   };
-}
-
-/** The managed `content/` keys live content records name, the GC guard input. */
-function recordedContentKeys(db: ReturnType<typeof openAndMigrate>["db"]): Result<string[], AppError> {
-  try {
-    const table = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
-      .get() as { name: string } | null | undefined;
-    if (!table) return ok([]);
-    const rows = db
-      .prepare("SELECT storage_key FROM content_records WHERE storage_key IS NOT NULL")
-      .all() as unknown as Array<{
-      storage_key: string;
-    }>;
-    return ok(rows.map((row) => row.storage_key));
-  } catch (error) {
-    return err(
-      appError("INTERNAL_ERROR", `Reading the content keys failed: ${messageOf(error)}.`, { cause: String(error) }),
-    );
-  }
 }
 
 interface MoveScratchMarker {
@@ -719,14 +572,12 @@ function readMoveScratchMarker(root: string): MoveScratchMarker | null {
 }
 
 function writeMoveScratchMarker(path: string, marker: MoveScratchMarker): void {
-  const handle = openSync(path, "wx");
-  try {
-    writeSync(handle, `${JSON.stringify({ type: "sorage-vault-move-scratch", ...marker }, null, 2)}\n`, null, "utf8");
-    fsyncSync(handle);
-  } finally {
-    closeSync(handle);
-  }
-  fsyncDirectory(dirname(path));
+  placeExclusive(path, `${JSON.stringify({ type: "sorage-vault-move-scratch", ...marker }, null, 2)}\n`, {
+    noFollow: false,
+    fileFsync: true,
+    dirFsync: "required",
+    cleanupOwnedOnError: false,
+  });
 }
 
 /**
@@ -755,37 +606,15 @@ export function resolvePhysicalPath(path: string): string {
 /** Copies one file streaming through a fixed buffer, hashing in the same pass. */
 function streamCopy(sourceRoot: string, sourceKey: string, destination: string): string {
   const input = openManagedFile(sourceRoot, sourceKey);
-  let output: number | undefined;
   try {
-    output = openSync(destination, "wx");
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
-    for (;;) {
-      const read = readSync(input, buffer, 0, buffer.length, null);
-      if (read === 0) break;
-      hash.update(buffer.subarray(0, read));
-      // A partial write must never pass the copy verification, which compares
-      // two hashes of the same in-memory bytes and cannot see truncation.
-      let written = 0;
-      while (written < read) {
-        const count = writeSync(output, buffer, written, read - written);
-        if (count <= 0) throw new Error(`The move copy made no progress after ${written} of ${read} bytes.`);
-        written += count;
-      }
-    }
-    fsyncSync(output);
-    closeSync(output);
-    output = undefined;
-    return hash.digest("hex");
+    return copyFileHashed(input, destination, {
+      mode: "exclusive-direct",
+      fileFsync: true,
+      dirFsync: "none",
+      bufferBytes: COPY_BUFFER_BYTES,
+    });
   } finally {
     closeSync(input);
-    if (output !== undefined) {
-      try {
-        closeSync(output);
-      } catch {
-        // Best effort on the error path.
-      }
-    }
   }
 }
 

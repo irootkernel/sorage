@@ -1,14 +1,5 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   isWellFormedToken,
@@ -19,6 +10,7 @@ import {
   type WebSecretPort,
 } from "@sorage/core";
 import type { Clock } from "@sorage/core";
+import { writeFileAtomic } from "./fs-atomic";
 
 /**
  * The file-backed API token and one-time web secret stores (SEC-002, SEC-019,
@@ -31,15 +23,14 @@ import type { Clock } from "@sorage/core";
 const TOKEN_MODE = 0o600;
 
 function atomicWrite(path: string, contents: string): void {
-  const temporary = join(dirname(path), `.${basenameSafe(path)}.tmp-${process.pid}`);
-  writeFileSync(temporary, contents, { encoding: "utf8", mode: TOKEN_MODE });
-  chmodSync(temporary, TOKEN_MODE);
-  renameSync(temporary, path);
-}
-
-function basenameSafe(path: string): string {
-  const parts = path.split("/");
-  return parts[parts.length - 1] ?? "token";
+  writeFileAtomic(path, contents, {
+    tempName: "pid",
+    exclusiveTemp: false,
+    createMode: TOKEN_MODE,
+    finalMode: TOKEN_MODE,
+    fileFsync: false,
+    dirFsync: "none",
+  });
 }
 
 /** The production entropy source: 32 random bytes from the platform CSPRNG. */

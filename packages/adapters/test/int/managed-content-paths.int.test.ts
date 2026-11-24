@@ -13,14 +13,11 @@ import {
 import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { moveVault, vaultVerify } from "@sorage/core";
-import {
-  activateCommonFile,
-  createSqliteContentStore,
-  materializeFetchCacheFile,
-  sweepFetchCache,
-  unlinkCommonFile,
-} from "../../src/content-store";
-import { collectVaultGarbage, createSqliteIntentLog } from "../../src/intent-log";
+import { activateCommonFile, unlinkCommonFile } from "../../src/common-intent";
+import { createSqliteContentStore } from "../../src/content-store";
+import { materializeFetchCacheFile, sweepFetchCache } from "../../src/fetch-cache";
+import { createSqliteIntentLog } from "../../src/intent-log";
+import { collectVaultGarbage } from "../../src/maintenance";
 import { createNodeDoctorPorts } from "../../src/doctor";
 import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";

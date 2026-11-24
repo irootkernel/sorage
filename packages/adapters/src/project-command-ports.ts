@@ -1,18 +1,15 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import type { ProjectCommandPorts, ProjectResolutionPorts } from "@sorage/core";
 import { appError, err, ok, SystemClock, UuidGenerator } from "@sorage/core";
-import { createConfigStore, type ReadConfiguration } from "./config-store";
+import { composeAdapterContext, openAdapterContext } from "./adapter-context";
+import type { ReadConfiguration } from "./config-store";
 import { createSqliteEventLedger } from "./events";
-import { createHomePaths, type HomeEnvironment } from "./home";
-import { createNodeLockProbePorts } from "./lockfile";
+import { createNodeGitClient } from "./git-client";
+import type { HomeEnvironment } from "./home";
 import { createSqliteProjectRepository, type ProjectRepositoryFs } from "./projects";
 import type { SorageSqlite } from "./sqlite/connection";
-import { productionMigrationPlan } from "./sqlite/migrations";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
-import { AppCommandError, type ContentionSurface, carriedAppError, storageContentionOf } from "./storage-contention";
+import type { ContentionSurface } from "./storage-contention";
 
 /**
  * The production wiring of the `sorage project` commands: the migrated SQLite database,
@@ -51,21 +48,20 @@ export type GitProbe = (directory: string) => string | null;
 /** Reports whether a directory is a bare Git repository (ADR-0020). */
 export type BareProbe = (directory: string) => boolean;
 
+const projectGitClient = createNodeGitClient({ timeoutMs: 10_000 });
+
 const nativeIsBare: BareProbe = (directory) => {
-  const result = spawnSync("git", ["-C", directory, "rev-parse", "--is-bare-repository"], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  return result.status === 0 && (result.stdout ?? "").trim() === "true";
+  const result = projectGitClient.run({ cwd: directory, args: ["rev-parse", "--is-bare-repository"] });
+  return result.ok && result.value.exitCode === 0 && result.value.stdout.trim() === "true";
 };
 
 const nativeGit: GitProbe = (directory) => {
-  const result = spawnSync("git", ["-C", directory, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
-    encoding: "utf8",
-    timeout: 10_000,
+  const result = projectGitClient.run({
+    cwd: directory,
+    args: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
   });
-  if (result.error !== undefined || result.status !== 0) return null;
-  const common = (result.stdout ?? "").trim();
+  if (!result.ok || result.value.exitCode !== 0) return null;
+  const common = result.value.stdout.trim();
   return common === "" ? null : common;
 };
 
@@ -101,54 +97,19 @@ export function createNodeResolutionBindings(
 }
 
 export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): NodeProjectCommandPorts {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  const ownsDatabase = options.database === undefined;
-  const plan = productionMigrationPlan();
-  let db: SorageSqlite;
-  try {
-    db =
-      options.database ??
-      openAndMigrate(resolve(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-        rebuilds: plan.rebuilds,
-      }).db;
-  } catch (error) {
-    // A schema admission refusal keeps its public code; contention maps to the
-    // stamped refusal only for a surfaced composition; everything else stays raw.
-    if (asSchemaAdmission(error) !== null || error instanceof AppCommandError) throw error;
-    const contention =
-      options.contentionSurface !== undefined ? storageContentionOf(error, options.contentionSurface) : null;
-    if (contention !== null) throw carriedAppError(contention);
-    throw error;
-  }
-  let closed = false;
-  const close = (): void => {
-    if (closed || !ownsDatabase) return;
-    closed = true;
-    db.close();
-  };
-  try {
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "operation",
+    env: options.env,
+    userHome: options.userHome,
+    database: options.database,
+    configuration: options.configuration,
+    contentionSurface: options.contentionSurface,
+  });
+  return composeAdapterContext(context, ({ db, configuration: effective, close }) => {
     const git = options.git ?? nativeGit;
     const isBare = options.gitIsBare ?? nativeIsBare;
     const fs = options.fs ?? { realpath: (path: string) => realpathSync(path) };
-    // The canonical installation identity is the generated key in the effective
-    // configuration; the repository never trusts a caller-supplied identity.
-    // An operational read distinguishes an unreadable configuration from an
-    // absent one and carries both as typed errors (SHR-015, W7).
-    let effective = options.configuration;
-    if (effective === undefined) {
-      const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-      const read = config.readForOperation();
-      if (!read.ok || read.value === null) {
-        throw carriedAppError(
-          read.ok
-            ? appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile })
-            : read.error,
-        );
-      }
-      effective = read.value;
-    }
     return {
       installationId: effective.config.installationId,
       vaultPath: effective.config.vault.path,
@@ -237,16 +198,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): N
       },
       close,
     };
-  } catch (error) {
-    if (ownsDatabase) {
-      try {
-        close();
-      } catch {
-        // Cleanup must not replace the original configuration or construction refusal.
-      }
-    }
-    throw error;
-  }
+  });
 }
 
 function joinPath(home: string, rest: string): string {

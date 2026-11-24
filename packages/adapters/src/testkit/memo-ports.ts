@@ -15,12 +15,8 @@ import {
   type Result,
 } from "@sorage/core";
 import type { SorageSqlite } from "../sqlite/connection";
-import {
-  activateCommonFile,
-  completeCommonIntentTx,
-  createSqliteContentStore,
-  type SqliteContentStore,
-} from "../content-store";
+import { activateCommonFile, completeCommonIntentTx } from "../common-intent";
+import { createSqliteContentStore, type SqliteContentStore } from "../content-store";
 import { createSqliteEventLedger } from "../events";
 import { createSqliteMemoRepository } from "../memos";
 import { streamMemoSpool } from "../memo-body-file";

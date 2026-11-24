@@ -6,7 +6,7 @@ import { backupRestore, canonicalJson, exportSnapshot, mutateMemo, showMemo } fr
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { createNodeConfigCommandPorts } from "../../src/config-command-ports";
 import { createNodeMemoPorts } from "../../src/memo-command-ports";
-import { activateCommonFile } from "../../src/content-store";
+import { activateCommonFile } from "../../src/common-intent";
 import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { captureMemoBodyText } from "../../src/memo-body-file";
 import { openSorageDatabase } from "../../src/sqlite/connection";
@@ -64,13 +64,23 @@ vi.mock("../../src/sqlite/migrator", async (original) => {
 });
 vi.mock("../../src/fs-atomic", async (original) => {
   const actual = await original<typeof import("../../src/fs-atomic")>();
+  const tracedFsyncDirectory = (path: string) => {
+    fault.trace.push(`sync:${path}`);
+    if (fault.mode === "sync" && path.endsWith(MEMO_ID)) throw new Error("Injected directory sync refusal");
+    return actual.fsyncDirectory(path);
+  };
   return {
     ...actual,
-    fsyncDirectory(path: string) {
-      fault.trace.push(`sync:${path}`);
-      if (fault.mode === "sync" && path.endsWith(MEMO_ID)) throw new Error("Injected directory sync refusal");
-      return actual.fsyncDirectory(path);
-    },
+    fsyncDirectory: tracedFsyncDirectory,
+    placeExclusive: (
+      path: Parameters<typeof actual.placeExclusive>[0],
+      bytes: Parameters<typeof actual.placeExclusive>[1],
+      options?: Parameters<typeof actual.placeExclusive>[2],
+    ) =>
+      actual.placeExclusive(path, bytes, {
+        ...options,
+        syncDirectory: options?.syncDirectory ?? tracedFsyncDirectory,
+      }),
   };
 });
 

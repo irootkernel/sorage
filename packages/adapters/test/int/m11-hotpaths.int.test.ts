@@ -25,7 +25,8 @@ import {
   serializeMemoReceiptForStorage,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSqliteContentStore, sqliteContentReferences } from "../../src/content-store";
+import { sqliteContentReferences } from "../../src/content-references";
+import { createSqliteContentStore } from "../../src/content-store";
 import { createNodeDoctorPorts } from "../../src/doctor";
 import { createSqliteEventLedger } from "../../src/events";
 import { readExchangeOriginal, resolveExchangeSource, withExchangeSource } from "../../src/exchange-sources";

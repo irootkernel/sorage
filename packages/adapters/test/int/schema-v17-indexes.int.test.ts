@@ -15,7 +15,7 @@ import {
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
-import { sqliteContentReferences } from "../../src/content-store";
+import { sqliteContentReferences } from "../../src/content-references";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { inspectPreflight } from "../../src/preflight";
 import { openSorageDatabase, type SorageSqlite } from "../../src/sqlite/connection";

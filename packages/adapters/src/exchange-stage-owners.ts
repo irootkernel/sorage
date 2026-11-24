@@ -1,20 +1,10 @@
 import { spawnSync } from "node:child_process";
-import {
-  closeSync,
-  constants,
-  fsyncSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  readlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { closeSync, readFileSync, readdirSync, readlinkSync, unlinkSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { isCanonicalUuid } from "@sorage/core";
-import { fsyncDirectory } from "./fs-atomic";
-import { managedDirectory, managedFile, managedPath, openManagedFile } from "./managed-paths";
+import { fsyncDirectory, placeExclusive } from "./fs-atomic";
+import { managedDirectory, managedFile, managedPath, managedRoot, openManagedFile } from "./managed-paths";
 
 interface StageOwner {
   exchangeId: string;
@@ -44,16 +34,14 @@ function localProcessRealm(): string | null {
 
 export function recordExchangeStageOwner(root: string, id: string, exchangeId: string): void {
   const key = managedPath(root, `owners/${id}`, true, 0o700);
-  const fd = openSync(key, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try {
-    const owner: StageOwner = { exchangeId, pid: process.pid, realm: localProcessRealm() };
-    writeFileSync(fd, JSON.stringify(owner), "utf8");
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  fsyncDirectory(dirname(key));
-  fsyncDirectory(root);
+  const owner: StageOwner = { exchangeId, pid: process.pid, realm: localProcessRealm() };
+  placeExclusive(key, JSON.stringify(owner), {
+    createMode: 0o600,
+    noFollow: true,
+    fileFsync: true,
+    syncAncestorsTo: managedRoot(root),
+    cleanupOwnedOnError: true,
+  });
 }
 
 export function removeExchangeStageOwner(root: string, id: string): void {

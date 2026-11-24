@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { InboxMarkerPorts } from "@sorage/core";
 import { createNodeHandoffReadPorts, type NodeHandoffCommandPortsOptions } from "./handoff-command-ports";
 import { createConfigStore } from "./config-store";
+import { writeFileAtomic } from "./fs-atomic";
 import { createNodeLockProbePorts } from "./lockfile";
 import { createHomePaths } from "./home";
 import { withInboxMarkerLock } from "./inbox-marker-lock";
@@ -65,16 +66,14 @@ export function createNodeInboxMarkerPorts(
           const directory = resolve(bindingDirectory, ".sorage");
           try {
             mkdirSync(directory, { recursive: true });
-            const temporary = join(directory, `.INBOX.md.${process.pid}.tmp`);
-            writeFileSync(temporary, content, "utf8");
-            renameSync(temporary, join(directory, "INBOX.md"));
+            writeFileAtomic(join(directory, "INBOX.md"), content, {
+              tempName: "pid",
+              exclusiveTemp: false,
+              fileFsync: false,
+              dirFsync: "none",
+            });
             return { ok: true as const, value: undefined };
           } catch (error) {
-            try {
-              rmSync(join(directory, `.INBOX.md.${process.pid}.tmp`), { force: true });
-            } catch {
-              // The marker is derived; leaving a stale temporary behind is harmless.
-            }
             return {
               ok: false as const,
               error: {

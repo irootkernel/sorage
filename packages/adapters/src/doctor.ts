@@ -31,8 +31,9 @@ import {
   validateArtifactContentLinks,
   validateChannelContentLinks,
   validateMemoContentLinks,
-} from "./content-store";
+} from "./content-layout";
 import { createHomePaths, type HomeEnvironment } from "./home";
+import { createNodeGitClient } from "./git-client";
 import { launchAgentPlistPath, launchAgentsDirectory, launchAgentUid, plistPointsAtBinary } from "./launchagent-ports";
 import { evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
 import { openSorageDatabase, type SorageSqlite } from "./sqlite/connection";
@@ -1243,8 +1244,9 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
           );
         }
         if (!existsSync(join(vault, ".git"))) return ok("The Vault has no Git repository yet.");
-        const completed = spawnSync("git", ["-C", vault, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" });
-        const branch = completed.status === 0 ? String(completed.stdout ?? "").trim() : "";
+        const git = createNodeGitClient();
+        const completed = git.run({ cwd: vault, args: ["symbolic-ref", "--short", "HEAD"] });
+        const branch = completed.ok && completed.value.exitCode === 0 ? completed.value.stdout.trim() : "";
         if (branch !== config.gitBackup.push.branch) {
           return warning(
             `The Vault repository is on '${branch === "" ? "a detached HEAD" : branch}', not the configured branch '${config.gitBackup.push.branch}'.`,
@@ -1257,21 +1259,15 @@ export function createNodeDoctorPorts(options: NodeDoctorPortsOptions = {}): Doc
         ) {
           return warning("The Vault repository has a merge or rebase in progress.");
         }
-        const staged = spawnSync("git", ["-C", vault, "diff", "--cached", "--name-only"], { encoding: "utf8" });
-        const stagedPaths = String(staged.stdout ?? "")
-          .split("\n")
-          .filter((line) => line !== "");
+        const staged = git.run({ cwd: vault, args: ["diff", "--cached", "--name-only"] });
+        const stagedPaths = (staged.ok ? staged.value.stdout : "").split("\n").filter((line) => line !== "");
         const unmanaged = stagedPaths.filter((path) => !isManagedVaultPath(path));
         if (unmanaged.length > 0) {
           return warning(`The index holds staged work outside the managed pathspecs: ${unmanaged.join(", ")}.`);
         }
-        const listed = spawnSync("git", ["-C", vault, "remote"], { encoding: "utf8" });
+        const listed = git.run({ cwd: vault, args: ["remote"] });
         const remotes =
-          listed.status === 0
-            ? String(listed.stdout ?? "")
-                .split("\n")
-                .filter((line) => line !== "")
-            : [];
+          listed.ok && listed.value.exitCode === 0 ? listed.value.stdout.split("\n").filter((line) => line !== "") : [];
         if (config.gitBackup.push.enabled && !remotes.includes(config.gitBackup.push.remote)) {
           return warning(
             `Push is enabled for remote '${config.gitBackup.push.remote}' but the repository does not know that remote.`,

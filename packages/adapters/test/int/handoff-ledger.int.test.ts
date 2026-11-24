@@ -1,12 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { errorSpec } from "@sorage/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
-import { createSqliteHandoffRowStore } from "../../src/handoffs";
 import { createSqliteIntentLog } from "../../src/intent-log";
 import { createSqliteProjectRepository } from "../../src/projects";
-import { openSorageDatabase } from "../../src/sqlite/connection";
 import { MIGRATIONS } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
@@ -165,58 +162,6 @@ describe("the Project event ledger", () => {
     expect(event?.actorKind).toBe("registered_project");
     expect(event?.actorId).toBe("p-1");
     expect(event?.metadata).toEqual({ projectId: "p-9", slug: "actor-probe" });
-  });
-});
-
-describe("the Row Version compare-and-set", () => {
-  it("fails a stale expectation with ROW_VERSION_CONFLICT at exit 75", () => {
-    const temp = migratedDb();
-    const store = createSqliteHandoffRowStore(temp.db);
-    insertHandoff(temp.db, "h-cas", { row_version: 4 });
-    const stale = store.compareAndSet("h-cas", 3, { pinned: 1, updated_at: "2026-01-02T00:00:00.000Z" });
-    expect(stale.ok).toBe(false);
-    if (!stale.ok) {
-      expect(stale.error.code).toBe("ROW_VERSION_CONFLICT");
-      expect(errorSpec(stale.error.code).exitCode).toBe(75);
-    }
-    const row = temp.db.prepare("SELECT row_version, pinned FROM handoffs WHERE id = 'h-cas'").get() as {
-      row_version: number;
-      pinned: number;
-    };
-    expect(row).toEqual({ row_version: 4, pinned: 0 });
-  });
-
-  it("lets exactly one of two concurrent writers through", () => {
-    const temp = migratedDb();
-    insertHandoff(temp.db, "h-race");
-    // Two processes each hold the row at Row Version 1.
-    const first = openSorageDatabase(temp.databasePath);
-    const second = openSorageDatabase(temp.databasePath);
-    try {
-      const writerA = createSqliteHandoffRowStore(first);
-      const writerB = createSqliteHandoffRowStore(second);
-      const a = writerA.compareAndSet("h-race", 1, { pinned: 1, updated_at: "2026-01-02T00:00:00.000Z" });
-      const b = writerB.compareAndSet("h-race", 1, { pinned: 0, updated_at: "2026-01-02T00:00:00.000Z" });
-      expect(a.ok).toBe(true);
-      expect(b.ok).toBe(false);
-      if (!b.ok) expect(b.error.code).toBe("ROW_VERSION_CONFLICT");
-      const row = second.prepare("SELECT row_version, pinned FROM handoffs WHERE id = 'h-race'").get() as {
-        row_version: number;
-        pinned: number;
-      };
-      expect(row).toEqual({ row_version: 2, pinned: 1 });
-    } finally {
-      first.close();
-      second.close();
-    }
-  });
-
-  it("answers HANDOFF_NOT_FOUND for an unknown row", () => {
-    const temp = migratedDb();
-    const store = createSqliteHandoffRowStore(temp.db);
-    const outcome = store.compareAndSet("h-ghost", 1, { pinned: 1 });
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.error.code).toBe("HANDOFF_NOT_FOUND");
   });
 });
 

@@ -10,6 +10,7 @@ import {
   type Result,
 } from "@sorage/core";
 import type { SorageSqlite } from "./sqlite/connection";
+import { runInTransaction } from "./sqlite/transaction";
 
 /**
  * The SQLite append-only event ledger behind the core port (SEC-012, HND-016, HND-017).
@@ -80,9 +81,10 @@ export function createSqliteEventLedger(db: SorageSqlite): SqliteEventLedger {
       );
     },
     appendStandalone(event) {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           insert().run(
             event.id,
             event.handoffId ?? null,
@@ -93,19 +95,16 @@ export function createSqliteEventLedger(db: SorageSqlite): SqliteEventLedger {
             JSON.stringify(event.metadata),
             event.createdAt,
           );
-          db.exec("COMMIT");
           return ok({ id: event.id });
-        } catch (error) {
-          db.exec("ROLLBACK");
-          throw error;
-        }
-      } catch (error) {
-        return err(
-          appError("INTERNAL_ERROR", `Appending the ${event.eventType} event failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            appError("INTERNAL_ERROR", `Appending the ${event.eventType} event failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
     list(input) {
       try {

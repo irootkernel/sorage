@@ -2,9 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
-  constants,
   existsSync,
-  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
@@ -18,9 +16,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   ChannelContentFileExport,
@@ -93,29 +89,20 @@ import {
   validateSnapshot,
   verifyVaultArtifacts,
 } from "@sorage/core";
+import { openAdapterContext } from "./adapter-context";
 import { createNodeArtifactStore } from "./artifact-store";
-import { type ConfigStore, createConfigStore } from "./config-store";
-import {
-  createSqliteContentStore,
-  receiptReferencedContentKeys,
-  sqliteContentReferences,
-  sweepFetchCache,
-  validateArtifactContentLinks,
-  validateChannelContentLinks,
-  validateMemoContentLinks,
-} from "./content-store";
-import { createSqliteEventLedger } from "./events";
+import { validateArtifactContentLinks, validateChannelContentLinks, validateMemoContentLinks } from "./content-layout";
 import {
   EXCHANGE_FOUNDATION_TABLES,
   readExchangeCollaborationRecords,
   restoreExchangeRecords,
 } from "./exchange-records";
-import { fsyncDirectory } from "./fs-atomic";
+import { copyFileHashed, fsyncDirectory, placeExclusive, writeFileAtomic } from "./fs-atomic";
 import { type AsyncGitClient, createNodeAsyncGitClient, createNodeGitClient, type GitClient } from "./git-client";
 import { createNodeAsyncVaultGitRepository, createNodeVaultGitRepository } from "./vault-git-repository";
-import { createHomePaths, type HomeEnvironment } from "./home";
-import { collectVaultGarbage, createSqliteIntentLog } from "./intent-log";
+import type { HomeEnvironment } from "./home";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
+import { acquireVaultMoveLock, runStartupMaintenance } from "./maintenance";
 import {
   digestManagedFile,
   digestManagedFileAsync,
@@ -135,8 +122,6 @@ import {
   readMemoExport,
 } from "./memos";
 import type { SorageSqlite } from "./sqlite/connection";
-import { productionMigrationPlan } from "./sqlite/migrations";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 
 /**
  * Places one file-backed Channel message body's exact carried bytes at a fresh
@@ -162,49 +147,20 @@ function placeChannelContentFile(
   if (!isManagedContentStorageKey(storageKey)) {
     return err(appError("INTERNAL_ERROR", "The Channel content restore target is not a managed key", { storageKey }));
   }
-  let destination: string | undefined;
-  let owned = false;
   try {
-    destination = managedPath(vaultPath, storageKey, true);
-    const handle = openSync(
-      destination,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o644,
-    );
-    owned = true;
-    try {
-      let written = 0;
-      const buffer = Buffer.from(bytes);
-      while (written < buffer.byteLength) {
-        written += writeSync(handle, buffer, written, buffer.byteLength - written, null);
-      }
-      fchmodSync(handle, 0o444);
-      fsyncSync(handle);
-    } finally {
-      closeSync(handle);
-    }
-    // Persist the entry and its ancestors before any SQL row claims that this
-    // file is materialized. The managed path already uses the canonical Vault.
-    const root = managedRoot(vaultPath);
-    for (let directory = dirname(destination); ; directory = dirname(directory)) {
-      fsyncDirectory(directory);
-      if (directory === root) break;
-    }
-    // Read back the placed file and verify its identity against the source.
-    const identity = digestManagedFile(vaultPath, storageKey);
-    const expectedDigest = createHash("sha256").update(bytes).digest("hex");
-    if (identity.sizeBytes !== bytes.byteLength || identity.sha256 !== expectedDigest) {
-      throw new Error("The placed Channel body changed identity");
-    }
+    const destination = managedPath(vaultPath, storageKey, true);
+    const identity = placeExclusive(destination, bytes, {
+      createMode: 0o644,
+      finalMode: 0o444,
+      noFollow: true,
+      fileFsync: true,
+      syncAncestorsTo: managedRoot(vaultPath),
+      verifyReadback: true,
+      readback: () => digestManagedFile(vaultPath, storageKey),
+      cleanupOwnedOnError: true,
+    });
     return ok({ storageKey, ...identity });
   } catch {
-    if (owned && destination !== undefined) {
-      try {
-        rmSync(destination, { force: true });
-      } catch {
-        /* Owned survivor remains unreachable. */
-      }
-    }
     return err(appError("INTERNAL_ERROR", "The Channel content restore file could not be placed", { channelId }));
   }
 }
@@ -266,10 +222,13 @@ interface InstallationView {
  * regenerates the API token.
  */
 export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOptions = {}): NodeBackupCommandPorts {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const clock = options.clock ?? { now: () => new Date() };
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
+  const context = openAdapterContext({
+    order: "config-first",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+  });
+  const { env, userHome, clock, home, configStore: store } = context;
   const gitClient = options.gitClient ?? createNodeGitClient();
   const injectedSyncGit = options.gitClient;
   const asyncGitClient: AsyncGitClient =
@@ -277,14 +236,9 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     (injectedSyncGit !== undefined
       ? { run: async (request) => injectedSyncGit.run(request) }
       : createNodeAsyncGitClient());
-  const store: ConfigStore = createConfigStore({
-    home,
-    lockPorts: createNodeLockProbePorts(clock),
-    userHome,
-  });
 
   function installation(): Result<InstallationView, AppError> {
-    const read = store.read();
+    const read = context.readConfiguration("read");
     if (!read.ok) return err(read.error);
     if (read.value === null) {
       return err(
@@ -316,28 +270,8 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     });
   }
 
-  function withDatabase<T>(
-    body: (db: ReturnType<typeof openAndMigrate>["db"]) => Result<T, AppError>,
-  ): Result<T, AppError> {
-    try {
-      const plan = productionMigrationPlan();
-      const migrated = openAndMigrate(join(home.stateDir, "sorage.sqlite3"), plan.migrations, {
-        rebuilds: plan.rebuilds,
-      });
-      try {
-        return body(migrated.db);
-      } finally {
-        migrated.db.close();
-      }
-    } catch (error) {
-      // A schema admission refusal keeps its public code instead of collapsing
-      // into INTERNAL_ERROR (SHR-009).
-      const admission = asSchemaAdmission(error);
-      if (admission !== null) return err(admission);
-      return err(
-        appError("INTERNAL_ERROR", `Accessing the database failed: ${messageOf(error)}.`, { cause: String(error) }),
-      );
-    }
+  function withDatabase<T>(body: (db: SorageSqlite) => Result<T, AppError>): Result<T, AppError> {
+    return context.withDatabase(body, { errorPrefix: "Accessing the database failed" });
   }
 
   /** One file-backed Channel message's content reference for the export. */
@@ -781,23 +715,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     });
   }
 
-  function acquireVaultMoveLock(): Result<{ release: () => void }, AppError> {
-    const acquired = acquireLock({
-      path: home.lockFile("vault-move"),
-      lock: "vault-move",
-      ports: createNodeLockProbePorts(clock),
-    });
-    if (acquired.ok) return ok({ release: acquired.release });
-    return err(
-      appError(
-        "SERVICE_PAUSED",
-        `A Vault move or restore is in progress (vault-move.lock held by pid ${String(
-          acquired.error.record?.pid,
-        )}); this operation paused instead of racing it.`,
-        { lockPath: home.lockFile("vault-move") },
-      ),
-    );
-  }
+  const acquireMoveLock = (): Result<{ release: () => void }, AppError> => acquireVaultMoveLock(home, clock);
 
   /** A daemon holds its lifetime lock while running; a live record means restore must refuse (section 32). */
   function daemonRunning(): Result<boolean, AppError> {
@@ -1383,21 +1301,13 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         2,
       )}\n`;
       const markerPath = join(vaultPath, ".sorage-vault.json");
-      const temporary = join(vaultPath, `.sorage-vault.json.tmp-${process.pid}`);
-      let created = false;
-      let renamed = false;
       try {
-        const handle = openSync(temporary, "wx");
-        created = true;
-        try {
-          writeSync(handle, body, null, "utf8");
-          fsyncSync(handle);
-        } finally {
-          closeSync(handle);
-        }
-        renameSync(temporary, markerPath);
-        renamed = true;
-        fsyncDirectory(vaultPath);
+        writeFileAtomic(markerPath, body, {
+          tempName: "pid",
+          exclusiveTemp: true,
+          fileFsync: true,
+          dirFsync: "required",
+        });
         return ok(undefined);
       } catch (error) {
         return err(
@@ -1405,14 +1315,6 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
             cause: String(error),
           }),
         );
-      } finally {
-        if (created && !renamed) {
-          try {
-            rmSync(temporary, { force: true });
-          } catch {
-            // Best-effort cleanup on failure path.
-          }
-        }
       }
     };
   }
@@ -1935,7 +1837,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         sourcePath,
         installationId: view.value.installationId,
         daemonRunning,
-        lock: { acquire: acquireVaultMoveLock },
+        lock: { acquire: acquireMoveLock },
         readSourceMarker: () => {
           const raw = readSourceFile(sourcePath, ".sorage-vault.json");
           if (!raw.ok) return err(raw.error);
@@ -2284,77 +2186,18 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     drainAtStart(): Result<DrainReport, AppError> {
       const view = installation();
       if (!view.ok) return err(view.error);
-      return withDatabase((db) => {
-        const log = createSqliteIntentLog({
-          db,
-          installationId: view.value.installationId,
-          runDir: home.runDir,
-          events: createSqliteEventLedger(db),
-        });
-        const drained = log.drain(view.value.vaultPath);
-        if (!drained.ok) return drained;
-        // The same pre-backup maintenance order as the Vault maintenance flow
-        // (SHR-004, SHR-011): drain, then the reference-proof cleanup in its own
-        // single BEGIN IMMEDIATE, then the freshly recomputed protection set,
-        // then the physical GC, then the cache sweep. A failed cleanup — a live
-        // fence aborting it atomically included — skips the physical GC for
-        // this run and surfaces the exact cleanup error.
-        const cleanup = createSqliteContentStore({
-          db,
+      return withDatabase((db) =>
+        runStartupMaintenance(db, {
+          home,
           vaultPath: view.value.vaultPath,
           installationId: view.value.installationId,
-          // The same late-handoff entry guard as the Vault maintenance flow:
-          // a vault-move.lock acquired after the successful drain, before the
-          // cleanup transaction opens, must pause the pre-backup cleanup —
-          // the SQL fence alone is set only later at switch time (RUN-014).
-          runDir: home.runDir,
-        }).cleanup(sqliteContentReferences(db), clock.now());
-        if (!cleanup.ok) {
-          // The same pre-backup maintenance failure semantics: the exact
-          // cleanup error propagates and no GC or cache sweep runs after a
-          // failed proof (SHR-004, SHR-011).
-          return err(cleanup.error);
-        }
-        const surviving = log.pending();
-        const recorded = readRecordedStorageKeys(db);
-        const contentKeys = readRecordedContentKeys(db);
-        const receiptKeys = receiptReferencedContentKeys(db, clock.now());
-        // The physical GC runs only over a complete protection proof: a failed
-        // link guard, an unreadable key set, or any other unavailable proof
-        // skips the collector for this run rather than age-deleting files whose
-        // protection cannot be established (SHR-008, SHR-014).
-        if (surviving.ok && recorded.ok && contentKeys.ok && receiptKeys.ok) {
-          void collectVaultGarbage(view.value.vaultPath, surviving.value, {
-            liveStorageKeys: recorded.value,
-            liveContentKeys: contentKeys.value,
-            receiptReferencedKeys: receiptKeys.value,
-            graceHours: view.value.graceHours,
-            now: clock.now(),
-          });
-        }
-        sweepFetchCache(home.stateDir, { graceHours: view.value.graceHours, now: clock.now() });
-        return drained;
-      });
+          graceHours: view.value.graceHours,
+          clock,
+          liveStorageKeys: readRecordedStorageKeys,
+        }),
+      );
     },
   };
-}
-
-/** The managed `content/` keys live content records name, the GC guard input. */
-function readRecordedContentKeys(db: ReturnType<typeof openAndMigrate>["db"]): Result<string[], AppError> {
-  try {
-    const table = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'content_records'")
-      .get() as { name: string } | null | undefined;
-    if (!table) return ok([]);
-    const rows = db
-      .prepare("SELECT storage_key FROM content_records WHERE storage_key IS NOT NULL")
-      .all() as unknown as Row[];
-    return ok(rows.map((row) => String(row.storage_key ?? "")));
-  } catch (error) {
-    return err(
-      appError("INTERNAL_ERROR", `Reading the content keys failed: ${messageOf(error)}.`, { cause: String(error) }),
-    );
-  }
 }
 
 interface Row {
@@ -2516,7 +2359,7 @@ function mapBackupRunRow(row: Record<string, unknown>): import("@sorage/core").B
   };
 }
 
-function readRecordedStorageKeys(db: ReturnType<typeof openAndMigrate>["db"]): Result<string[], AppError> {
+function readRecordedStorageKeys(db: SorageSqlite): Result<string[], AppError> {
   // The GC live-key proof validates every Artifact's record link before
   // collecting keys: an INNER JOIN would silently drop an Artifact whose
   // record row is missing and hand the collector an incomplete protection set
@@ -2606,48 +2449,13 @@ function readLockText(path: string): string | null {
 
 /** Copies one file streaming through a fixed buffer, hashing in the same pass. */
 function streamCopy(source: string, destination: string): string {
-  const input = openSync(source, "r");
-  let output: number | undefined;
-  const temporary = join(dirname(destination), `.${basename(destination)}.restore-${randomUUID()}.tmp`);
-  try {
-    // A retry may replace the exact managed destination, but it never opens that
-    // path for truncation: bytes first reach an exclusive sibling and rename
-    // atomically only after the copy and fsync succeed.
-    output = openSync(temporary, "wx");
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
-    for (;;) {
-      const read = readSync(input, buffer, 0, buffer.length, null);
-      if (read === 0) break;
-      hash.update(buffer.subarray(0, read));
-      let written = 0;
-      while (written < read) {
-        const count = writeSync(output, buffer, written, read - written);
-        if (count <= 0) throw new Error(`The restore copy made no progress after ${written} of ${read} bytes.`);
-        written += count;
-      }
-    }
-    fsyncSync(output);
-    closeSync(output);
-    output = undefined;
-    renameSync(temporary, destination);
-    fsyncDirectory(dirname(destination));
-    return hash.digest("hex");
-  } finally {
-    closeSync(input);
-    if (output !== undefined) {
-      try {
-        closeSync(output);
-      } catch {
-        // Best effort on the error path.
-      }
-    }
-    try {
-      rmSync(temporary, { force: true });
-    } catch {
-      // Best effort after a failed copy; the exclusive name cannot alias user data.
-    }
-  }
+  return copyFileHashed(source, destination, {
+    mode: "temp-rename",
+    tempName: "uuid",
+    fileFsync: true,
+    dirFsync: "required",
+    bufferBytes: COPY_BUFFER_BYTES,
+  });
 }
 
 function isContained(root: string, candidate: string): boolean {

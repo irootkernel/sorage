@@ -1,18 +1,6 @@
 import { managedRoot, managedDirectory } from "./managed-paths";
-import { randomUUID } from "node:crypto";
-import {
-  closeSync,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, lstatSync, openSync, readFileSync, readdirSync, statSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { appError, err, ok, type AppError, type Result } from "@sorage/core";
 import type { Clock } from "@sorage/core";
 import type { InitVaultPort } from "@sorage/core";
@@ -26,6 +14,7 @@ import {
   vaultGitignoreContent,
   verifyVaultPolicyFiles,
 } from "@sorage/core";
+import { writeFileAtomic } from "./fs-atomic";
 
 /**
  * Vault initialization (VLT-001, VLT-002, VLT-024 as amended by SHR-011):
@@ -119,33 +108,13 @@ function mergeMissingGitattributesLines(path: string): void {
 
 /** Replace only after the complete policy file has been written and synced. */
 function writeExact(path: string, content: string, mode: number): void {
-  const temporary = `${path}.tmp-${randomUUID()}`;
-  let handle: number | null = null;
-  let created = false;
-  try {
-    handle = openSync(temporary, "wx", mode);
-    created = true;
-    const bytes = Buffer.from(content, "utf8");
-    let offset = 0;
-    while (offset < bytes.length) {
-      const written = writeSync(handle, bytes, offset, bytes.length - offset);
-      if (written === 0) throw new Error("Writing the Vault attributes file made no progress");
-      offset += written;
-    }
-    fsyncSync(handle);
-    closeSync(handle);
-    handle = null;
-    renameSync(temporary, path);
-    const directory = openSync(dirname(path), "r");
-    try {
-      fsyncSync(directory);
-    } finally {
-      closeSync(directory);
-    }
-  } finally {
-    if (handle !== null) closeSync(handle);
-    if (created) rmSync(temporary, { force: true });
-  }
+  writeFileAtomic(path, content, {
+    tempName: "uuid",
+    exclusiveTemp: true,
+    createMode: mode,
+    fileFsync: true,
+    dirFsync: "required",
+  });
 }
 
 /** A Vault opened for use: the validated marker plus any layout findings. */

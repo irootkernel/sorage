@@ -5,7 +5,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { openNodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
 import * as handoffPorts from "@sorage/adapters/src/handoff-command-ports";
-import { clearMoveFence, setMoveFenceAndCountPending } from "@sorage/adapters/src/intent-log";
+import { clearMoveFence, setMoveFenceAndCountPending } from "@sorage/adapters/src/sqlite/move-fence";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import {
   createNodeApiTokenStore,

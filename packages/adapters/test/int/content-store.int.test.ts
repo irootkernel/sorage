@@ -16,15 +16,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { appError, err, ok, parseMemoReceipt, SystemClock, type ContentReferences } from "@sorage/core";
-import {
-  materializeFetchCacheFile,
-  sweepFetchCache,
-  createSqliteContentStore,
-  sqliteContentReferences,
-  receiptReferencedContentKeys,
-  type SqliteContentStore,
-} from "../../src/content-store";
-import { collectVaultGarbage, createSqliteIntentLog } from "../../src/intent-log";
+import { receiptReferencedContentKeys, sqliteContentReferences } from "../../src/content-references";
+import { createSqliteContentStore, type SqliteContentStore } from "../../src/content-store";
+import { materializeFetchCacheFile, sweepFetchCache } from "../../src/fetch-cache";
+import { createSqliteIntentLog } from "../../src/intent-log";
+import { collectVaultGarbage } from "../../src/maintenance";
 import { createSqliteEventLedger } from "../../src/events";
 import { migrate } from "../../src/sqlite/migrator";
 import { MIGRATIONS } from "../../src/sqlite/migrations";

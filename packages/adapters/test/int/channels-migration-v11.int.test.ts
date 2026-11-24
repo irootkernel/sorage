@@ -12,7 +12,7 @@ import {
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
-import { validateChannelContentLinks } from "../../src/content-store";
+import { validateChannelContentLinks } from "../../src/content-layout";
 import { createNodeDoctorPorts } from "../../src/doctor";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { inspectPreflight } from "../../src/preflight";

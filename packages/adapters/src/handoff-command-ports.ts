@@ -2,11 +2,13 @@ import { homedir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import type { ArtifactStore, HandoffDetailReadPorts, HandoffEventView, RevisionPorts, SendPorts } from "@sorage/core";
 import { type AppError, appError, err, ok, type Result, SystemClock, UuidGenerator } from "@sorage/core";
+import { composeAdapterContext, openAdapterContext } from "./adapter-context";
 import { createNodeArtifactStore } from "./artifact-store";
 import { createArtifactBodyPorts } from "./artifact-body-ports";
-import { createConfigStore, type ReadConfiguration } from "./config-store";
+import type { ReadConfiguration } from "./config-store";
 export type { ReadConfiguration } from "./config-store";
-import { createSqliteContentStore, sqliteContentReferences } from "./content-store";
+import { sqliteContentReferences } from "./content-references";
+import { createSqliteContentStore } from "./content-store";
 import { createSqliteEventLedger } from "./events";
 import { createSqliteHandoffReadStore } from "./handoff-read-store";
 import {
@@ -18,10 +20,10 @@ import {
 } from "./handoffs";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { digestFile, inspectSourceFile } from "./import-source";
-import { executeLegacyIntent } from "./intent-log";
-import { createNodeLockProbePorts, vaultMoveLockHeld } from "./lockfile";
+import { executeLegacyIntent } from "./legacy-intent";
+import { vaultMoveLockHeld } from "./lockfile";
 import { createNodeProjectPorts } from "./project-command-ports";
-import { AppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
+import { AppCommandError, storageContentionOf } from "./storage-contention";
 import { appendStructuredLog } from "./structured-log";
 import { createSqliteReviewStore } from "./review-store";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -85,72 +87,6 @@ export function openNodeHandoffDatabase(
         { cause: String(error) },
       ),
     );
-  }
-}
-
-function databaseFor(options: NodeHandoffCommandPortsOptions, stateDir: string): SorageSqlite {
-  if (options.database !== undefined) return options.database;
-  const plan = productionMigrationPlan();
-  try {
-    return openAndMigrate(resolve(stateDir, "sorage.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds }).db;
-  } catch (error) {
-    // A schema admission refusal keeps its public code; storage-preparation
-    // contention becomes the stamped Handoff refusal (SHR-015).
-    if (asSchemaAdmission(error) !== null || error instanceof AppCommandError) throw error;
-    const contention = storageContentionOf(error, "handoff");
-    if (contention !== null) throw carriedAppError(contention);
-    throw error;
-  }
-}
-
-/** Returns the operational configuration, reusing a borrowed command-scoped read when supplied (ADR-0036, SHR-015). */
-function operableConfiguration(
-  options: NodeHandoffCommandPortsOptions,
-  home: ReturnType<typeof createHomePaths>,
-  userHome: string,
-): ReadConfiguration {
-  if (options.configuration !== undefined) return options.configuration;
-  const config = createConfigStore({ home, lockPorts: createNodeLockProbePorts(), userHome });
-  const read = config.readForOperation();
-  if (!read.ok || read.value === null) {
-    throw carriedAppError(
-      read.ok
-        ? appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile })
-        : read.error,
-    );
-  }
-  return read.value;
-}
-
-/**
- * Composes a port bundle over either a borrowed connection or one owned by this
- * bundle. The returned `close()` releases only an owned connection (idempotently)
- * and is a safe no-op for a borrowed connection (ADR-0036).
- */
-function composeWithDatabase<T>(
-  options: NodeHandoffCommandPortsOptions,
-  stateDir: string,
-  compose: (database: SorageSqlite, close: () => void) => T,
-): T {
-  const ownsDatabase = options.database === undefined;
-  const db = databaseFor(options, stateDir);
-  let closed = false;
-  const close = (): void => {
-    if (closed || !ownsDatabase) return;
-    closed = true;
-    db.close();
-  };
-  try {
-    return compose(db, close);
-  } catch (error) {
-    if (ownsDatabase) {
-      try {
-        close();
-      } catch {
-        // Cleanup must not replace the original configuration or construction refusal.
-      }
-    }
-    throw error;
   }
 }
 
@@ -301,11 +237,17 @@ function artifactContentBindings(
 }
 
 export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}): SendPorts & { close(): void } {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  return composeWithDatabase(options, home.stateDir, (db, close) => {
-    const readConfig = operableConfiguration(options, home, userHome);
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "operation",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    configuration: options.configuration,
+    contentionSurface: "handoff",
+  });
+  return composeAdapterContext(context, ({ env, userHome, home, db, configuration: readConfig, close }) => {
     const effective = readConfig.config;
     const ledger = createSqliteEventLedger(db);
     const clock = options.clock ?? new SystemClock();
@@ -318,7 +260,7 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
     });
     return {
       projectPorts: createNodeProjectPorts({
-        env: env as HomeEnvironment,
+        env,
         userHome,
         database: db,
         configuration: readConfig,
@@ -406,11 +348,17 @@ export function createNodeRetentionPorts(options: NodeHandoffCommandPortsOptions
   disclosures?: import("@sorage/core").RetentionPorts["disclosures"];
   close(): void;
 } {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  return composeWithDatabase(options, home.stateDir, (db, close) => {
-    const read = operableConfiguration(options, home, userHome);
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "operation",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    configuration: options.configuration,
+    contentionSurface: "handoff",
+  });
+  return composeAdapterContext(context, ({ home, db, configuration: read, close }) => {
     const reviews = createNodeReviewPorts({ ...options, database: db, configuration: read });
     const artifactVaultPath = read.config.vault.path;
     const artifactInstallationId = read.config.installationId;
@@ -453,10 +401,15 @@ export function createNodeTerminalPorts(options: NodeHandoffCommandPortsOptions 
   terminals: ReturnType<typeof createSqliteTerminalStore>;
   close(): void;
 } {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  return composeWithDatabase(options, home.stateDir, (db, close) => {
+  const context = openAdapterContext({
+    order: "db-only",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    contentionSurface: "handoff",
+  });
+  return composeAdapterContext(context, ({ db, close }) => {
     const reviews = createNodeReviewPorts({ ...options, database: db });
     return {
       ...reviews,
@@ -479,11 +432,17 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   disclosures?: NonNullable<RevisionPorts["disclosures"]>;
   close(): void;
 } {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  return composeWithDatabase(options, home.stateDir, (db, close) => {
-    const readConfig = operableConfiguration(options, home, userHome);
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "operation",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    configuration: options.configuration,
+    contentionSurface: "handoff",
+  });
+  return composeAdapterContext(context, ({ home, db, configuration: readConfig, close }) => {
     const effective = readConfig.config;
     const reviews = createNodeReviewPorts({ ...options, database: db, configuration: readConfig });
     const artifactStore = createNodeArtifactStore({
@@ -557,10 +516,15 @@ export function createNodeReviewPorts(options: NodeHandoffCommandPortsOptions = 
   reviews: ReturnType<typeof createSqliteReviewStore>;
   close(): void;
 } {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  return composeWithDatabase(options, home.stateDir, (db, close) => {
+  const context = openAdapterContext({
+    order: "db-only",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    contentionSurface: "handoff",
+  });
+  return composeAdapterContext(context, ({ db, close }) => {
     const read = createNodeHandoffReadPorts({ ...options, database: db });
     return {
       ...read,
@@ -574,16 +538,22 @@ export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptio
   reviews: ReturnType<typeof createSqliteReviewStore>;
   close(): void;
 } {
-  const env = options.env ?? process.env;
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths({ SORAGE_HOME: env.SORAGE_HOME }, userHome);
-  return composeWithDatabase(options, home.stateDir, (db, close) => {
-    const readConfig = operableConfiguration(options, home, userHome);
+  const context = openAdapterContext({
+    order: "db-first",
+    configMode: "operation",
+    env: options.env,
+    userHome: options.userHome,
+    clock: options.clock,
+    database: options.database,
+    configuration: options.configuration,
+    contentionSurface: "handoff",
+  });
+  return composeAdapterContext(context, ({ env, userHome, home, db, configuration: readConfig, close }) => {
     const effective = readConfig.config;
     const ledger = createSqliteEventLedger(db);
     return {
       projectPorts: createNodeProjectPorts({
-        env: env as HomeEnvironment,
+        env,
         userHome,
         database: db,
         configuration: readConfig,

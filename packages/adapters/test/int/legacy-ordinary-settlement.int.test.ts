@@ -5,7 +5,8 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { approveDeletion, initializeInstallation, reviseHandoff, SYSTEM_ACTOR } from "@sorage/core";
 import { createSqliteEventLedger } from "../../src/events";
-import { createSqliteIntentLog, executeLegacyIntent } from "../../src/intent-log";
+import { createSqliteIntentLog } from "../../src/intent-log";
+import { executeLegacyIntent } from "../../src/legacy-intent";
 import {
   createSqliteHandoffWriteStore,
   createSqliteRetentionStore,

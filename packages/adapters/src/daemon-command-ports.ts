@@ -1,18 +1,6 @@
 import { homedir } from "node:os";
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import {
   appError,
   isManagedContentStorageKey,
@@ -23,7 +11,8 @@ import {
 } from "@sorage/core";
 import type { Configuration } from "@sorage/core";
 import { createConfigStore } from "./config-store";
-import { validateArtifactContentLinks } from "./content-store";
+import { validateArtifactContentLinks } from "./content-layout";
+import { writeFileAtomic } from "./fs-atomic";
 import { createNodeHomePaths, type HomePaths } from "./home";
 import { acquireLock, createNodeLockProbePorts, isPidAlive } from "./lockfile";
 import { digestManagedFileAsync, type ManagedAbortSignal } from "./managed-paths";
@@ -251,25 +240,12 @@ function artifactSize(vault: string, storageKey: string): number | null {
 
 /** The durable write every run-record change uses: temp file, fsync, rename, fsync dir. */
 export function atomicWrite(path: string, contents: string): void {
-  const temporary = join(dirname(path), `.${basenameOf(path)}.tmp-${process.pid}`);
-  writeFileSync(temporary, contents, "utf8");
-  const handle = openSync(temporary, "r+");
-  fsyncSync(handle);
-  closeSync(handle);
-  renameSync(temporary, path);
-  try {
-    const dir = openSync(dirname(path), "r");
-    fsyncSync(dir);
-    closeSync(dir);
-  } catch {
-    // Directory fsync is best effort on platforms that refuse it.
-  }
-  rmSync(temporary, { force: true });
-}
-
-function basenameOf(path: string): string {
-  const parts = path.split("/");
-  return parts[parts.length - 1] ?? "record";
+  writeFileAtomic(path, contents, {
+    tempName: "pid",
+    exclusiveTemp: false,
+    fileFsync: true,
+    dirFsync: "best-effort",
+  });
 }
 
 /** Apps classify only the migrator's typed admission exceptions through composition. */

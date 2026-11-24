@@ -1,11 +1,13 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, fstatSync, readSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type AppError, appError, exchangeInvalid, type ExchangeLocalScope, type ProjectBinding } from "@sorage/core";
+import { createNodeGitClient } from "./git-client";
 import { managedRoot, openManagedFile, UnsafeManagedPathError } from "./managed-paths";
 import { createNodeResolutionBindings } from "./project-command-ports";
 import { carriedAppError } from "./storage-contention";
+
+const exchangeGitClient = createNodeGitClient({ timeoutMs: 10_000 });
 
 export interface BoundExchangeSource extends ExchangeLocalScope {
   root: string;
@@ -32,12 +34,9 @@ function unavailable(reason: string): never {
 
 export function exchangeWorkspaceRoot(binding: ProjectBinding, cwd: string): string {
   if (binding.bindingKind === "directory") return managedRoot(binding.directory);
-  const root = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  if (root.status !== 0) return unavailable("binding");
-  return managedRoot(root.stdout.trim());
+  const root = exchangeGitClient.run({ cwd, args: ["rev-parse", "--show-toplevel"] });
+  if (!root.ok || root.value.exitCode !== 0) return unavailable("binding");
+  return managedRoot(root.value.stdout.trim());
 }
 
 export function resolveExchangeSource(

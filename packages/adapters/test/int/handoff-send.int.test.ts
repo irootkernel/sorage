@@ -10,7 +10,7 @@ import { createHomePaths } from "../../src/home";
 import { createSqliteContentStore } from "../../src/content-store";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffWriteStore } from "../../src/handoffs";
-import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/intent-log";
+import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/sqlite/move-fence";
 import { createSqliteProjectRepository } from "../../src/projects";
 import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";

@@ -14,8 +14,8 @@ import {
   type TerminalTransition,
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
-import { liveFencePaused } from "./sqlite/move-fence";
 import type { SorageSqlite } from "./sqlite/connection";
+import { runInTransaction } from "./sqlite/transaction";
 import { type ContentionSurface, storageContentionOf } from "./storage-contention";
 
 export interface IdempotencyLookupOptions {
@@ -74,7 +74,7 @@ export interface HandoffRowSnapshot {
   rowVersion: number;
 }
 
-/** Column values an update may carry; the statement builder whitelists the keys. */
+/** Column values an update may carry through the exhaustive terminal/retention switches. */
 export type HandoffAssignment =
   | "review_state"
   | "revision"
@@ -91,92 +91,6 @@ export type HandoffAssignment =
   | "archived_at"
   | "deleted_at"
   | "updated_at";
-
-const ASSIGNABLE: readonly HandoffAssignment[] = [
-  "review_state",
-  "revision",
-  "current_artifact_id",
-  "accepted_revision",
-  "accepted_at",
-  "declined_at",
-  "decline_reason",
-  "withdrawn_at",
-  "consecutive_no_change_resolutions",
-  "first_fetched_at",
-  "review_engaged_at",
-  "pinned",
-  "archived_at",
-  "deleted_at",
-  "updated_at",
-];
-
-export interface SqliteHandoffRowStore {
-  /**
-   * Runs the compare-and-set for one Handoff. `changes === 1` means the row moved from
-   * the expected version to its successor; anything else means another writer moved it
-   * first, or the row is absent.
-   */
-  compareAndSet(
-    handoffId: string,
-    expectedRowVersion: number,
-    assignments: Partial<Record<HandoffAssignment, unknown>>,
-  ): Result<{ rowVersion: number }, AppError>;
-  /** Loads one row's Row Version; the row-mapping read side arrives with TASK-030. */
-  rowVersionOf(handoffId: string): Result<number | null, AppError>;
-}
-
-export function createSqliteHandoffRowStore(db: SorageSqlite): SqliteHandoffRowStore {
-  return {
-    compareAndSet(handoffId, expectedRowVersion, assignments) {
-      const columns = Object.keys(assignments).filter((column) => (ASSIGNABLE as readonly string[]).includes(column));
-      if (columns.length === 0) {
-        return err(appError("INTERNAL_ERROR", "the compare-and-set requires at least one assignable Handoff column"));
-      }
-      const sets = columns.map((column) => `${column} = ?`).join(", ");
-      const values = columns.map((column) => (assignments as Record<string, unknown>)[column]);
-      try {
-        const changed = db
-          .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
-          .run(...(values as never[]), handoffId, expectedRowVersion) as { changes: number };
-        if (changed.changes === 1) {
-          return ok({ rowVersion: expectedRowVersion + 1 });
-        }
-        const current = db.prepare("SELECT row_version FROM handoffs WHERE id = ?").get(handoffId) as
-          | { row_version: number }
-          | null
-          | undefined;
-        if (!current) {
-          return err(appError("HANDOFF_NOT_FOUND", `no Handoff has the id '${handoffId}'`, { handoffId }));
-        }
-        return err(
-          appError(
-            "ROW_VERSION_CONFLICT",
-            "the Handoff changed since it was last read; re-read it and retry with the new Row Version",
-            { handoffId, expectedRowVersion, currentRowVersion: current.row_version },
-          ),
-        );
-      } catch (error) {
-        return err(
-          appError("INTERNAL_ERROR", `the Handoff compare-and-set failed: ${messageOf(error)}`, {
-            handoffId,
-            cause: String(error),
-          }),
-        );
-      }
-    },
-    rowVersionOf(handoffId) {
-      try {
-        const row = db.prepare("SELECT row_version FROM handoffs WHERE id = ?").get(handoffId) as
-          | { row_version: number }
-          | null
-          | undefined;
-        return ok(row ? row.row_version : null);
-      } catch (error) {
-        return err(appError("INTERNAL_ERROR", `reading the Handoff Row Version failed: ${messageOf(error)}`));
-      }
-    },
-  };
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -205,25 +119,10 @@ export function createSqliteHandoffWriteStore(
     );
   return {
     createFanout(commit: FanoutCommit): Result<{ recorded: number }, AppError> {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          // The vault-move fence pauses creation exactly as it pauses intent records:
-          // a fan-out's committed intents are promises about the current Vault
-          // (RUN-002, the closed EPIC-004 seam).
-          const paused = liveFencePaused(db);
-          if (paused) {
-            db.exec("ROLLBACK");
-            return err(
-              appError(
-                "SERVICE_PAUSED",
-                "A Vault move or restore is in progress; the Handoff creation paused instead of racing it.",
-                {
-                  moveFencePid: paused.pid,
-                },
-              ),
-            );
-          }
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           const bindingRows =
             commit.unregisteredSenderPath !== undefined || commit.registeredSender !== undefined
               ? (db
@@ -243,7 +142,6 @@ export function createSqliteHandoffWriteStore(
             const sender = commit.registeredSender;
             if (sender.asOverride) {
               if (!bindingRows.some((row) => row.project_id === sender.projectId)) {
-                db.exec("ROLLBACK");
                 return err(
                   appError(
                     "PROJECT_UNBOUND",
@@ -264,7 +162,6 @@ export function createSqliteHandoffWriteStore(
                 .sort((a, b) => b.directory.length - a.directory.length)[0];
               const owner = gitOwner ?? directoryOwner;
               if (owner?.id !== sender.bindingId || owner.project_id !== sender.projectId) {
-                db.exec("ROLLBACK");
                 return err(
                   owner?.status === "archived"
                     ? appError(
@@ -303,7 +200,6 @@ export function createSqliteHandoffWriteStore(
               return atOrBelow(root, directory) || atOrBelow(directory, root);
             });
             if (owner !== undefined || (!allowUnregistered && unresolvedRoot !== undefined)) {
-              db.exec("ROLLBACK");
               return err(
                 owner?.status === "archived"
                   ? appError("PROJECT_ARCHIVED", "the sender Project was archived while the Handoff was prepared", {
@@ -326,7 +222,6 @@ export function createSqliteHandoffWriteStore(
           for (const projectId of participants) {
             const project = projectStatus.get(projectId) as { slug: string; status: string } | null | undefined;
             if (project?.status === "archived") {
-              db.exec("ROLLBACK");
               return err(
                 appError("PROJECT_ARCHIVED", "an archived Project cannot start a new Handoff", {
                   slug: project.slug,
@@ -335,7 +230,6 @@ export function createSqliteHandoffWriteStore(
             }
             const binding = db.prepare("SELECT 1 FROM project_bindings WHERE project_id = ? LIMIT 1").get(projectId);
             if (binding === null || binding === undefined) {
-              db.exec("ROLLBACK");
               return err(
                 appError("PROJECT_UNBOUND", "a Project lost its last binding while the Handoff was prepared", {
                   slug: project?.slug,
@@ -411,32 +305,31 @@ export function createSqliteHandoffWriteStore(
               commit.idempotency.expiresAt,
             );
           }
-          db.exec("COMMIT");
           return ok({ recorded: commit.handoffs.length });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // The transaction never opened or the connection already rolled back.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        const contention = contentionRefusal(error, options.contentionSurface);
-        if (contention !== null) return err(contention);
-        return err(
-          appError("INTERNAL_ERROR", `Creating the Handoff fan-out failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: true,
+          fenceError: (pid) =>
+            appError(
+              "SERVICE_PAUSED",
+              "A Vault move or restore is in progress; the Handoff creation paused instead of racing it.",
+              { moveFencePid: pid },
+            ),
+          failure: (error) =>
+            contentionRefusal(error, options.contentionSurface) ??
+            appError("INTERNAL_ERROR", `Creating the Handoff fan-out failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
 
     completeActivations(completions): Result<{ completed: number }, AppError> {
       if (completions.length === 0) return ok({ completed: 0 });
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           let winners = 0;
           for (const completion of completions) {
             // The persisted pending row — read and retained before this
@@ -458,23 +351,16 @@ export function createSqliteHandoffWriteStore(
               winners += 1;
             }
           }
-          db.exec("COMMIT");
           return ok({ completed: winners });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        return err(
-          appError("INTERNAL_ERROR", `Completing Artifact activations failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            appError("INTERNAL_ERROR", `Completing Artifact activations failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
 
     findSupersedesTarget(id) {
@@ -551,24 +437,10 @@ export function createSqliteRevisionStore(
   return {
     idempotencyLookup: (key, scope) => write.idempotencyLookup(key, scope),
     applyContentRevision(input) {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          // The vault-move fence pauses revision exactly as it pauses creation: a
-          // committed intent is a promise about the current Vault (RUN-002).
-          const pausedRevision = liveFencePaused(db);
-          if (pausedRevision) {
-            db.exec("ROLLBACK");
-            return err(
-              appError(
-                "SERVICE_PAUSED",
-                "A Vault move or restore is in progress; the revision paused instead of racing it.",
-                {
-                  moveFencePid: pausedRevision.pid,
-                },
-              ),
-            );
-          }
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           const changed = db
             .prepare(
               "UPDATE handoffs SET revision = revision + 1, read_status = 'unconfirmed', read_revision = NULL, revision_read_at = NULL, processing_status = 'not_started', processing_started_at = NULL, processing_completed_at = NULL, review_state = ?, current_artifact_id = ?, consecutive_no_change_resolutions = 0, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
@@ -581,7 +453,7 @@ export function createSqliteRevisionStore(
               input.expectedRowVersion,
             ) as { changes: number };
           if (changed.changes !== 1) {
-            return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
+            return conflictAfterFailedCas(db, input.handoffId, input.expectedRowVersion);
           }
           db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
           // The replacement lands first, so the living Handoff's metadata is
@@ -630,10 +502,8 @@ export function createSqliteRevisionStore(
           for (const superseded of supersededRecords) {
             const removal = content.removeArtifactContentRecord(superseded.content_record_id);
             if (!removal.ok) {
-              // A refusal aborts the whole revision inside this open
-              // transaction: roll back every earlier mutation of this call
-              // before propagating the existing error code.
-              db.exec("ROLLBACK");
+              // Returning err(...) lets runInTransaction roll back every earlier
+              // mutation of this call before propagating the existing error code.
               return err(removal.error);
             }
           }
@@ -673,30 +543,29 @@ export function createSqliteRevisionStore(
               input.idempotency.expiresAt,
             );
           }
-          db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        const contention = contentionRefusal(error, options.contentionSurface);
-        if (contention !== null) return err(contention);
-        return err(
-          appError("INTERNAL_ERROR", `Applying the content revision failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: true,
+          fenceError: (pid) =>
+            appError(
+              "SERVICE_PAUSED",
+              "A Vault move or restore is in progress; the revision paused instead of racing it.",
+              { moveFencePid: pid },
+            ),
+          failure: (error) =>
+            contentionRefusal(error, options.contentionSurface) ??
+            appError("INTERNAL_ERROR", `Applying the content revision failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
     applyNoChangeResolution(input) {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           const changed = db
             .prepare(
               "UPDATE handoffs SET review_state = ?, consecutive_no_change_resolutions = consecutive_no_change_resolutions + 1, updated_at = ?, row_version = row_version + 1 WHERE id = ? AND row_version = ?",
@@ -710,7 +579,7 @@ export function createSqliteRevisionStore(
             changes: number;
           };
           if (changed.changes !== 1) {
-            return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
+            return conflictAfterFailedCas(db, input.handoffId, input.expectedRowVersion);
           }
           db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
           for (const event of input.events) {
@@ -728,32 +597,25 @@ export function createSqliteRevisionStore(
               input.idempotency.expiresAt,
             );
           }
-          db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        const contention = contentionRefusal(error, options.contentionSurface);
-        if (contention !== null) return err(contention);
-        return err(
-          appError("INTERNAL_ERROR", `Applying the no-change resolution failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            contentionRefusal(error, options.contentionSurface) ??
+            appError("INTERNAL_ERROR", `Applying the no-change resolution failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
     completeActivations: (completions) => write.completeActivations(completions),
     completeUnlinks(completions) {
       if (completions.length === 0) return ok({ completed: 0 });
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           let winners = 0;
           for (const completion of completions) {
             // Exactly-once over the persisted row: the live pending intent's
@@ -779,21 +641,16 @@ export function createSqliteRevisionStore(
               winners += 1;
             }
           }
-          db.exec("COMMIT");
           return ok({ completed: winners });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        return err(
-          appError("INTERNAL_ERROR", `Completing the unlinks failed: ${messageOf(error)}.`, { cause: String(error) }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            appError("INTERNAL_ERROR", `Completing the unlinks failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
   };
 }
@@ -915,16 +772,12 @@ function settleLegacyCompletion(
   return true;
 }
 
-function rollbackWithConflict(
+/** Reads the current row version inside an active transaction so `runInTransaction` owns rollback on conflict. */
+function conflictAfterFailedCas(
   db: SorageSqlite,
   handoffId: string,
   expectedRowVersion: number,
 ): Result<{ rowVersion: number }, AppError> {
-  try {
-    db.exec("ROLLBACK");
-  } catch {
-    // Nothing left to roll back.
-  }
   const row = db.prepare("SELECT row_version FROM handoffs WHERE id = ?").get(handoffId) as
     | { row_version: number }
     | null
@@ -1042,38 +895,31 @@ export function createSqliteTerminalStore(
       const mapped = mapTerminalTransition(input.transition, input.at);
       if (!mapped.ok) return mapped;
       const sets = mapped.value.columns.map((column) => `${column} = ?`).join(", ");
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           const changed = db
             .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
             .run(...(mapped.value.values as never[]), input.handoffId, input.expectedRowVersion) as {
             changes: number;
           };
           if (changed.changes !== 1) {
-            return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
+            return conflictAfterFailedCas(db, input.handoffId, input.expectedRowVersion);
           }
           db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
           ledger.append(input.event);
-          db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        const contention = contentionRefusal(error, options.contentionSurface);
-        if (contention !== null) return err(contention);
-        return err(
-          appError("INTERNAL_ERROR", `Applying the terminal transition failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            contentionRefusal(error, options.contentionSurface) ??
+            appError("INTERNAL_ERROR", `Applying the terminal transition failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
   };
 }
@@ -1097,34 +943,17 @@ export function createSqliteRetentionStore(
       const contentRemoval =
         input.change.kind === "deletion-approve" &&
         (input.change.unlinkIntent !== undefined || input.change.removeContent === true);
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
-          // The vault-move fence pauses the content-committing decisions: a
-          // deletion approval removes current content — its file unlink intent
-          // or its inline record — so it races the mover the same way a
-          // creation or revision does, while a pin or archive that touches no
-          // content may proceed (RUN-002, SHR-011).
-          const pausedRetention = contentRemoval ? liveFencePaused(db) : null;
-          if (pausedRetention) {
-            db.exec("ROLLBACK");
-            return err(
-              appError(
-                "SERVICE_PAUSED",
-                "A Vault move or restore is in progress; the retention decision paused instead of racing it.",
-                {
-                  moveFencePid: pausedRetention.pid,
-                },
-              ),
-            );
-          }
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           const changed = db
             .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
             .run(...(mapped.value.values as never[]), input.handoffId, input.expectedRowVersion) as {
             changes: number;
           };
           if (changed.changes !== 1) {
-            return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
+            return conflictAfterFailedCas(db, input.handoffId, input.expectedRowVersion);
           }
           if (input.change.kind === "deletion-request") {
             db.prepare(
@@ -1167,9 +996,8 @@ export function createSqliteRetentionStore(
             for (const tombstoned of tombstonedRecords) {
               const removal = content.removeArtifactContentRecord(tombstoned.content_record_id);
               if (!removal.ok) {
-                // Same abort discipline as a revision: no partial retention
-                // mutation survives a removal refusal.
-                db.exec("ROLLBACK");
+                // Returning err(...) lets runInTransaction roll back every earlier
+                // mutation so no partial retention change survives a removal refusal.
                 return err(removal.error);
               }
             }
@@ -1199,25 +1027,26 @@ export function createSqliteRetentionStore(
               input.change.idempotency.expiresAt,
             );
           }
-          db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        const contention = contentionRefusal(error, options.contentionSurface);
-        if (contention !== null) return err(contention);
-        return err(
-          appError("INTERNAL_ERROR", `Applying the retention decision failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          // The vault-move fence pauses content-removing deletion approvals
+          // (both inline and file-backed), while metadata-only changes proceed
+          // (RUN-002, SHR-011).
+          checkFence: contentRemoval,
+          fenceError: (pid) =>
+            appError(
+              "SERVICE_PAUSED",
+              "A Vault move or restore is in progress; the retention decision paused instead of racing it.",
+              { moveFencePid: pid },
+            ),
+          failure: (error) =>
+            contentionRefusal(error, options.contentionSurface) ??
+            appError("INTERNAL_ERROR", `Applying the retention decision failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
     idempotencyLookup(key, scope) {
       try {
@@ -1250,9 +1079,10 @@ export function createSqliteRetentionStore(
       }
     },
     completeUnlink(input) {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        try {
+      return runInTransaction(
+        db,
+        "BEGIN IMMEDIATE",
+        () => {
           // Exactly-once over the persisted row: the live pending intent's own
           // to_path, ownership, and exactly-matching authorized ArtifactID are
           // retained before this completion's DELETE, and only that winner
@@ -1270,23 +1100,16 @@ export function createSqliteRetentionStore(
             actor: input.event.actor,
             createdAt: input.event.createdAt,
           });
-          db.exec("COMMIT");
           return ok({ completed: settled ? 1 : 0 });
-        } catch (transactionError) {
-          try {
-            db.exec("ROLLBACK");
-          } catch {
-            // As above.
-          }
-          throw transactionError;
-        }
-      } catch (error) {
-        return err(
-          appError("INTERNAL_ERROR", `Completing the deletion unlink failed: ${messageOf(error)}.`, {
-            cause: String(error),
-          }),
-        );
-      }
+        },
+        {
+          checkFence: false,
+          failure: (error) =>
+            appError("INTERNAL_ERROR", `Completing the deletion unlink failed: ${messageOf(error)}.`, {
+              cause: String(error),
+            }),
+        },
+      );
     },
   };
 }

@@ -30,7 +30,7 @@ import {
 import { createNodeMemoPorts, type NodeMemoPorts } from "../../src/memo-command-ports";
 import { captureMemoBodyFile, captureMemoBodyText } from "../../src/memo-body-file";
 import { memoInputDirectory, sweepMemoInputSpool } from "../../src/memo-input-spool";
-import { validateMemoContentLinks } from "../../src/content-store";
+import { validateMemoContentLinks } from "../../src/content-layout";
 import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
 import { openSorageDatabase } from "../../src/sqlite/connection";

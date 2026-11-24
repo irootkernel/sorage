@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
   type AppError,
   appError,
@@ -83,7 +82,7 @@ import {
   waitForExchangeActivity,
   type Result,
 } from "@sorage/core";
-import { createConfigStore } from "./config-store";
+import { type ConfigFirstAdapterContext, openAdapterContext } from "./adapter-context";
 import {
   exchangeAcceptances,
   insertExchangeAcceptance,
@@ -105,22 +104,21 @@ import {
 import { createExchangeWorkingStore, type PreparedExchangeBody } from "./exchange-working-store";
 import { readExchangeLifecycle, recordExchangeTransition } from "./exchange-lifecycle-records";
 import { observeExchangeNotices, retainConnectionIssue, type NoticeSlot } from "./exchange-notice-records";
-import { createHomePaths, type HomeEnvironment, type HomePaths } from "./home";
-import { createNodeLockProbePorts, vaultMoveLockHeld, vaultMovePauseRefusal } from "./lockfile";
+import type { HomeEnvironment, HomePaths } from "./home";
 import { createNodeResolutionBindings } from "./project-command-ports";
 import { createSqliteEventLedger } from "./events";
 import { createSqliteProjectRepository } from "./projects";
 import { openCoveredReadStorage } from "./read-storage";
 import { blockingSleepMs } from "./sleep";
 import type { SorageSqlite } from "./sqlite/connection";
-import { productionMigrationPlan } from "./sqlite/migrations";
-import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
+import { asSchemaAdmission } from "./sqlite/migrator";
 import { runInTransaction } from "./sqlite/transaction";
 import { asAppCommandError, carriedAppError, storageContentionOf } from "./storage-contention";
 
 export { contentionKindOf } from "./storage-contention";
 
 interface Context {
+  adapter: ConfigFirstAdapterContext;
   cwd: string;
   userHome: string;
   env: HomeEnvironment;
@@ -226,19 +224,22 @@ function storageFailure(error: unknown): AppError {
 }
 
 function contextOf(options: ExchangeCommandOptions): Context {
-  const env = options.env ?? { SORAGE_HOME: process.env.SORAGE_HOME };
-  const userHome = options.userHome ?? homedir();
-  const home = createHomePaths(env, userHome);
-  const read = need(createConfigStore({ home, userHome, lockPorts: createNodeLockProbePorts() }).readForOperation());
+  const adapter = openAdapterContext({
+    order: "config-first",
+    env: options.env,
+    userHome: options.userHome,
+  });
+  const read = need(adapter.readConfiguration("operation"));
   if (!read)
     return fail(
-      appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: home.configFile }),
+      appError("NOT_INITIALIZED", "Sorage has not been initialized.", { expectedConfigPath: adapter.home.configFile }),
     );
   return {
     ...options,
-    env,
-    userHome,
-    home,
+    adapter,
+    env: adapter.env,
+    userHome: adapter.userHome,
+    home: adapter.home,
     cwd: options.cwd ?? process.cwd(),
     config: read.config,
     now: options.now ?? (() => new Date()),
@@ -274,13 +275,7 @@ function createWorkingStore(db: SorageSqlite, context: Context): WorkingStore {
 }
 
 function openExchangeWriter(context: Context): SorageSqlite {
-  if (vaultMoveLockHeld(context.home.runDir)) {
-    fail(vaultMovePauseRefusal(context.home.lockFile("vault-move")));
-  }
-  const migrations = productionMigrationPlan();
-  return openAndMigrate(join(context.home.stateDir, "sorage.sqlite3"), migrations.migrations, {
-    rebuilds: migrations.rebuilds,
-  }).db;
+  return context.adapter.openDatabase({ checkMoveLockBeforeOpen: true });
 }
 
 class ExchangeStore implements ExchangeBusinessRepository {
