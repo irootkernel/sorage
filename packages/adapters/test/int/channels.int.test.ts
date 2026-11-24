@@ -18,7 +18,7 @@ import {
   showChannel,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureChannelBodyFile, createNodeChannelPorts, type NodeChannelPorts } from "../../src/channels";
+import { captureChannelBodyFile, createNodeChannelPorts, type NodeChannelPorts } from "../../src/channel-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { openSorageDatabase } from "../../src/sqlite/connection";
 import { FakeClock } from "../../src/testkit/fakes";

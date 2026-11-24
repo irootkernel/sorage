@@ -40,9 +40,15 @@ export interface ProjectBindingFsPort {
   gitCommonDirectory(path: string): string | null;
 }
 
-/** The Handoff facts the Project commands need; the handoffs table itself arrives with EPIC-005. */
+/** The recipient-scoped Handoff stats the Project unbind guard needs (PRJ-022, HPR-011). */
 export interface ProjectHandoffStatsPort {
-  /** An open Handoff is one in `awaiting_recipient` or `changes_requested` that is not deleted (PRJ-022). */
+  /**
+   * Counts recipient-scoped non-deleted Handoffs in `awaiting_recipient` or
+   * `changes_requested`, plus non-deleted `accepted` Handoffs with recorded
+   * `not_started` or `in_progress` processing (including archived ones,
+   * counting each Handoff once and excluding legacy `unrecorded` processing;
+   * PRJ-022, HPR-011).
+   */
   openHandoffCount(projectId: string): Result<number, AppError>;
 }
 
@@ -218,6 +224,27 @@ function isAtOrBelow(candidate: string, directory: string): boolean {
   return candidate === directory || candidate.startsWith(`${directory}/`);
 }
 
+/** Checks a normalized binding target against existing bindings for exact duplication or Git repository containment (PRJ-016). */
+export function findBindingConflict(
+  target: { directory: string; physicalPath: string },
+  existing: readonly ProjectBinding[],
+  excludeBindingId?: string,
+): AppError | null {
+  for (const binding of existing) {
+    if (binding.id === excludeBindingId) continue;
+    if (binding.directory === target.directory) {
+      return appError("BINDING_DUPLICATE", "the target directory is already bound", { directory: target.directory });
+    }
+    if (binding.bindingKind === "git_repository" && isAtOrBelow(target.physicalPath, workspaceRootOf(binding))) {
+      return appError("BINDING_DUPLICATE", "the target lies inside an already-bound Git repository", {
+        directory: target.physicalPath,
+        existing: binding.directory,
+      });
+    }
+  }
+  return null;
+}
+
 function checkedBindingTarget(
   ports: ProjectCommandPorts,
   path: string,
@@ -238,22 +265,12 @@ function checkedBindingTarget(
   if (!containment.ok) return containment;
   const bindings = ports.projects.listBindings();
   if (!bindings.ok) return bindings;
-  for (const binding of bindings.value) {
-    if (binding.id === excludeBindingId) continue;
-    if (binding.directory === target.value.directory) {
-      return err(
-        appError("BINDING_DUPLICATE", "the target directory is already bound", { directory: target.value.directory }),
-      );
-    }
-    if (binding.bindingKind === "git_repository" && isAtOrBelow(physicalPath.value, workspaceRootOf(binding))) {
-      return err(
-        appError("BINDING_DUPLICATE", "the target lies inside an already-bound Git repository", {
-          directory: physicalPath.value,
-          existing: binding.directory,
-        }),
-      );
-    }
-  }
+  const conflict = findBindingConflict(
+    { directory: target.value.directory, physicalPath: physicalPath.value },
+    bindings.value,
+    excludeBindingId,
+  );
+  if (conflict !== null) return err(conflict);
   return ok({ ...target.value, physicalPath: physicalPath.value });
 }
 

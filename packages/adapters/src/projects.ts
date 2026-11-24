@@ -1,7 +1,15 @@
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort } from "@sorage/core";
-import { type AppError, appError, checkVaultContainment, err, ok, UuidGenerator, workspaceRootOf } from "@sorage/core";
+import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort, ProjectResolutionPorts } from "@sorage/core";
+import {
+  type AppError,
+  appError,
+  checkVaultContainment,
+  err,
+  findBindingConflict,
+  ok,
+  UuidGenerator,
+} from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { storageContentionOf, type ContentionSurface } from "./storage-contention";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -53,6 +61,13 @@ export interface SqliteProjectRepositoryOptions {
   /** The append-only ledger every mutation's event lands in, inside the same transaction. */
   events: SqliteEventLedger;
   /**
+   * Required withdrawal hook invoked synchronously inside the open write
+   * transaction, before emitting the Project lifecycle event, when a Project is
+   * archived or loses its last binding on this installation. Throwing aborts
+   * and rolls back the entire mutation atomically.
+   */
+  onLocalProjectWithdrawn: (projectId: string) => void;
+  /**
    * The invoking command family of SHR-015: when set, a busy write-lock
    * acquisition or commit in this repository maps to the stamped
    * `STORAGE_INSPECTION_UNAVAILABLE` refusal with that family's wording.
@@ -62,11 +77,62 @@ export interface SqliteProjectRepositoryOptions {
 
 const defaultEventIds = new UuidGenerator();
 
-function revokeExchangeClaims(db: SorageSqlite, projectId: string): void {
-  // The Project repository can also open historical schemas that predate Exchange notices.
-  if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'exchange_notice_claims'").get()) return;
-  db.prepare("DELETE FROM exchange_notice_claims WHERE project_id = ?").run(projectId);
-  db.prepare("DELETE FROM exchange_claims WHERE project_id = ?").run(projectId);
+export type SqliteProjectReader = ProjectResolutionPorts["projects"];
+
+/**
+ * Dedicated read-only Project registry reader exposing only slug/list/binding
+ * lookups with no mutation or withdrawal hook.
+ */
+export function createSqliteProjectReader(
+  db: SorageSqlite,
+  options: { contentionSurface?: ContentionSurface | undefined } = {},
+): SqliteProjectReader {
+  const repositorySurface = options.contentionSurface;
+  const mapRepositoryError = (error: unknown): AppError => internal(error, repositorySurface);
+  return {
+    findProjectBySlug(slug) {
+      try {
+        // NOCASE folds only ASCII, so the query folds the way every stored slug is
+        // folded (deriveProjectSlug and addProject use toLowerCase, which is
+        // locale-independent) and lookup stays case-insensitive in every script and on
+        // every host (PRJ-005). bun:sqlite returns null for a no-row get and
+        // node:sqlite returns undefined, so both mean absence.
+        const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug.toLowerCase()) as
+          | ProjectRow
+          | null
+          | undefined;
+        return ok(row ? toProject(row) : null);
+      } catch (error) {
+        return err(mapRepositoryError(error));
+      }
+    },
+    listProjects() {
+      try {
+        const rows = db.prepare("SELECT * FROM projects ORDER BY slug COLLATE NOCASE").all() as unknown as ProjectRow[];
+        return ok(rows.map(toProject));
+      } catch (error) {
+        return err(mapRepositoryError(error));
+      }
+    },
+    listBindings() {
+      try {
+        const rows = db.prepare("SELECT * FROM project_bindings ORDER BY directory").all() as unknown as BindingRow[];
+        return ok(rows.map(toBinding));
+      } catch (error) {
+        return err(mapRepositoryError(error));
+      }
+    },
+    listBindingsForProject(projectId) {
+      try {
+        const rows = db
+          .prepare("SELECT * FROM project_bindings WHERE project_id = ? ORDER BY directory")
+          .all(projectId) as unknown as BindingRow[];
+        return ok(rows.map(toBinding));
+      } catch (error) {
+        return err(mapRepositoryError(error));
+      }
+    },
+  };
 }
 
 export function createSqliteProjectRepository(
@@ -75,6 +141,7 @@ export function createSqliteProjectRepository(
 ): ProjectRepositoryPort {
   const fs = options.fs ?? nativeFs;
   const ledger = options.events;
+  const reader = createSqliteProjectReader(db, { contentionSurface: options.contentionSurface });
   // SHR-015: the invoking family's surface decides whether a busy signature
   // becomes the stamped refusal; unsurfaced compositions keep INTERNAL_ERROR.
   const repositorySurface = options.contentionSurface;
@@ -195,30 +262,8 @@ export function createSqliteProjectRepository(
         return err(mapInsertError(error, project.slug, binding.directory, repositorySurface));
       }
     },
-    findProjectBySlug(slug) {
-      try {
-        // NOCASE folds only ASCII, so the query folds the way every stored slug is
-        // folded (deriveProjectSlug and addProject use toLowerCase, which is
-        // locale-independent) and lookup stays case-insensitive in every script and on
-        // every host (PRJ-005). bun:sqlite returns null for a no-row get and
-        // node:sqlite returns undefined, so both mean absence.
-        const row = db.prepare("SELECT * FROM projects WHERE slug = ? COLLATE NOCASE").get(slug.toLowerCase()) as
-          | ProjectRow
-          | null
-          | undefined;
-        return ok(row ? toProject(row) : null);
-      } catch (error) {
-        return err(mapRepositoryError(error));
-      }
-    },
-    listProjects() {
-      try {
-        const rows = db.prepare("SELECT * FROM projects ORDER BY slug COLLATE NOCASE").all() as unknown as ProjectRow[];
-        return ok(rows.map(toProject));
-      } catch (error) {
-        return err(mapRepositoryError(error));
-      }
-    },
+    findProjectBySlug: reader.findProjectBySlug,
+    listProjects: reader.listProjects,
     addBinding(binding, actor) {
       try {
         // Inside the try like createProjectWithBinding, so a directory that vanishes
@@ -326,7 +371,7 @@ export function createSqliteProjectRepository(
             db.exec("ROLLBACK");
             return err(appError("PROJECT_NOT_FOUND", `no Project has the id '${projectId}'`, { projectId }));
           }
-          if (status === "archived") revokeExchangeClaims(db, projectId);
+          if (status === "archived") options.onLocalProjectWithdrawn(projectId);
           emit(
             status === "archived" ? "PROJECT_STATUS_ARCHIVED" : "PROJECT_STATUS_ACTIVE",
             actor,
@@ -368,7 +413,7 @@ export function createSqliteProjectRepository(
               .prepare("SELECT 1 FROM project_bindings WHERE project_id = ? AND installation_id = ? LIMIT 1")
               .get(row.project_id, options.installationId)
           )
-            revokeExchangeClaims(db, row.project_id);
+            options.onLocalProjectWithdrawn(row.project_id);
           emit(
             "PROJECT_BINDING_REMOVED",
             actor,
@@ -417,23 +462,10 @@ export function createSqliteProjectRepository(
           const others = db
             .prepare("SELECT * FROM project_bindings WHERE installation_id = ? AND id != ?")
             .all(options.installationId, bindingId) as BindingRow[];
-          for (const other of others) {
-            if (other.directory === directory) {
-              db.exec("ROLLBACK");
-              return err(appError("BINDING_DUPLICATE", "the target directory is already bound", { directory }));
-            }
-            if (other.binding_kind === "git_repository") {
-              const root = workspaceRootOf(toBinding(other));
-              if (physicalPath === root || physicalPath.startsWith(`${root}/`)) {
-                db.exec("ROLLBACK");
-                return err(
-                  appError("BINDING_DUPLICATE", "the target lies inside an already-bound Git repository", {
-                    directory: physicalPath,
-                    existing: other.directory,
-                  }),
-                );
-              }
-            }
+          const conflict = findBindingConflict({ directory, physicalPath }, others.map(toBinding), bindingId);
+          if (conflict !== null) {
+            db.exec("ROLLBACK");
+            return err(conflict);
           }
           db.prepare("UPDATE project_bindings SET directory = ?, binding_kind = ?, updated_at = ? WHERE id = ?").run(
             directory,
@@ -482,24 +514,8 @@ export function createSqliteProjectRepository(
         return err(mapRepositoryError(error));
       }
     },
-    listBindings() {
-      try {
-        const rows = db.prepare("SELECT * FROM project_bindings ORDER BY directory").all() as unknown as BindingRow[];
-        return ok(rows.map(toBinding));
-      } catch (error) {
-        return err(mapRepositoryError(error));
-      }
-    },
-    listBindingsForProject(projectId) {
-      try {
-        const rows = db
-          .prepare("SELECT * FROM project_bindings WHERE project_id = ? ORDER BY directory")
-          .all(projectId) as unknown as BindingRow[];
-        return ok(rows.map(toBinding));
-      } catch (error) {
-        return err(mapRepositoryError(error));
-      }
-    },
+    listBindings: reader.listBindings,
+    listBindingsForProject: reader.listBindingsForProject,
   };
 }
 

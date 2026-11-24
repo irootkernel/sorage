@@ -120,7 +120,7 @@ import {
   placeMemoContentFile,
   readMemoContentFileBytes,
   readMemoExport,
-} from "./memos";
+} from "./memo-backup-records";
 import type { SorageSqlite } from "./sqlite/connection";
 
 /**

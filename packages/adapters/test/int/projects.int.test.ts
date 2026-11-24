@@ -1,15 +1,18 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
-import { createSqliteProjectRepository } from "../../src/projects";
+import { createSqliteProjectHandoffStats } from "../../src/handoff-stats";
+import { createSqliteProjectReader, createSqliteProjectRepository } from "../../src/projects";
 import type { SorageSqlite } from "../../src/sqlite/connection";
 
 const TEST_ACTOR = { kind: "user", id: null } as const;
+const NOOP_WITHDRAWN = () => {};
 
-import { MIGRATIONS, PROJECT_REGISTRY_MIGRATION } from "../../src/sqlite/migrations";
-import { MigrationFailedError, migrate } from "../../src/sqlite/migrator";
+import { MIGRATIONS, PROJECT_REGISTRY_MIGRATION, productionMigrationPlan } from "../../src/sqlite/migrations";
+import { MigrationFailedError, migrate, openAndMigrate } from "../../src/sqlite/migrator";
 import { makeTempDatabase } from "../../src/testkit/temp-database";
 
 const tempCleanups: Array<() => void> = [];
@@ -43,6 +46,7 @@ function seedProject(temp: ReturnType<typeof migratedDb>, slug: string, id = "11
   const repository = createSqliteProjectRepository(temp.db, {
     installationId: "00000000-0000-4000-8000-000000000001",
     events: createSqliteEventLedger(temp.db),
+    onLocalProjectWithdrawn: NOOP_WITHDRAWN,
   });
   const result = repository.createProject(
     {
@@ -109,6 +113,7 @@ describe("project repository", () => {
     const base = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const added = base.addBinding(
       {
@@ -137,6 +142,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(tracked, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(tracked),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
       vaultPath: vault,
       fs: {
         realpath(path) {
@@ -163,6 +169,7 @@ describe("project repository", () => {
     const original = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const added = original.addBinding(
       {
@@ -179,6 +186,7 @@ describe("project repository", () => {
     const replacement = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
       vaultPath: vault,
       fs: { realpath: (path) => (path === target ? realpathSync(vault) : realpathSync(path)) },
     });
@@ -204,6 +212,7 @@ describe("project repository", () => {
     const other = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const added = other.addBinding(
       {
@@ -241,6 +250,7 @@ describe("project repository", () => {
     const first = createSqliteProjectRepository(intercepted, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(intercepted),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     }).replaceBinding(
       added.value.id,
       added.value.directory,
@@ -260,6 +270,7 @@ describe("project repository", () => {
     const ledger = createSqliteEventLedger(temp.db);
     const repository = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
       events: {
         ...ledger,
         appendNow(input) {
@@ -297,6 +308,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
       events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const oldDir = tempDir();
     const outer = tempDir();
@@ -350,6 +362,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const firstDir = tempDir();
     const secondDir = tempDir();
@@ -388,6 +401,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const input = {
       projectId: project.id,
@@ -410,6 +424,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const collision = repository.createProject(
       {
@@ -435,6 +450,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const viaSymlink = repository.addBinding(
       {
@@ -459,6 +475,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const found = repository.findProjectBySlug("ALPHA");
     expect(found.ok && found.value?.slug).toBe("alpha");
@@ -474,6 +491,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const found = repository.findProjectBySlug("ПРОЕКТ");
     expect(found.ok && found.value?.slug).toBe("проект");
@@ -485,6 +503,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });
     const found = repository.findProjectBySlug("WIZARD");
     expect(found.ok && found.value?.slug).toBe("wizard");
@@ -495,6 +514,7 @@ describe("project repository", () => {
     const repository = createSqliteProjectRepository(temp.db, {
       events: createSqliteEventLedger(temp.db),
       installationId: "00000000-0000-4000-8000-000000000001",
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
       fs: {
         realpath: () => {
           throw new Error("ENOENT: the directory vanished between the check and the insert");
@@ -514,5 +534,212 @@ describe("project repository", () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe("INTERNAL_ERROR");
     expect(result.error?.message).toContain("vanished");
+  });
+
+  it("invokes onLocalProjectWithdrawn synchronously before event emit on archive and on last local binding removal", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "withdrawn-hook");
+    const firstDir = tempDir();
+    const secondDir = tempDir();
+    const calls: Array<{ projectId: string; eventsAtHookTime: number }> = [];
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn(projectId) {
+        const count = (
+          temp.db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM events WHERE event_type IN ('PROJECT_STATUS_ARCHIVED', 'PROJECT_BINDING_REMOVED')",
+            )
+            .get() as { count: number }
+        ).count;
+        calls.push({ projectId, eventsAtHookTime: count });
+      },
+    });
+    const b1 = repository.addBinding(
+      {
+        id: "a1111111-1111-4111-8111-111111111111",
+        projectId: project.id,
+        directory: firstDir,
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      TEST_ACTOR,
+    );
+    const b2 = repository.addBinding(
+      {
+        id: "a2222222-2222-4222-8222-222222222222",
+        projectId: project.id,
+        directory: secondDir,
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+      TEST_ACTOR,
+    );
+    expect(b1.ok && b2.ok).toBe(true);
+
+    // Non-last local binding removal must NOT invoke the withdrawal hook.
+    expect(repository.removeBinding("a1111111-1111-4111-8111-111111111111", TEST_ACTOR).ok).toBe(true);
+    expect(calls).toEqual([]);
+
+    // Foreign-installation binding removal must NOT invoke the withdrawal hook.
+    temp.db
+      .prepare(
+        "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, 'directory', 't', 't')",
+      )
+      .run("a3333333-3333-4333-8333-333333333333", project.id, "00000000-0000-4000-8000-999999999999", "/foreign");
+    expect(repository.removeBinding("a3333333-3333-4333-8333-333333333333", TEST_ACTOR).ok).toBe(true);
+    expect(calls).toEqual([]);
+
+    // Removing the last local binding invokes the hook BEFORE emitting PROJECT_BINDING_REMOVED.
+    expect(repository.removeBinding("a2222222-2222-4222-8222-222222222222", TEST_ACTOR).ok).toBe(true);
+    expect(calls).toEqual([{ projectId: project.id, eventsAtHookTime: 2 }]);
+
+    // Archiving invokes the hook BEFORE emitting PROJECT_STATUS_ARCHIVED; unarchiving does not.
+    expect(repository.updateProjectStatus(project.id, "archived", "2026-01-02T00:00:00.000Z", TEST_ACTOR).ok).toBe(
+      true,
+    );
+    expect(calls).toEqual([
+      { projectId: project.id, eventsAtHookTime: 2 },
+      { projectId: project.id, eventsAtHookTime: 3 },
+    ]);
+    expect(repository.updateProjectStatus(project.id, "active", "2026-01-03T00:00:00.000Z", TEST_ACTOR).ok).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("atomically rolls back Project state, hook SQL, and event ledger when onLocalProjectWithdrawn throws on archive or last-binding unbind", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "atomic-rollback");
+    const dir = tempDir();
+    temp.db.exec("CREATE TABLE hook_probe (project_id TEXT NOT NULL)");
+
+    let shouldThrow = false;
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn(projectId) {
+        temp.db.prepare("INSERT INTO hook_probe (project_id) VALUES (?)").run(projectId);
+        if (shouldThrow) throw new Error("injected withdrawal hook failure");
+      },
+    });
+    const added = repository.addBinding(
+      {
+        id: "b1111111-1111-4111-8111-111111111111",
+        projectId: project.id,
+        directory: dir,
+        bindingKind: "directory",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      TEST_ACTOR,
+    );
+    expect(added.ok).toBe(true);
+
+    // 1. Trigger point: archive
+    shouldThrow = true;
+    const archived = repository.updateProjectStatus(project.id, "archived", "2026-01-02T00:00:00.000Z", TEST_ACTOR);
+    expect(archived.ok).toBe(false);
+    const afterArchiveStatus = temp.db.prepare("SELECT status FROM projects WHERE id = ?").get(project.id) as {
+      status: string;
+    };
+    expect(afterArchiveStatus.status).toBe("active");
+    expect(temp.db.prepare("SELECT * FROM hook_probe").all()).toHaveLength(0);
+    expect(temp.db.prepare("SELECT * FROM events WHERE event_type = 'PROJECT_STATUS_ARCHIVED'").all()).toHaveLength(0);
+
+    // 2. Trigger point: removal of last local binding
+    const removed = repository.removeBinding("b1111111-1111-4111-8111-111111111111", TEST_ACTOR);
+    expect(removed.ok).toBe(false);
+    const bindings = repository.listBindingsForProject(project.id);
+    expect(bindings.ok && bindings.value).toHaveLength(1);
+    expect(temp.db.prepare("SELECT * FROM hook_probe").all()).toHaveLength(0);
+    expect(temp.db.prepare("SELECT * FROM events WHERE event_type = 'PROJECT_BINDING_REMOVED'").all()).toHaveLength(0);
+  });
+
+  it("exposes a dedicated read-only createSqliteProjectReader without write methods", () => {
+    const temp = migratedDb();
+    const project = seedProject(temp, "reader-only");
+    const reader = createSqliteProjectReader(temp.db);
+    expect(Object.keys(reader).sort()).toEqual([
+      "findProjectBySlug",
+      "listBindings",
+      "listBindingsForProject",
+      "listProjects",
+    ]);
+    const found = reader.findProjectBySlug("READER-ONLY");
+    expect(found.ok && found.value?.id).toBe(project.id);
+    const listed = reader.listProjects();
+    expect(listed.ok && listed.value.map((p) => p.slug)).toEqual(["reader-only"]);
+  });
+
+  it("counts recipient-scoped open and recorded unfinished accepted Handoffs via createSqliteProjectHandoffStats (PRJ-022, HPR-011)", () => {
+    const dir = tempDir();
+    const plan = productionMigrationPlan();
+    const { db } = openAndMigrate(join(dir, "stats.sqlite3"), plan.migrations, { rebuilds: plan.rebuilds });
+    tempCleanups.push(() => db.close());
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, ?, ?, NULL, 'active', 't', 't')",
+    ).run("p-rec", "rec", "Rec");
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, ?, ?, NULL, 'active', 't', 't')",
+    ).run("p-other", "other", "Other");
+    const inlineBody = "x";
+    const inlineSha256 = createHash("sha256").update(inlineBody).digest("hex");
+    const insertContent = db.prepare(
+      "INSERT INTO content_records (id, inline_text, storage_key, size_bytes, sha256, materialized, created_at) VALUES (?, ?, NULL, ?, ?, 1, 't')",
+    );
+    const insertArtifact = db.prepare(
+      "INSERT INTO artifacts (id, handoff_id, original_name, stored_name, mime_type, imported_from_path, created_at, content_record_id) VALUES (?, ?, 'body.md', 'body.md', 'text/markdown', NULL, 't', ?)",
+    );
+    const insertHandoff = db.prepare(
+      `INSERT INTO handoffs (id, title, sender_kind, sender_project_id, recipient_project_id, current_artifact_id, revision, row_version, review_state, consecutive_no_change_resolutions, pinned, read_status, processing_status, processing_started_at, processing_completed_at, archived_at, deleted_at, created_at, updated_at)
+       VALUES (?, 't', 'registered_project', ?, ?, ?, 1, 1, ?, 0, 0, 'unconfirmed', ?, ?, ?, ?, ?, 't', 't')`,
+    );
+    const seedRow = (
+      id: string,
+      senderId: string,
+      recipientId: string,
+      reviewState: string,
+      processingStatus: string,
+      archivedAt: string | null,
+      deletedAt: string | null,
+    ) => {
+      const startedAt =
+        processingStatus === "in_progress" || processingStatus === "completed" ? "2026-01-01T00:00:00.000Z" : null;
+      const completedAt = processingStatus === "completed" ? "2026-01-01T00:01:00.000Z" : null;
+      db.exec("BEGIN IMMEDIATE");
+      const artifactId = deletedAt === null ? `a-${id}` : null;
+      if (artifactId !== null) {
+        insertContent.run(`c-${id}`, inlineBody, Buffer.byteLength(inlineBody, "utf8"), inlineSha256);
+        insertArtifact.run(artifactId, id, `c-${id}`);
+      }
+      insertHandoff.run(
+        id,
+        senderId,
+        recipientId,
+        artifactId,
+        reviewState,
+        processingStatus,
+        startedAt,
+        completedAt,
+        archivedAt,
+        deletedAt,
+      );
+      db.exec("COMMIT");
+    };
+    // Counted (4): awaiting_recipient, changes_requested, accepted+not_started, accepted+in_progress (archived)
+    seedRow("h1", "p-other", "p-rec", "awaiting_recipient", "not_started", null, null);
+    seedRow("h2", "p-other", "p-rec", "changes_requested", "not_started", null, null);
+    seedRow("h3", "p-other", "p-rec", "accepted", "not_started", null, null);
+    seedRow("h4", "p-other", "p-rec", "accepted", "in_progress", "2026-01-01T00:00:00.000Z", null);
+    // Not counted: accepted+completed, accepted+unrecorded (legacy), deleted, declined, withdrawn, sender-only
+    seedRow("h5", "p-other", "p-rec", "accepted", "completed", null, null);
+    seedRow("h6", "p-other", "p-rec", "accepted", "unrecorded", null, null);
+    seedRow("h7", "p-other", "p-rec", "awaiting_recipient", "not_started", null, "2026-01-02T00:00:00.000Z");
+    seedRow("h8", "p-other", "p-rec", "declined", "not_started", null, null);
+    seedRow("h9", "p-other", "p-rec", "withdrawn", "not_started", null, null);
+    seedRow("h10", "p-rec", "p-other", "awaiting_recipient", "not_started", null, null);
+
+    const stats = createSqliteProjectHandoffStats(db);
+    expect(stats.openHandoffCount("p-rec")).toEqual({ ok: true, value: 4 });
+    expect(stats.openHandoffCount("p-other")).toEqual({ ok: true, value: 1 });
   });
 });

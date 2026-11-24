@@ -70,7 +70,11 @@ describe("the Project event ledger", () => {
   it("appends every mutation's lifecycle event and nothing for a read", () => {
     const temp = migratedDb();
     const ledger = createSqliteEventLedger(temp.db);
-    const repository = createSqliteProjectRepository(temp.db, { installationId: INSTALLATION, events: ledger });
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: INSTALLATION,
+      events: ledger,
+      onLocalProjectWithdrawn: () => {},
+    });
 
     const registered = repository.createProjectWithBinding(
       { id: "p-1", slug: "web-app", displayName: "Web App", description: null, createdAt: "2026-01-01T00:00:00.000Z" },
@@ -142,7 +146,11 @@ describe("the Project event ledger", () => {
   it("records the actor provenance on each event", () => {
     const temp = migratedDb();
     const ledger = createSqliteEventLedger(temp.db);
-    const repository = createSqliteProjectRepository(temp.db, { installationId: INSTALLATION, events: ledger });
+    const repository = createSqliteProjectRepository(temp.db, {
+      installationId: INSTALLATION,
+      events: ledger,
+      onLocalProjectWithdrawn: () => {},
+    });
     expect(
       repository.createProject(
         {

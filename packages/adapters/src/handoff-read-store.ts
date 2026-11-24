@@ -1,6 +1,14 @@
 import { join } from "node:path";
 import type { HandoffContentIntegrity, HandoffListCandidate, LoadedHandoff } from "@sorage/core";
-import { appError, err, type HandoffReadPort, type HandoffView, type ListingScope, ok } from "@sorage/core";
+import {
+  appError,
+  deriveNextActors,
+  err,
+  type HandoffReadPort,
+  type HandoffView,
+  type ListingScope,
+  ok,
+} from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { vaultMoveLockHeld } from "./lockfile";
 import type { SorageSqlite } from "./sqlite/connection";
@@ -197,23 +205,19 @@ export function createSqliteHandoffReadStore(
 
   const toCandidate = (row: ProjectedHandoffRow): HandoffListCandidate => {
     const tombstone = row.deleted_at !== null;
-    const terminal =
-      row.review_state === "accepted" || row.review_state === "declined" || row.review_state === "withdrawn";
     // Section 6: a pending Deletion Request adds the User beside the review next
     // actor, and an integrity failure — a current Artifact that never materialized
     // or whose authoritative record is missing — belongs to the User as well.
     const { artifact, integrity } = artifactOf(row);
     const integrityFailure = artifact !== null ? artifact.materialized !== true : integrity !== "ok";
     const hasPendingDeletion = row.has_pending_deletion === 1;
-    const nextActors = {
-      reviewNextActor:
-        tombstone || terminal
-          ? null
-          : row.review_state === "awaiting_recipient"
-            ? ("recipient" as const)
-            : ("sender" as const),
-      administrativeNextActor: hasPendingDeletion || integrityFailure ? ("user" as const) : null,
-    };
+    const reviewState = row.review_state as HandoffView["reviewState"];
+    const nextActors = deriveNextActors({
+      reviewState,
+      tombstone,
+      pendingDeletionRequest: hasPendingDeletion,
+      integrityOrConfigurationFailure: integrityFailure,
+    });
     return {
       contentIntegrity: integrity,
       view: {
@@ -230,7 +234,7 @@ export function createSqliteHandoffReadStore(
         recipientProjectSlug: row.rp_slug ?? row.recipient_project_id,
         revision: row.revision,
         rowVersion: row.row_version,
-        reviewState: row.review_state as HandoffView["reviewState"],
+        reviewState,
         nextActors,
         read: {
           revision: row.revision,

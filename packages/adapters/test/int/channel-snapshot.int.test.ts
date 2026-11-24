@@ -20,7 +20,7 @@ import {
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
-import { captureChannelBodyText, createNodeChannelPorts, type NodeChannelPorts } from "../../src/channels";
+import { captureChannelBodyText, createNodeChannelPorts, type NodeChannelPorts } from "../../src/channel-command-ports";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { openSorageDatabase } from "../../src/sqlite/connection";
 import { FakeClock } from "../../src/testkit/fakes";

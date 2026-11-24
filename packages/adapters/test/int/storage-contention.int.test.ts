@@ -27,7 +27,7 @@ import {
   USER_ACTOR,
 } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureChannelBodyText, channelStorageError, createNodeChannelPorts } from "../../src/channels";
+import { captureChannelBodyText, channelStorageError, createNodeChannelPorts } from "../../src/channel-command-ports";
 import {
   createNodeHandoffReadPorts,
   createNodeRetentionPorts,

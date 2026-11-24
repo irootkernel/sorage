@@ -104,6 +104,7 @@ beforeAll(() => {
   const repository = createSqliteProjectRepository(seedDb, {
     installationId: init.ok ? init.value.installationId : "x",
     events: createSqliteEventLedger(seedDb),
+    onLocalProjectWithdrawn: () => {},
   });
   const created = repository.createProjectWithBinding(
     {

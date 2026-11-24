@@ -7,6 +7,7 @@ import {
   archiveProject,
   bindProject,
   checkRecipientEligibility,
+  findBindingConflict,
   listProjects,
   renameProject,
   showProject,
@@ -518,5 +519,44 @@ describe("archive, unarchive, and recipient eligibility", () => {
     expect(unbound.error?.code).toBe("PROJECT_UNBOUND");
     const eligible = checkRecipientEligibility(ports([project()], [binding()]), "web-app");
     expect(eligible.ok && eligible.value.slug).toBe("web-app");
+  });
+});
+
+describe("findBindingConflict", () => {
+  const existing: ProjectBinding[] = [
+    {
+      id: "b1",
+      projectId: "p1",
+      installationId: "i1",
+      directory: "/work/app",
+      bindingKind: "directory",
+      createdAt: "t",
+      updatedAt: "t",
+    },
+    {
+      id: "b2",
+      projectId: "p2",
+      installationId: "i1",
+      directory: "/work/repo/.git",
+      bindingKind: "git_repository",
+      createdAt: "t",
+      updatedAt: "t",
+    },
+  ];
+
+  it("reports BINDING_DUPLICATE for an exact directory match and skips excludeBindingId", () => {
+    const duplicate = findBindingConflict({ directory: "/work/app", physicalPath: "/work/app" }, existing);
+    expect(duplicate?.code).toBe("BINDING_DUPLICATE");
+    expect(duplicate?.message).toBe("the target directory is already bound");
+    expect(duplicate?.details).toEqual({ directory: "/work/app" });
+    expect(findBindingConflict({ directory: "/work/app", physicalPath: "/work/app" }, existing, "b1")).toBeNull();
+  });
+
+  it("reports BINDING_DUPLICATE when the physical path lies inside a bound Git repository", () => {
+    const contained = findBindingConflict({ directory: "/work/repo/sub", physicalPath: "/work/repo/sub" }, existing);
+    expect(contained?.code).toBe("BINDING_DUPLICATE");
+    expect(contained?.message).toBe("the target lies inside an already-bound Git repository");
+    expect(contained?.details).toEqual({ directory: "/work/repo/sub", existing: "/work/repo/.git" });
+    expect(findBindingConflict({ directory: "/work/other", physicalPath: "/work/other" }, existing)).toBeNull();
   });
 });

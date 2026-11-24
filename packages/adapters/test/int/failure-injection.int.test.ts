@@ -109,7 +109,11 @@ function makeWorld(): World {
   const seed = () => {
     const db = open();
     const ledger = createSqliteEventLedger(db);
-    const repository = createSqliteProjectRepository(db, { installationId: INSTALLATION, events: ledger });
+    const repository = createSqliteProjectRepository(db, {
+      installationId: INSTALLATION,
+      events: ledger,
+      onLocalProjectWithdrawn: () => {},
+    });
     void repository.createProjectWithBinding(
       { id: "p-1", slug: "alpha", displayName: "Alpha", description: null, createdAt: "2026-01-01T00:00:00.000Z" },
       {
@@ -170,7 +174,11 @@ function makeWorld(): World {
       let activateOrdinal = 0;
       let ids = 0;
       const nextId = () => `00000000-0000-4000-8000-${(++ids).toString().padStart(12, "0")}`;
-      const repository = createSqliteProjectRepository(db, { installationId: INSTALLATION, events: ledger });
+      const repository = createSqliteProjectRepository(db, {
+        installationId: INSTALLATION,
+        events: ledger,
+        onLocalProjectWithdrawn: () => {},
+      });
       return {
         projectPorts: {
           installationId: INSTALLATION,

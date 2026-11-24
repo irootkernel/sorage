@@ -65,3 +65,122 @@ export function resolveSenderIdentity(
     pathSnapshot: directory,
   });
 }
+
+export interface CommitSenderBindingFact {
+  id: string;
+  projectId: string;
+  directory: string;
+  bindingKind: string;
+  slug: string;
+  status: string;
+}
+
+export type CommitRegisteredSender =
+  | { projectId: string; asOverride: true }
+  | { projectId: string; asOverride: false; bindingId: string; directory: string; gitCommonDirectory: string | null };
+
+export interface CommitUnregisteredSenderPath {
+  directory: string;
+  gitCommonDirectory: string | null;
+  allowUnregistered: boolean;
+}
+
+export interface CommitSenderCheck {
+  registeredSender?: CommitRegisteredSender | undefined;
+  unregisteredSenderPath?: CommitUnregisteredSenderPath | undefined;
+}
+
+function posixParentDirectory(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  if (trimmed === "") return "/";
+  const lastSlash = trimmed.lastIndexOf("/");
+  if (lastSlash <= 0) return "/";
+  return trimmed.slice(0, lastSlash);
+}
+
+function atOrBelowRootSafe(path: string, root: string): boolean {
+  return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
+}
+
+function matchDirectoryOwner(
+  bindings: readonly CommitSenderBindingFact[],
+  directory: string,
+): CommitSenderBindingFact | undefined {
+  return bindings
+    .filter(
+      (row) =>
+        row.bindingKind === "directory" && (directory === row.directory || directory.startsWith(`${row.directory}/`)),
+    )
+    .sort((a, b) => b.directory.length - a.directory.length)[0];
+}
+
+/**
+ * Revalidates a prepared Handoff sender's Project or Workspace identity against
+ * the current binding snapshot at commit time (PRJ-019, PRJ-021, PRJ-022).
+ */
+export function revalidateSenderAtCommit(
+  bindings: readonly CommitSenderBindingFact[],
+  sender: CommitSenderCheck,
+): Result<void, AppError> {
+  if (sender.registeredSender !== undefined) {
+    const registered = sender.registeredSender;
+    if (registered.asOverride) {
+      if (!bindings.some((row) => row.projectId === registered.projectId)) {
+        return err(
+          appError("PROJECT_UNBOUND", "the sender Project lost its last binding while the Handoff was prepared"),
+        );
+      }
+    } else {
+      const gitOwner = bindings.find(
+        (row) => row.bindingKind === "git_repository" && row.directory === registered.gitCommonDirectory,
+      );
+      const directoryOwner = matchDirectoryOwner(bindings, registered.directory);
+      const owner = gitOwner ?? directoryOwner;
+      if (owner?.id !== registered.bindingId || owner.projectId !== registered.projectId) {
+        return err(
+          owner?.status === "archived"
+            ? appError(
+                "PROJECT_ARCHIVED",
+                "the sender path changed to an archived Project while the Handoff was prepared",
+                {
+                  slug: owner.slug,
+                },
+              )
+            : appError(
+                "SENDER_IDENTITY_DOWNGRADE",
+                "the sender path changed Project identity while the Handoff was prepared; retry the send",
+                {
+                  slug: owner?.slug,
+                },
+              ),
+        );
+      }
+    }
+  }
+  if (sender.unregisteredSenderPath !== undefined) {
+    const { directory, gitCommonDirectory, allowUnregistered } = sender.unregisteredSenderPath;
+    const gitOwner = bindings.find(
+      (row) => row.bindingKind === "git_repository" && row.directory === gitCommonDirectory,
+    );
+    const directoryOwner = matchDirectoryOwner(bindings, directory);
+    const owner = gitOwner ?? directoryOwner;
+    const unresolvedRoot = bindings.find((row) => {
+      const root = row.bindingKind === "directory" ? row.directory : posixParentDirectory(row.directory);
+      return atOrBelowRootSafe(root, directory) || atOrBelowRootSafe(directory, root);
+    });
+    if (owner !== undefined || (!allowUnregistered && unresolvedRoot !== undefined)) {
+      return err(
+        owner?.status === "archived"
+          ? appError("PROJECT_ARCHIVED", "the sender Project was archived while the Handoff was prepared", {
+              slug: owner.slug,
+            })
+          : appError(
+              "SENDER_IDENTITY_DOWNGRADE",
+              "the sender Workspace overlapped a registered Project while the Handoff was prepared; retry the send",
+              { slug: (owner ?? unresolvedRoot)?.slug },
+            ),
+      );
+    }
+  }
+  return ok(undefined);
+}

@@ -23,7 +23,7 @@ interface AppErrorLike {
   recovery?: { suggestedCommand: string };
 }
 import { afterEach, describe, expect, it } from "vitest";
-import { createNodeChannelPorts } from "../../src/channels";
+import { createNodeChannelPorts } from "../../src/channel-command-ports";
 import { inspectPreflight } from "../../src/preflight";
 import { openCoveredReadStorage } from "../../src/read-storage";
 import { createNodeSendRecoveryPorts } from "../../src/send-recovery";

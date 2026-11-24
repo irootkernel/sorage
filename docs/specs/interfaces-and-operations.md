@@ -441,7 +441,7 @@ A second binding names a genuinely separate directory or repository that belongs
 
 A Project may hold many bindings, and a Project with zero bindings is flagged as unbound by `project list` and by `doctor` and fails as a recipient with `PROJECT_UNBOUND` (PRJ-022).
 
-`project unbind` that would leave a Project with open Handoffs unbound requires `--confirm` and otherwise fails with `CONFIRMATION_REQUIRED`; an **open Handoff** is one in `awaiting_recipient` or `changes_requested` that is not deleted (PRJ-022). A `--dir` whose directory no longer exists is accepted when it names the recorded binding directory, which the `bindings.exist` warning names, so a vanished binding can always be removed (PRJ-010).
+When the recipient Project has any non-deleted Handoff in `awaiting_recipient` or `changes_requested`, or any non-deleted `accepted` Handoff with recorded `not_started` or `in_progress` processing (including archived ones, counting each Handoff once, while legacy `unrecorded` processing does not add inferred unfinished work), `project unbind` requires `--confirm` on every binding removal (including the last) and otherwise fails with `CONFIRMATION_REQUIRED` (PRJ-022, HPR-011). A `--dir` whose directory no longer exists is accepted when it names the recorded binding directory, which the `bindings.exist` warning names, so a vanished binding can always be removed (PRJ-010).
 
 An archived Project keeps `fetch`, `review set`, `review withdraw`, `accept`, and `decline` on the Handoffs already in its inbox and rejects new incoming Handoffs with `PROJECT_ARCHIVED` (PRJ-021).
 
@@ -631,7 +631,7 @@ A fetch of a Handoff whose current Artifact is not yet materialized returns `ART
 | `sorage project show <project>` | M1 | Bindings, counts, lifecycle |
 | `sorage project rename <project> --name <name>` | M1 | Slug is not renamed |
 | `sorage project bind <project> --dir <path>` | M1 | Adds a binding (PRJ-016) |
-| `sorage project unbind <project> --dir <path> [--confirm]` | M1 | `--confirm` required when it would leave open Handoffs unbound (PRJ-022) |
+| `sorage project unbind <project> --dir <path> [--confirm]` | M1 | `--confirm` required on any binding removal when the recipient Project has open or recorded unfinished Handoffs (PRJ-022, HPR-011) |
 | `sorage project rebind <project> --from <recorded-path> --to <existing-path>` | M6 | Atomically replaces one binding and preserves its id (PRJ-024) |
 | `sorage project archive <project>` | M1, M6 | Blocks new incoming and outgoing Handoffs (PRJ-023); User actor is implicit |
 | `sorage project unarchive <project>` | M1, M6 | Returns the Project to `active`; User actor is implicit |
@@ -815,7 +815,7 @@ The mapping from symbolic code to HTTP status is published here and verified by 
 | `HANDOFF_NOT_FOUND` | 404 | Unknown Handoff UUID, or one this actor does not participate in; a non-participant read never reveals that the Handoff exists | Verify the UUID with `sorage inbox` or `sorage outbox` |
 | `FORBIDDEN_ACTOR` | 403 | The resolved actor may not perform this operation | Run from the correct directory, or use `--as` or `--as-user` |
 | `USER_CONTEXT_REQUIRED` | 403 | A User-admin operation was invoked without `--as-user` | Re-run with `--as-user` |
-| `CONFIRMATION_REQUIRED` | 422 | A state-conditional confirmation is missing, such as `project unbind` that would leave open Handoffs unbound | Re-run with `--confirm` |
+| `CONFIRMATION_REQUIRED` | 422 | A state-conditional confirmation is missing, such as `project unbind` while the recipient Project has open or recorded unfinished Handoffs | Re-run with `--confirm` |
 | `HOST_NOT_ALLOWED` | 421 | The `Host` header is outside the allowlist; rejected before authentication and before routing | Reach the daemon as `127.0.0.1`, `localhost`, or `[::1]` on the configured port |
 | `NOT_FOUND` | 404 | The request targets no endpoint in the section 18 catalog | Check the endpoint path against the API catalog of interfaces-and-operations.md |
 | `METHOD_NOT_ALLOWED` | 405 | The endpoint exists but does not accept the request method | Use the documented method for this endpoint |

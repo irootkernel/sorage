@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import {
   type ActorRef,
   type AppError,
@@ -11,6 +10,7 @@ import {
   ok,
   type Result,
   type RetentionChange,
+  revalidateSenderAtCommit,
   type TerminalTransition,
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
@@ -51,10 +51,6 @@ export interface ArtifactContentBindings {
 function removeExpiredIdempotency(db: SorageSqlite, options: IdempotencyLookupOptions): void {
   const now = (options.now ?? (() => new Date()))().toISOString();
   db.prepare("DELETE FROM idempotency_keys WHERE expires_at <= ?").run(now);
-}
-
-function atOrBelow(path: string, root: string): boolean {
-  return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
 }
 
 /**
@@ -123,94 +119,35 @@ export function createSqliteHandoffWriteStore(
         db,
         "BEGIN IMMEDIATE",
         () => {
-          const bindingRows =
-            commit.unregisteredSenderPath !== undefined || commit.registeredSender !== undefined
-              ? (db
-                  .prepare(
-                    "SELECT b.id, b.project_id, b.directory, b.binding_kind, p.slug, p.status FROM project_bindings b JOIN projects p ON p.id = b.project_id",
-                  )
-                  .all() as Array<{
-                  id: string;
-                  project_id: string;
-                  directory: string;
-                  binding_kind: string;
-                  slug: string;
-                  status: string;
-                }>)
-              : [];
-          if (commit.registeredSender !== undefined) {
-            const sender = commit.registeredSender;
-            if (sender.asOverride) {
-              if (!bindingRows.some((row) => row.project_id === sender.projectId)) {
-                return err(
-                  appError(
-                    "PROJECT_UNBOUND",
-                    "the sender Project lost its last binding while the Handoff was prepared",
-                  ),
-                );
-              }
-            } else {
-              const gitOwner = bindingRows.find(
-                (row) => row.binding_kind === "git_repository" && row.directory === sender.gitCommonDirectory,
-              );
-              const directoryOwner = bindingRows
-                .filter(
-                  (row) =>
-                    row.binding_kind === "directory" &&
-                    (sender.directory === row.directory || sender.directory.startsWith(`${row.directory}/`)),
-                )
-                .sort((a, b) => b.directory.length - a.directory.length)[0];
-              const owner = gitOwner ?? directoryOwner;
-              if (owner?.id !== sender.bindingId || owner.project_id !== sender.projectId) {
-                return err(
-                  owner?.status === "archived"
-                    ? appError(
-                        "PROJECT_ARCHIVED",
-                        "the sender path changed to an archived Project while the Handoff was prepared",
-                        {
-                          slug: owner.slug,
-                        },
-                      )
-                    : appError(
-                        "SENDER_IDENTITY_DOWNGRADE",
-                        "the sender path changed Project identity while the Handoff was prepared; retry the send",
-                        {
-                          slug: owner?.slug,
-                        },
-                      ),
-                );
-              }
-            }
-          }
-          if (commit.unregisteredSenderPath !== undefined) {
-            const { directory, gitCommonDirectory, allowUnregistered } = commit.unregisteredSenderPath;
-            const gitOwner = bindingRows.find(
-              (row) => row.binding_kind === "git_repository" && row.directory === gitCommonDirectory,
-            );
-            const directoryOwner = bindingRows
-              .filter(
-                (row) =>
-                  row.binding_kind === "directory" &&
-                  (directory === row.directory || directory.startsWith(`${row.directory}/`)),
+          if (commit.unregisteredSenderPath !== undefined || commit.registeredSender !== undefined) {
+            const bindingRows = db
+              .prepare(
+                "SELECT b.id, b.project_id, b.directory, b.binding_kind, p.slug, p.status FROM project_bindings b JOIN projects p ON p.id = b.project_id",
               )
-              .sort((a, b) => b.directory.length - a.directory.length)[0];
-            const owner = gitOwner ?? directoryOwner;
-            const unresolvedRoot = bindingRows.find((row) => {
-              const root = row.binding_kind === "directory" ? row.directory : dirname(row.directory);
-              return atOrBelow(root, directory) || atOrBelow(directory, root);
-            });
-            if (owner !== undefined || (!allowUnregistered && unresolvedRoot !== undefined)) {
-              return err(
-                owner?.status === "archived"
-                  ? appError("PROJECT_ARCHIVED", "the sender Project was archived while the Handoff was prepared", {
-                      slug: owner.slug,
-                    })
-                  : appError(
-                      "SENDER_IDENTITY_DOWNGRADE",
-                      "the sender Workspace overlapped a registered Project while the Handoff was prepared; retry the send",
-                      { slug: (owner ?? unresolvedRoot)?.slug },
-                    ),
-              );
+              .all() as Array<{
+              id: string;
+              project_id: string;
+              directory: string;
+              binding_kind: string;
+              slug: string;
+              status: string;
+            }>;
+            const checked = revalidateSenderAtCommit(
+              bindingRows.map((row) => ({
+                id: row.id,
+                projectId: row.project_id,
+                directory: row.directory,
+                bindingKind: row.binding_kind,
+                slug: row.slug,
+                status: row.status,
+              })),
+              {
+                registeredSender: commit.registeredSender,
+                unregisteredSenderPath: commit.unregisteredSenderPath,
+              },
+            );
+            if (!checked.ok) {
+              return err(checked.error);
             }
           }
           const projectStatus = db.prepare("SELECT slug, status FROM projects WHERE id = ?");

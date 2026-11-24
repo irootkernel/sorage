@@ -59,7 +59,11 @@ function makeFixture(options: { failCreateFanout?: boolean } = {}): Fixture {
   const marker = createVaultInitializer(new FakeClock()).initialize(vault.vaultPath, INSTALLATION);
   if (!marker.ok) throw new Error("fixture vault marker must initialize");
   const ledger = createSqliteEventLedger(temp.db);
-  const repository = createSqliteProjectRepository(temp.db, { installationId: INSTALLATION, events: ledger });
+  const repository = createSqliteProjectRepository(temp.db, {
+    installationId: INSTALLATION,
+    events: ledger,
+    onLocalProjectWithdrawn: () => {},
+  });
   const clock = new FakeClock();
   const write = createSqliteHandoffWriteStore(
     temp.db,
