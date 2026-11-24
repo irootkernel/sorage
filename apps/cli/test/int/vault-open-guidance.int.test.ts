@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { VAULT_ADOPTION_COMMAND, VAULT_OPEN_RECOVERY } from "@sorage/core";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The TASK-118 contract at the CLI surface: every `openVault` refusal state

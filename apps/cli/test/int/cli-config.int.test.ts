@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 const homes: string[] = [];
 const cliEntry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));

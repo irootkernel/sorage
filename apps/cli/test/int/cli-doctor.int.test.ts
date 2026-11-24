@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 import { CONFIGURATION_DEFAULTS } from "@sorage/core";
 
 /**

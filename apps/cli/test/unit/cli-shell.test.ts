@@ -1,7 +1,8 @@
 import { DAEMON_VERSION } from "@sorage/daemon";
 import { SORAGE_VERSION } from "@sorage/core";
 import { describe, expect, it } from "vitest";
-import { CLI_VERSION, runCli, type OutputPorts } from "../../src/main";
+import { CLI_VERSION, type OutputPorts } from "../../src/cli-output";
+import { runCli } from "../../src/program";
 
 function capture(): { ports: OutputPorts; out: string; err: string } {
   let out = "";
@@ -109,5 +110,35 @@ describe("cli shell", () => {
         cap.ports,
       ),
     ).toBe(0);
+  });
+
+  it("signals global-flag mcp synchronously via onMcpRequested without starting inside Commander", () => {
+    const cap = capture();
+    let requested = 0;
+    const code = runCli(["--json", "mcp"], cap.ports, undefined, false, {
+      onMcpRequested: () => {
+        requested += 1;
+      },
+    });
+    expect(code).toBe(-1);
+    expect(requested).toBe(1);
+    expect(cap.out).toBe("");
+    expect(cap.err).toBe("");
+  });
+
+  it("handles mcp --help and mcp extra synchronously without triggering onMcpRequested", () => {
+    let requested = 0;
+    const onMcpRequested = () => {
+      requested += 1;
+    };
+    const helped = capture();
+    expect(runCli(["mcp", "--help"], helped.ports, undefined, false, { onMcpRequested })).toBe(0);
+    expect(helped.out).toContain("STDIO MCP adapter");
+    expect(requested).toBe(0);
+
+    const extra = capture();
+    expect(runCli(["mcp", "extra"], extra.ports, undefined, false, { onMcpRequested })).toBe(2);
+    expect(extra.err).toContain("arguments");
+    expect(requested).toBe(0);
   });
 });

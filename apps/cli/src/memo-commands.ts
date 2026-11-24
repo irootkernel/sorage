@@ -15,7 +15,6 @@ import {
   addMemo,
   appError,
   err,
-  largeContentDisclosureMessage,
   listMemos,
   mutateMemo,
   ok,
@@ -31,6 +30,7 @@ import {
   type Result,
 } from "@sorage/core";
 import { Option, Command } from "commander";
+import { createDisclosureBuffer } from "./disclosure-buffer";
 
 type Operation = "add" | "list" | "show" | "update" | "done" | "dismiss" | "reopen";
 /** Whether a failure rendering also records the failure in the installation log. */
@@ -155,21 +155,15 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
     // the presentation, so a post-commit failure still yields exactly one
     // error document on stderr with the disclosure inside the existing
     // message field, and a success keeps its stdout JSON and exit 0.
-    const warnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
+    const disclosureBuffer = createDisclosureBuffer();
     try {
       // The crash-orphan backstop runs at the command entry, before this
       // operation's own spool can exist, under the configured grace window.
       sweepMemoAcceptedInputs();
       if (ports.disclosures !== undefined) {
-        const composed = ports.disclosures;
         ports = {
           ...ports,
-          disclosures: {
-            ...composed,
-            largeContent: (sizeBytes: number, thresholdBytes: number) => {
-              warnings.push({ sizeBytes, thresholdBytes });
-            },
-          },
+          disclosures: disclosureBuffer.wrap(ports.disclosures),
         };
       }
       const body = bodyInput(options, ports);
@@ -203,43 +197,12 @@ export function registerMemoCommands(program: Command, output: MemoCliOutput): v
           accepted,
         );
       if (!result.ok) {
-        // WR3: a JSON failure keeps stdout empty and emits exactly one error
-        // envelope; a buffered disclosure rides inside the existing message
-        // field as a conditional append, preserving the base message prefix,
-        // code, details, recovery, and exit. A non-JSON failure flushes the
-        // warning lines to stderr before the human error. The formatter is
-        // best-effort: if building the appended message itself fails, the
-        // original error renders unchanged.
-        if (warnings.length > 0 && json) {
-          let error = result.error;
-          try {
-            const appended = warnings
-              .map((warning) => largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes))
-              .join(" ");
-            error = { ...error, message: `${error.message}; ${appended}` };
-          } catch {
-            // Formatting failure leaves the original error intact.
-          }
-          return output.fail(error, json);
-        }
-        for (const warning of warnings) {
-          try {
-            output.warn(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
-          } catch {
-            // A diagnostic flush failure never masks the real error.
-          }
-        }
-        return output.fail(result.error, json);
+        const error = disclosureBuffer.applyOnFailure(result.error, json, output.warn);
+        return output.fail(error, json);
       }
       // Success: the disclosure is a stderr diagnostic; the stdout success
       // JSON, its shape, and exit 0 are unchanged.
-      for (const warning of warnings) {
-        try {
-          output.warn(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
-        } catch {
-          // A diagnostic flush failure never changes a committed outcome.
-        }
-      }
+      disclosureBuffer.flushOnSuccess(output.warn);
       if (json) output.out(`${JSON.stringify(successEnvelope(result.value, output.requestId()), null, 2)}\n`);
       else renderMemo(result.value, output.out);
     } finally {

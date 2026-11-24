@@ -1,8 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
+import { confineFileArgument, resolveCallCwd } from "@sorage/adapters/src/workspace-confinement";
 import { appError, errorEnvelope, SORAGE_VERSION } from "@sorage/core";
 import { EXCHANGE_JOIN_ACK, EXCHANGE_JOIN_GATE, ExchangeJoinGate } from "./exchange-join-gate";
 import {
@@ -13,12 +12,9 @@ import {
   interruptExchangeChild,
   ownedLeaseOf,
   reportExchangeKeeperStop,
-  selfInvocationArgv,
 } from "./exchange-owner";
 import { admitArguments, type McpTool, mcpToolByName, MCP_TOOLS } from "./mcp-catalogue";
-import { expandTilde } from "./expand-tilde";
-
-export { selfInvocationArgv } from "./exchange-owner";
+import { selfInvocationArgv } from "./self-invocation";
 
 /**
  * The `sorage mcp` STDIO server of interface section 39 (MCP-001 to MCP-006):
@@ -190,49 +186,6 @@ export function workspaceEscapeEnvelope(resolvedPath: string, workspaceRoot: str
   };
 }
 
-export type CwdResolution = { ok: true; cwd: string } | { ok: false };
-
-/** Layer 1: the call's workspace root must be an existing directory (MCP-004). */
-export function resolveCallCwd(cwd: unknown): CwdResolution {
-  if (cwd === undefined) return { ok: true, cwd: process.cwd() };
-  if (typeof cwd !== "string" || cwd === "") return { ok: false };
-  try {
-    if (!statSync(cwd).isDirectory()) return { ok: false };
-  } catch {
-    return { ok: false };
-  }
-  return { ok: true, cwd };
-}
-
-/**
- * The real path of `path`, following every existing component of its chain;
- * for a not-yet-existing target the nearest existing ancestor's real path
- * plus the remaining segments, so a symlinked ancestor cannot smuggle a
- * target past the containment comparison (SEC-006, as `import-source.ts`).
- */
-export function realPathOf(path: string): string {
-  let probe = path;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      const real = realpathSync(probe);
-      return tail.length === 0 ? real : `${real}/${tail.join("/")}`;
-    } catch {
-      const parent = dirname(probe);
-      if (parent === probe) return path;
-      tail.unshift(basename(probe));
-      probe = parent;
-    }
-  }
-}
-
-export function isInsideWorkspace(workspaceRoot: string, resolvedPath: string): boolean {
-  const rel = relative(realpathSync(workspaceRoot), realPathOf(resolvedPath));
-  // A leading `..` segment escapes; a confined filename that merely begins
-  // with two dots (`..draft.md`) does not.
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
 /** The file-like property of each tool that carries a workspace-confined argument. */
 export function fileLikePropertyOf(toolName: string): string | undefined {
   if (
@@ -248,26 +201,6 @@ export function fileLikePropertyOf(toolName: string): string | undefined {
   if (toolName === "memo_add" || toolName === "memo_update" || toolName === "channel_post") return "bodyFile";
   if (toolName === "handoff_processing_start" || toolName === "handoff_processing_complete") return "commentFile";
   return undefined;
-}
-
-export type Confinement =
-  | { ok: true; realPath: string; tildeExpanded: string }
-  | { ok: false; resolvedPath: string; workspaceRoot: string };
-
-/**
- * MCP-004's confinement check on real paths: expand the tilde exactly as the
- * CLI does, resolve against the workspace root, and compare real path against
- * real path with the prefix rule expressed through `path.relative` — correct
- * at the filesystem root too. An inside-but-nonexistent path passes, so the
- * child returns the CLI's typed missing-source error.
- */
-export function confineFileArgument(workspaceRoot: string, argument: string): Confinement {
-  const tildeExpanded = expandTilde(argument);
-  const resolvedPath = resolve(workspaceRoot, tildeExpanded);
-  if (!isInsideWorkspace(workspaceRoot, resolvedPath)) {
-    return { ok: false, resolvedPath, workspaceRoot: realpathSync(workspaceRoot) };
-  }
-  return { ok: true, realPath: realPathOf(resolvedPath), tildeExpanded };
 }
 
 /** The spawn seam: minimal child surface the call handler needs, injectable for tests. */

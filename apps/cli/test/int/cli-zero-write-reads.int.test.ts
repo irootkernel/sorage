@@ -22,7 +22,8 @@ import {
   openWindow,
   settleConnections,
 } from "../fixtures/connection-window";
-import { runCli, withCoveredRead } from "../../src/main";
+import { withCoveredRead } from "../../src/covered-read";
+import { runCli } from "../../src/program";
 
 /**
  * The covered zero-write reads through the in-process CLI (RDR-001, RDR-002):

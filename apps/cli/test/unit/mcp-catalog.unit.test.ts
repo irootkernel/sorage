@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Command } from "commander";
-import { buildProgram } from "../../src/main";
+import { buildProgram } from "../../src/program";
 import { admitArguments, type McpTool, MCP_TOOLS, mcpToolByName } from "../../src/mcp-catalogue";
 import {
   ACCEPT_REQUIRES_ROW_VERSION,

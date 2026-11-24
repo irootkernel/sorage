@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { errorSpec } from "@sorage/core";
-import { renderAppError, runCli } from "../../src/main";
+import { renderAppError } from "../../src/cli-output";
+import { runCli } from "../../src/program";
 
 /**
  * The TASK-040 surface: `sorage completion <shell>` emits a script that loads in a

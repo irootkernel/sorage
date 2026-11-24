@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The TASK-016 acceptance gate executed through the CLI surface: add prints the derived

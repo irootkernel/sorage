@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The CLI-019 matrix of TASK-036: every M1 User-admin command refuses to run without

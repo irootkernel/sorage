@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
-import { buildProgram } from "../../src/main";
+import { buildProgram } from "../../src/program";
 
 /** The shipped Channel catalog is the nine executable leaf commands; group commands are not catalog entries. */
 const catalogPath = fileURLToPath(new URL("../../../../skills/use-sorage/references/channels.md", import.meta.url));

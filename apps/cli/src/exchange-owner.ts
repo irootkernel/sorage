@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { contentionKindOf } from "@sorage/adapters/src/exchange-command-ports";
 import { EXCHANGE_RENEW_SECONDS, isCanonicalUuid } from "@sorage/core";
 import type { ExchangeLifecycleInput } from "@sorage/core";
+import { selfInvocationArgv } from "./self-invocation";
 
 export interface ExchangePair {
   exchangeId: string;
@@ -24,11 +25,6 @@ const RENEW_INTERVAL_MS = EXCHANGE_RENEW_SECONDS * 1_000;
 const RENEW_RETRY_MS = 1_000;
 export const EXCHANGE_JOIN_TIMEOUT_MS = 15_000;
 const OWNER_PARENT = "SORAGE_EXCHANGE_OWNER_PARENT";
-
-export function selfInvocationArgv(argv: string[]): string[] {
-  const entry = process.argv[1];
-  return entry?.endsWith("main.ts") ? [entry, ...argv] : argv;
-}
 
 export function exchangePairOf(value: unknown): ExchangePair | undefined {
   if (typeof value !== "object" || value === null) return;

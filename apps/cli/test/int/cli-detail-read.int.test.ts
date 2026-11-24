@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * TASK-081 CLI detail reads: review show and events call the same use cases as

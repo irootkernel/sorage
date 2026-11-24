@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appError, errorSpec } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 import { memoCliFixture } from "../fixtures/memo-cli";
 
 // Faults occur only after real domain commits, or in the optional diagnostic

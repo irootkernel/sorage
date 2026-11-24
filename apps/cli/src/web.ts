@@ -3,11 +3,8 @@ import { showConfiguration, SystemClock } from "@sorage/core";
 import type { AppError, Configuration, Result } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
-import {
-  createNodeApiTokenStore,
-  createNodeTokenEntropy,
-  createNodeWebSecretStore,
-} from "@sorage/adapters/src/token-store";
+import { createNodeWebSecretStore } from "@sorage/adapters/src/token-store";
+import { selfInvocation } from "./self-invocation";
 
 /**
  * The `sorage web` use case (RUN-012, SEC-019): probe the daemon, start it when
@@ -35,14 +32,6 @@ export interface WebRuntimePorts {
   readConfig(): Result<Configuration, AppError>;
   /** Issues the one-time browser secret. */
   issueSecret(): Result<{ secret: string; expiresAt: string }, AppError>;
-}
-
-/** Interpreter plus entry arguments for re-invoking this CLI as a subprocess. */
-function selfInvocation(extraArgs: string[]): { interpreter: string; args: string[] } {
-  // Under `bun apps/cli/src/main.ts` the interpreter and the entry are separate argv
-  // slots; the compiled binary is a single executable.
-  const scriptArgs = process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string, ...extraArgs] : extraArgs;
-  return { interpreter: process.execPath, args: scriptArgs };
 }
 
 export const WEB_START_TIMEOUT_MS = 10_000;
@@ -138,9 +127,4 @@ export function runWebCommand(
     )}\n`,
   );
   return 0;
-}
-
-/** Reads the Installation API token for CLI-to-daemon calls (SEC-002). */
-export function readApiToken(stateDir: string): string | null {
-  return createNodeApiTokenStore({ stateDir, entropy: createNodeTokenEntropy() }).read();
 }

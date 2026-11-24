@@ -9,8 +9,8 @@ import {
   sweepChannelAcceptedInputs,
 } from "@sorage/adapters/src/channel-command-ports";
 import { type CoveredReadStorage, openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
-import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeVaultCommandPorts } from "@sorage/adapters/src/vault-command-ports";
+import { runChannelMessagesWait } from "@sorage/adapters/src/wait-storage";
 import {
   type AcceptedChannelBody,
   type AppError,
@@ -22,21 +22,18 @@ import {
   closeChannel,
   createChannel,
   err,
-  largeContentDisclosureMessage,
   listChannelMessages,
   listChannels,
   type MessageView,
-  ok,
   postMessage,
   type Result,
   removeParticipant,
   showChannel,
-  SystemClock,
   successEnvelope,
-  isRetryableWaitListingFailure,
-  waitForChannelMessages,
 } from "@sorage/core";
-import { type Command, InvalidArgumentError, Option } from "commander";
+import { type Command, Option } from "commander";
+import { parseInteger } from "./cli-output";
+import { createDisclosureBuffer } from "./disclosure-buffer";
 import { CHANNEL_WAIT_ONLY_OPTIONS, CHANNEL_WAIT_UNHANDLED_ONLY, CHANNEL_WAIT_WHOLE_SECONDS } from "./usage-sentences";
 
 /**
@@ -170,17 +167,6 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
       run("show", [channelRef], options, current);
     });
 
-  function parseInteger(value: string): number {
-    if (!/^\d+$/.test(value)) {
-      throw new InvalidArgumentError("expected a non-negative integer");
-    }
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isNaN(parsed) || parsed < 0 || parsed > Number.MAX_SAFE_INTEGER) {
-      throw new InvalidArgumentError("expected a non-negative integer");
-    }
-    return parsed;
-  }
-
   function run(
     operation: ChannelOperation,
     positionals: string[],
@@ -265,7 +251,7 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
     }
 
     let accepted: AcceptedChannelBody | undefined;
-    const warnings: Array<{ sizeBytes: number; thresholdBytes: number }> = [];
+    const disclosureBuffer = createDisclosureBuffer();
     try {
       sweepChannelAcceptedInputs();
       {
@@ -276,9 +262,7 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
         (ports as ChannelCommandPorts).disclosures = {
           backupEnabled: composed?.backupEnabled ?? false,
           thresholdBytes: composed?.thresholdBytes ?? 0,
-          largeContent: (sizeBytes: number, thresholdBytes: number) => {
-            warnings.push({ sizeBytes, thresholdBytes });
-          },
+          largeContent: disclosureBuffer.record,
           completionWarning: (text: string) => {
             emitWarning(output, text);
           },
@@ -327,27 +311,13 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
           return invalid("An internal Channel command dispatch failed");
       }
       if (!result.ok) {
-        let error = channelError(result.error);
-        if (warnings.length > 0 && json) {
-          try {
-            const appended = warnings
-              .map((warning) => largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes))
-              .join(" ");
-            error = { ...error, message: `${error.message}; ${appended}` };
-          } catch {
-            // Formatting failure leaves the original error intact.
-          }
-        }
+        const error = disclosureBuffer.applyOnFailure(channelError(result.error), json, output.warn, {
+          flushOnHumanFailure: false,
+        });
         output.fail(error, json);
         return null;
       }
-      for (const warning of warnings) {
-        try {
-          output.warn(`${largeContentDisclosureMessage(warning.sizeBytes, warning.thresholdBytes)}.\n`);
-        } catch {
-          // A diagnostic flush failure never masks the real error.
-        }
-      }
+      disclosureBuffer.flushOnSuccess(output.warn);
       emitResult(operation, result.value, json);
       return null;
     } catch (error) {
@@ -469,10 +439,6 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
     };
     const intervalSeconds = typeof options.interval === "number" ? options.interval : 2;
     const timeoutSeconds = typeof options.timeout === "number" ? options.timeout : 60;
-    const clock = new SystemClock();
-    // The deadline is measured from invocation, before the start admission and
-    // the once-only validation run (section 38.5).
-    const deadlineAt = clock.now().getTime() + timeoutSeconds * 1000;
     const listing = {
       channelRef,
       ...(options.after === undefined ? {} : { after: options.after }),
@@ -481,82 +447,8 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
       ...(globals.limit === undefined ? {} : { limit: globals.limit }),
     };
 
-    let start: Result<CoveredReadStorage, AppError>;
-    try {
-      start = openCoveredReadStorage({ surface: "channel", vaultAdmission: true });
-    } catch (error) {
-      start = err(thrownChannelReadError(error));
-    }
-    if (!start.ok) return fail(start.error);
-    // The start listing is this wait's first poll (pending-inclusive): the
-    // once-only Channel and `--from` validation runs on it, an unknown Channel
-    // or handle fails here immediately (section 38.4 line 1712), its success
-    // marks the filter validated, and a retryable read-side failure is the
-    // first poll's failure inside the loop. No second listing runs at
-    // invocation.
-    let first: Result<MessageView[], AppError>;
-    let startPorts: NodeChannelPorts | undefined;
-    try {
-      startPorts = createNodeChannelPorts({ database: start.value.db });
-      const validated = listChannelMessages(startPorts, listing);
-      first = validated.ok ? ok(validated.value.items) : validated;
-    } catch (error) {
-      first = err(thrownChannelReadError(error));
-    } finally {
-      try {
-        startPorts?.close();
-      } catch {
-        // The storage close below owns the injected connection.
-      }
-      start.value.close();
-    }
-    if (!first.ok && !isRetryableWaitListingFailure(first.error)) return fail(channelError(first.error));
-
-    let filterValidated = first.ok;
-    let startListing: Result<MessageView[], AppError> | null = first;
-    const poll = (): Result<MessageView[], AppError> => {
-      if (startListing !== null) {
-        const result = startListing;
-        startListing = null;
-        return result;
-      }
-      let storage: Result<CoveredReadStorage, AppError>;
-      try {
-        storage = openCoveredReadStorage({ surface: "channel" });
-      } catch (error) {
-        storage = err(thrownChannelReadError(error));
-      }
-      if (!storage.ok) return storage;
-      let ports: NodeChannelPorts | undefined;
-      try {
-        ports = createNodeChannelPorts({ database: storage.value.db });
-        if (!filterValidated) {
-          // Only after a retryable start failure: every poll validates until
-          // one listing succeeds — a typed unknown-Channel or handle refusal
-          // ends the wait at once, and a retryable failure keeps polling.
-          const first = listChannelMessages(ports, listing);
-          if (!first.ok) return first;
-          filterValidated = true;
-          return ok(first.value.items);
-        }
-        // After validation the polls never re-validate the handle: a removal
-        // mid-wait does not end the wait (section 38.5).
-        const listed = listChannelMessages(ports, { ...listing, fromAlreadyValidated: true });
-        return listed.ok ? ok(listed.value.items) : listed;
-      } catch (error) {
-        return err(thrownChannelReadError(error));
-      } finally {
-        try {
-          ports?.close();
-        } catch {
-          // The storage close below owns the injected connection.
-        }
-        storage.value.close();
-      }
-    };
-
-    const waited = waitForChannelMessages({ intervalSeconds, deadlineAt, clock, sleepMs: blockingSleepMs, poll });
-    if (!waited.ok) return fail(channelError(waited.error));
+    const waited = runChannelMessagesWait({ listing, intervalSeconds, timeoutSeconds });
+    if (!waited.ok) return fail(waited.error);
     if (waited.value.timedOut) {
       if (json) {
         output.out(

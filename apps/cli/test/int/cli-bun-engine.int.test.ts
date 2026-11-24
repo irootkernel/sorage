@@ -22,11 +22,11 @@ describe("the real bun engine", () => {
     const home = mkdtempSync(join(tmpdir(), "sorage-bun-engine-"));
     homes.push(home);
     const dir = join(home, "proj");
-    const cliMain = fileURLToPath(new URL("../../src/main.ts", import.meta.url));
+    const cliProgram = fileURLToPath(new URL("../../src/program.ts", import.meta.url));
     const script = `
       process.env.SORAGE_HOME = ${JSON.stringify(home)};
       const { mkdirSync, rmSync } = await import("node:fs");
-      const { runCli } = await import(${JSON.stringify(cliMain)});
+      const { runCli } = await import(${JSON.stringify(cliProgram)});
       const sinks = { out: () => {}, err: () => {} };
       const codes = [];
       mkdirSync(${JSON.stringify(dir)});

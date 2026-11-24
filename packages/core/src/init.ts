@@ -1,4 +1,10 @@
-import { type Configuration, defaultConfiguration, expandConfigurationPath } from "./config";
+import {
+  CONFIG_ACCESS_REPAIR,
+  CONFIG_PATH_REPAIR,
+  type Configuration,
+  defaultConfiguration,
+  expandConfigurationPath,
+} from "./config";
 import { type AppError, ok, type Result } from "./errors";
 import type { Clock, IdGenerator } from "./ids";
 import type { ApiTokenStorePort } from "./tokens";
@@ -151,4 +157,206 @@ function ensureHomeTree(ports: InitPorts): void {
   ports.filesystem.ensureDirectory(ports.paths.stateDir);
   ports.filesystem.ensureDirectory(ports.paths.logsDir);
   ports.filesystem.ensureDirectory(ports.paths.runDir);
+}
+
+/** Observed state of an existing configuration before initialization writes anything (INIT-017). */
+export type ExistingConfigurationState = "absent" | "present" | "unreadable" | "unsafe-path";
+
+export interface InitChoicesInput {
+  vaultPath: string;
+  createVault: boolean;
+  serverPort: number;
+  installService: boolean;
+  startDaemon: boolean;
+  initializeGit: boolean;
+  enableDailyBackup: boolean;
+  backupAt: string;
+  backupTimezone: string;
+  enablePush: boolean;
+  pushRemote: string;
+  pushBranch: string;
+  registerProject: boolean;
+  projectName: string;
+  projectDir: string;
+}
+
+export interface ApplyInitChoicesPorts {
+  configFile: string;
+  /** Default Vault path under the active home, used to decide whether `vaultOption` is preserved verbatim. */
+  defaultVaultPath: string;
+  existingConfiguration(): ExistingConfigurationState;
+  vaultExists(path: string): boolean;
+  initialize(options: InitOptions): Result<InitResult, AppError>;
+  configuredVaultOpens(): boolean;
+  configureBackup(
+    input:
+      | { action: "enable"; asUser: true; dailyAt: string; timezone: string }
+      | { action: "enable-push"; asUser: true; remote: string; branch: string },
+  ): Result<unknown, AppError>;
+  addProject(input: { name: string; dir: string }): Result<
+    {
+      project: { slug: string; displayName: string };
+      binding: { bindingKind: string; directory: string };
+    },
+    AppError
+  >;
+  installService(): Result<{ plistPath: string; bootstrapped: boolean }, AppError>;
+  startDaemon(): { ok: true } | { ok: false; exitCode: number };
+}
+
+export type ApplyInitChoicesOutcome =
+  | { kind: "declined-missing-vault"; vaultPath: string }
+  | { kind: "error"; error: AppError; recoveryOverride?: string | undefined }
+  | { kind: "daemon-start-failed"; exitCode: number }
+  | { kind: "already-initialized"; init: InitResult; vaultOpens?: boolean | undefined }
+  | {
+      kind: "completed";
+      created: boolean;
+      init: InitResult;
+      backup?: { enabled: true; at: string; timezone: string } | undefined;
+      push?: { remote: string; branch: string } | undefined;
+      project?: { slug: string; displayName: string; bindingKind: string; binding: string } | undefined;
+      service?:
+        | {
+            label: "xyz.rootkernel.sorage";
+            plistPath: string;
+            bootstrapped: boolean;
+            subsumedStartDaemon: boolean;
+          }
+        | undefined;
+      daemonStarted?: boolean | undefined;
+    };
+
+/**
+ * Applies one confirmed set of init choices (INIT-004, section 3.1 and 3.2): base
+ * installation first, then optional pieces in configuration order — backup schedule,
+ * remote push, first Project, LaunchAgent, and daemon start — so a failure reports
+ * exactly where the sequence stopped and the CLI remains a pure renderer.
+ */
+export function applyInitChoices(
+  ports: ApplyInitChoicesPorts,
+  input: {
+    choices: InitChoicesInput;
+    vaultOption: string | undefined;
+    reconfigure?: boolean | undefined;
+    probeVaultOpens?: boolean | undefined;
+  },
+): ApplyInitChoicesOutcome {
+  const { choices, vaultOption } = input;
+  const reconfigure = input.reconfigure === true;
+  const wizardDefault = vaultOption ?? ports.defaultVaultPath;
+  const vaultForUseCase = choices.vaultPath === wizardDefault ? vaultOption : choices.vaultPath;
+
+  const existing = ports.existingConfiguration();
+  if (existing === "unreadable" || existing === "unsafe-path") {
+    const message =
+      existing === "unsafe-path"
+        ? `The configuration path ${ports.configFile} is not a regular file.`
+        : `The configuration at ${ports.configFile} cannot be read.`;
+    const recovery = existing === "unsafe-path" ? CONFIG_PATH_REPAIR : CONFIG_ACCESS_REPAIR;
+    return {
+      kind: "error",
+      error: { code: "CONFIG_INVALID", message, recovery: { suggestedCommand: recovery } },
+    };
+  }
+
+  if (!choices.createVault && !ports.vaultExists(choices.vaultPath)) {
+    return { kind: "declined-missing-vault", vaultPath: choices.vaultPath };
+  }
+
+  const result = ports.initialize({
+    vaultPath: vaultForUseCase,
+    reconfigure,
+    initializeGit: choices.initializeGit,
+    serverPort: choices.serverPort,
+  });
+  if (!result.ok) {
+    return {
+      kind: "error",
+      error: result.error,
+      recoveryOverride: result.error.code === "CONFIG_INVALID" ? "sorage doctor" : undefined,
+    };
+  }
+
+  const created = result.value.outcome === "created";
+  const installsServiceOnExisting = !created && reconfigure && choices.installService;
+  if (!created && !installsServiceOnExisting) {
+    return {
+      kind: "already-initialized",
+      init: result.value,
+      ...(result.value.git === undefined && input.probeVaultOpens !== false
+        ? { vaultOpens: ports.configuredVaultOpens() }
+        : {}),
+    };
+  }
+
+  let backup: { enabled: true; at: string; timezone: string } | undefined;
+  let push: { remote: string; branch: string } | undefined;
+  let project: { slug: string; displayName: string; bindingKind: string; binding: string } | undefined;
+  let service:
+    | {
+        label: "xyz.rootkernel.sorage";
+        plistPath: string;
+        bootstrapped: boolean;
+        subsumedStartDaemon: boolean;
+      }
+    | undefined;
+  let daemonStarted: boolean | undefined;
+
+  if (created && choices.enableDailyBackup) {
+    const enabled = ports.configureBackup({
+      action: "enable",
+      asUser: true,
+      dailyAt: choices.backupAt,
+      timezone: choices.backupTimezone,
+    });
+    if (!enabled.ok) return { kind: "error", error: enabled.error };
+    backup = { enabled: true, at: choices.backupAt, timezone: choices.backupTimezone };
+  }
+  if (created && choices.enablePush) {
+    const configured = ports.configureBackup({
+      action: "enable-push",
+      asUser: true,
+      remote: choices.pushRemote,
+      branch: choices.pushBranch,
+    });
+    if (!configured.ok) return { kind: "error", error: configured.error };
+    push = { remote: choices.pushRemote, branch: choices.pushBranch };
+  }
+  if (created && choices.registerProject) {
+    const registered = ports.addProject({ name: choices.projectName, dir: choices.projectDir });
+    if (!registered.ok) return { kind: "error", error: registered.error };
+    project = {
+      slug: registered.value.project.slug,
+      displayName: registered.value.project.displayName,
+      bindingKind: registered.value.binding.bindingKind,
+      binding: registered.value.binding.directory,
+    };
+  }
+  if (choices.installService) {
+    const installed = ports.installService();
+    if (!installed.ok) return { kind: "error", error: installed.error };
+    service = {
+      label: "xyz.rootkernel.sorage",
+      plistPath: installed.value.plistPath,
+      bootstrapped: installed.value.bootstrapped,
+      subsumedStartDaemon: choices.startDaemon,
+    };
+  }
+  if (created && choices.startDaemon && !choices.installService) {
+    const started = ports.startDaemon();
+    if (!started.ok) return { kind: "daemon-start-failed", exitCode: started.exitCode };
+    daemonStarted = true;
+  }
+
+  return {
+    kind: "completed",
+    created,
+    init: result.value,
+    ...(backup !== undefined ? { backup } : {}),
+    ...(push !== undefined ? { push } : {}),
+    ...(project !== undefined ? { project } : {}),
+    ...(service !== undefined ? { service } : {}),
+    ...(daemonStarted !== undefined ? { daemonStarted } : {}),
+  };
 }

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { configPutOnce } from "../../src/main";
+import { configPutOnce } from "@sorage/adapters/src/daemon-probes";
 
 /**
  * The TASK-070 retry proof against a scripted server (SEC-020, section 17.1):

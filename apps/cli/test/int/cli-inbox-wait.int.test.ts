@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as readStorage from "@sorage/adapters/src/read-storage";
 import { assertWindowConnectionsClosed, openWindow, settleConnections } from "../fixtures/connection-window";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The `inbox --wait` CLI surface of TASK-036 (CLI-020): the timeout answers exit 0

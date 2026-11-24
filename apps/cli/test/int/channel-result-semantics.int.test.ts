@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appError, err } from "@sorage/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 import { memoCliFixture } from "../fixtures/memo-cli";
 
 /**

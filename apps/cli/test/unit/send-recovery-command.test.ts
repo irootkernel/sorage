@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appError, ERROR_CODES, errorSpec, ok, type SendRecoveryInput } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 import { renderSendRecoveryError, runSendRecoveryCommand } from "../../src/send-recovery-command";
 
 const originalHome = process.env.SORAGE_HOME;

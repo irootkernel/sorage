@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as memoPorts from "@sorage/adapters/src/memo-command-ports";
 import { memoCliFixture } from "../fixtures/memo-cli";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 describe("Memo recovery guidance through the CLI", () => {
   it("reports ambiguous inference and accepts its explicit Project recovery without changing Handoff guidance", () => {

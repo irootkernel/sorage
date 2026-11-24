@@ -5,6 +5,7 @@ import { appError, errorEnvelope, errorSpec } from "@sorage/core";
 import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
 import { daemonStartAdmissionRefusal } from "@sorage/adapters/src/daemon-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
+import { selfInvocationArgv } from "./self-invocation";
 
 /**
  * The `sorage daemon start|stop|restart|status` use cases (RUN-006, RUN-008,
@@ -52,10 +53,11 @@ export function createDaemonRuntimePorts(): DaemonRuntimePorts {
     healthConfirms: (host, port, installationId) => selfProbe(["__health-probe", host, String(port), installationId]),
     historyAdmissionRefusal: () => daemonStartAdmissionRefusal(),
     spawnDaemon: () => {
-      const scriptArgs = process.argv[1]?.endsWith("main.ts")
-        ? [process.argv[1] as string, "daemon", "serve"]
-        : ["daemon", "serve"];
-      const child = spawn(process.execPath, scriptArgs, { detached: true, stdio: "ignore", env: process.env });
+      const child = spawn(process.execPath, selfInvocationArgv(["daemon", "serve"]), {
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      });
       child.unref();
     },
     signal: (pid, name) => {
@@ -70,8 +72,7 @@ export function createDaemonRuntimePorts(): DaemonRuntimePorts {
 }
 
 function selfProbe(args: string[]): boolean {
-  const scriptArgs = process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string, ...args] : args;
-  const probe = spawnSync(process.execPath, scriptArgs, { timeout: 5000 });
+  const probe = spawnSync(process.execPath, selfInvocationArgv(args), { timeout: 5000 });
   return probe.status === 0;
 }
 

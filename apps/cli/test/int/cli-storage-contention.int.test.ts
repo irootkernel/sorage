@@ -15,7 +15,7 @@ import * as sqliteConnections from "@sorage/adapters/src/sqlite/connection";
 import * as migrator from "@sorage/adapters/src/sqlite/migrator";
 import { appError, err } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The SHR-015 storage-preparation contention contract at the CLI boundary: the

@@ -18,7 +18,7 @@ import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-po
 import { acquireLock, createNodeLockProbePorts } from "@sorage/adapters/src/lockfile";
 import { reconcileReboundInboxMarker } from "@sorage/core";
 import { assertWindowConnectionsClosed, openWindow, settleConnections } from "../fixtures/connection-window";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The derived inbox marker of TASK-038 (HND-026) through the real CLI: the default

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildProgram } from "../../src/main";
+import { buildProgram } from "../../src/program";
 
 /**
  * The rebuilt Channel CLI surface of TASK-123 (interface sections 38.4 to

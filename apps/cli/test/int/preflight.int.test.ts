@@ -6,7 +6,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { appError } from "@sorage/core";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 import { runPreflightCommand } from "../../src/preflight-command";
 
 const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url));

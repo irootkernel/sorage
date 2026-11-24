@@ -40,6 +40,10 @@ const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
     "src/read-storage",
     "src/send-recovery",
     "src/sleep",
+    "src/daemon-probes",
+    "src/uninstall-ports",
+    "src/wait-storage",
+    "src/workspace-confinement",
   ],
   "@sorage/daemon": [
     "src/memo-command-ports",

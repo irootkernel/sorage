@@ -2,12 +2,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  confineFileArgument,
-  handleToolCall,
-  WORKSPACE_ESCAPE_RECOVERY,
-  type SpawnedChild,
-} from "../../src/mcp-server";
+import { confineFileArgument } from "@sorage/adapters/src/workspace-confinement";
+import { handleToolCall, WORKSPACE_ESCAPE_RECOVERY, type SpawnedChild } from "../../src/mcp-server";
 
 it("refuses all Exchange file escapes and recipient paths before spawning a child", async () => {
   const root = tempDir("sorage-mcp-exchange-file-");

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { type CommandInput, runCli } from "../../src/main";
+import { type CommandInput, runCli } from "../../src/program";
 import { runInitWizard } from "../../src/init-wizard";
 
 const homes: string[] = [];

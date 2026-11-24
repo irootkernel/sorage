@@ -22,7 +22,7 @@ import {
   openWindow,
   settleConnections,
 } from "../fixtures/connection-window";
-import { runCli } from "../../src/main";
+import { runCli } from "../../src/program";
 
 /**
  * The covered Channel reads through the in-process CLI (RDR-001 to RDR-005,
