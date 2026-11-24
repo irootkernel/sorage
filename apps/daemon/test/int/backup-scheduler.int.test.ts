@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
-import { FakeClock } from "@sorage/adapters/src/testkit/fakes";
+import { FakeClock } from "@sorage/adapters/testkit";
 import { initializeInstallation } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { serveDaemon } from "../../src/runtime";

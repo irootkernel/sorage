@@ -3,14 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createSqliteEventLedger } from "@sorage/adapters/src/events";
+import { createSqliteEventLedger, createSqliteReviewStore } from "@sorage/adapters";
 import {
   createNodeHandoffReadPorts,
   createNodeRetentionPorts,
   createNodeReviewPorts,
   createNodeRevisionPorts,
 } from "@sorage/adapters/src/handoff-command-ports";
-import { createSqliteReviewStore } from "@sorage/adapters/src/review-store";
 import { openSorageDatabase } from "@sorage/adapters/src/sqlite/connection";
 import {
   approveDeletion,

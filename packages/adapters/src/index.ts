@@ -45,7 +45,6 @@ export * from "./sqlite/migrations";
 export * from "./sqlite/migrator";
 export * from "./sqlite/move-fence";
 export * from "./sqlite/transaction";
-export * from "./testkit";
 export * from "./vault";
 export * from "./vault-command-ports";
 export * from "./vault-git-repository";

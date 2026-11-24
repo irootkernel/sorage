@@ -1,86 +1,29 @@
 // Enforces the package import rules of docs/implementation-tips/README.md section 2 (NFR-014).
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  APP_ADAPTERS_ALLOWLIST,
+  ECOSYSTEM_TOOLS,
+  enumerateWorkspaceDirectories,
+  isExportsMap,
+  readPackageManifest,
+  reportViolationsAndExit,
+  resolveExportTarget,
+  walkSourceFiles,
+} from "./workspace";
 
 // Package name -> packages whose imports it may reference.
-const IMPORT_RULES: Record<string, string[]> = {
+const IMPORT_RULES: Record<string, readonly string[]> = {
   "@sorage/core": [],
   "@sorage/adapters": ["@sorage/core"],
   "@sorage/cli": ["@sorage/core", "@sorage/adapters", "@sorage/daemon"],
   "@sorage/daemon": ["@sorage/core", "@sorage/adapters"],
 };
 
-/**
- * The composition surface an app may deep-import from `@sorage/adapters` (CLI-018): a
- * shipped process reaches SQLite and the Vault only through these command-port and
- * infrastructure modules, never the adapters index (which also exports the vitest-only
- * testkit) and never a storage implementation module directly.
- */
-const APP_ADAPTERS_ALLOWLIST: Record<string, readonly string[]> = {
-  "@sorage/cli": [
-    "src/backup-command-ports",
-    "src/config-command-ports",
-    "src/daemon-command-ports",
-    "src/token-store",
-    "src/inbox-marker-ports",
-    "src/doctor",
-    "src/home",
-    "src/init-ports",
-    "src/launchagent-ports",
-    "src/logging",
-    "src/handoff-command-ports",
-    "src/project-command-ports",
-    "src/vault-command-ports",
-    "src/import-source",
-    "src/memo-command-ports",
-    "src/channel-command-ports",
-    "src/exchange-command-ports",
-    "src/memo-body-file",
-    "src/preflight",
-    "src/read-storage",
-    "src/send-recovery",
-    "src/sleep",
-    "src/daemon-probes",
-    "src/uninstall-ports",
-    "src/wait-storage",
-    "src/workspace-confinement",
-  ],
-  "@sorage/daemon": [
-    "src/memo-command-ports",
-    "src/backup-command-ports",
-    "src/config-command-ports",
-    "src/daemon-command-ports",
-    "src/token-store",
-    "src/inbox-marker-ports",
-    "src/doctor",
-    "src/home",
-    "src/init-ports",
-    "src/logging",
-    "src/handoff-command-ports",
-    "src/read-storage",
-    "src/project-command-ports",
-    "src/vault-command-ports",
-    "src/import-source",
-    "src/sleep",
-  ],
-};
-
-const ECOSYSTEM_PACKAGES = ["aquarium", "podway", "mulgae", "gaori", "sanho", "ouroboros", "dolgorae"];
-const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPEC_PATTERN = /(?:from\s*|import\s*|import\(\s*|require\(\s*)["']([^"']+)["']/g;
 
 const root = process.argv[2] ?? ".";
 const violations: string[] = [];
-
-function walk(dir: string, visit: (path: string) => void): void {
-  if (!existsSync(dir)) return;
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules" || entry === "dist" || entry.startsWith(".")) continue;
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) walk(path, visit);
-    else if (SOURCE_EXTENSIONS.some((extension) => path.endsWith(extension))) visit(path);
-  }
-}
 
 // Removes comments so scanners cannot match on prose; string literal contents survive
 // because import specifiers themselves are quoted.
@@ -89,14 +32,14 @@ function stripComments(text: string): string {
 }
 
 function ecosystemToolFor(spec: string): string | null {
-  for (const tool of ECOSYSTEM_PACKAGES) {
+  for (const tool of ECOSYSTEM_TOOLS) {
     if (new RegExp(`(^|/)@?${tool}(/|$)|(^|/)@?${tool}-`).test(spec)) return tool;
   }
   return null;
 }
 
-function checkImportsForPackage(pkgDir: string, pkgName: string, allowed: string[]): void {
-  walk(join(pkgDir, "src"), (path) => {
+function checkImportsForPackage(pkgDir: string, pkgName: string, allowed: readonly string[]): void {
+  walkSourceFiles(join(pkgDir, "src"), (path) => {
     const text = stripComments(readFileSync(path, "utf8"));
     for (const match of text.matchAll(IMPORT_SPEC_PATTERN)) {
       const spec = match[1];
@@ -127,17 +70,50 @@ function checkImportsForPackage(pkgDir: string, pkgName: string, allowed: string
   });
 }
 
-for (const [pkgName, allowed] of Object.entries(IMPORT_RULES)) {
-  const pkgDir = join(root, "packages", pkgName.replace("@sorage/", ""));
-  const appDir = join(root, "apps", pkgName.replace("@sorage/", ""));
-  const dir = existsSync(pkgDir) ? pkgDir : appDir;
-  checkImportsForPackage(dir, pkgName, allowed);
+function checkAllowlistExportsAlignment(): void {
+  const adaptersDir = join(root, "packages", "adapters");
+  const adaptersManifestPath = join(adaptersDir, "package.json");
+  // Minimal temporary fixtures omit package manifests; fail closed whenever the manifest exists.
+  if (!existsSync(adaptersManifestPath)) return;
+
+  const result = readPackageManifest(adaptersManifestPath);
+  if (!result.ok) {
+    violations.push(result.error);
+    return;
+  }
+  if (!isExportsMap(result.manifest.exports)) {
+    violations.push(`${adaptersManifestPath}: missing or invalid "exports" map`);
+    return;
+  }
+  for (const [appName, entries] of Object.entries(APP_ADAPTERS_ALLOWLIST)) {
+    for (const entry of entries) {
+      const exportKey = `./${entry}`;
+      const resolved = resolveExportTarget(adaptersDir, result.manifest.exports, exportKey);
+      if (!resolved.ok) {
+        violations.push(
+          `${adaptersManifestPath}: allowlisted ${appName} entry "${entry}" (${exportKey}) does not resolve to an exported file (${resolved.reason})`,
+        );
+      }
+    }
+  }
 }
 
-if (violations.length > 0) {
-  console.error("import-boundary check failed:");
-  for (const violation of violations) console.error(`  ${violation}`);
-  process.exit(1);
+for (const ws of enumerateWorkspaceDirectories(root)) {
+  let pkgName = `@sorage/${ws.entry}`;
+  if (existsSync(ws.manifestPath)) {
+    const manifestResult = readPackageManifest(ws.manifestPath);
+    if (manifestResult.ok && typeof manifestResult.manifest.name === "string" && manifestResult.manifest.name !== "") {
+      pkgName = manifestResult.manifest.name;
+    }
+  }
+  const allowed = IMPORT_RULES[pkgName];
+  if (allowed !== undefined) {
+    checkImportsForPackage(ws.dir, pkgName, allowed);
+  }
 }
+
+checkAllowlistExportsAlignment();
+
+reportViolationsAndExit("import-boundary check failed:", violations);
 
 console.log("import-boundary check passed: package import rules hold.");

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as inboxMarkerPorts from "@sorage/adapters/src/inbox-marker-ports";
 import { createNodeInboxMarkerPorts } from "@sorage/adapters/src/inbox-marker-ports";
-import { acquireLock, createNodeLockProbePorts } from "@sorage/adapters/src/lockfile";
+import { acquireLock, createNodeLockProbePorts } from "@sorage/adapters";
 import { reconcileReboundInboxMarker } from "@sorage/core";
 import { assertWindowConnectionsClosed, openWindow, settleConnections } from "../fixtures/connection-window";
 import { runCli } from "../../src/program";

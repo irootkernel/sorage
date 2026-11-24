@@ -1,31 +1,26 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { assertManagedBun, managedCompiler, managedNode } from "./toolchain-runtime";
+import { enumerateWorkspaceDirectories, reportViolationsAndExit } from "./workspace";
 
 assertManagedBun();
 const node = managedNode();
 const tsc = managedCompiler();
 
 const root = process.argv[2] ?? ".";
-const groups = ["packages", "apps"];
 const failures: string[] = [];
 
-for (const group of groups) {
-  const groupDir = join(root, group);
-  if (!existsSync(groupDir)) continue;
-  for (const entry of readdirSync(groupDir)) {
-    const project = join(group, entry);
-    if (!existsSync(join(root, project, "tsconfig.json"))) continue;
-    const result = Bun.spawnSync({
-      cmd: [node, tsc, "-p", join(project, "tsconfig.json")],
-      cwd: root,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (result.exitCode !== 0) {
-      const diagnostics = result.stdout.toString() || result.stderr.toString();
-      failures.push(`${project}: tsc exited ${result.exitCode}\n${diagnostics}`);
-    }
+for (const ws of enumerateWorkspaceDirectories(root)) {
+  if (!existsSync(join(ws.dir, "tsconfig.json"))) continue;
+  const result = Bun.spawnSync({
+    cmd: [node, tsc, "-p", join(ws.relDir, "tsconfig.json")],
+    cwd: root,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) {
+    const diagnostics = result.stdout.toString() || result.stderr.toString();
+    failures.push(`${ws.relDir}: tsc exited ${result.exitCode}\n${diagnostics}`);
   }
 }
 
@@ -42,10 +37,6 @@ if (existsSync(join(root, "tsconfig.json"))) {
   }
 }
 
-if (failures.length > 0) {
-  console.error("typecheck failed:");
-  for (const failure of failures) console.error(failure);
-  process.exit(1);
-}
+reportViolationsAndExit("typecheck failed:", failures, { indent: "" });
 
 console.log("typecheck passed for every workspace package.");

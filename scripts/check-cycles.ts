@@ -1,36 +1,98 @@
 // Enforces zero runtime circular dependencies across all four Sorage packages (ADR-0038, NFR-014).
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import ts from "typescript";
-
-const PACKAGES: ReadonlyArray<{ name: string; relDir: string }> = [
-  { name: "@sorage/core", relDir: "packages/core" },
-  { name: "@sorage/adapters", relDir: "packages/adapters" },
-  { name: "@sorage/cli", relDir: "apps/cli" },
-  { name: "@sorage/daemon", relDir: "apps/daemon" },
-];
-
-const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"] as const;
+import {
+  enumerateWorkspaceDirectories,
+  isExportsMap,
+  readPackageManifest,
+  reportViolationsAndExit,
+  resolveExportTarget,
+  SOURCE_EXTENSIONS,
+  walkSourceFiles,
+} from "./workspace";
 
 const root = resolve(process.argv[2] ?? ".");
-const packageDirs = new Map<string, string>(PACKAGES.map((pkg) => [pkg.name, resolve(root, pkg.relDir)]));
+
+interface WorkspacePackageInfo {
+  readonly name: string;
+  readonly dir: string;
+  readonly hasManifest: boolean;
+  readonly exports: Record<string, unknown> | null;
+}
+
+function relPath(filePath: string): string {
+  return relative(root, filePath).split("\\").join("/");
+}
+
+const workspaceDirs = enumerateWorkspaceDirectories(root);
+const packagesByName = new Map<string, WorkspacePackageInfo>();
+const manifestErrors: string[] = [];
+
+for (const ws of workspaceDirs) {
+  const fallbackName = `@sorage/${ws.entry}`;
+  if (!existsSync(ws.manifestPath)) {
+    // Minimal temp fixtures omit workspace manifests; retain legacy fallback only when absent.
+    packagesByName.set(fallbackName, {
+      name: fallbackName,
+      dir: ws.dir,
+      hasManifest: false,
+      exports: null,
+    });
+    continue;
+  }
+
+  const manifestResult = readPackageManifest(ws.manifestPath);
+  if (!manifestResult.ok) {
+    manifestErrors.push(`${relPath(ws.manifestPath)}: not parseable JSON`);
+    packagesByName.set(fallbackName, {
+      name: fallbackName,
+      dir: ws.dir,
+      hasManifest: true,
+      exports: null,
+    });
+    continue;
+  }
+
+  const pkgName =
+    typeof manifestResult.manifest.name === "string" && manifestResult.manifest.name.length > 0
+      ? manifestResult.manifest.name
+      : fallbackName;
+
+  if (!isExportsMap(manifestResult.manifest.exports)) {
+    manifestErrors.push(`${relPath(ws.manifestPath)}: missing or invalid "exports" map`);
+    packagesByName.set(pkgName, {
+      name: pkgName,
+      dir: ws.dir,
+      hasManifest: true,
+      exports: null,
+    });
+    continue;
+  }
+
+  for (const key of Object.keys(manifestResult.manifest.exports).sort()) {
+    const resolved = resolveExportTarget(ws.dir, manifestResult.manifest.exports, key);
+    if (!resolved.ok) {
+      const targetDisplay = resolved.target === undefined ? "(invalid)" : `"${resolved.target}"`;
+      manifestErrors.push(
+        `${relPath(ws.manifestPath)}: export "${key}" target ${targetDisplay} is invalid or missing (${resolved.reason})`,
+      );
+    }
+  }
+
+  packagesByName.set(pkgName, {
+    name: pkgName,
+    dir: ws.dir,
+    hasManifest: true,
+    exports: manifestResult.manifest.exports,
+  });
+}
 
 function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
     return false;
-  }
-}
-
-function walk(dir: string, out: string[]): void {
-  if (!existsSync(dir)) return;
-  for (const entry of readdirSync(dir).sort()) {
-    if (entry === "node_modules" || entry === "dist" || entry.startsWith(".")) continue;
-    const full = join(dir, entry);
-    const stat = statSync(full);
-    if (stat.isDirectory()) walk(full, out);
-    else if (SOURCE_EXTENSIONS.some((ext) => full.endsWith(ext))) out.push(full);
   }
 }
 
@@ -56,16 +118,25 @@ function resolveInternalSpecifier(fromFile: string, spec: string): { resolved: s
   }
   const parts = spec.split("/");
   const pkgName = parts.slice(0, 2).join("/");
-  const pkgDir = packageDirs.get(pkgName);
-  if (pkgDir === undefined) {
+  const pkg = packagesByName.get(pkgName);
+  if (pkg === undefined) {
     return { resolved: null, internal: true };
   }
   const subpath = parts.slice(2).join("/");
+  if (pkg.hasManifest) {
+    // Fail closed when a package manifest is present: resolve strictly through its exports map.
+    if (pkg.exports === null) {
+      return { resolved: null, internal: true };
+    }
+    const exportKey = subpath === "" ? "." : `./${subpath}`;
+    const result = resolveExportTarget(pkg.dir, pkg.exports, exportKey);
+    return { resolved: result.ok ? result.path : null, internal: true };
+  }
   if (subpath === "") {
-    return { resolved: resolveCandidateFile(join(pkgDir, "src", "index")), internal: true };
+    return { resolved: resolveCandidateFile(join(pkg.dir, "src", "index")), internal: true };
   }
   if (subpath.startsWith("src/")) {
-    return { resolved: resolveCandidateFile(join(pkgDir, subpath)), internal: true };
+    return { resolved: resolveCandidateFile(join(pkg.dir, subpath)), internal: true };
   }
   return { resolved: null, internal: true };
 }
@@ -146,13 +217,9 @@ function extractRuntimeSpecifiers(filePath: string, text: string): string[] {
   return specifiers;
 }
 
-function relPath(filePath: string): string {
-  return relative(root, filePath).split("\\").join("/");
-}
-
 const files: string[] = [];
-for (const pkg of PACKAGES) {
-  walk(join(root, pkg.relDir, "src"), files);
+for (const ws of workspaceDirs) {
+  walkSourceFiles(join(ws.dir, "src"), (file) => files.push(file));
 }
 files.sort();
 
@@ -277,27 +344,15 @@ const coreTopOnlyDirCycles = findStronglyConnectedCycles(coreTopDirGraph).filter
   (cycle) => !leafCycleKeys.has(cycle.join(" <-> ")),
 );
 
-if (
-  unresolvedErrors.length > 0 ||
-  cycles.length > 0 ||
-  coreLeafDirCycles.length > 0 ||
-  coreTopOnlyDirCycles.length > 0
-) {
-  console.error("cycle check failed:");
-  for (const error of unresolvedErrors) {
-    console.error(`  ${error}`);
-  }
-  for (const cycle of cycles) {
-    console.error(`  runtime cycle: ${cycle.join(" <-> ")}`);
-  }
-  for (const cycle of coreLeafDirCycles) {
-    console.error(`  core directory cycle: ${cycle.join(" <-> ")}`);
-  }
-  for (const cycle of coreTopOnlyDirCycles) {
-    console.error(`  core directory cycle (top-level rollup): ${cycle.join(" <-> ")}`);
-  }
-  process.exit(1);
-}
+const allViolations = [
+  ...manifestErrors,
+  ...unresolvedErrors,
+  ...cycles.map((cycle) => `runtime cycle: ${cycle.join(" <-> ")}`),
+  ...coreLeafDirCycles.map((cycle) => `core directory cycle: ${cycle.join(" <-> ")}`),
+  ...coreTopOnlyDirCycles.map((cycle) => `core directory cycle (top-level rollup): ${cycle.join(" <-> ")}`),
+];
+
+reportViolationsAndExit("cycle check failed:", allViolations);
 
 console.log(
   `cycle check passed: zero runtime circular dependencies across ${String(files.length)} files and zero core directory cycles.`,

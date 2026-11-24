@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { knownSchemaMaximum } from "@sorage/core";
-import { MIGRATIONS } from "@sorage/adapters/src/sqlite/migrations";
+import { MIGRATIONS } from "@sorage/adapters";
 import { openAndMigrate } from "@sorage/adapters/src/sqlite/migrator";
 import {
   assertWindowConnectionsClosed,

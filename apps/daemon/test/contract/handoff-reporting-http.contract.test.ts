@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { openNodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
-import { productionMigrationPlan } from "@sorage/adapters/src/sqlite/migrations";
+import { productionMigrationPlan } from "@sorage/adapters";
 import { openAndMigrate } from "@sorage/adapters/src/sqlite/migrator";
 import {
   createNodeApiTokenStore,

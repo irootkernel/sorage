@@ -114,7 +114,7 @@ describe("the daemon runtime", () => {
   it("sweep ticks verify real artifact bytes and only report true mismatches (SEC-014)", async () => {
     // Seed one materialized artifact whose planted bytes hash to the recorded digest.
     const { openAndMigrate } = await import("@sorage/adapters/src/sqlite/migrator");
-    const { productionMigrationPlan } = await import("@sorage/adapters/src/sqlite/migrations");
+    const { productionMigrationPlan } = await import("@sorage/adapters");
     const plan = productionMigrationPlan();
     const db = openAndMigrate(join(home, "state", "sorage.sqlite3"), plan.migrations, {
       rebuilds: plan.rebuilds,
@@ -181,7 +181,7 @@ describe("the daemon runtime", () => {
   it("reports an unverifiable Artifact-record relationship honestly, stays alive, and resumes after repair (SHR-004)", async () => {
     const recordId = "4f0ac9a0-0000-4000-8000-0000000000c1";
     const { openAndMigrate } = await import("@sorage/adapters/src/sqlite/migrator");
-    const { productionMigrationPlan } = await import("@sorage/adapters/src/sqlite/migrations");
+    const { productionMigrationPlan } = await import("@sorage/adapters");
     const plan = productionMigrationPlan();
     const seeded = openAndMigrate(join(home, "state", "sorage.sqlite3"), plan.migrations, {
       rebuilds: plan.rebuilds,
