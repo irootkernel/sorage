@@ -6,6 +6,7 @@ export * from "./backup-schedule";
 export * from "./backup-snapshot";
 export * from "./channel-snapshot";
 export * from "./channels";
+export type { SnapshotDomainCodec } from "./codec-snapshot";
 export * from "./config";
 export * from "./config-commands";
 export * from "./content";

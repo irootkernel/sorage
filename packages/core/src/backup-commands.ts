@@ -31,6 +31,7 @@ import {
   redactSnapshotDataV4,
   reportingSnapshotDataBase,
   type SnapshotDataV4,
+  type SnapshotHandoffV4,
   snapshotFilesV4,
   upgradeSnapshotHandoff,
   validateReportingSnapshotEvent,
@@ -127,6 +128,15 @@ export interface BackupRestorePorts {
   readSourceSnapshot(): Result<BackupSnapshotData, AppError>;
   /** Cross-checks the manifest counts against the parsed snapshot (BKP-005). */
   readSourceManifest(): Result<VersionedSnapshotManifest, AppError>;
+  /**
+   * Optional single-pass reader that parses and validates the source manifest
+   * and snapshot once; when supplied, `backupRestore` avoids re-reading the
+   * manifest and re-running `validateSnapshot`.
+   */
+  readValidatedSourceSnapshot?(): Result<
+    { data: BackupSnapshotData; manifest: VersionedSnapshotManifest; reviewNotes: number },
+    AppError
+  >;
   /** False once any domain row or ledger row exists; the empty rule of section 32 (BKP-021). */
   targetIsEmpty(): Result<boolean, AppError>;
   /**
@@ -187,12 +197,15 @@ export function validateSnapshot(
   }
   if ("exchanges" in input) return snapshotProblem("A legacy snapshot cannot contain Exchange records.");
   if (manifest.formatVersion === 4) {
+    const handoffsById = new Map<string, SnapshotHandoffV4>();
     for (const handoff of input.handoffs) {
       const shape = validateSnapshotHandoffV4(handoff);
       if (!shape.ok) return shape;
+      const typed = handoff as SnapshotHandoffV4;
+      if (!handoffsById.has(typed.id)) handoffsById.set(typed.id, typed);
     }
     for (const event of input.events) {
-      const valid = validateReportingSnapshotEvent(event, (input as SnapshotDataV4).handoffs);
+      const valid = validateReportingSnapshotEvent(event, handoffsById);
       if (!valid.ok) return valid;
     }
   }
@@ -411,12 +424,23 @@ function restoreUnderLock(
 ): Result<RestorePlan | RestoreOutcome, AppError> {
   const marker = ports.readSourceMarker();
   if (!marker.ok) return err(marker.error);
-  const data = ports.readSourceSnapshot();
-  if (!data.ok) return err(data.error);
-  const manifest = ports.readSourceManifest();
-  if (!manifest.ok) return err(manifest.error);
-  const valid = validateSnapshot(data.value, manifest.value);
-  if (!valid.ok) return err(valid.error);
+  let dataValue: BackupSnapshotData;
+  let reviewNotes: number;
+  if (ports.readValidatedSourceSnapshot !== undefined) {
+    const validated = ports.readValidatedSourceSnapshot();
+    if (!validated.ok) return err(validated.error);
+    dataValue = validated.value.data;
+    reviewNotes = validated.value.reviewNotes;
+  } else {
+    const data = ports.readSourceSnapshot();
+    if (!data.ok) return err(data.error);
+    const manifest = ports.readSourceManifest();
+    if (!manifest.ok) return err(manifest.error);
+    const valid = validateSnapshot(data.value, manifest.value);
+    if (!valid.ok) return err(valid.error);
+    dataValue = data.value;
+    reviewNotes = valid.value.reviewNotes;
+  }
 
   const empty = ports.targetIsEmpty();
   if (!empty.ok) return err(empty.error);
@@ -430,7 +454,7 @@ function restoreUnderLock(
     );
   }
 
-  const verified = ports.verifyArtifacts(data.value);
+  const verified = ports.verifyArtifacts(dataValue);
   if (!verified.ok) return err(verified.error);
 
   const plan: RestorePlan = {
@@ -438,16 +462,16 @@ function restoreUnderLock(
     sourcePath: ports.sourcePath,
     adoptedInstallationId: marker.value.installationId,
     wouldCreate: {
-      projects: data.value.projects.length,
-      handoffs: data.value.handoffs.length,
-      reviewNotes: valid.value.reviewNotes,
-      artifacts: data.value.handoffs.filter((handoff) => handoff.artifact !== null).length,
-      events: data.value.events.length,
+      projects: dataValue.projects.length,
+      handoffs: dataValue.handoffs.length,
+      reviewNotes,
+      artifacts: dataValue.handoffs.filter((handoff) => handoff.artifact !== null).length,
+      events: dataValue.events.length,
     },
   };
   if (options.dryRun) return ok(plan);
 
-  const copied = ports.copyArtifacts(data.value);
+  const copied = ports.copyArtifacts(dataValue);
   if (!copied.ok) return err(copied.error);
   // The marker and the configuration adopt adjacent to each other and before
   // the rebuild: a crash between them leaves the target still empty of domain
@@ -456,7 +480,7 @@ function restoreUnderLock(
   if (!marked.ok) return err(marked.error);
   const configured = ports.adoptInstallationId(marker.value.installationId);
   if (!configured.ok) return err(configured.error);
-  const rebuilt = ports.rebuildDatabase(data.value, marker.value);
+  const rebuilt = ports.rebuildDatabase(dataValue, marker.value);
   if (!rebuilt.ok) return err(rebuilt.error);
   const token = ports.regenerateApiToken();
   if (!token.ok) return err(token.error);

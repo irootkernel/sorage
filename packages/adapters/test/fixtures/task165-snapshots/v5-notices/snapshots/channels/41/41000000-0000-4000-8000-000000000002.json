@@ -1,0 +1,39 @@
+{
+  "closedAt": "2026-11-20T00:09:00.000Z",
+  "createdAt": "2026-11-20T00:07:00.000Z",
+  "id": "41000000-0000-4000-8000-000000000002",
+  "main": "main",
+  "messages": [
+    {
+      "bodyContent": {
+        "inline": "Closed channel question"
+      },
+      "createdAt": "2026-11-20T00:08:00.000Z",
+      "handleNote": null,
+      "handled": true,
+      "handledAt": "2026-11-20T00:09:00.000Z",
+      "kind": "question",
+      "ref": null,
+      "senderHandle": "worker-1",
+      "seq": 1,
+      "toHandle": null
+    }
+  ],
+  "name": "ch-closed",
+  "participants": [
+    {
+      "addedAt": "2026-11-20T00:07:00.000Z",
+      "handle": "main",
+      "removedAt": null,
+      "role": "main"
+    },
+    {
+      "addedAt": "2026-11-20T00:08:00.000Z",
+      "handle": "worker-1",
+      "removedAt": null,
+      "role": "worker"
+    }
+  ],
+  "state": "closed",
+  "title": null
+}

@@ -1,0 +1,24 @@
+{
+  "bodyContent": {
+    "contentPath": "content/memo/31000000-0000-4000-8000-000000000002/32000000-0000-4000-8000-000000000002",
+    "sha256": "db55efa35e2517f01e2646087f65aaf4f90adc3cf9b9dc922415aff024a07f2d",
+    "sizeBytes": 70025
+  },
+  "closedAt": null,
+  "closedBy": null,
+  "createdAt": "2026-11-20T00:05:00.000Z",
+  "createdBy": {
+    "id": null,
+    "kind": "user"
+  },
+  "id": "31000000-0000-4000-8000-000000000002",
+  "projectId": "11000000-0000-4000-8000-000000000002",
+  "rowVersion": 1,
+  "state": "open",
+  "title": "File-backed Memo",
+  "updatedAt": "2026-11-20T00:05:00.000Z",
+  "updatedBy": {
+    "id": null,
+    "kind": "user"
+  }
+}

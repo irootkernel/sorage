@@ -1,5 +1,14 @@
-import type { SnapshotFile, SnapshotProject } from "./backup-snapshot";
+import { createHash } from "node:crypto";
+import { compareSnapshotStrings, handoffShardPath, type SnapshotFile, type SnapshotProject } from "./backup-snapshot";
+import {
+  channelContentFilePath,
+  channelSnapshotPath,
+  proveChannelContentBytes,
+  validateSnapshotChannelShard,
+} from "./channel-snapshot";
+import { runV5SnapshotCodecs, type SnapshotCodecContext, type SnapshotDomainCodec } from "./codec-snapshot";
 import { isLowercaseSha256, isUtf8ExactText } from "./content";
+import { serializeMemoSnapshotV3, validateSnapshotMemoContent } from "./content-snapshot";
 import { appError, err, ok, type Result } from "./errors";
 import { canonicalExchangeCollaboration, validateExchangeCollaboration } from "./exchange-collaboration-snapshot";
 import type { ExchangeLifecycle } from "./exchange-lifecycle";
@@ -12,10 +21,15 @@ import {
 import { validateExchangeNoticeInventory } from "./exchange-notice-snapshot";
 import type { ExchangeNoticeInventory } from "./exchange-notices";
 import type { ExchangeCollaboration } from "./exchanges";
-import { type SnapshotDataV4, snapshotFilesV4 } from "./handoff-reporting-snapshot";
-import type { ExchangeSnapshotManifest } from "./memo-snapshot";
+import {
+  type SnapshotDataV4,
+  type SnapshotHandoffV4,
+  validateReportingSnapshotEvent,
+  validateSnapshotHandoffV4,
+} from "./handoff-reporting-snapshot";
+import { type ExchangeSnapshotManifest, memoContentFilePath } from "./memo-snapshot";
 import { isCanonicalUtcTimestamp, isCanonicalUuid } from "./primitives/identity";
-import { canonicalJson, parseUniqueSnapshotJson } from "./primitives/json";
+import { canonicalJson, canonicalJsonLine, parseUniqueSnapshotJson } from "./primitives/json";
 import { memoObject, sha256OfText, utf8ByteLength } from "./primitives/validation";
 
 export const EXCHANGE_SNAPSHOT_FILE = "exchanges.json";
@@ -281,26 +295,208 @@ export function parseExchangeSnapshot(
   return opened.ok ? opened.value(projects) : opened;
 }
 
+const preparedMemoState = new WeakMap<
+  SnapshotCodecContext,
+  { files: SnapshotFile[]; memoDigests: Record<string, string>; contentDigests: Record<string, string> }
+>();
+const preparedChannelState = new WeakMap<
+  SnapshotCodecContext,
+  { files: SnapshotFile[]; contentDigests: Record<string, string> }
+>();
+const preparedExchangeState = new WeakMap<
+  SnapshotCodecContext,
+  { records: ExchangeSnapshotRecord[]; representation: ExchangeSnapshotRepresentation }
+>();
+
+const projectsV5Codec: SnapshotDomainCodec<SnapshotDataV5> = {
+  id: "projects",
+  validate: () => ok(undefined),
+  files: (data) => ok([{ path: "projects.json", content: canonicalJson(data.projects) }]),
+  counts: (data) => ({ projects: data.projects.length }),
+};
+
+const handoffsV5Codec: SnapshotDomainCodec<SnapshotDataV5> = {
+  id: "handoffs",
+  validate: (data) => {
+    const handoffsById = new Map<string, SnapshotHandoffV4>();
+    for (const handoff of data.handoffs) {
+      const valid = validateSnapshotHandoffV4(handoff);
+      if (!valid.ok) return valid;
+      if (!handoffsById.has(handoff.id)) handoffsById.set(handoff.id, handoff);
+    }
+    for (const event of data.events) {
+      const valid = validateReportingSnapshotEvent(event, handoffsById);
+      if (!valid.ok) return valid;
+    }
+    return ok(undefined);
+  },
+  files: (data) => {
+    const byId = [...data.handoffs].sort((a, b) => compareSnapshotStrings(a.id, b.id));
+    return ok(byId.map((handoff) => ({ path: handoffShardPath(handoff.id), content: canonicalJson(handoff) })));
+  },
+  counts: (data) => ({
+    handoffs: data.handoffs.length,
+    artifacts: data.handoffs.filter((handoff) => handoff.artifact !== null).length,
+  }),
+};
+
+const memosV5Codec: SnapshotDomainCodec<SnapshotDataV5> = {
+  id: "memos",
+  validate: (data, context) => {
+    const content = validateSnapshotMemoContent(data);
+    if (!content.ok) return content;
+    const files: SnapshotFile[] = [];
+    const memoDigests: Record<string, string> = {};
+    const contentDigests: Record<string, string> = {};
+    for (const carried of data.memoContentFiles ?? []) {
+      const carriedPath = memoContentFilePath(carried.memoId, carried.contentId);
+      if (!carriedPath.ok) return carriedPath;
+      if (context.carriedContent.has(carriedPath.value)) return corrupt("Duplicate Memo content file identity");
+      const digest = createHash("sha256").update(carried.bytes).digest("hex");
+      context.carriedContent.set(carriedPath.value, carried.bytes);
+      context.contentDigests[carriedPath.value] = digest;
+      contentDigests[carriedPath.value] = digest;
+    }
+    const memos = data.memos ?? [];
+    for (const memo of [...memos].sort((a, b) => compareSnapshotStrings(a.id, b.id))) {
+      const shard = serializeMemoSnapshotV3(memo);
+      if (!shard.ok) return shard;
+      if (Object.hasOwn(memoDigests, shard.value.path)) return corrupt("Duplicate Memo snapshot ID");
+      memoDigests[shard.value.path] = shard.value.digest;
+      context.memoDigests[shard.value.path] = shard.value.digest;
+      files.push({ path: shard.value.path, content: Buffer.from(shard.value.bytes).toString("utf8") });
+      if (memo.bodyContent.kind === "file-backed") {
+        context.referencedContent.add(memo.bodyContent.contentPath);
+        const bytes = context.carriedContent.get(memo.bodyContent.contentPath);
+        if (bytes === undefined) {
+          return corrupt("A file-backed Memo shard names a content file the export does not carry");
+        }
+        if (
+          bytes.byteLength !== memo.bodyContent.sizeBytes ||
+          context.contentDigests[memo.bodyContent.contentPath] !== memo.bodyContent.sha256
+        ) {
+          return corrupt("A file-backed Memo shard disagrees with its carried content file");
+        }
+        files.push({ path: memo.bodyContent.contentPath, content: bytes });
+      }
+    }
+    preparedMemoState.set(context, { files, memoDigests, contentDigests });
+    return ok(undefined);
+  },
+  files: (_data, context) => ok(preparedMemoState.get(context)?.files ?? []),
+  counts: (data) => ({ memos: (data.memos ?? []).length }),
+  digests: (_data, context) => {
+    const state = preparedMemoState.get(context);
+    return state ? { memoDigests: state.memoDigests, contentDigests: state.contentDigests } : {};
+  },
+};
+
+const channelsV5Codec: SnapshotDomainCodec<SnapshotDataV5> = {
+  id: "channels",
+  validate: (data, context) => {
+    const files: SnapshotFile[] = [];
+    const contentDigests: Record<string, string> = {};
+    for (const carried of data.channelContentFiles ?? []) {
+      const carriedPath = channelContentFilePath(carried.channelId, carried.contentId);
+      if (!carriedPath.ok) return carriedPath;
+      if (context.carriedContent.has(carriedPath.value)) return corrupt("Duplicate Channel content file identity");
+      const proof = proveChannelContentBytes(carried.bytes);
+      if (!proof.ok) return proof;
+      const digest = createHash("sha256").update(carried.bytes).digest("hex");
+      context.carriedContent.set(carriedPath.value, carried.bytes);
+      context.contentDigests[carriedPath.value] = digest;
+      contentDigests[carriedPath.value] = digest;
+    }
+    const channels = data.channels ?? [];
+    const channelIds = new Set<string>();
+    for (const channel of [...channels].sort((a, b) => compareSnapshotStrings(a.id, b.id))) {
+      const shard = validateSnapshotChannelShard(channel);
+      if (!shard.ok) return shard;
+      if (channelIds.has(channel.id)) return corrupt("Duplicate Channel snapshot ID");
+      channelIds.add(channel.id);
+      const shardPath = channelSnapshotPath(channel.id);
+      if (!shardPath.ok) return shardPath;
+      files.push({ path: shardPath.value, content: canonicalJson(channel) });
+      for (const message of channel.messages) {
+        if (!("contentPath" in message.bodyContent)) continue;
+        const body = message.bodyContent;
+        if (context.referencedContent.has(body.contentPath)) {
+          return corrupt("Two file-backed records name one content file");
+        }
+        context.referencedContent.add(body.contentPath);
+        const bytes = context.carriedContent.get(body.contentPath);
+        if (bytes === undefined) {
+          return corrupt("A file-backed Channel message names a content file the export does not carry");
+        }
+        if (bytes.byteLength !== body.sizeBytes || context.contentDigests[body.contentPath] !== body.sha256) {
+          return corrupt("A file-backed Channel message disagrees with its carried content file");
+        }
+        files.push({ path: body.contentPath, content: bytes });
+      }
+    }
+    if (context.carriedContent.size !== context.referencedContent.size) {
+      return corrupt("The export carries a content file no shard names");
+    }
+    for (const contentPath of context.carriedContent.keys()) {
+      if (!context.referencedContent.has(contentPath)) {
+        return corrupt("The export carries a content file no shard names");
+      }
+    }
+    preparedChannelState.set(context, { files, contentDigests });
+    return ok(undefined);
+  },
+  files: (_data, context) => ok(preparedChannelState.get(context)?.files ?? []),
+  counts: (data) => ({ channels: (data.channels ?? []).length }),
+  digests: (_data, context) => {
+    const state = preparedChannelState.get(context);
+    return state ? { contentDigests: state.contentDigests } : {};
+  },
+};
+
+const eventsV5Codec: SnapshotDomainCodec<SnapshotDataV5> = {
+  id: "events",
+  validate: () => ok(undefined),
+  files: (data) => {
+    const events = data.events
+      .map((event) => ({ ...event, memoId: event.memoId ?? null }))
+      .sort((a, b) => compareSnapshotStrings(a.createdAt, b.createdAt) || compareSnapshotStrings(a.id, b.id))
+      .map(canonicalJsonLine)
+      .join("");
+    return ok([{ path: "events.jsonl", content: events }]);
+  },
+  counts: (data) => ({ events: data.events.length }),
+};
+
+const exchangesV5Codec: SnapshotDomainCodec<SnapshotDataV5> = {
+  id: "exchanges",
+  validationOrder: -1,
+  placement: "after-manifest",
+  validate: (data, context) => {
+    const representation = data.exchangeRepresentation ?? FOUNDATION_REPRESENTATION;
+    const inventory = validateExchangeInventory(data.exchanges, data.projects, data.exchanges.length, representation);
+    if (!inventory.ok) return inventory;
+    preparedExchangeState.set(context, { records: inventory.value, representation });
+    return ok(undefined);
+  },
+  files: (_data, context) => {
+    const state = preparedExchangeState.get(context);
+    if (!state) return corrupt("Exchange snapshot state was not prepared.");
+    return ok([{ path: EXCHANGE_SNAPSHOT_FILE, content: serialize(state.records, state.representation) }]);
+  },
+  counts: (data) => ({ exchanges: data.exchanges.length }),
+};
+
+const V5_SNAPSHOT_CODECS: readonly SnapshotDomainCodec<SnapshotDataV5>[] = [
+  projectsV5Codec,
+  handoffsV5Codec,
+  memosV5Codec,
+  channelsV5Codec,
+  eventsV5Codec,
+  exchangesV5Codec,
+];
+
 export function snapshotFilesV5(
   data: SnapshotDataV5,
 ): Result<{ files: SnapshotFile[]; manifest: ExchangeSnapshotManifest }> {
-  const representation = data.exchangeRepresentation ?? FOUNDATION_REPRESENTATION;
-  const inventory = validateExchangeInventory(data.exchanges, data.projects, data.exchanges.length, representation);
-  if (!inventory.ok) return inventory;
-  const older = snapshotFilesV4(data);
-  if (!older.ok) return older;
-  const manifest: ExchangeSnapshotManifest = {
-    ...older.value.manifest,
-    formatVersion: 5,
-    counts: { ...older.value.manifest.counts, exchanges: inventory.value.length },
-  };
-  return ok({
-    files: [
-      ...older.value.files.map((file) =>
-        file.path === "manifest.json" ? { ...file, content: canonicalJson(manifest) } : file,
-      ),
-      { path: EXCHANGE_SNAPSHOT_FILE, content: serialize(inventory.value, representation) },
-    ],
-    manifest,
-  });
+  return runV5SnapshotCodecs(data, V5_SNAPSHOT_CODECS);
 }

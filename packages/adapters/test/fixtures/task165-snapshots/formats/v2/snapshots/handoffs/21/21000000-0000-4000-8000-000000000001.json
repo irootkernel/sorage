@@ -1,0 +1,63 @@
+{
+  "acceptedAt": "2026-11-20T00:03:00.000Z",
+  "acceptedRevision": 1,
+  "archivedAt": null,
+  "artifact": {
+    "createdAt": "2026-11-20T00:01:00.000Z",
+    "handoffId": "21000000-0000-4000-8000-000000000001",
+    "id": "22000000-0000-4000-8000-000000000001",
+    "importedFromPath": "/deterministic/work/alpha/brief.md",
+    "materialized": true,
+    "mimeType": "text/markdown",
+    "originalName": "brief.md",
+    "sha256": "bd3daf8408a492559e048bb8061311085f3056001415289100548212d51ab1c5",
+    "sizeBytes": 53,
+    "storageKey": "artifacts/21000000-0000-4000-8000-000000000001/22000000-0000-4000-8000-000000000001/brief.md",
+    "storedName": "brief.md"
+  },
+  "consecutiveNoChangeResolutions": 0,
+  "createdAt": "2026-11-20T00:01:00.000Z",
+  "currentArtifactId": "22000000-0000-4000-8000-000000000001",
+  "declineReason": null,
+  "declinedAt": null,
+  "deletedAt": null,
+  "deletionRequests": [
+    {
+      "handoffId": "21000000-0000-4000-8000-000000000001",
+      "id": "24000000-0000-4000-8000-000000000001",
+      "reason": "Keep audit history",
+      "requestedAt": "2026-11-20T00:02:00.000Z",
+      "requestedById": "11000000-0000-4000-8000-000000000002",
+      "requestedByKind": "registered_project",
+      "resolutionNote": "Retained",
+      "resolvedAt": "2026-11-20T00:03:00.000Z",
+      "resolvedByUser": "user",
+      "status": "rejected"
+    }
+  ],
+  "dispatchGroupId": null,
+  "firstFetchedAt": "2026-11-20T00:02:00.000Z",
+  "id": "21000000-0000-4000-8000-000000000001",
+  "pinned": true,
+  "recipientProjectId": "11000000-0000-4000-8000-000000000002",
+  "reviewEngagedAt": "2026-11-20T00:02:00.000Z",
+  "reviewNote": {
+    "authorKind": "registered_project",
+    "authorProjectId": "11000000-0000-4000-8000-000000000002",
+    "body": "﻿General note\r\n",
+    "createdAt": "2026-11-20T00:03:00.000Z",
+    "handoffId": "21000000-0000-4000-8000-000000000001",
+    "targetRevision": 1,
+    "updatedAt": "2026-11-20T00:03:00.000Z"
+  },
+  "reviewState": "accepted",
+  "revision": 1,
+  "rowVersion": 4,
+  "senderKind": "registered_project",
+  "senderProjectId": "11000000-0000-4000-8000-000000000001",
+  "senderWorkspaceKey": null,
+  "supersedesHandoffId": null,
+  "title": "File-backed Reported Handoff",
+  "updatedAt": "2026-11-20T00:04:00.000Z",
+  "withdrawnAt": null
+}

@@ -267,7 +267,7 @@ export function validateExchangeCollaboration(
       return false;
     reportByKey.set(key, report);
   }
-  const accepted = new Map<string, ExchangeAcceptanceReceipt>();
+  const accepted = new Map<string, { requesterId: string; receipt: ExchangeAcceptanceReceipt }>();
   for (const row of acceptances) {
     const key = reportKey(row.requestId, row.reportVersion);
     const request = typeof row.requestId === "string" ? requestById.get(row.requestId) : undefined;
@@ -287,7 +287,12 @@ export function validateExchangeCollaboration(
     ) {
       return false;
     }
-    accepted.set(key, { operationId: row.receipt.operationId, kind: row.receipt.kind });
+    if (!accepted.has(key)) {
+      accepted.set(key, {
+        requesterId: row.requesterId,
+        receipt: { operationId: row.receipt.operationId, kind: row.receipt.kind },
+      });
+    }
   }
   const messageBySeq = new Map<number, Row>();
   const requestMessages = new Set<string>();
@@ -368,7 +373,8 @@ export function validateExchangeCollaboration(
       reportMessages.add(key);
       currentReportVersions.set(message.requestId, message.reportVersion);
     } else if (message.kind === "accept") {
-      const receipt = accepted.get(key);
+      const acceptedEntry = accepted.get(key);
+      const receipt = acceptedEntry?.receipt;
       if (
         !request ||
         typeof message.requestId !== "string" ||
@@ -378,8 +384,7 @@ export function validateExchangeCollaboration(
         message.senderId !== (ownership ? ownership.acceptanceOwnerId : request.requesterId) ||
         ownership?.disposition ||
         reportByKey.get(key)?.assignmentVersion !== (ownership?.assignmentVersion ?? request.assignmentVersion) ||
-        acceptances.find((entry) => reportKey(entry.requestId, entry.reportVersion) === key)?.requesterId !==
-          message.senderId ||
+        acceptedEntry.requesterId !== message.senderId ||
         message.recipientId !== null ||
         message.materialId !== null
       )

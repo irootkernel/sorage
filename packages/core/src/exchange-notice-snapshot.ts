@@ -3,6 +3,7 @@ import { type ExchangeLifecycle, exchangeLifecycleHead, exchangeRequiresParticip
 import {
   EXCHANGE_RESPONSE_NOTICE_MS,
   type ExchangeNoticeOutcome,
+  type ExchangeResponseObligation,
   exchangeNoticeBasisKey,
   exchangeResponseObligations,
 } from "./exchange-notices";
@@ -49,6 +50,14 @@ export function validExchangeNoticeOutcome(value: unknown): value is ExchangeNot
   );
 }
 
+function requestVersionKey(requestId: unknown, version: unknown): string {
+  return JSON.stringify([requestId, version]);
+}
+
+function obligationLookupKey(affectedProjectId: string, obligation: ExchangeNoticeOutcome["obligation"]): string {
+  return `${affectedProjectId}\0${canonicalJson(obligation)}`;
+}
+
 export function validateExchangeNoticeInventory(
   value: unknown,
   lifecycle: ExchangeLifecycle,
@@ -79,6 +88,100 @@ export function validateExchangeNoticeInventory(
   for (const { seq, actorId, transition } of lifecycle.transitions) {
     if (exchangeRequiresParticipantClaim(transition.kind)) observePresence(actorId, seq);
   }
+
+  const distinctHeadSet = new Set<number>();
+  for (const { outcome } of collaboration.operations) {
+    if (outcome.kind === "notice-ack" && committedHeads.has(outcome.observedThroughSeq)) {
+      distinctHeadSet.add(outcome.observedThroughSeq);
+    }
+  }
+  const headCache = new Map<
+    number,
+    { members: ReadonlySet<string>; obligationsByKey: ReadonlyMap<string, ExchangeResponseObligation> }
+  >();
+  if (distinctHeadSet.size > 0) {
+    const distinctHeads = [...distinctHeadSet].sort((a, b) => a - b);
+    const sortedTransitions = [...lifecycle.transitions].sort((a, b) => a.seq - b.seq);
+    const sortedMessages = [...collaboration.messages].sort((a, b) => a.seq - b.seq);
+    const requestsById = new Map<string, ExchangeCollaboration["requests"][number]>();
+    for (const request of collaboration.requests) {
+      if (!requestsById.has(request.id)) requestsById.set(request.id, request);
+    }
+    const reportsByKey = new Map<string, ExchangeCollaboration["reports"][number]>();
+    for (const report of collaboration.reports) {
+      const key = requestVersionKey(report.requestId, report.version);
+      if (!reportsByKey.has(key)) reportsByKey.set(key, report);
+    }
+    const acceptancesByKey = new Map<string, ExchangeCollaboration["acceptances"][number]>();
+    for (const acceptance of collaboration.acceptances) {
+      const key = requestVersionKey(acceptance.requestId, acceptance.reportVersion);
+      if (!acceptancesByKey.has(key)) acceptancesByKey.set(key, acceptance);
+    }
+
+    const prefixTransitions: ExchangeLifecycle["transitions"] = [];
+    const prefixMessages: ExchangeCollaboration["messages"] = [];
+    const prefixRequests: ExchangeCollaboration["requests"] = [];
+    const prefixReports: ExchangeCollaboration["reports"] = [];
+    const prefixAcceptances: ExchangeCollaboration["acceptances"] = [];
+    const seenRequestIds = new Set<string>();
+    const seenReportKeys = new Set<string>();
+    const seenAcceptanceKeys = new Set<string>();
+    let transitionIndex = 0;
+    let messageIndex = 0;
+
+    for (const headSeq of distinctHeads) {
+      while (transitionIndex < sortedTransitions.length) {
+        const record = sortedTransitions[transitionIndex];
+        if (!record || record.seq > headSeq) break;
+        prefixTransitions.push(record);
+        transitionIndex++;
+      }
+      while (messageIndex < sortedMessages.length) {
+        const message = sortedMessages[messageIndex];
+        if (!message || message.seq > headSeq) break;
+        prefixMessages.push(message);
+        if (message.kind === "request" && message.requestId !== null && !seenRequestIds.has(message.requestId)) {
+          seenRequestIds.add(message.requestId);
+          const request = requestsById.get(message.requestId);
+          if (request) prefixRequests.push(request);
+        } else if (message.kind === "report" && message.requestId !== null && message.reportVersion !== null) {
+          const key = requestVersionKey(message.requestId, message.reportVersion);
+          if (!seenReportKeys.has(key)) {
+            seenReportKeys.add(key);
+            const report = reportsByKey.get(key);
+            if (report) prefixReports.push(report);
+          }
+        } else if (message.kind === "accept" && message.requestId !== null && message.reportVersion !== null) {
+          const key = requestVersionKey(message.requestId, message.reportVersion);
+          if (!seenAcceptanceKeys.has(key)) {
+            seenAcceptanceKeys.add(key);
+            const acceptance = acceptancesByKey.get(key);
+            if (acceptance) prefixAcceptances.push(acceptance);
+          }
+        }
+        messageIndex++;
+      }
+      const observedLifecycle = { ...lifecycle, transitions: prefixTransitions };
+      const observed = exchangeLifecycleHead(observedLifecycle);
+      const obligations = exchangeResponseObligations(
+        observedLifecycle,
+        {
+          requests: prefixRequests,
+          reports: prefixReports,
+          acceptances: prefixAcceptances,
+          messages: prefixMessages,
+        },
+        compatibilityAt,
+      );
+      const obligationsByKey = new Map<string, ExchangeResponseObligation>();
+      for (const candidate of obligations) {
+        const key = obligationLookupKey(candidate.affectedProjectId, candidate.obligation);
+        if (!obligationsByKey.has(key)) obligationsByKey.set(key, candidate);
+      }
+      headCache.set(headSeq, { members: observed.members, obligationsByKey });
+    }
+  }
+
   const issued = new Map<string, ExchangeNoticeOutcome>();
   const lastConnectionHeads = new Map<string, number>();
   for (const { outcome, projectId, registrationAfterSeq } of collaboration.operations) {
@@ -90,38 +193,9 @@ export function validateExchangeNoticeInventory(
       observePresence(projectId, registrationAfterSeq);
     if (outcome.kind !== "notice-ack") continue;
     if (!committedHeads.has(outcome.observedThroughSeq) || issued.has(outcome.incidentId)) return false;
-    const observedLifecycle = {
-      ...lifecycle,
-      transitions: lifecycle.transitions.filter(({ seq }) => seq <= outcome.observedThroughSeq),
-    };
-    const observed = exchangeLifecycleHead(observedLifecycle);
-    if (!observed.members.has(outcome.projectId)) return false;
-    const messages = collaboration.messages.filter(({ seq }) => seq <= outcome.observedThroughSeq);
-    const requestIds = new Set(messages.filter(({ kind }) => kind === "request").map(({ requestId }) => requestId));
-    const versions = (kind: "report" | "accept") =>
-      new Set(
-        messages
-          .filter((message) => message.kind === kind)
-          .map((message) => `${message.requestId}:${message.reportVersion}`),
-      );
-    const reports = versions("report");
-    const acceptances = versions("accept");
-    const response = exchangeResponseObligations(
-      observedLifecycle,
-      {
-        requests: collaboration.requests.filter(({ id }) => requestIds.has(id)),
-        reports: collaboration.reports.filter(({ requestId, version }) => reports.has(`${requestId}:${version}`)),
-        acceptances: collaboration.acceptances.filter(({ requestId, reportVersion }) =>
-          acceptances.has(`${requestId}:${reportVersion}`),
-        ),
-        messages,
-      },
-      compatibilityAt,
-    ).find(
-      (candidate) =>
-        candidate.affectedProjectId === outcome.affectedProjectId &&
-        canonicalJson(candidate.obligation) === canonicalJson(outcome.obligation),
-    );
+    const cached = headCache.get(outcome.observedThroughSeq);
+    if (!cached || !cached.members.has(outcome.projectId)) return false;
+    const response = cached.obligationsByKey.get(obligationLookupKey(outcome.affectedProjectId, outcome.obligation));
     if (!response || Date.parse(outcome.issuedAt) < Date.parse(response.availableAt) + EXCHANGE_RESPONSE_NOTICE_MS)
       return false;
     issued.set(outcome.incidentId, outcome);

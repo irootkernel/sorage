@@ -1,0 +1,5 @@
+artifacts/** -text -diff
+content/** -text -diff
+snapshots/** text eol=lf
+snapshots/content/** -text -diff
+.sorage-vault.json text eol=lf

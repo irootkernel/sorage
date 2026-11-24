@@ -258,6 +258,10 @@ export function exchangeWorkTimeline(lifecycle: ExchangeLifecycle, collaboration
   return { sequenced, registrations, committedHeads };
 }
 
+function requestVersionKey(requestId: unknown, version: unknown): string {
+  return JSON.stringify([requestId, version]);
+}
+
 export function validateExchangeLifecycleEffects(
   lifecycle: ExchangeLifecycle,
   collaboration: ExchangeCollaboration,
@@ -269,8 +273,23 @@ export function validateExchangeLifecycleEffects(
   const head = exchangeLifecycleHead(lifecycle, 0);
   head.workRevision = 1;
   const seen = new Set(lifecycle.initialMembers);
-  const messageSeqs = new Set(messages.map((message) => message.seq));
-  const byRequest = new Map(requests.map((request) => [request.id, request]));
+  const messageBySeq = new Map<number, ExchangeCollaboration["messages"][number]>();
+  for (const message of messages) {
+    if (!messageBySeq.has(message.seq)) messageBySeq.set(message.seq, message);
+  }
+  const byRequest = new Map<string, ExchangeCollaboration["requests"][number]>();
+  for (const request of requests) {
+    if (!byRequest.has(request.id)) byRequest.set(request.id, request);
+  }
+  const reportByKey = new Map<string, ExchangeCollaboration["reports"][number]>();
+  for (const report of reports) {
+    const key = requestVersionKey(report.requestId, report.version);
+    if (!reportByKey.has(key)) reportByKey.set(key, report);
+  }
+  const materialById = new Map<string, ExchangeCollaboration["materials"][number]>();
+  for (const material of materials) {
+    if (!materialById.has(material.id)) materialById.set(material.id, material);
+  }
   const timeline = [...messages].sort((a, b) => a.seq - b.seq);
   const firstSequence = Math.min(timeline[0]?.seq ?? Infinity, lifecycle.transitions[0]?.seq ?? Infinity);
   const legacySequenceFloor = Number.isFinite(firstSequence) ? firstSequence - 1 : collaboration.lastSeq;
@@ -300,7 +319,7 @@ export function validateExchangeLifecycleEffects(
       if (message.kind === "request" && message.requestId) opened.add(message.requestId);
       if (message.kind === "report" && message.requestId && message.reportVersion)
         currentReports.set(message.requestId, message.reportVersion);
-      if (message.kind === "accept") accepted.add(`${message.requestId}:${message.reportVersion}`);
+      if (message.kind === "accept") accepted.add(requestVersionKey(message.requestId, message.reportVersion));
       const work = sequenced.get(message.seq);
       if (work === true || (work && exchangeAcceptanceChangesWork(work, currentExchangeProposal(head))))
         head.workRevision++;
@@ -314,7 +333,7 @@ export function validateExchangeLifecycleEffects(
       workRevision !== head.workRevision ||
       !head.members.has(actorId) ||
       head.state === "completed" ||
-      messageSeqs.has(seq)
+      messageBySeq.has(seq)
     )
       return false;
     if (
@@ -329,23 +348,24 @@ export function validateExchangeLifecycleEffects(
       return request ? (head.ownership.get(id) ?? initialOwnership(request)) : undefined;
     };
     const current = (id: string): number => {
-      const report = reports.find((row) => row.requestId === id && row.version === currentReports.get(id));
+      const version = currentReports.get(id);
+      const report = version !== undefined ? reportByKey.get(requestVersionKey(id, version)) : undefined;
       return report?.assignmentVersion === state(id)?.assignmentVersion ? (report?.version ?? 0) : 0;
     };
     if (transition.kind === "roster") {
       const { add, remove, rosterVersion } = transition;
+      const removed = new Set(remove);
       if (
         rosterVersion !== head.rosterVersion + 1 ||
         add.length + remove.length === 0 ||
-        add.some((id) => head.members.has(id) || remove.includes(id)) ||
+        add.some((id) => head.members.has(id) || removed.has(id)) ||
         remove.some((id) => !head.members.has(id)) ||
         head.members.size + add.length - remove.length < 1
       )
         return false;
-      const removed = new Set(remove);
       const expected = [...opened].sort().flatMap((id) => {
         const old = state(id);
-        return old ? ownershipAfterRosterRemoval(old, removed, accepted.has(`${id}:${current(id)}`)) : [];
+        return old ? ownershipAfterRosterRemoval(old, removed, accepted.has(requestVersionKey(id, current(id)))) : [];
       });
       if (canonicalJson(expected) !== canonicalJson(transition.ownership)) return false;
       for (const id of add) seen.add(id);
@@ -354,7 +374,7 @@ export function validateExchangeLifecycleEffects(
       const old = state(next.requestId);
       if (
         !old ||
-        accepted.has(`${next.requestId}:${current(next.requestId)}`) ||
+        accepted.has(requestVersionKey(next.requestId, current(next.requestId))) ||
         next.version !== old.version + 1 ||
         next.assignmentVersion !== old.assignmentVersion + Number(next.assignedProjectId !== old.assignedProjectId)
       )
@@ -417,17 +437,25 @@ export function validateExchangeLifecycleEffects(
             proposal.members.every((id) => id === actorId || head.votes.get(id)?.vote === "approve"))
       )
         return false;
+      const proposalReportVersion = new Map<string, number>();
+      for (const row of proposal.report) {
+        if (!proposalReportVersion.has(row.requestId)) proposalReportVersion.set(row.requestId, row.reportVersion);
+      }
+      const proposalDispositionVersion = new Map<string, number>();
+      for (const row of proposal.disposition) {
+        if (!proposalDispositionVersion.has(row.requestId)) proposalDispositionVersion.set(row.requestId, row.version);
+      }
       if (
         transition.completed &&
         (proposal.workRevision !== lifecycle.workRevision ||
           [...opened].some((id) => {
             const request = state(id);
+            const currentVersion = current(id);
             const reference =
-              proposal.report.some((row) => row.requestId === id && row.reportVersion === current(id)) &&
-              accepted.has(`${id}:${current(id)}`);
+              proposalReportVersion.get(id) === currentVersion && accepted.has(requestVersionKey(id, currentVersion));
             const disposition =
               request?.disposition &&
-              proposal.disposition.some((row) => row.requestId === id && row.version === request.version) &&
+              proposalDispositionVersion.get(id) === request.version &&
               (request.disposition.followUpProjectId === null ||
                 head.members.has(request.disposition.followUpProjectId));
             return !reference && !disposition;
@@ -436,24 +464,22 @@ export function validateExchangeLifecycleEffects(
         return false;
       if (
         transition.acceptanceSequences.some((index) => {
-          const message = messages.find((entry) => entry.seq === index);
+          const message = messageBySeq.get(index);
           return (
             !message ||
-            !proposal.report.some(
-              (row) => row.requestId === message.requestId && row.reportVersion === message.reportVersion,
-            )
+            message.requestId === null ||
+            message.reportVersion === null ||
+            proposalReportVersion.get(message.requestId) !== message.reportVersion
           );
         })
       )
         return false;
     } else if (transition.kind === "material-revalidate") {
+      const material = materialById.get(transition.materialId);
       if (
-        !materials.some(
-          (row) =>
-            row.id === transition.materialId &&
-            row.ownerProjectId === actorId &&
-            (row.kind === "live" || row.kind === "versioned"),
-        )
+        !material ||
+        material.ownerProjectId !== actorId ||
+        (material.kind !== "live" && material.kind !== "versioned")
       )
         return false;
     }

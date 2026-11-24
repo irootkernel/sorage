@@ -1,0 +1,61 @@
+{
+  "closedAt": null,
+  "createdAt": "2026-11-20T00:06:00.000Z",
+  "id": "41000000-0000-4000-8000-000000000001",
+  "main": "main",
+  "messages": [
+    {
+      "bodyContent": {
+        "inline": "Inline channel report\r\nline 2"
+      },
+      "createdAt": "2026-11-20T00:07:00.000Z",
+      "handleNote": "Reviewed",
+      "handled": true,
+      "handledAt": "2026-11-20T00:08:00.000Z",
+      "kind": "report",
+      "ref": "pr-165",
+      "senderHandle": "worker-1",
+      "seq": 1,
+      "toHandle": null
+    },
+    {
+      "bodyContent": {
+        "contentPath": "content/channel/41000000-0000-4000-8000-000000000001/42000000-0000-4000-8000-000000000002",
+        "sha256": "dabbc80409fbd699ee5e79486ae9e587858ea3928ad5aadfd34b6821d6b93700",
+        "sizeBytes": 70034
+      },
+      "createdAt": "2026-11-20T00:08:00.000Z",
+      "handleNote": null,
+      "handled": false,
+      "handledAt": null,
+      "kind": "relay_request",
+      "ref": null,
+      "senderHandle": "worker-1",
+      "seq": 2,
+      "toHandle": "judge-1"
+    }
+  ],
+  "name": "ch-open",
+  "participants": [
+    {
+      "addedAt": "2026-11-20T00:07:00.000Z",
+      "handle": "judge-1",
+      "removedAt": "2026-11-20T00:08:00.000Z",
+      "role": "judge"
+    },
+    {
+      "addedAt": "2026-11-20T00:06:00.000Z",
+      "handle": "main",
+      "removedAt": null,
+      "role": "main"
+    },
+    {
+      "addedAt": "2026-11-20T00:07:00.000Z",
+      "handle": "worker-1",
+      "removedAt": null,
+      "role": "worker"
+    }
+  ],
+  "state": "open",
+  "title": "Open Channel"
+}

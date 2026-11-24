@@ -1,0 +1,41 @@
+{
+  "acceptedAt": "2026-11-20T00:03:00.000Z",
+  "acceptedRevision": 1,
+  "archivedAt": null,
+  "artifact": null,
+  "comment": null,
+  "consecutiveNoChangeResolutions": 0,
+  "createdAt": "2026-11-20T00:03:00.000Z",
+  "currentArtifactId": null,
+  "declineReason": null,
+  "declinedAt": null,
+  "deletedAt": "2026-11-20T00:04:00.000Z",
+  "deletionRequests": [],
+  "dispatchGroupId": null,
+  "firstFetchedAt": null,
+  "id": "21000000-0000-4000-8000-000000000003",
+  "pinned": false,
+  "processing": {
+    "completedAt": null,
+    "revision": 1,
+    "startedAt": null,
+    "status": "unrecorded"
+  },
+  "read": {
+    "readAt": null,
+    "revision": 1,
+    "status": "unrecorded"
+  },
+  "recipientProjectId": "11000000-0000-4000-8000-000000000002",
+  "reviewEngagedAt": null,
+  "reviewState": "accepted",
+  "revision": 1,
+  "rowVersion": 1,
+  "senderKind": "user",
+  "senderProjectId": null,
+  "senderWorkspaceKey": null,
+  "supersedesHandoffId": null,
+  "title": "Deleted Tombstone Handoff",
+  "updatedAt": "2026-11-20T00:04:00.000Z",
+  "withdrawnAt": null
+}

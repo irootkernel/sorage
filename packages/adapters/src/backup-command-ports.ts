@@ -46,6 +46,7 @@ import {
   err,
   expandConfigurationPath,
   exportSnapshot,
+  type HandoffReportingSnapshotManifest,
   isManagedContentStorageKey,
   isManagedStorageKey,
   isCanonicalUuid,
@@ -86,6 +87,7 @@ import {
   upgradeSnapshotHandoff,
   type VaultGitOutcome,
   type VaultMarker,
+  type VersionedSnapshotManifest,
   validateSnapshot,
   verifyVaultArtifacts,
 } from "@sorage/core";
@@ -748,314 +750,340 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
     }
   }
 
-  function readSourceSnapshot(sourcePath: string) {
-    return (): Result<BackupSnapshotData, AppError> => {
+  function readSourceSnapshotInternal(
+    sourcePath: string,
+    preParsedManifest?: VersionedSnapshotManifest,
+  ): Result<
+    { data: BackupSnapshotData; manifest: VersionedSnapshotManifest; reviewNotes: number; eventLineCount: number },
+    AppError
+  > {
+    let snapshotManifest: VersionedSnapshotManifest;
+    if (preParsedManifest !== undefined) {
+      snapshotManifest = preParsedManifest;
+    } else {
       const manifest = readSourceManifest(sourcePath)();
       if (!manifest.ok) return manifest;
-      const snapshotManifest = manifest.value;
-      const sharedContent = "contentDigests" in snapshotManifest;
-      const reporting = snapshotManifest.formatVersion === 4 || snapshotManifest.formatVersion === 5;
-      let validateExchange: ExchangeSnapshotValidator | undefined;
-      if (snapshotManifest.formatVersion === 5) {
-        const exchangeRaw = readSourceFile(sourcePath, `snapshots/${EXCHANGE_SNAPSHOT_FILE}`);
-        if (!exchangeRaw.ok) return exchangeRaw;
-        const exchange = openExchangeSnapshot(exchangeRaw.value, snapshotManifest.counts.exchanges);
-        if (!exchange.ok) return exchange;
-        validateExchange = exchange.value;
-      } else {
-        try {
-          if (managedFile(sourcePath, `snapshots/${EXCHANGE_SNAPSHOT_FILE}`).stat !== undefined) {
-            return err(
-              appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries an unexpected Exchange inventory."),
-            );
-          }
-        } catch {
-          return err(appError("VAULT_INTEGRITY_ERROR", "The Exchange snapshot path is unsafe."));
+      snapshotManifest = manifest.value;
+    }
+    const sharedContent = "contentDigests" in snapshotManifest;
+    const reporting = snapshotManifest.formatVersion === 4 || snapshotManifest.formatVersion === 5;
+    let validateExchange: ExchangeSnapshotValidator | undefined;
+    if (snapshotManifest.formatVersion === 5) {
+      const exchangeRaw = readSourceFile(sourcePath, `snapshots/${EXCHANGE_SNAPSHOT_FILE}`);
+      if (!exchangeRaw.ok) return exchangeRaw;
+      const exchange = openExchangeSnapshot(exchangeRaw.value, snapshotManifest.counts.exchanges);
+      if (!exchange.ok) return exchange;
+      validateExchange = exchange.value;
+    } else {
+      try {
+        if (managedFile(sourcePath, `snapshots/${EXCHANGE_SNAPSHOT_FILE}`).stat !== undefined) {
+          return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries an unexpected Exchange inventory."));
+        }
+      } catch {
+        return err(appError("VAULT_INTEGRITY_ERROR", "The Exchange snapshot path is unsafe."));
+      }
+    }
+    const channels = snapshotTreeFiles(join(sourcePath, "snapshots", "channels"));
+    if (!channels.ok) return channels;
+    const content = snapshotTreeFiles(join(sourcePath, "snapshots", "content"));
+    if (!content.ok) return content;
+    const contentDigests = "contentDigests" in snapshotManifest ? snapshotManifest.contentDigests : {};
+    if (!sharedContent && content.value.length !== 0)
+      return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected content files"));
+    /** Read one carried content file's exact bytes; the map's digests were already shape-checked. */
+    const readContentFile = (relative: string): Result<Uint8Array, AppError> => {
+      const read = readSnapshotBytes(join(sourcePath, "snapshots"), relative);
+      if (!read.ok) return err(read.error);
+      const entry = contentDigests[relative];
+      if (entry === undefined || createHash("sha256").update(read.value).digest("hex") !== entry) {
+        return err(
+          appError(
+            "VAULT_INTEGRITY_ERROR",
+            `The carried content file ${relative} disagrees with its manifest digest.`,
+            {
+              relative,
+            },
+          ),
+        );
+      }
+      return ok(read.value);
+    };
+    if (sharedContent) {
+      // The content-file inventory must agree with the map exactly: a file
+      // the map omits, a map key with no regular file, or a non-Memo content
+      // path this build cannot faithfully import is refused before adoption.
+      const contentNames = new Set(content.value.map((file) => `content/${file}`));
+      const mapKeys = Object.keys(contentDigests);
+      if (
+        mapKeys.some((key) => !contentNames.has(key)) ||
+        [...contentNames].some((name) => !(name in contentDigests))
+      ) {
+        return err(
+          appError(
+            "VAULT_INTEGRITY_ERROR",
+            "The snapshot's exported content files disagree with its content digest inventory",
+          ),
+        );
+      }
+      for (const key of mapKeys) {
+        if (!/^content\/(memo|channel)\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/.test(key)) {
+          return err(
+            appError(
+              "VAULT_SCHEMA_UNSUPPORTED",
+              "The snapshot carries shared content outside the Memo and Channel content families this build cannot import",
+            ),
+          );
         }
       }
-      const channels = snapshotTreeFiles(join(sourcePath, "snapshots", "channels"));
-      if (!channels.ok) return channels;
-      const content = snapshotTreeFiles(join(sourcePath, "snapshots", "content"));
-      if (!content.ok) return content;
-      const contentDigests = sharedContent ? snapshotManifest.contentDigests : {};
-      if (!sharedContent && content.value.length !== 0)
-        return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected content files"));
-      /** Read one carried content file's exact bytes; the map's digests were already shape-checked. */
-      const readContentFile = (relative: string): Result<Uint8Array, AppError> => {
-        const read = readSnapshotBytes(join(sourcePath, "snapshots"), relative);
-        if (!read.ok) return err(read.error);
-        const entry = contentDigests[relative];
-        if (entry === undefined || createHash("sha256").update(read.value).digest("hex") !== entry) {
-          return err(
-            appError(
-              "VAULT_INTEGRITY_ERROR",
-              `The carried content file ${relative} disagrees with its manifest digest.`,
-              {
-                relative,
-              },
-            ),
-          );
-        }
-        return ok(read.value);
-      };
+    }
+    const memoFiles = readMemoSnapshotFiles(sourcePath, snapshotManifest);
+    if (!memoFiles.ok) return memoFiles;
+    const memos: Memo[] = [];
+    const memoExports: SnapshotMemoV3[] = [];
+    const memoContentFiles: MemoContentFileExport[] = [];
+    for (const file of memoFiles.value) {
       if (sharedContent) {
-        // The content-file inventory must agree with the map exactly: a file
-        // the map omits, a map key with no regular file, or a non-Memo content
-        // path this build cannot faithfully import is refused before adoption.
-        const contentNames = new Set(content.value.map((file) => `content/${file}`));
-        const mapKeys = Object.keys(contentDigests);
-        if (
-          mapKeys.some((key) => !contentNames.has(key)) ||
-          [...contentNames].some((name) => !(name in contentDigests))
-        ) {
-          return err(
-            appError(
-              "VAULT_INTEGRITY_ERROR",
-              "The snapshot's exported content files disagree with its content digest inventory",
-            ),
-          );
-        }
-        for (const key of mapKeys) {
-          if (!/^content\/(memo|channel)\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/.test(key)) {
+        const parsed = parseMemoSnapshotV3(file.path, file.bytes, file.digest);
+        if (!parsed.ok) return parsed;
+        const imported = parsed.value;
+        if (imported.bodyContent.kind === "inline") {
+          memoExports.push({ ...imported.meta, bodyContent: { kind: "inline", text: imported.bodyContent.text } });
+        } else {
+          // The file-backed form: the carried content file must exist, match
+          // the shard's recorded size and digest, and live under this Memo's
+          // own identity path; the metadata is validated independently of the carried body.
+          const contentPath = imported.bodyContent.contentPath;
+          const canonicalContentPath = memoContentFilePath(imported.meta.id, contentPath.split("/")[3] as string);
+          if (!canonicalContentPath.ok || canonicalContentPath.value !== contentPath) {
+            return err(
+              appError("VAULT_INTEGRITY_ERROR", `The Memo shard names a content file outside its own identity path.`, {
+                memoId: imported.meta.id,
+              }),
+            );
+          }
+          const bytes = readContentFile(contentPath);
+          if (!bytes.ok) return bytes;
+          if (bytes.value.byteLength !== imported.bodyContent.sizeBytes) {
             return err(
               appError(
-                "VAULT_SCHEMA_UNSUPPORTED",
-                "The snapshot carries shared content outside the Memo and Channel content families this build cannot import",
+                "VAULT_INTEGRITY_ERROR",
+                `The carried content file for Memo ${imported.meta.id} disagrees with its recorded size.`,
               ),
             );
           }
+          const contentId = contentPath.split("/")[3] as string;
+          memoContentFiles.push({ memoId: imported.meta.id, contentId, bytes: bytes.value });
+          memoExports.push({
+            ...imported.meta,
+            bodyContent: {
+              kind: "file-backed",
+              contentPath,
+              sizeBytes: imported.bodyContent.sizeBytes,
+              sha256: imported.bodyContent.sha256,
+            },
+          });
         }
-      }
-      const memoFiles = readMemoSnapshotFiles(sourcePath, manifest.value);
-      if (!memoFiles.ok) return memoFiles;
-      const memos: Memo[] = [];
-      const memoExports: SnapshotMemoV3[] = [];
-      const memoContentFiles: MemoContentFileExport[] = [];
-      for (const file of memoFiles.value) {
-        if (sharedContent) {
-          const parsed = parseMemoSnapshotV3(file.path, file.bytes, file.digest);
-          if (!parsed.ok) return parsed;
-          const imported = parsed.value;
-          if (imported.bodyContent.kind === "inline") {
-            memoExports.push({ ...imported.meta, bodyContent: { kind: "inline", text: imported.bodyContent.text } });
-          } else {
-            // The file-backed form: the carried content file must exist, match
-            // the shard's recorded size and digest, and live under this Memo's
-            // own identity path; the metadata is validated independently of the carried body.
-            const contentPath = imported.bodyContent.contentPath;
-            const canonicalContentPath = memoContentFilePath(imported.meta.id, contentPath.split("/")[3] as string);
-            if (!canonicalContentPath.ok || canonicalContentPath.value !== contentPath) {
-              return err(
-                appError(
-                  "VAULT_INTEGRITY_ERROR",
-                  `The Memo shard names a content file outside its own identity path.`,
-                  {
-                    memoId: imported.meta.id,
-                  },
-                ),
-              );
-            }
-            const bytes = readContentFile(contentPath);
-            if (!bytes.ok) return bytes;
-            if (bytes.value.byteLength !== imported.bodyContent.sizeBytes) {
-              return err(
-                appError(
-                  "VAULT_INTEGRITY_ERROR",
-                  `The carried content file for Memo ${imported.meta.id} disagrees with its recorded size.`,
-                ),
-              );
-            }
-            const contentId = contentPath.split("/")[3] as string;
-            memoContentFiles.push({ memoId: imported.meta.id, contentId, bytes: bytes.value });
-            memoExports.push({
-              ...imported.meta,
-              bodyContent: {
-                kind: "file-backed",
-                contentPath,
-                sizeBytes: imported.bodyContent.sizeBytes,
-                sha256: imported.bodyContent.sha256,
-              },
-            });
-          }
-        } else {
-          const parsed = parseMemoSnapshot(file.path, file.bytes, file.digest);
-          if (!parsed.ok) return parsed;
-          memos.push(parsed.value);
-        }
-      }
-      const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
-      if (!projectsRaw.ok) return err(projectsRaw.error);
-      const projects = sharedContent
-        ? parseUniqueSnapshotJson(projectsRaw.value)
-        : parseJsonArray(projectsRaw.value, "snapshots/projects.json");
-      if (!projects.ok) return err(projects.error);
-      if (!Array.isArray(projects.value) || (sharedContent && canonicalJson(projects.value) !== projectsRaw.value))
-        return err(appError("VAULT_INTEGRITY_ERROR", "The snapshot Project metadata is not a canonical array."));
-
-      const shardFiles: string[] = [];
-      const shardsRoot = join(sourcePath, "snapshots/handoffs");
-      // Format 3 parses its distinct V3 records; formats 1 and 2 keep their
-      // frozen legacy shapes and readers.
-      const legacyHandoffs: SnapshotHandoff[] = [];
-      const v3Handoffs: SnapshotHandoffV3[] = [];
-      const v4Handoffs: SnapshotHandoffV4[] = [];
-      if (sharedContent) {
-        const files = snapshotTreeFiles(shardsRoot);
-        if (!files.ok) return files;
-        shardFiles.push(...files.value.map((file) => `handoffs/${file}`));
-      } else
-        try {
-          for (const shard of existsSync(shardsRoot) ? readdirSync(shardsRoot) : []) {
-            const shardPath = join(shardsRoot, shard);
-            if (!statSync(shardPath).isDirectory()) continue;
-            for (const name of readdirSync(shardPath)) {
-              if (name.endsWith(".json")) shardFiles.push(`handoffs/${shard}/${name}`);
-            }
-          }
-        } catch (error) {
-          return err(
-            appError("VAULT_INTEGRITY_ERROR", `The backup copy has no readable handoff shards: ${messageOf(error)}.`, {
-              sourcePath,
-            }),
-          );
-        }
-      shardFiles.sort();
-      for (const shardFile of shardFiles) {
-        const raw = readSourceFile(sourcePath, `snapshots/${shardFile}`);
-        if (!raw.ok) return err(raw.error);
-        // Format 3 parses its Handoff shards with the duplicate-key-rejecting
-        // parser of the Memo contract, over the same safe bounded reader the
-        // memo shards use; formats 1 and 2 keep their existing parser and rules.
-        const parsed = sharedContent
-          ? parseUniqueSnapshotJson(raw.value)
-          : parseJsonObject(raw.value, `snapshots/${shardFile}`);
+      } else {
+        const parsed = parseMemoSnapshot(file.path, file.bytes, file.digest);
         if (!parsed.ok) return parsed;
-        const value = parsed.value;
-        if (sharedContent && canonicalJson(value) !== raw.value) {
-          return err(
-            appError("VAULT_INTEGRITY_ERROR", `The handoff shard ${shardFile} does not carry canonical bytes.`),
-          );
-        }
-        if (value === null || typeof value !== "object" || Array.isArray(value)) {
-          return err(
-            appError("VAULT_INTEGRITY_ERROR", `The backup entry snapshots/${shardFile} is not a JSON object.`),
-          );
-        }
-        const handoff = sharedContent ? (value as unknown as SnapshotHandoffV3) : (value as unknown as SnapshotHandoff);
-        if (sharedContent && !isCanonicalUuid(handoff.id)) {
-          return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
-        }
-        const expected = `${handoff.id}.json`;
-        if (
-          sharedContent
-            ? typeof handoff.id !== "string" || shardFile !== `handoffs/${handoff.id.slice(0, 2)}/${expected}`
-            : !shardFile.endsWith(`/${expected}`)
-        ) {
-          return err(
-            appError(
-              "VAULT_INTEGRITY_ERROR",
-              `The handoff shard ${shardFile} does not match the handoff id it carries (${handoff.id}).`,
-              { sourcePath, shardFile },
-            ),
-          );
-        }
-        if (reporting) v4Handoffs.push(value as unknown as SnapshotHandoffV4);
-        else if (manifest.value.formatVersion === 3) v3Handoffs.push(value as unknown as SnapshotHandoffV3);
-        else legacyHandoffs.push(value as unknown as SnapshotHandoff);
+        memos.push(parsed.value);
       }
+    }
+    const projectsRaw = readSourceFile(sourcePath, "snapshots/projects.json");
+    if (!projectsRaw.ok) return err(projectsRaw.error);
+    const projects = sharedContent
+      ? parseUniqueSnapshotJson(projectsRaw.value)
+      : parseJsonArray(projectsRaw.value, "snapshots/projects.json");
+    if (!projects.ok) return err(projects.error);
+    if (!Array.isArray(projects.value) || (sharedContent && canonicalJson(projects.value) !== projectsRaw.value))
+      return err(appError("VAULT_INTEGRITY_ERROR", "The snapshot Project metadata is not a canonical array."));
 
-      const eventsRaw = readSourceFile(sourcePath, "snapshots/events.jsonl");
-      if (!eventsRaw.ok) return err(eventsRaw.error);
-      const events: SnapshotEvent[] = [];
-      for (const [index, line] of eventsRaw.value.split("\n").entries()) {
-        if (line === "") continue;
-        const unique = parseUniqueSnapshotJson(line);
-        if (!unique.ok) return unique;
-        const parsed = parseJsonObject(line, `snapshots/events.jsonl line ${index + 1}`);
-        if (!parsed.ok) return err(parsed.error);
-        events.push(parsed.value as unknown as SnapshotEvent);
-      }
-      // Format-3 Channel shard reading: each shard at
-      // `snapshots/channels/<xx>/<id>.json` is parsed by the closed typed
-      // parser — never a cast — so a null, array, unknown-shape, unknown-key,
-      // duplicate-key, or noncanonical shard is a typed VAULT_INTEGRITY_ERROR
-      // before any property access or adoption, and its file-backed messages
-      // reference carried content files under this Channel's own identity
-      // path (section 38.8, CHN-009).
-      const channelShards: SnapshotChannelShard[] = [];
-      const channelContentFileExports: ChannelContentFileExport[] = [];
-      if (!sharedContent && channels.value.length !== 0)
-        return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected Channel shards"));
-      if (sharedContent) {
-        for (const channelFile of channels.value) {
-          const shardPath = `channels/${channelFile}`;
-          if (!channelIdFromSnapshotPath(shardPath).ok) {
-            return err(appError("VAULT_INTEGRITY_ERROR", `A Channel shard path is malformed: ${channelFile}`));
+    const shardFiles: string[] = [];
+    const shardsRoot = join(sourcePath, "snapshots/handoffs");
+    // Format 3 parses its distinct V3 records; formats 1 and 2 keep their
+    // frozen legacy shapes and readers.
+    const legacyHandoffs: SnapshotHandoff[] = [];
+    const v3Handoffs: SnapshotHandoffV3[] = [];
+    const v4Handoffs: SnapshotHandoffV4[] = [];
+    if (sharedContent) {
+      const files = snapshotTreeFiles(shardsRoot);
+      if (!files.ok) return files;
+      shardFiles.push(...files.value.map((file) => `handoffs/${file}`));
+    } else
+      try {
+        for (const shard of existsSync(shardsRoot) ? readdirSync(shardsRoot) : []) {
+          const shardPath = join(shardsRoot, shard);
+          if (!statSync(shardPath).isDirectory()) continue;
+          for (const name of readdirSync(shardPath)) {
+            if (name.endsWith(".json")) shardFiles.push(`handoffs/${shard}/${name}`);
           }
-          const bytes = readSnapshotBytes(join(sourcePath, "snapshots"), shardPath);
-          if (!bytes.ok) return err(bytes.error);
-          const shard = parseChannelSnapshotShard(shardPath, bytes.value);
-          if (!shard.ok) return shard;
-          for (const message of shard.value.messages) {
-            if (!("contentPath" in message.bodyContent)) continue;
-            const bytesOfFile = readContentFile(message.bodyContent.contentPath);
-            if (!bytesOfFile.ok) return bytesOfFile;
-            if (bytesOfFile.value.byteLength !== message.bodyContent.sizeBytes) {
-              return err(
-                appError("VAULT_INTEGRITY_ERROR", `A carried Channel content file disagrees with its recorded size.`),
-              );
-            }
-            const contentId = message.bodyContent.contentPath.split("/")[3] as string;
-            channelContentFileExports.push({
-              channelId: shard.value.id,
-              contentId,
-              bytes: bytesOfFile.value,
-            });
-          }
-          channelShards.push(shard.value);
         }
-        // The manifest's Channel count must match the shard family exactly: a
-        // positive count with zero shards and a zero count with stray shards
-        // are both inventory disagreements (section 38.8).
-        if (snapshotManifest.counts.channels !== channelShards.length) {
-          return err(
-            appError("VAULT_INTEGRITY_ERROR", `The manifest's Channel count disagrees with the shard family.`),
-          );
-        }
+      } catch (error) {
+        return err(
+          appError("VAULT_INTEGRITY_ERROR", `The backup copy has no readable handoff shards: ${messageOf(error)}.`, {
+            sourcePath,
+          }),
+        );
       }
-      const common = {
-        projects: projects.value as unknown as SnapshotProject[],
-        events,
-        memos: memoExports,
-        memoContentFiles,
-        ...(channelShards.length > 0 ? { channels: channelShards } : {}),
-        ...(channelContentFileExports.length > 0 ? { channelContentFiles: channelContentFileExports } : {}),
+    shardFiles.sort();
+    for (const shardFile of shardFiles) {
+      const raw = readSourceFile(sourcePath, `snapshots/${shardFile}`);
+      if (!raw.ok) return err(raw.error);
+      // Format 3 parses its Handoff shards with the duplicate-key-rejecting
+      // parser of the Memo contract, over the same safe bounded reader the
+      // memo shards use; formats 1 and 2 keep their existing parser and rules.
+      const parsed = sharedContent
+        ? parseUniqueSnapshotJson(raw.value)
+        : parseJsonObject(raw.value, `snapshots/${shardFile}`);
+      if (!parsed.ok) return parsed;
+      const value = parsed.value;
+      if (sharedContent && canonicalJson(value) !== raw.value) {
+        return err(appError("VAULT_INTEGRITY_ERROR", `The handoff shard ${shardFile} does not carry canonical bytes.`));
+      }
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return err(appError("VAULT_INTEGRITY_ERROR", `The backup entry snapshots/${shardFile} is not a JSON object.`));
+      }
+      const handoff = sharedContent ? (value as unknown as SnapshotHandoffV3) : (value as unknown as SnapshotHandoff);
+      if (sharedContent && !isCanonicalUuid(handoff.id)) {
+        return err(appError("VAULT_INTEGRITY_ERROR", "The format-3 handoff shard does not carry a valid UUID."));
+      }
+      const expected = `${handoff.id}.json`;
+      if (
+        sharedContent
+          ? typeof handoff.id !== "string" || shardFile !== `handoffs/${handoff.id.slice(0, 2)}/${expected}`
+          : !shardFile.endsWith(`/${expected}`)
+      ) {
+        return err(
+          appError(
+            "VAULT_INTEGRITY_ERROR",
+            `The handoff shard ${shardFile} does not match the handoff id it carries (${handoff.id}).`,
+            { sourcePath, shardFile },
+          ),
+        );
+      }
+      if (reporting) v4Handoffs.push(value as unknown as SnapshotHandoffV4);
+      else if (snapshotManifest.formatVersion === 3) v3Handoffs.push(value as unknown as SnapshotHandoffV3);
+      else legacyHandoffs.push(value as unknown as SnapshotHandoff);
+    }
+
+    const eventsRaw = readSourceFile(sourcePath, "snapshots/events.jsonl");
+    if (!eventsRaw.ok) return err(eventsRaw.error);
+    const events: SnapshotEvent[] = [];
+    for (const [index, line] of eventsRaw.value.split("\n").entries()) {
+      if (line === "") continue;
+      const unique = parseUniqueSnapshotJson(line);
+      if (!unique.ok) return unique;
+      if (unique.value === null || typeof unique.value !== "object" || Array.isArray(unique.value)) {
+        return err(
+          appError(
+            "VAULT_INTEGRITY_ERROR",
+            `The backup entry snapshots/events.jsonl line ${index + 1} is not a JSON object.`,
+          ),
+        );
+      }
+      events.push(unique.value as unknown as SnapshotEvent);
+    }
+    // Format-3 Channel shard reading: each shard at
+    // `snapshots/channels/<xx>/<id>.json` is parsed by the closed typed
+    // parser — never a cast — so a null, array, unknown-shape, unknown-key,
+    // duplicate-key, or noncanonical shard is a typed VAULT_INTEGRITY_ERROR
+    // before any property access or adoption, and its file-backed messages
+    // reference carried content files under this Channel's own identity
+    // path (section 38.8, CHN-009).
+    const channelShards: SnapshotChannelShard[] = [];
+    const channelContentFileExports: ChannelContentFileExport[] = [];
+    if (!sharedContent && channels.value.length !== 0)
+      return err(appError("VAULT_INTEGRITY_ERROR", "A legacy snapshot carries unexpected Channel shards"));
+    if (sharedContent) {
+      for (const channelFile of channels.value) {
+        const shardPath = `channels/${channelFile}`;
+        if (!channelIdFromSnapshotPath(shardPath).ok) {
+          return err(appError("VAULT_INTEGRITY_ERROR", `A Channel shard path is malformed: ${channelFile}`));
+        }
+        const bytes = readSnapshotBytes(join(sourcePath, "snapshots"), shardPath);
+        if (!bytes.ok) return err(bytes.error);
+        const shard = parseChannelSnapshotShard(shardPath, bytes.value);
+        if (!shard.ok) return shard;
+        for (const message of shard.value.messages) {
+          if (!("contentPath" in message.bodyContent)) continue;
+          const bytesOfFile = readContentFile(message.bodyContent.contentPath);
+          if (!bytesOfFile.ok) return bytesOfFile;
+          if (bytesOfFile.value.byteLength !== message.bodyContent.sizeBytes) {
+            return err(
+              appError("VAULT_INTEGRITY_ERROR", `A carried Channel content file disagrees with its recorded size.`),
+            );
+          }
+          const contentId = message.bodyContent.contentPath.split("/")[3] as string;
+          channelContentFileExports.push({
+            channelId: shard.value.id,
+            contentId,
+            bytes: bytesOfFile.value,
+          });
+        }
+        channelShards.push(shard.value);
+      }
+      // The manifest's Channel count must match the shard family exactly: a
+      // positive count with zero shards and a zero count with stray shards
+      // are both inventory disagreements (section 38.8).
+      if ("channels" in snapshotManifest.counts && snapshotManifest.counts.channels !== channelShards.length) {
+        return err(appError("VAULT_INTEGRITY_ERROR", `The manifest's Channel count disagrees with the shard family.`));
+      }
+    }
+    const common = {
+      projects: projects.value as unknown as SnapshotProject[],
+      events,
+      memos: memoExports,
+      memoContentFiles,
+      ...(channelShards.length > 0 ? { channels: channelShards } : {}),
+      ...(channelContentFileExports.length > 0 ? { channelContentFiles: channelContentFileExports } : {}),
+    };
+    let data: BackupSnapshotData = reporting
+      ? { ...common, handoffs: v4Handoffs }
+      : snapshotManifest.formatVersion === 3
+        ? { ...common, handoffs: v3Handoffs }
+        : { projects: common.projects, handoffs: legacyHandoffs, events, memos };
+    let valid: Result<{ reviewNotes: number }, AppError>;
+    if (snapshotManifest.formatVersion === 5 && validateExchange !== undefined) {
+      const exchanges = validateExchange(common.projects);
+      if (!exchanges.ok) return exchanges;
+      const v4Data: SnapshotDataV4 = { ...common, handoffs: v4Handoffs };
+      const { exchanges: _exchangeCount, ...v4Counts } = snapshotManifest.counts;
+      const v4Manifest: HandoffReportingSnapshotManifest = {
+        ...snapshotManifest,
+        counts: v4Counts,
+        formatVersion: 4,
       };
-      let data: BackupSnapshotData = reporting
-        ? { ...common, handoffs: v4Handoffs }
-        : snapshotManifest.formatVersion === 3
-          ? { ...common, handoffs: v3Handoffs }
-          : { projects: common.projects, handoffs: legacyHandoffs, events, memos };
-      if (validateExchange !== undefined) {
-        const exchanges = validateExchange(common.projects);
-        if (!exchanges.ok) return exchanges;
-        data = { ...common, handoffs: v4Handoffs, exchanges: exchanges.value };
-      }
-      const valid = validateSnapshot(data, snapshotManifest);
+      valid = validateSnapshot(v4Data, v4Manifest);
       if (!valid.ok) return valid;
-      if (sharedContent) {
-        const canonicalLedger = [...events]
-          .sort((a, b) =>
-            a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-          )
-          .map(canonicalJsonLine)
-          .join("");
-        if (canonicalLedger !== eventsRaw.value)
-          return err(
-            appError("VAULT_INTEGRITY_ERROR", "The snapshot ledger does not carry canonical ordered JSONL bytes."),
-          );
-      }
-      return ok(data);
+      data = { ...v4Data, exchanges: exchanges.value };
+    } else {
+      valid = validateSnapshot(data, snapshotManifest);
+      if (!valid.ok) return valid;
+    }
+    if (sharedContent) {
+      const canonicalLedger = [...events]
+        .sort((a, b) =>
+          a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+        )
+        .map(canonicalJsonLine)
+        .join("");
+      if (canonicalLedger !== eventsRaw.value)
+        return err(
+          appError("VAULT_INTEGRITY_ERROR", "The snapshot ledger does not carry canonical ordered JSONL bytes."),
+        );
+    }
+    return ok({
+      data,
+      manifest: snapshotManifest,
+      reviewNotes: valid.value.reviewNotes,
+      eventLineCount: events.length,
+    });
+  }
+
+  function readSourceSnapshot(sourcePath: string) {
+    return (): Result<BackupSnapshotData, AppError> => {
+      const read = readSourceSnapshotInternal(sourcePath);
+      return read.ok ? ok(read.value.data) : read;
     };
   }
 
@@ -1845,6 +1873,11 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
         },
         readSourceSnapshot: readSourceSnapshot(sourcePath),
         readSourceManifest: readSourceManifest(sourcePath),
+        readValidatedSourceSnapshot: () => {
+          const read = readSourceSnapshotInternal(sourcePath);
+          if (!read.ok) return read;
+          return ok({ data: read.value.data, manifest: read.value.manifest, reviewNotes: read.value.reviewNotes });
+        },
         targetIsEmpty,
         verifyArtifacts: verifyArtifacts(sourcePath),
         copyArtifacts: copyArtifacts(vaultPath, sourcePath),
@@ -1863,6 +1896,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       // the same port builder so the two commands can never drift.
       const vaultPorts = createNodeVaultCommandPorts({ env: env as HomeEnvironment, userHome, clock }).verifyPorts();
       if (!vaultPorts.ok) return err(vaultPorts.error);
+      let verifiedEventLines: number | undefined;
       return ok({
         ...vaultPorts.value,
         git: createNodeVaultGitRepository(vaultPath, gitClient),
@@ -1877,12 +1911,14 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           }),
         census: () => readCensus(),
         readManifest: () => {
+          verifiedEventLines = undefined;
           const raw = readSourceFile(vaultPath, "snapshots/manifest.json");
           if (!raw.ok) return existsSync(join(vaultPath, "snapshots/manifest.json")) ? raw : ok(null);
           const manifest = parseVersionedSnapshotManifest(raw.value);
           if (!manifest.ok) return manifest;
-          const snapshot = readSourceSnapshot(vaultPath)();
+          const snapshot = readSourceSnapshotInternal(vaultPath, manifest.value);
           if (!snapshot.ok) return snapshot;
+          verifiedEventLines = snapshot.value.eventLineCount;
           return manifest;
         },
         countShards: () => {
@@ -1900,6 +1936,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           return ok(count);
         },
         countEventLines: () => {
+          if (verifiedEventLines !== undefined) return ok(verifiedEventLines);
           const raw = readSourceFile(vaultPath, "snapshots/events.jsonl");
           if (!raw.ok) return ok(0);
           return ok(raw.value.split("\n").filter((line) => line !== "").length);

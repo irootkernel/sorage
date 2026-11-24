@@ -1,0 +1,25 @@
+{
+  "bodyContent": {
+    "inline": "﻿Updated inline memo\r\nline 2"
+  },
+  "closedAt": "2026-11-20T00:06:00.000Z",
+  "closedBy": {
+    "id": null,
+    "kind": "user"
+  },
+  "createdAt": "2026-11-20T00:04:00.000Z",
+  "createdBy": {
+    "id": null,
+    "kind": "user"
+  },
+  "id": "31000000-0000-4000-8000-000000000001",
+  "projectId": "11000000-0000-4000-8000-000000000001",
+  "rowVersion": 3,
+  "state": "done",
+  "title": "Inline Memo",
+  "updatedAt": "2026-11-20T00:06:00.000Z",
+  "updatedBy": {
+    "id": null,
+    "kind": "user"
+  }
+}

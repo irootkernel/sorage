@@ -1,0 +1,19 @@
+{
+  "contentDigests": {
+    "content/channel/41000000-0000-4000-8000-000000000001/42000000-0000-4000-8000-000000000002": "dabbc80409fbd699ee5e79486ae9e587858ea3928ad5aadfd34b6821d6b93700",
+    "content/memo/31000000-0000-4000-8000-000000000002/32000000-0000-4000-8000-000000000002": "db55efa35e2517f01e2646087f65aaf4f90adc3cf9b9dc922415aff024a07f2d"
+  },
+  "counts": {
+    "artifacts": 2,
+    "channels": 2,
+    "events": 20,
+    "handoffs": 3,
+    "memos": 2,
+    "projects": 3
+  },
+  "formatVersion": 3,
+  "memoDigests": {
+    "memos/31/31000000-0000-4000-8000-000000000001.json": "472b6e42af06998725322ca9a338381ba41345c3f8a7af24cb2f5712af1d3310",
+    "memos/31/31000000-0000-4000-8000-000000000002.json": "8378d33ddcf210e67c8587899a29dd683adbf961669a94fc75ea166eef9a0e0c"
+  }
+}

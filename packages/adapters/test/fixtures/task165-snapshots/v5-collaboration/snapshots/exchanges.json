@@ -1,0 +1,184 @@
+{
+  "records": [
+    {
+      "collaboration": {
+        "acceptances": [
+          {
+            "acceptedAt": "2026-11-20T00:13:00.000Z",
+            "receipt": {
+              "kind": "accept",
+              "operationId": "op-collab-accept"
+            },
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000004",
+            "requesterId": "11000000-0000-4000-8000-000000000001"
+          }
+        ],
+        "lastSeq": 4,
+        "materials": [
+          {
+            "id": "53000000-0000-4000-8000-000000000005",
+            "kind": "body",
+            "ownerProjectId": "11000000-0000-4000-8000-000000000001",
+            "scope": null,
+            "sha256": "c70cf5d4cd5ff3512dfe76d087f9f18bf6b12ab42a868f79b69b95d12141367f",
+            "sizeBytes": 27
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000006",
+            "kind": "body",
+            "ownerProjectId": "11000000-0000-4000-8000-000000000002",
+            "scope": null,
+            "sha256": "34316831ee16dedf6928d123c0c7a7da05bb7ede57183abe81a6f3049fd0ead6",
+            "sizeBytes": 25
+          }
+        ],
+        "messages": [
+          {
+            "createdAt": "2026-11-20T00:10:00.000Z",
+            "kind": "information",
+            "materialId": "53000000-0000-4000-8000-000000000005",
+            "recipientId": "11000000-0000-4000-8000-000000000002",
+            "replyTo": null,
+            "reportVersion": null,
+            "requestId": null,
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 1
+          },
+          {
+            "createdAt": "2026-11-20T00:11:00.000Z",
+            "kind": "request",
+            "materialId": null,
+            "recipientId": "11000000-0000-4000-8000-000000000002",
+            "replyTo": 1,
+            "reportVersion": null,
+            "requestId": "52000000-0000-4000-8000-000000000004",
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 2
+          },
+          {
+            "createdAt": "2026-11-20T00:12:00.000Z",
+            "kind": "report",
+            "materialId": "53000000-0000-4000-8000-000000000006",
+            "recipientId": "11000000-0000-4000-8000-000000000001",
+            "replyTo": 2,
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000004",
+            "senderId": "11000000-0000-4000-8000-000000000002",
+            "seq": 3
+          },
+          {
+            "createdAt": "2026-11-20T00:13:00.000Z",
+            "kind": "accept",
+            "materialId": null,
+            "recipientId": null,
+            "replyTo": 3,
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000004",
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 4
+          }
+        ],
+        "operations": [
+          {
+            "fingerprint": "01a4660ee4345880778bd0f9a137ffd6b278beb73a14447987e3c8a78f0ef104",
+            "operationId": "op-collab-accept",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000004",
+              "kind": "accept",
+              "sequences": [
+                4
+              ]
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "01ea60a44082c34c0ca0d31176e0bc1a5433a78dfb50746032dcb2d511999245",
+            "operationId": "op-collab-req",
+            "outcome": {
+              "assignmentVersion": 1,
+              "exchangeId": "51000000-0000-4000-8000-000000000004",
+              "kind": "request",
+              "requestId": "52000000-0000-4000-8000-000000000004",
+              "seq": 2
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "792bb8072571c58495edc8109762807af9bbdb261f8340cf66e42add3af725b8",
+            "operationId": "op-collab-send",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000004",
+              "kind": "send",
+              "materialId": "53000000-0000-4000-8000-000000000005",
+              "seq": 1
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "667d353456267c95862299a4254246999dd827a9d2b2ca81067ebe1f1b32b007",
+            "operationId": "op-collab-report",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000004",
+              "kind": "report",
+              "materialId": "53000000-0000-4000-8000-000000000006",
+              "reportVersion": 1,
+              "requestId": "52000000-0000-4000-8000-000000000004",
+              "seq": 3
+            },
+            "projectId": "11000000-0000-4000-8000-000000000002"
+          }
+        ],
+        "reports": [
+          {
+            "assignmentVersion": 1,
+            "authorId": "11000000-0000-4000-8000-000000000002",
+            "evidence": [],
+            "materialId": "53000000-0000-4000-8000-000000000006",
+            "requestId": "52000000-0000-4000-8000-000000000004",
+            "version": 1
+          }
+        ],
+        "requests": [
+          {
+            "assigneeId": "11000000-0000-4000-8000-000000000002",
+            "assignmentVersion": 1,
+            "condition": "Submit collaboration report",
+            "criteria": [
+              "Body-only collaboration materials"
+            ],
+            "id": "52000000-0000-4000-8000-000000000004",
+            "requesterId": "11000000-0000-4000-8000-000000000001"
+          }
+        ]
+      },
+      "createdAt": "2026-11-20T00:09:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "63b87ccee9a02f0363f858bde8a02afb655668baa29ffb59e527e5a92f9b3179",
+          "operationId": "op-collab-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "Verify literal collaboration wire representation"
+      ],
+      "goal": "Pure active collaboration exchange without lifecycle or notices",
+      "id": "51000000-0000-4000-8000-000000000004",
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 2,
+          "projectId": "11000000-0000-4000-8000-000000000002"
+        }
+      ]
+    }
+  ],
+  "recordsSha256": "95b32c2bc977e4f49ec02eb34aa4563a82814a73c0c4f44bcbf4320c3d2a0fb2",
+  "representation": "collaboration"
+}

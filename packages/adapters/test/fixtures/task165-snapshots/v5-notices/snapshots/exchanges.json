@@ -1,0 +1,539 @@
+{
+  "records": [
+    {
+      "collaboration": {
+        "acceptances": [],
+        "lastSeq": 2,
+        "materials": [
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "kind": "external",
+            "ownerProjectId": "11000000-0000-4000-8000-000000000001",
+            "scope": {
+              "access": "url",
+              "value": "https://example.invalid/spec/v1"
+            },
+            "sha256": null,
+            "sizeBytes": null
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000002",
+            "kind": "body",
+            "ownerProjectId": "11000000-0000-4000-8000-000000000002",
+            "scope": null,
+            "sha256": "3f1c4bd044aaf3c1016b6048d1154358e2ea33d5c123b07a65974580f9293fbc",
+            "sizeBytes": 18
+          }
+        ],
+        "messages": [
+          {
+            "createdAt": "2026-11-20T00:10:00.000Z",
+            "kind": "request",
+            "materialId": null,
+            "recipientId": "11000000-0000-4000-8000-000000000002",
+            "replyTo": null,
+            "reportVersion": null,
+            "requestId": "52000000-0000-4000-8000-000000000001",
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 1
+          },
+          {
+            "createdAt": "2026-11-20T00:11:00.000Z",
+            "kind": "report",
+            "materialId": "53000000-0000-4000-8000-000000000002",
+            "recipientId": "11000000-0000-4000-8000-000000000001",
+            "replyTo": 1,
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000001",
+            "senderId": "11000000-0000-4000-8000-000000000002",
+            "seq": 2
+          }
+        ],
+        "operations": [
+          {
+            "fingerprint": "0ce41f4921d443fac16af7a340bfcc18e567bb5fda96fc214af9b51c10556fe3",
+            "operationId": "op-active-mat",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000001",
+              "kind": "material-register",
+              "materialId": "53000000-0000-4000-8000-000000000001"
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001",
+            "registrationAfterSeq": 1
+          },
+          {
+            "fingerprint": "db4940dff02678e25218836600eb06ba3ff7fdc053f064e789baf0b16231a68e",
+            "operationId": "op-active-req",
+            "outcome": {
+              "assignmentVersion": 1,
+              "exchangeId": "51000000-0000-4000-8000-000000000001",
+              "kind": "request",
+              "requestId": "52000000-0000-4000-8000-000000000001",
+              "seq": 1
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "21ccaa2617137f3f8577a8ee259ba529b64c4447eaa146a665ca6142b1f105a4",
+            "operationId": "op-active-notice",
+            "outcome": {
+              "affectedProjectId": "11000000-0000-4000-8000-000000000001",
+              "exchangeId": "51000000-0000-4000-8000-000000000001",
+              "incidentId": "019a1c2ad570675202f615916269c97fbe849979dd8a7dee4e39106da0fa9171",
+              "issuedAt": "2026-11-20T00:25:00.000Z",
+              "kind": "notice-ack",
+              "noticeKind": "connection-check",
+              "obligation": {
+                "requestId": "52000000-0000-4000-8000-000000000001",
+                "response": "acceptance",
+                "responsibilitySeq": 0,
+                "resumeSeq": 0,
+                "sourceSeq": 2,
+                "version": 1
+              },
+              "observedThroughSeq": 2,
+              "projectId": "11000000-0000-4000-8000-000000000002"
+            },
+            "projectId": "11000000-0000-4000-8000-000000000002"
+          },
+          {
+            "fingerprint": "27c82c01230ce592e225d248550ddd877c13f7151fb2bcbbb884f29d8a6d5dc3",
+            "operationId": "op-active-report",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000001",
+              "kind": "report",
+              "materialId": "53000000-0000-4000-8000-000000000002",
+              "reportVersion": 1,
+              "requestId": "52000000-0000-4000-8000-000000000001",
+              "seq": 2
+            },
+            "projectId": "11000000-0000-4000-8000-000000000002"
+          }
+        ],
+        "reports": [
+          {
+            "assignmentVersion": 1,
+            "authorId": "11000000-0000-4000-8000-000000000002",
+            "evidence": [
+              "53000000-0000-4000-8000-000000000001"
+            ],
+            "materialId": "53000000-0000-4000-8000-000000000002",
+            "requestId": "52000000-0000-4000-8000-000000000001",
+            "version": 1
+          }
+        ],
+        "requests": [
+          {
+            "assigneeId": "11000000-0000-4000-8000-000000000002",
+            "assignmentVersion": 1,
+            "condition": "Deliver deterministic report",
+            "criteria": [
+              "Exact bytes preserved"
+            ],
+            "id": "52000000-0000-4000-8000-000000000001",
+            "requesterId": "11000000-0000-4000-8000-000000000001"
+          }
+        ]
+      },
+      "createdAt": "2026-11-20T00:09:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "2d9adfbadebe088b055ecc7e02d204f4a4a424c1abae80697d27d27492b5f95e",
+          "operationId": "op-active-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "Track active report and connection notice"
+      ],
+      "goal": "Active exchange with notice tracking",
+      "id": "51000000-0000-4000-8000-000000000001",
+      "lifecycle": {
+        "initialMembers": [
+          "11000000-0000-4000-8000-000000000001",
+          "11000000-0000-4000-8000-000000000002"
+        ],
+        "transitions": [],
+        "workRevision": 4
+      },
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "notices": {
+        "compatibilityAt": null,
+        "openConnectionIssues": [
+          "019a1c2ad570675202f615916269c97fbe849979dd8a7dee4e39106da0fa9171"
+        ]
+      },
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 1,
+          "projectId": "11000000-0000-4000-8000-000000000002"
+        }
+      ]
+    },
+    {
+      "collaboration": {
+        "acceptances": [],
+        "lastSeq": 2,
+        "materials": [
+          {
+            "id": "53000000-0000-4000-8000-000000000003",
+            "kind": "body",
+            "ownerProjectId": "11000000-0000-4000-8000-000000000001",
+            "scope": null,
+            "sha256": "d54fe1f4dd55b4308875d402ee81ea57fb733e5484a7f94d1a86fa463149509b",
+            "sizeBytes": 13
+          }
+        ],
+        "messages": [
+          {
+            "createdAt": "2026-11-20T00:12:00.000Z",
+            "kind": "information",
+            "materialId": "53000000-0000-4000-8000-000000000003",
+            "recipientId": "11000000-0000-4000-8000-000000000002",
+            "replyTo": null,
+            "reportVersion": null,
+            "requestId": null,
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 1
+          }
+        ],
+        "operations": [
+          {
+            "fingerprint": "471cd2c1e053e368abdd892ecc1277603c7bd6dad01eaae8f9fd2da7426dec39",
+            "operationId": "op-paused-send",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000002",
+              "kind": "send",
+              "materialId": "53000000-0000-4000-8000-000000000003",
+              "seq": 1
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "5f88e2730f5a9b9fcca16bbc6f360b561b7085535aaa9e6a18622959e34e8c51",
+            "operationId": "op-paused-pause",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000002",
+              "kind": "pause",
+              "pauseVersion": 1,
+              "seq": 2,
+              "state": "paused"
+            },
+            "projectId": "11000000-0000-4000-8000-000000000002"
+          }
+        ],
+        "reports": [],
+        "requests": []
+      },
+      "createdAt": "2026-11-20T00:11:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "66872d0560fbe3b04c7fb410a95749ea55ba003b8e29963907d132a20c0376f8",
+          "operationId": "op-paused-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "Pause cleanly with decision prompt"
+      ],
+      "goal": "Paused exchange waiting for decision",
+      "id": "51000000-0000-4000-8000-000000000002",
+      "lifecycle": {
+        "initialMembers": [
+          "11000000-0000-4000-8000-000000000001",
+          "11000000-0000-4000-8000-000000000002"
+        ],
+        "transitions": [
+          {
+            "actorId": "11000000-0000-4000-8000-000000000002",
+            "operationId": "op-paused-pause",
+            "seq": 2,
+            "transition": {
+              "kind": "pause",
+              "pause": {
+                "question": "Approve scope freeze?",
+                "reason": "Awaiting user decision",
+                "version": 1
+              }
+            },
+            "workRevision": 1
+          }
+        ],
+        "workRevision": 1
+      },
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "notices": {
+        "compatibilityAt": null,
+        "openConnectionIssues": []
+      },
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 1,
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ]
+    },
+    {
+      "collaboration": {
+        "acceptances": [
+          {
+            "acceptedAt": "2026-11-20T00:15:00.000Z",
+            "receipt": {
+              "kind": "accept",
+              "operationId": "op-done-accept"
+            },
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000003",
+            "requesterId": "11000000-0000-4000-8000-000000000001"
+          }
+        ],
+        "lastSeq": 6,
+        "materials": [
+          {
+            "id": "53000000-0000-4000-8000-000000000004",
+            "kind": "body",
+            "ownerProjectId": "11000000-0000-4000-8000-000000000002",
+            "scope": null,
+            "sha256": "b12859437790fe004309ecdfe8d9d1c27918f10fad66061e60c898b2c3e454d8",
+            "sizeBytes": 21
+          }
+        ],
+        "messages": [
+          {
+            "createdAt": "2026-11-20T00:13:00.000Z",
+            "kind": "request",
+            "materialId": null,
+            "recipientId": "11000000-0000-4000-8000-000000000002",
+            "replyTo": null,
+            "reportVersion": null,
+            "requestId": "52000000-0000-4000-8000-000000000003",
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 1
+          },
+          {
+            "createdAt": "2026-11-20T00:14:00.000Z",
+            "kind": "report",
+            "materialId": "53000000-0000-4000-8000-000000000004",
+            "recipientId": "11000000-0000-4000-8000-000000000001",
+            "replyTo": 1,
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000003",
+            "senderId": "11000000-0000-4000-8000-000000000002",
+            "seq": 2
+          },
+          {
+            "createdAt": "2026-11-20T00:15:00.000Z",
+            "kind": "accept",
+            "materialId": null,
+            "recipientId": null,
+            "replyTo": 2,
+            "reportVersion": 1,
+            "requestId": "52000000-0000-4000-8000-000000000003",
+            "senderId": "11000000-0000-4000-8000-000000000001",
+            "seq": 3
+          }
+        ],
+        "operations": [
+          {
+            "fingerprint": "e48374626e9f1f17ef207095c259cea9c0cd398cbc54a5697221b1a319c6a423",
+            "operationId": "op-done-accept",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000003",
+              "kind": "accept",
+              "sequences": [
+                3
+              ]
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "97549a94f94ea395a78e8e88e912ae7ba6b1d973241dd7182c95690f71d8adfc",
+            "operationId": "op-done-propose",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000003",
+              "kind": "propose",
+              "proposalVersion": 1,
+              "seq": 4
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "ae00473ed5dcf98cc2832f3aefaecadb136f980df4d49f81b6bdabb7ee11917a",
+            "operationId": "op-done-req",
+            "outcome": {
+              "assignmentVersion": 1,
+              "exchangeId": "51000000-0000-4000-8000-000000000003",
+              "kind": "request",
+              "requestId": "52000000-0000-4000-8000-000000000003",
+              "seq": 1
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "612eafeeb79ff195fab1f98885f29602fac80cc53ee18c0092fb98750a0bc149",
+            "operationId": "op-done-vote-alpha",
+            "outcome": {
+              "acceptanceSequences": [],
+              "exchangeId": "51000000-0000-4000-8000-000000000003",
+              "kind": "vote",
+              "proposalVersion": 1,
+              "seq": 5,
+              "state": "active"
+            },
+            "projectId": "11000000-0000-4000-8000-000000000001"
+          },
+          {
+            "fingerprint": "76b1ed6fa1dd0933a9395adf139449fb9a6cd9002bfc7c135a2b1956869dc6ba",
+            "operationId": "op-done-report",
+            "outcome": {
+              "exchangeId": "51000000-0000-4000-8000-000000000003",
+              "kind": "report",
+              "materialId": "53000000-0000-4000-8000-000000000004",
+              "reportVersion": 1,
+              "requestId": "52000000-0000-4000-8000-000000000003",
+              "seq": 2
+            },
+            "projectId": "11000000-0000-4000-8000-000000000002"
+          },
+          {
+            "fingerprint": "d506150d9111f665f0d5330c85655208fd1c6dcce0a85132637999b7825f39ad",
+            "operationId": "op-done-vote-beta",
+            "outcome": {
+              "acceptanceSequences": [],
+              "exchangeId": "51000000-0000-4000-8000-000000000003",
+              "kind": "vote",
+              "proposalVersion": 1,
+              "seq": 6,
+              "state": "completed"
+            },
+            "projectId": "11000000-0000-4000-8000-000000000002"
+          }
+        ],
+        "reports": [
+          {
+            "assignmentVersion": 1,
+            "authorId": "11000000-0000-4000-8000-000000000002",
+            "evidence": [],
+            "materialId": "53000000-0000-4000-8000-000000000004",
+            "requestId": "52000000-0000-4000-8000-000000000003",
+            "version": 1
+          }
+        ],
+        "requests": [
+          {
+            "assigneeId": "11000000-0000-4000-8000-000000000002",
+            "assignmentVersion": 1,
+            "condition": "Produce final report",
+            "criteria": [
+              "Report accepted"
+            ],
+            "id": "52000000-0000-4000-8000-000000000003",
+            "requesterId": "11000000-0000-4000-8000-000000000001"
+          }
+        ]
+      },
+      "createdAt": "2026-11-20T00:12:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "d3150fb476d9dd2842753cc933e319c879b94eb50b246e6a3095dfb9dbbc6a6e",
+          "operationId": "op-done-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "All requests accepted"
+      ],
+      "goal": "Completed exchange with full vote closure",
+      "id": "51000000-0000-4000-8000-000000000003",
+      "lifecycle": {
+        "initialMembers": [
+          "11000000-0000-4000-8000-000000000001",
+          "11000000-0000-4000-8000-000000000002"
+        ],
+        "transitions": [
+          {
+            "actorId": "11000000-0000-4000-8000-000000000001",
+            "operationId": "op-done-propose",
+            "seq": 4,
+            "transition": {
+              "kind": "propose",
+              "proposal": {
+                "criterion": [
+                  "All requests accepted"
+                ],
+                "disposition": [],
+                "members": [
+                  "11000000-0000-4000-8000-000000000001",
+                  "11000000-0000-4000-8000-000000000002"
+                ],
+                "proposerId": "11000000-0000-4000-8000-000000000001",
+                "report": [
+                  {
+                    "reportVersion": 1,
+                    "requestId": "52000000-0000-4000-8000-000000000003"
+                  }
+                ],
+                "rosterVersion": 1,
+                "summary": "All criteria satisfied",
+                "version": 1,
+                "workRevision": 4
+              }
+            },
+            "workRevision": 4
+          },
+          {
+            "actorId": "11000000-0000-4000-8000-000000000001",
+            "operationId": "op-done-vote-alpha",
+            "seq": 5,
+            "transition": {
+              "acceptanceSequences": [],
+              "completed": false,
+              "kind": "vote",
+              "objection": null,
+              "proposalVersion": 1,
+              "vote": "approve"
+            },
+            "workRevision": 4
+          },
+          {
+            "actorId": "11000000-0000-4000-8000-000000000002",
+            "operationId": "op-done-vote-beta",
+            "seq": 6,
+            "transition": {
+              "acceptanceSequences": [],
+              "completed": true,
+              "kind": "vote",
+              "objection": null,
+              "proposalVersion": 1,
+              "vote": "approve"
+            },
+            "workRevision": 4
+          }
+        ],
+        "workRevision": 4
+      },
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "notices": {
+        "compatibilityAt": null,
+        "openConnectionIssues": []
+      },
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": []
+    }
+  ],
+  "recordsSha256": "371a51b71074bb9250d9d62366a1ec29c2d274a7f8f934c0d23925b06e55cf67",
+  "representation": "notices"
+}

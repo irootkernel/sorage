@@ -1,0 +1,81 @@
+{
+  "records": [
+    {
+      "createdAt": "2026-11-20T00:09:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "2d9adfbadebe088b055ecc7e02d204f4a4a424c1abae80697d27d27492b5f95e",
+          "operationId": "op-active-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "Track active report and connection notice"
+      ],
+      "goal": "Active exchange with notice tracking",
+      "id": "51000000-0000-4000-8000-000000000001",
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 1,
+          "projectId": "11000000-0000-4000-8000-000000000002"
+        }
+      ]
+    },
+    {
+      "createdAt": "2026-11-20T00:11:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "66872d0560fbe3b04c7fb410a95749ea55ba003b8e29963907d132a20c0376f8",
+          "operationId": "op-paused-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "Pause cleanly with decision prompt"
+      ],
+      "goal": "Paused exchange waiting for decision",
+      "id": "51000000-0000-4000-8000-000000000002",
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": [
+        {
+          "firstSeq": 1,
+          "lastSeq": 1,
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ]
+    },
+    {
+      "createdAt": "2026-11-20T00:12:00.000Z",
+      "creationOutcomes": [
+        {
+          "fingerprint": "d3150fb476d9dd2842753cc933e319c879b94eb50b246e6a3095dfb9dbbc6a6e",
+          "operationId": "op-done-create",
+          "projectId": "11000000-0000-4000-8000-000000000001"
+        }
+      ],
+      "criteria": [
+        "All requests accepted"
+      ],
+      "goal": "Completed exchange with full vote closure",
+      "id": "51000000-0000-4000-8000-000000000003",
+      "members": [
+        "11000000-0000-4000-8000-000000000001",
+        "11000000-0000-4000-8000-000000000002"
+      ],
+      "openingProjectId": "11000000-0000-4000-8000-000000000001",
+      "readRanges": []
+    }
+  ],
+  "recordsSha256": "86866117319ddd339edc7f84f368cf4701a8e5052d1e071a75db951a5505800f",
+  "representation": "foundation"
+}

@@ -159,10 +159,14 @@ export function validateSnapshotHandoffV4(value: unknown): Result<void, AppError
 /** Exact association/metadata admission for the four format-4 reporting events. */
 export function validateReportingSnapshotEvent(
   event: SnapshotEvent,
-  handoffs: readonly SnapshotHandoffV4[],
+  handoffs: readonly SnapshotHandoffV4[] | ReadonlyMap<string, SnapshotHandoffV4>,
 ): Result<void, AppError> {
   if (!(HANDOFF_REPORTING_EVENT_TYPES as readonly string[]).includes(event.eventType)) return ok(undefined);
-  const handoff = handoffs.find((value) => value.id === event.handoffId);
+  const handoff = Array.isArray(handoffs)
+    ? handoffs.find((value) => value.id === event.handoffId)
+    : event.handoffId !== null
+      ? (handoffs as ReadonlyMap<string, SnapshotHandoffV4>).get(event.handoffId)
+      : undefined;
   if (
     handoff === undefined ||
     !isMemoRowVersion(event.rowVersion) ||
@@ -223,12 +227,14 @@ export function redactSnapshotDataV4(data: SnapshotDataV4): SnapshotDataV4 {
 export function snapshotFilesV4(
   data: SnapshotDataV4,
 ): Result<{ files: SnapshotFile[]; manifest: HandoffReportingSnapshotManifest }, AppError> {
+  const handoffsById = new Map<string, SnapshotHandoffV4>();
   for (const handoff of data.handoffs) {
     const valid = validateSnapshotHandoffV4(handoff);
     if (!valid.ok) return valid;
+    if (!handoffsById.has(handoff.id)) handoffsById.set(handoff.id, handoff);
   }
   for (const event of data.events) {
-    const valid = validateReportingSnapshotEvent(event, data.handoffs);
+    const valid = validateReportingSnapshotEvent(event, handoffsById);
     if (!valid.ok) return valid;
   }
   const legacy = snapshotFilesV3(reportingSnapshotDataBase(data));

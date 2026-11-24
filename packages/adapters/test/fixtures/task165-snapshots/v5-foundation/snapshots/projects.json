@@ -1,0 +1,48 @@
+[
+  {
+    "bindings": [
+      {
+        "bindingKind": "directory",
+        "createdAt": "2026-11-20T00:00:00.000Z",
+        "id": "12000000-0000-4000-8000-000000000001",
+        "installationId": "10000000-0000-4000-8000-000000000001",
+        "updatedAt": "2026-11-20T00:00:00.000Z"
+      }
+    ],
+    "createdAt": "2026-11-20T00:00:00.000Z",
+    "description": "Primary sender project",
+    "displayName": "Alpha",
+    "id": "11000000-0000-4000-8000-000000000001",
+    "slug": "alpha",
+    "status": "active",
+    "updatedAt": "2026-11-20T00:00:00.000Z"
+  },
+  {
+    "bindings": [
+      {
+        "bindingKind": "git_repository",
+        "createdAt": "2026-11-20T00:00:00.000Z",
+        "id": "12000000-0000-4000-8000-000000000002",
+        "installationId": "10000000-0000-4000-8000-000000000001",
+        "updatedAt": "2026-11-20T00:00:00.000Z"
+      }
+    ],
+    "createdAt": "2026-11-20T00:00:00.000Z",
+    "description": "Primary recipient project",
+    "displayName": "Beta",
+    "id": "11000000-0000-4000-8000-000000000002",
+    "slug": "beta",
+    "status": "active",
+    "updatedAt": "2026-11-20T00:00:00.000Z"
+  },
+  {
+    "bindings": [],
+    "createdAt": "2026-11-20T00:00:00.000Z",
+    "description": null,
+    "displayName": "Gamma",
+    "id": "11000000-0000-4000-8000-000000000003",
+    "slug": "gamma",
+    "status": "archived",
+    "updatedAt": "2026-11-20T00:01:00.000Z"
+  }
+]
