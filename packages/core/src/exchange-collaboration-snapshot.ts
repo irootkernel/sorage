@@ -1,4 +1,3 @@
-import { isAbsolute } from "node:path";
 import { isLowercaseSha256 } from "./content";
 import {
   applyExchangeTransition,
@@ -94,12 +93,12 @@ function validMaterial(row: Row, projects: Set<string>): row is Row & ExchangeMa
   if (root === undefined && relativePath === undefined) return true;
   return (
     typeof root === "string" &&
-    isAbsolute(root) &&
+    root.startsWith("/") &&
     !root.includes("\0") &&
     typeof relativePath === "string" &&
     !relativePath.includes("\0") &&
     !relativePath.includes("\\") &&
-    !isAbsolute(relativePath) &&
+    !relativePath.startsWith("/") &&
     relativePath.split("/").every((part) => part !== "" && part !== "." && part !== "..")
   );
 }

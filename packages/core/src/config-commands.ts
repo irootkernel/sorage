@@ -1,7 +1,12 @@
-import { CONFIGURATION_DEFAULTS } from "./config";
-import { parseConfigurationFile, validateConfiguration, type Configuration } from "./config";
 import { createHash } from "node:crypto";
-import { appError, err, ok, type AppError, type Result } from "./errors";
+import { CONFIGURATION_DEFAULTS, type Configuration, validateConfiguration } from "./config";
+import { type AppError, appError, err, ok, type Result } from "./errors";
+
+/** Semantic parser port for configuration file text, keeping YAML codec dependencies in adapters. */
+export interface ConfigTextCodec {
+  /** Parses and validates the file view of `config.yaml`, preserving `yaml: <messages>` syntax detail. */
+  parse(text: string): Result<Configuration, AppError>;
+}
 
 /**
  * The configuration commands as application use cases (INIT-011, INIT-012, CFG-013,
@@ -30,6 +35,7 @@ export interface ConfigCommandStore {
 
 export interface ConfigCommandPorts {
   store: ConfigCommandStore;
+  codec: ConfigTextCodec;
   configFile: string;
   userHome: string;
   sorageHome: string;
@@ -56,16 +62,16 @@ export function showConfiguration(ports: ConfigCommandPorts): Result<Configurati
   // The file view keeps the literal tilde path; expansion belongs to consumers.
   const text = ports.store.readText();
   if (text === null) return err(notInitialized(ports.configFile));
-  const parsed = parseConfigurationFile(text);
+  const parsed = ports.codec.parse(text);
   if (!parsed.ok) return parsed;
-  return ok(parsed.value.config);
+  return ok(parsed.value);
 }
 
 /** `config validate`: reports the file as valid or fails with CONFIG_INVALID. */
 export function validateConfigurationFile(ports: ConfigCommandPorts): Result<{ path: string }, AppError> {
   const text = ports.store.readText();
   if (text === null) return err(notInitialized(ports.configFile));
-  const parsed = parseConfigurationFile(text);
+  const parsed = ports.codec.parse(text);
   if (!parsed.ok) return parsed;
   return ok({ path: ports.configFile });
 }
@@ -116,9 +122,9 @@ export function setConfigurationValue(
   // tilde-form vault path with its expansion.
   const basisText = ports.store.readText();
   if (basisText === null) return err(notInitialized(ports.configFile));
-  const basis = parseConfigurationFile(basisText);
+  const basis = ports.codec.parse(basisText);
   if (!basis.ok) return basis;
-  const next = withLeaf(basis.value.config, input.key, parsed.value);
+  const next = withLeaf(basis.value, input.key, parsed.value);
   if (!next.ok) return next;
   const written = ports.store.write(next.value, {
     ...(input.expectedRevision !== undefined ? { revision: input.expectedRevision } : {}),
@@ -161,7 +167,7 @@ export function editConfiguration(
 
   // Validate the edited bytes before anything is accepted; an invalid edit restores
   // the previous valid file so the installation never runs on broken configuration.
-  const edited = parseConfigurationFile(afterText);
+  const edited = ports.codec.parse(afterText);
   if (!edited.ok) {
     // The restore is a compare-and-set on the bytes the editor produced: when a
     // concurrent mediated write moved the file while the editor was open, the
@@ -174,7 +180,7 @@ export function editConfiguration(
   // The revision fence alone guards concurrent mediated writes; the captured ETag
   // cannot be passed because the editor's own save legitimately changes it, while
   // the unchanged case was already decided by the byte comparison above.
-  const written = ports.store.write(edited.value.config, {
+  const written = ports.store.write(edited.value, {
     revision: before.value.config.configRevision,
   });
   if (!written.ok) return written;

@@ -17,21 +17,23 @@ import { dirname } from "node:path";
 import {
   type AppError,
   appError,
-  applyConfigurationToDocument,
   type Configuration,
   CONFIG_ACCESS_REPAIR,
   CONFIG_PATH_REPAIR,
   configurationPathState,
-  emptyConfigurationDocument,
   err,
-  loadConfiguration,
   ok,
-  parseConfigurationFile,
-  probeConfigurationPath,
   type Result,
-  serializeConfiguration,
   validateConfiguration,
 } from "@sorage/core";
+import {
+  applyConfigurationToDocument,
+  emptyConfigurationDocument,
+  loadConfiguration,
+  parseConfigurationFile,
+  probeConfigurationPath,
+  serializeConfiguration,
+} from "./config-codec";
 import type { HomePaths } from "./home";
 import { acquireLock, type LockProbePorts } from "./lockfile";
 

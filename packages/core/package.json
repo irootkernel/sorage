@@ -4,8 +4,5 @@
   "version": "0.1.5",
   "type": "module",
   "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "dependencies": {
-    "yaml": "2.9.0"
-  }
+  "types": "./src/index.ts"
 }

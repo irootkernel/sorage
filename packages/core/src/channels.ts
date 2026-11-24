@@ -1531,6 +1531,8 @@ export interface ChannelWaitOptions<T> {
   intervalSeconds: number;
   /** The deadline instant, measured by the caller at invocation (section 38.5). */
   deadlineAt: number;
+  /** The clock used to measure remaining wait time against the deadline. */
+  clock: Clock;
   sleepMs: (ms: number) => void;
   /**
    * One poll: opens storage afresh, validates the Channel and the `--from`
@@ -1566,7 +1568,9 @@ export function waitForChannelMessages<T>(options: ChannelWaitOptions<T>): Resul
     } else {
       return err(page.error);
     }
-    if (!sleepWithinDeadline(deadline, Date.now(), options.intervalSeconds * 1000, options.sleepMs)) {
+    if (
+      !sleepWithinDeadline(deadline, options.clock.now().getTime(), options.intervalSeconds * 1000, options.sleepMs)
+    ) {
       if (tracked !== null) return err(tracked);
       return ok({ timedOut: true, items: [] });
     }

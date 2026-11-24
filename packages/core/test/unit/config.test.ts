@@ -3,86 +3,21 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CONFIGURATION_DEFAULTS,
-  applyConfigurationToDocument,
+  type Configuration,
+  configurationPathState,
   defaultConfiguration,
   expandConfiguration,
   expandConfigurationPath,
-  loadConfiguration,
-  serializeConfiguration,
   validateConfiguration,
-  type Configuration,
 } from "../../src/config";
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const schemaPath = `${repoRoot}docs/specs/schemas/config.schema.json`;
-const examplePath = `${repoRoot}docs/specs/examples/config.example.yaml`;
 
 const UUID = "9d57384c-030e-4ff7-90ca-c615d8043db2";
 
-/** An annotated fixture exercising comments, quoted scalars, null, and key order. */
-const ANNOTATED = `# annotated fixture — comments must survive a round trip
-schemaVersion: 1
-configRevision: 7
-installationId: "${UUID}"
-
-# comment above a mapping survives verbatim
-vault:
-  path: "~/Vault" # expanded against the user home
-  importMode: "copy"
-
-server:
-  host: "::1"
-  port: 46322
-  autoStart: true
-  openBrowserOnStart: false
-
-handoff:
-  allowUnregisteredSenders: false
-  requireRegisteredRecipient: true
-  inboxMarker: true
-
-artifact:
-  maxBytes: 2048
-  externalSourcePolicy: "workspace_only"
-  verifyChecksumOnFetch: true
-
-gitBackup:
-  enabled: true
-  schedule:
-    type: "daily"
-    at: "04:30"
-    timezone: "Asia/Seoul"
-    catchUpAfterMissedRun: false
-  commit:
-    messageTemplate: "nightly {timestamp}"
-  push:
-    enabled: true
-    remote: "backup"
-    branch: "vault"
-  largeArtifactWarningBytes: 1024
-  snapshot:
-    redactWorkspacePaths: false
-
-ui:
-  defaultPageSize: 100
-  showArchivedByDefault: true
-  timezone: "Asia/Seoul"
-
-logging:
-  level: "info"
-  includeFullPaths: true
-  rotation:
-    maxBytes: 4096
-    maxFiles: 2
-
-gc:
-  graceHours: 48
-`;
-
 function validFile(): Record<string, unknown> {
-  const loaded = loadConfiguration(ANNOTATED, { userHome: "/Users/tester" });
-  if (!loaded.ok) throw new Error(`fixture must load: ${loaded.error.message}`);
-  return loaded.value.config as unknown as Record<string, unknown>;
+  return defaultConfiguration(UUID) as unknown as Record<string, unknown>;
 }
 
 describe("default configuration", () => {
@@ -112,46 +47,6 @@ describe("default configuration", () => {
     expect(withoutDefault).toBe(1);
     expect(checked).toBe(leaves.length - 1);
   });
-
-  it("validates examples/config.example.yaml into exactly the declared defaults", () => {
-    const text = readFileSync(examplePath, "utf8");
-    const loaded = loadConfiguration(text, { userHome: "/Users/tester" });
-    expect(loaded.ok).toBe(true);
-    if (loaded.ok) {
-      const expected = expandConfiguration(defaultConfiguration(UUID), "/Users/tester");
-      expect(loaded.value.config).toEqual(expected);
-    }
-  });
-});
-
-describe("comment-preserving round trip", () => {
-  it("is byte-identical for the annotated fixture, comments and key order included", () => {
-    const loaded = loadConfiguration(ANNOTATED, { userHome: "/Users/tester" });
-    expect(loaded.ok).toBe(true);
-    if (loaded.ok) expect(serializeConfiguration(loaded.value)).toBe(ANNOTATED);
-  });
-
-  it("is byte-identical for the tracked example file", () => {
-    const text = readFileSync(examplePath, "utf8");
-    const loaded = loadConfiguration(text, { userHome: "/Users/tester" });
-    expect(loaded.ok).toBe(true);
-    if (loaded.ok) expect(serializeConfiguration(loaded.value)).toBe(text);
-  });
-
-  it("keeps comments when a changed value is applied to the document", () => {
-    const loaded = loadConfiguration(ANNOTATED, { userHome: "/Users/tester" });
-    expect(loaded.ok).toBe(true);
-    if (!loaded.ok) return;
-    const changed = { ...loaded.value.config, configRevision: 8 } as Configuration;
-    applyConfigurationToDocument(loaded.value.document, changed);
-    const text = serializeConfiguration(loaded.value);
-    expect(text).toContain("# annotated fixture — comments must survive a round trip");
-    expect(text).toContain("# expanded against the user home");
-    expect(text).toContain("configRevision: 8");
-    const reloaded = loadConfiguration(text, { userHome: "/Users/tester" });
-    expect(reloaded.ok).toBe(true);
-    if (reloaded.ok) expect(reloaded.value.config.configRevision).toBe(8);
-  });
 });
 
 describe("tilde expansion and path normalization", () => {
@@ -161,10 +56,14 @@ describe("tilde expansion and path normalization", () => {
     expect(expandConfigurationPath("~/a/b", "/Users/tester/")).toBe("/Users/tester/a/b");
   });
 
-  it("resolves the canonical ~/.sorage prefix under the effective Sorage home", () => {
+  it("resolves the canonical ~/.sorage prefix under the effective Sorage home, including empty and root userHome", () => {
     expect(expandConfigurationPath("~/.sorage/vault", "/Users/tester", "/tmp/override")).toBe("/tmp/override/vault");
     expect(expandConfigurationPath("~/.sorage", "/Users/tester", "/tmp/override")).toBe("/tmp/override");
     expect(expandConfigurationPath("~/.sorage/vault", "/Users/tester")).toBe("/Users/tester/.sorage/vault");
+    expect(expandConfigurationPath("~/.sorage/vault", "/Users/tester/")).toBe("/Users/tester/.sorage/vault");
+    expect(expandConfigurationPath("~/.sorage/vault", "/")).toBe("/.sorage/vault");
+    expect(expandConfigurationPath("~/.sorage/vault", "")).toBe(".sorage/vault");
+    expect(expandConfigurationPath("~/.sorage", "")).toBe(".sorage");
     expect(expandConfigurationPath("~/.sorage-backup/vault", "/Users/tester", "/tmp/override")).toBe(
       "/Users/tester/.sorage-backup/vault",
     );
@@ -176,16 +75,25 @@ describe("tilde expansion and path normalization", () => {
     expect(expandConfigurationPath("relative/path", "/Users/tester")).toBe("relative/path");
   });
 
-  it("expands vault.path in the loaded runtime view only", () => {
-    const loaded = loadConfiguration(ANNOTATED, { userHome: "/Users/tester" });
-    expect(loaded.ok).toBe(true);
-    if (loaded.ok) {
-      expect(loaded.value.config.vault.path).toBe("/Users/tester/Vault");
-      // The document keeps the literal tilde so serialization stays byte-stable.
-      expect(serializeConfiguration(loaded.value)).toContain('path: "~/Vault"');
-    }
+  it("expands vault.path in the runtime copy without mutating the input", () => {
+    const base = defaultConfiguration(UUID);
+    base.vault.path = "~/Vault";
+    const expanded = expandConfiguration(base, "/Users/tester");
+    expect(expanded.vault.path).toBe("/Users/tester/Vault");
+    expect(base.vault.path).toBe("~/Vault");
     const literal = expandConfiguration({ vault: { path: "kept", importMode: "copy" } } as Configuration, "/h");
     expect(literal.vault.path).toBe("kept");
+  });
+});
+
+describe("configurationPathState", () => {
+  it("classifies every probe variant into its canonical state", () => {
+    expect(configurationPathState({ kind: "regular-file" })).toBe("valid");
+    expect(configurationPathState({ kind: "missing" })).toBe("absent");
+    expect(configurationPathState({ kind: "access-failure" })).toBe("access-failure");
+    expect(configurationPathState({ kind: "not-regular" })).toBe("path-fault");
+    expect(configurationPathState({ kind: "dangling-symlink" })).toBe("path-fault");
+    expect(configurationPathState({ kind: "symlink-loop" })).toBe("path-fault");
   });
 });
 
@@ -247,12 +155,6 @@ describe("validation failures", () => {
 
     const arrayRoot = ["not", "a", "mapping"];
     const result = validateConfiguration(arrayRoot);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("CONFIG_INVALID");
-  });
-
-  it("rejects unparseable YAML with CONFIG_INVALID", () => {
-    const result = loadConfiguration("vault: [unclosed", { userHome: "/Users/tester" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("CONFIG_INVALID");
   });

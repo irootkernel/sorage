@@ -12,12 +12,18 @@ import { validateHandoffObservations } from "./reporting-commands";
  * Version compare-and-set, and the event ledger in one transaction.
  */
 
+export type TerminalTransition =
+  | { kind: "accept"; acceptedRevision: number }
+  | { kind: "decline"; reason: string }
+  | { kind: "withdraw" };
+
 export interface TerminalMutationPort {
   /** Applies one evaluated terminal transition in a single transaction. */
   applyTerminalTransition(input: {
     handoffId: string;
     expectedRowVersion: number;
-    assignments: Record<string, string | number | null>;
+    transition: TerminalTransition;
+    at: string;
     event: NewDomainEvent;
   }): Result<{ rowVersion: number }, AppError>;
 }
@@ -129,12 +135,8 @@ export function acceptHandoff(ports: TerminalPorts, input: AcceptInput): Result<
   const applied = ports.terminals.applyTerminalTransition({
     handoffId: handoff.id,
     expectedRowVersion: handoff.rowVersion,
-    assignments: {
-      review_state: "accepted",
-      accepted_revision: input.expectedRevision,
-      accepted_at: now,
-      updated_at: now,
-    },
+    transition: { kind: "accept", acceptedRevision: input.expectedRevision },
+    at: now,
     event: {
       id: ports.ids.next(),
       handoffId: handoff.id,
@@ -176,7 +178,8 @@ export function declineHandoff(ports: TerminalPorts, input: DeclineInput): Resul
   const applied = ports.terminals.applyTerminalTransition({
     handoffId: handoff.id,
     expectedRowVersion: handoff.rowVersion,
-    assignments: { review_state: "declined", declined_at: now, decline_reason: input.reason, updated_at: now },
+    transition: { kind: "decline", reason: input.reason },
+    at: now,
     event: {
       id: ports.ids.next(),
       handoffId: handoff.id,
@@ -211,7 +214,8 @@ export function withdrawHandoff(ports: TerminalPorts, input: WithdrawInput): Res
   const applied = ports.terminals.applyTerminalTransition({
     handoffId: handoff.id,
     expectedRowVersion: handoff.rowVersion,
-    assignments: { review_state: "withdrawn", withdrawn_at: now, updated_at: now },
+    transition: { kind: "withdraw" },
+    at: now,
     event: {
       id: ports.ids.next(),
       handoffId: handoff.id,

@@ -1,16 +1,19 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installLaunchAgent, renderLaunchAgentPlist, uninstallLaunchAgent } from "@sorage/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createNodeDoctorPorts } from "../../src/doctor";
-import { escapePlistValue } from "@sorage/core";
 import {
+  createNodeBackgroundServicePort,
   createNodeLaunchAgentPorts,
+  escapePlistValue,
+  installLaunchAgent,
   launchAgentPlistPath,
   launchAgentsDirectory,
   launchAgentUid,
   plistPointsAtBinary,
+  renderLaunchAgentPlist,
+  uninstallLaunchAgent,
 } from "../../src/launchagent-ports";
 
 /**
@@ -246,5 +249,25 @@ describe("the doctor service.installed probe", () => {
     expect(install.ok).toBe(true);
     const outcome = createNodeDoctorPorts({ userHome }).probe("service.installed");
     expect(outcome.severity).toBe("ok");
+  });
+
+  it("installs and uninstalls through createNodeBackgroundServicePort using configured agentsDirectory and uid", () => {
+    const agentsDirectory = launchAgentsDirectory(userHome);
+    const service = createNodeBackgroundServicePort({ agentsDirectory, uid: launchAgentUid() });
+    const installed = service.install({ program: PROGRAM, sorageHome: `${userHome}/.sorage` });
+    expect(installed.ok).toBe(true);
+    if (!installed.ok) return;
+    expect(installed.value).toEqual({
+      plistPath: launchAgentPlistPath(agentsDirectory),
+      bootstrapped: true,
+    });
+    const removed = service.uninstall();
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    expect(removed.value).toEqual({
+      wasLoaded: true,
+      plistRemoved: true,
+      plistPath: launchAgentPlistPath(agentsDirectory),
+    });
   });
 });

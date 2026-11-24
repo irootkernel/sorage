@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateSnapshot } from "../../src/backup-commands";
+import { validateExchangeCollaboration } from "../../src/exchange-collaboration-snapshot";
 import { canonicalJson } from "../../src/primitives/json";
 import { sha256OfText } from "../../src/primitives/validation";
 import {
@@ -189,5 +190,61 @@ describe("the global format-5 Exchange inventory", () => {
         ],
       }),
     ).toMatchObject({ ok: false, error: { code: "VAULT_INTEGRITY_ERROR" } });
+  });
+
+  it("validates portable POSIX root and relativePath bounds on collaboration materials", () => {
+    const materialId = "44444444-4444-4444-8444-444444444444";
+    const members = new Set([OWNER, PEER]);
+    const collaborationWith = (scope: {
+      offset: number;
+      length: number | null;
+      root: string;
+      relativePath: string;
+    }) => ({
+      lastSeq: 0,
+      messages: [],
+      requests: [],
+      reports: [],
+      acceptances: [],
+      materials: [
+        {
+          id: materialId,
+          ownerProjectId: OWNER,
+          kind: "live",
+          sizeBytes: null,
+          sha256: null,
+          scope,
+        },
+      ],
+      operations: [
+        {
+          projectId: OWNER,
+          operationId: "reg-1",
+          fingerprint: sha256OfText("reg"),
+          outcome: { kind: "material-register", exchangeId: EXCHANGE, materialId },
+        },
+      ],
+    });
+    expect(
+      validateExchangeCollaboration(
+        collaborationWith({ offset: 0, length: null, root: "/workspace/project", relativePath: "src/index.ts" }),
+        EXCHANGE,
+        members,
+      ),
+    ).toBe(true);
+    expect(
+      validateExchangeCollaboration(
+        collaborationWith({ offset: 0, length: null, root: "relative/project", relativePath: "src/index.ts" }),
+        EXCHANGE,
+        members,
+      ),
+    ).toBe(false);
+    expect(
+      validateExchangeCollaboration(
+        collaborationWith({ offset: 0, length: null, root: "/workspace/project", relativePath: "/abs/index.ts" }),
+        EXCHANGE,
+        members,
+      ),
+    ).toBe(false);
   });
 });

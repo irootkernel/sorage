@@ -1,6 +1,7 @@
+import { type AppError, ok, type Result } from "@sorage/core";
 import { describe, expect, it } from "vitest";
-import { type AppError, ok, type Result } from "../../src/errors";
 import {
+  createNodeBackgroundServicePort,
   escapePlistValue,
   installLaunchAgent,
   LAUNCH_AGENT_LABEL,
@@ -10,7 +11,7 @@ import {
   launchAgentTarget,
   renderLaunchAgentPlist,
   uninstallLaunchAgent,
-} from "../../src/launchagent";
+} from "../../src/launchagent-ports";
 
 function fakePorts(overrides: Partial<LaunchAgentPorts> = {}): LaunchAgentPorts & {
   written: Map<string, string>;
@@ -174,5 +175,50 @@ describe("uninstallLaunchAgent", () => {
     expect(result.value.wasLoaded).toBe(false);
     expect(result.value.plistRemoved).toBe(true);
     expect(ports.bootoutCalls).toBe(0);
+  });
+});
+
+describe("createNodeBackgroundServicePort", () => {
+  it("binds agentsDirectory and uid in the adapter factory and forwards uid to install and uninstall", () => {
+    const seenUids: Array<{ op: string; uid: number }> = [];
+    const ports = fakePorts({
+      isLoaded: (uid) => {
+        seenUids.push({ op: "isLoaded", uid });
+        return seenUids.some((entry) => entry.op === "bootstrap");
+      },
+      bootstrap: (plistPath, uid) => {
+        seenUids.push({ op: "bootstrap", uid });
+        expect(plistPath).toBe("/tmp/custom-agents/xyz.rootkernel.sorage.plist");
+        return ok({ bootstrapped: true });
+      },
+      bootout: (uid) => {
+        seenUids.push({ op: "bootout", uid });
+        return ok({ wasLoaded: true });
+      },
+    });
+    const service = createNodeBackgroundServicePort({
+      agentsDirectory: "/tmp/custom-agents",
+      uid: 777,
+      ports,
+    });
+    const installed = service.install({
+      program: { binaryPath: "/opt/sorage", scriptArgs: [] },
+      sorageHome: "/tmp/home",
+    });
+    expect(installed).toEqual(ok({ plistPath: "/tmp/custom-agents/xyz.rootkernel.sorage.plist", bootstrapped: true }));
+    const removed = service.uninstall();
+    expect(removed).toEqual(
+      ok({
+        wasLoaded: true,
+        plistRemoved: true,
+        plistPath: "/tmp/custom-agents/xyz.rootkernel.sorage.plist",
+      }),
+    );
+    expect(seenUids).toEqual([
+      { op: "isLoaded", uid: 777 },
+      { op: "bootstrap", uid: 777 },
+      { op: "isLoaded", uid: 777 },
+      { op: "bootout", uid: 777 },
+    ]);
   });
 });

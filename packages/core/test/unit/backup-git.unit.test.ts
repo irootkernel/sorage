@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { backupVerify, ensureVaultGitRepository } from "../../src/backup-commands";
-import type { BackupCensus } from "../../src/backup-commands";
-import { GIT_ARGS, type GitClient, type GitRunRequest, type GitRunOutcome, isRuntimeTrackedPath } from "../../src/git";
-import type { AppError } from "../../src/errors";
-import { ok, type Result } from "../../src/errors";
+import { type BackupCensus, backupVerify, ensureVaultGitRepository } from "../../src/backup-commands";
+import { type AppError, appError, err, ok, type Result } from "../../src/errors";
+import { isRuntimeTrackedPath, type VaultGitRepository } from "../../src/git";
 
 /**
  * The TASK-053 decision matrix (INIT-007, BKP-001, BKP-004, BKP-022): Git
@@ -13,37 +11,73 @@ import { ok, type Result } from "../../src/errors";
  * stays a warning.
  */
 
-function recordingGit(responses: Array<(request: GitRunRequest) => GitRunOutcome | null>) {
-  const calls: GitRunRequest[] = [];
-  const client: GitClient = {
-    run(request: GitRunRequest): Result<GitRunOutcome, AppError> {
-      calls.push(request);
-      for (const respond of responses) {
-        const outcome = respond(request);
-        if (outcome !== null) return ok(outcome);
-      }
-      return ok({ exitCode: 0, stdout: "", stderr: "" });
+interface FakeRepoOptions {
+  initializeResult?: Result<void, AppError> | undefined;
+  autocrlf?: string | undefined;
+  branch?: string | undefined;
+  staged?: string[] | undefined;
+  tracked?: string[] | undefined;
+}
+
+function fakeVaultGit(options: FakeRepoOptions = {}) {
+  const calls: string[] = [];
+  const repo: VaultGitRepository = {
+    initialize(branch: string) {
+      calls.push(`initialize:${branch}`);
+      return options.initializeResult ?? ok(undefined);
+    },
+    autocrlf() {
+      calls.push("autocrlf");
+      return ok(options.autocrlf ?? "false");
+    },
+    currentBranch() {
+      calls.push("currentBranch");
+      return ok(options.branch ?? "main");
+    },
+    stagedPaths() {
+      calls.push("stagedPaths");
+      return ok(options.staged ?? []);
+    },
+    trackedPaths() {
+      calls.push("trackedPaths");
+      return ok(options.tracked ?? []);
+    },
+    stageManaged() {
+      calls.push("stageManaged");
+      return ok(undefined);
+    },
+    hasStagedManagedChanges() {
+      calls.push("hasStagedManagedChanges");
+      return ok(false);
+    },
+    commit(message: string) {
+      calls.push(`commit:${message}`);
+      return ok({ sha: "abc123" });
+    },
+    push(target) {
+      calls.push(`push:${target.remote}/${target.branch}`);
+      return ok(undefined);
     },
   };
-  return { calls, client };
+  return { calls, repo };
 }
 
 describe("ensureVaultGitRepository", () => {
-  it("reports an existing repository without running any Git command", () => {
-    const { calls, client } = recordingGit([]);
+  it("reports an existing repository without running any Git operation", () => {
+    const { calls, repo } = fakeVaultGit();
     const result = ensureVaultGitRepository({
       vaultPath: "/vault",
       configuredBranch: "main",
       repositoryExists: () => ok(true),
       reassertPolicyFiles: () => ok(undefined),
-      git: client,
+      git: repo,
     });
     expect(result.ok && result.value).toEqual({ initialized: false, existingReported: true });
     expect(calls).toEqual([]);
   });
 
-  it("initializes and configures autocrlf when no repository exists, then re-asserts the policy files", () => {
-    const { calls, client } = recordingGit([]);
+  it("initializes on the configured branch when no repository exists, then re-asserts the policy files", () => {
+    const { calls, repo } = fakeVaultGit();
     const reassertions: string[] = [];
     const result = ensureVaultGitRepository({
       vaultPath: "/vault",
@@ -53,26 +87,25 @@ describe("ensureVaultGitRepository", () => {
         reassertions.push("/vault");
         return ok(undefined);
       },
-      git: client,
+      git: repo,
     });
     expect(result.ok && result.value).toEqual({ initialized: true, existingReported: false });
-    expect(calls.map((call) => call.args)).toEqual([
-      GIT_ARGS.init("main"),
-      GIT_ARGS.configSet("core.autocrlf", "false"),
-    ]);
+    expect(calls).toEqual(["initialize:main"]);
     expect(reassertions).toEqual(["/vault"]);
   });
 
-  it("fails a refused init with GIT_BACKUP_CONFLICT", () => {
-    const { client } = recordingGit([
-      (request) => (request.args[0] === "init" ? { exitCode: 128, stdout: "", stderr: "fatal: already exists" } : null),
-    ]);
+  it("propagates a refused init as GIT_BACKUP_CONFLICT", () => {
+    const { repo } = fakeVaultGit({
+      initializeResult: err(
+        appError("GIT_BACKUP_CONFLICT", "git init refused: fatal: already exists.", { exitCode: 128 }),
+      ),
+    });
     const result = ensureVaultGitRepository({
       vaultPath: "/vault",
       configuredBranch: "main",
       repositoryExists: () => ok(false),
       reassertPolicyFiles: () => ok(undefined),
-      git: client,
+      git: repo,
     });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error.code).toBe("GIT_BACKUP_CONFLICT");
@@ -113,18 +146,12 @@ interface VerifyFixture {
 }
 
 function verifyPortsOf(fixture: VerifyFixture) {
-  const { calls, client } = recordingGit([
-    (request) =>
-      request.args[0] === "config" && request.args.includes("--get")
-        ? { exitCode: 0, stdout: fixture.autocrlf ?? "false", stderr: "" }
-        : null,
-    (request) =>
-      request.args[0] === "symbolic-ref" ? { exitCode: 0, stdout: fixture.branch ?? "main", stderr: "" } : null,
-    (request) =>
-      request.args[0] === "diff" ? { exitCode: 0, stdout: (fixture.staged ?? []).join("\n"), stderr: "" } : null,
-    (request) =>
-      request.args[0] === "ls-files" ? { exitCode: 0, stdout: (fixture.tracked ?? []).join("\n"), stderr: "" } : null,
-  ]);
+  const { calls, repo } = fakeVaultGit({
+    autocrlf: fixture.autocrlf,
+    branch: fixture.branch,
+    staged: fixture.staged,
+    tracked: fixture.tracked,
+  });
   const census: BackupCensus = {
     projects: 1,
     handoffs: 2,
@@ -164,7 +191,7 @@ function verifyPortsOf(fixture: VerifyFixture) {
       recordedContent: () => ok([]),
       contentChecksum: () => ok("0".repeat(64)),
       stagingEntries: () => ok([]),
-      git: client,
+      git: repo,
       configuredBranch: "main",
       repositoryExists: () => ok(fixture.repository ?? true),
       repositorySignals: () =>

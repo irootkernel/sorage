@@ -385,12 +385,8 @@ describe("the section 20.8 crash points", () => {
     const accepted = terminal.applyTerminalTransition({
       handoffId: id,
       expectedRowVersion: 1,
-      assignments: {
-        review_state: "accepted",
-        accepted_revision: 1,
-        accepted_at: "2026-01-02T00:00:00.000Z",
-        updated_at: "2026-01-02T00:00:00.000Z",
-      },
+      transition: { kind: "accept", acceptedRevision: 1 },
+      at: "2026-01-02T00:00:00.000Z",
       event: {
         id: "e-accept",
         handoffId: id,

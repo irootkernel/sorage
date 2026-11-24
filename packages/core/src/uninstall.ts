@@ -1,13 +1,25 @@
 import { type Configuration, expandConfigurationPath } from "./config";
 import { type AppError, appError, err, ok, type Result } from "./errors";
-import { type LaunchAgentPorts, type LaunchAgentUninstallOutcome, uninstallLaunchAgent } from "./launchagent";
+
+/**
+ * Semantic background-service lifecycle port (RUN-007, RUN-011, INIT-009, INIT-016):
+ * hides platform-specific agent files and service-manager commands behind install
+ * and uninstall operations while keeping the user-visible output contract intact.
+ */
+export interface BackgroundServicePort {
+  install(input: {
+    program: { binaryPath: string; scriptArgs: string[] };
+    sorageHome: string;
+  }): Result<{ plistPath: string; bootstrapped: boolean }, AppError>;
+  uninstall(): Result<{ wasLoaded: boolean; plistRemoved: boolean; plistPath: string }, AppError>;
+}
 
 /**
  * The `sorage uninstall` use case (INIT-016, milestone M3): a User-admin operation
- * that requires `--as-user --confirm`, stops a running daemon, boots out and deletes
- * the LaunchAgent, removes `state`, `run`, `logs`, `config.yaml`, and its retained
- * `.bak`, never deletes the Vault, and reports the retained Vault path so the User
- * knows exactly what remains.
+ * that requires `--as-user --confirm`, stops a running daemon, removes the
+ * background service, removes `state`, `run`, `logs`, `config.yaml`, and its
+ * retained `.bak`, never deletes the Vault, and reports the retained Vault path
+ * so the User knows exactly what remains.
  */
 export interface UninstallPorts {
   home: string;
@@ -22,10 +34,7 @@ export interface UninstallPorts {
   /** True when `run/daemon.json` names a live pid; the daemon is stopped before removal. */
   daemonRunning(): boolean;
   stopDaemon(): Result<{ stopped: boolean }, AppError>;
-  launchAgent: LaunchAgentPorts;
-  /** The directory the LaunchAgent plist lives in, `~/Library/LaunchAgents`. */
-  agentsDirectory: string;
-  uid: number;
+  launchAgent: BackgroundServicePort;
   removeDirectory(path: string): void;
   removeFile(path: string): void;
   /** True when the named path exists, so the report names only what was really removed. */
@@ -36,7 +45,11 @@ export interface UninstallOutcome {
   removed: string[];
   retainedVaultPath: string;
   daemonStopped: boolean;
-  launchAgent: LaunchAgentUninstallOutcome;
+  launchAgent: {
+    wasLoaded: boolean;
+    plistRemoved: boolean;
+    plistPath: string;
+  };
 }
 
 export function uninstallInstallation(
@@ -79,10 +92,7 @@ export function uninstallInstallation(
     }
     daemonStopped = true;
   }
-  const launchAgent = uninstallLaunchAgent(ports.launchAgent, {
-    agentsDirectory: ports.agentsDirectory,
-    uid: ports.uid,
-  });
+  const launchAgent = ports.launchAgent.uninstall();
   if (!launchAgent.ok) return launchAgent;
 
   const removed: string[] = [];

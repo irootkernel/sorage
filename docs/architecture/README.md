@@ -659,7 +659,7 @@ interface IntentLog {}
 interface IdempotencyStore {}
 interface ConfigStore {}
 interface BackupService {}
-interface GitClient {}
+interface VaultGitRepository {}
 interface Lock {}
 interface Clock {}
 interface IdGenerator {}
@@ -668,7 +668,7 @@ interface PlatformService {}
 interface UnitOfWork {}
 ```
 
-`GitClient` and `BackupService` arrive with milestone M3; `PlatformService` is defined in section 23. Interfaces are designed around application behavior, not adapter convenience.
+`VaultGitRepository` and `BackupService` arrive with milestone M3; `PlatformService` is defined in section 23. Interfaces are designed around application behavior, not adapter convenience.
 
 `UnitOfWork` below is a schematic application boundary, not a required production symbol. Production uses explicit synchronous SQLite transactions, including the typed `runInTransaction` helper in `packages/adapters/src/sqlite/transaction.ts`; its work callback returns `Result<T>` rather than a promise. Suspending a transaction would let statements from another logical transaction interleave on the same connection:
 

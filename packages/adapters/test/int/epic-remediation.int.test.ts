@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { SystemClock } from "@sorage/core";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteHandoffReadStore } from "../../src/handoff-read-store";
-import { createSqliteRetentionStore, createSqliteRevisionStore } from "../../src/handoffs";
+import { createSqliteRetentionStore, createSqliteRevisionStore, createSqliteTerminalStore } from "../../src/handoffs";
 import { clearMoveFence, setMoveFenceAndCountPending } from "../../src/intent-log";
 import { productionMigrationPlan } from "../../src/sqlite/migrations";
 import { migrate } from "../../src/sqlite/migrator";
@@ -167,7 +167,8 @@ describe("the whole-epic round-1 remediations", () => {
     const pinned = retention.applyRetentionMutation({
       handoffId: "h-f002",
       expectedRowVersion: 1,
-      assignments: { pinned: 1, updated_at: "2026-01-02T00:00:00.000Z" },
+      change: { kind: "pin" },
+      at: "2026-01-02T00:00:00.000Z",
       events: [],
     });
     expect(pinned.ok && pinned.value.rowVersion).toBe(2);
@@ -175,13 +176,13 @@ describe("the whole-epic round-1 remediations", () => {
     const resolved = retention.applyRetentionMutation({
       handoffId: "h-f002",
       expectedRowVersion: 2,
-      assignments: {
-        deleted_at: "2026-01-02T00:00:00.000Z",
-        current_artifact_id: null,
-        updated_at: "2026-01-02T00:00:00.000Z",
+      change: {
+        kind: "deletion-approve",
+        removeContent: true,
+        unlinkIntent: { id: "i-u", toPath: "artifacts/h-f002/a-h-f002/doc.md", artifactId: "a-h-f002" },
       },
+      at: "2026-01-02T00:00:00.000Z",
       events: [],
-      unlinkIntent: { id: "i-u", toPath: "artifacts/h-f002/a-h-f002/doc.md", artifactId: "a-h-f002" },
     });
     expect(!resolved.ok && resolved.error.code).toBe("SERVICE_PAUSED");
 
@@ -224,5 +225,37 @@ describe("the whole-epic round-1 remediations", () => {
       events: [],
     });
     expect(through.ok).toBe(true);
+
+    // Invalid runtime transition/change kinds fail with INTERNAL_ERROR before opening a transaction.
+    const terminals = createSqliteTerminalStore(temp.db, ledger);
+    const badTerminal = terminals.applyTerminalTransition({
+      handoffId: "h-f002",
+      expectedRowVersion: 3,
+      transition: { kind: "unknown-kind" } as never,
+      at: "2026-01-02T00:00:00.000Z",
+      event: {
+        id: "e-bad-t",
+        handoffId: "h-f002",
+        eventType: "HANDOFF_ACCEPTED",
+        actor: { kind: "user", id: null },
+        rowVersion: 4,
+        metadata: {},
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+    });
+    expect(!badTerminal.ok && badTerminal.error.code).toBe("INTERNAL_ERROR");
+
+    const badRetention = retention.applyRetentionMutation({
+      handoffId: "h-f002",
+      expectedRowVersion: 3,
+      change: { kind: "unknown-kind" } as never,
+      at: "2026-01-02T00:00:00.000Z",
+      events: [],
+    });
+    expect(!badRetention.ok && badRetention.error.code).toBe("INTERNAL_ERROR");
+
+    // Neither invalid runtime kind left a transaction open on the shared connection.
+    temp.db.exec("BEGIN IMMEDIATE");
+    temp.db.exec("ROLLBACK");
   });
 });

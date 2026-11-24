@@ -22,14 +22,10 @@ import {
 import { type AppError, appError, err, ok, type Result } from "./errors";
 import { snapshotFilesV5, type SnapshotDataV5, validateExchangeInventory } from "./exchange-snapshot";
 import {
-  type AsyncGitClient,
-  classifyPushFailure,
-  GIT_ARGS,
-  type GitClient,
-  gitStateConflict,
+  type AsyncVaultGitRepository,
   isRuntimeTrackedPath,
-  MANAGED_PATHSPECS,
   unmanagedStagedPaths,
+  type VaultGitRepository,
 } from "./git";
 import {
   redactSnapshotDataV4,
@@ -492,7 +488,7 @@ export interface VaultGitPorts {
   repositoryExists(): Result<boolean, AppError>;
   /** Re-runs the idempotent Vault initializer so the policy files and marker are re-asserted (VLT-024). */
   reassertPolicyFiles(): Result<void, AppError>;
-  git: GitClient;
+  git: VaultGitRepository;
 }
 
 export interface VaultGitOutcome {
@@ -510,22 +506,15 @@ export function ensureVaultGitRepository(ports: VaultGitPorts): Result<VaultGitO
     // Sorage verifies it but never rewrites its history or configuration.
     return ok({ initialized: false, existingReported: true });
   }
-  const init = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.init(ports.configuredBranch) });
-  if (!init.ok) return err(init.error);
-  if (init.value.exitCode !== 0) return gitStateConflict("init", init.value);
-  const autocrlf = ports.git.run({
-    cwd: ports.vaultPath,
-    args: GIT_ARGS.configSet("core.autocrlf", "false"),
-  });
-  if (!autocrlf.ok) return err(autocrlf.error);
-  if (autocrlf.value.exitCode !== 0) return gitStateConflict("config core.autocrlf=false", autocrlf.value);
+  const initialized = ports.git.initialize(ports.configuredBranch);
+  if (!initialized.ok) return err(initialized.error);
   const reasserted = ports.reassertPolicyFiles();
   if (!reasserted.ok) return err(reasserted.error);
   return ok({ initialized: true, existingReported: false });
 }
 
 export interface AsyncVaultGitPorts extends Omit<VaultGitPorts, "git"> {
-  git: AsyncGitClient;
+  git: AsyncVaultGitRepository;
 }
 
 /** Asynchronous counterpart of `ensureVaultGitRepository` for daemon backup runs. */
@@ -537,15 +526,8 @@ export async function ensureVaultGitRepositoryAsync(
   if (existing.value) {
     return ok({ initialized: false, existingReported: true });
   }
-  const init = await ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.init(ports.configuredBranch) });
-  if (!init.ok) return err(init.error);
-  if (init.value.exitCode !== 0) return gitStateConflict("init", init.value);
-  const autocrlf = await ports.git.run({
-    cwd: ports.vaultPath,
-    args: GIT_ARGS.configSet("core.autocrlf", "false"),
-  });
-  if (!autocrlf.ok) return err(autocrlf.error);
-  if (autocrlf.value.exitCode !== 0) return gitStateConflict("config core.autocrlf=false", autocrlf.value);
+  const initialized = await ports.git.initialize(ports.configuredBranch);
+  if (!initialized.ok) return err(initialized.error);
   const reasserted = ports.reassertPolicyFiles();
   if (!reasserted.ok) return err(reasserted.error);
   return ok({ initialized: true, existingReported: false });
@@ -568,7 +550,7 @@ export interface BackupCensus {
 }
 
 export interface BackupVerifyPorts extends VaultVerifyPorts {
-  git: GitClient;
+  git: VaultGitRepository;
   /** The configured `gitBackup.push.branch`; the repository must sit on it (section 31). */
   configuredBranch: string;
   /** True when a `.git` exists at the Vault path. */
@@ -630,17 +612,17 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
   if (!existing.value) {
     findings.push("The Vault has no Git repository; re-run sorage init --initialize-git to initialize one.");
   } else {
-    const autocrlf = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.configGet("core.autocrlf") });
+    const autocrlf = ports.git.autocrlf();
     if (!autocrlf.ok) return err(autocrlf.error);
-    const value = autocrlf.value.exitCode === 0 ? autocrlf.value.stdout.trim() : "";
+    const value = autocrlf.value;
     if (value !== "false") {
       findings.push(
         `core.autocrlf is '${value === "" ? "unset" : value}' in the Vault repository; run git config core.autocrlf false inside the Vault, because a clone with autocrlf true would rewrite managed bytes and break their checksums.`,
       );
     }
-    const branch = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.currentBranch() });
+    const branch = ports.git.currentBranch();
     if (!branch.ok) return err(branch.error);
-    const branchName = branch.value.exitCode === 0 ? branch.value.stdout.trim() : "";
+    const branchName = branch.value;
     if (branchName !== ports.configuredBranch) {
       findings.push(
         `The Vault repository is on '${branchName === "" ? "a detached HEAD" : branchName}', not the configured branch '${ports.configuredBranch}'; Sorage commits only on the configured branch.`,
@@ -654,20 +636,20 @@ export function backupVerify(ports: BackupVerifyPorts, options: { now: Date }): 
     if (signals.value.rebaseInProgress) {
       findings.push("A rebase is in progress in the Vault repository; resolve it manually, Sorage never rebases.");
     }
-    const staged = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.stagedFiles() });
+    const staged = ports.git.stagedPaths();
     if (!staged.ok) return err(staged.error);
     // Only staged work outside the managed pathspecs is a finding: a crashed
     // backup run legitimately leaves its own staged managed files behind, and
     // the next run re-stages and commits them.
-    const stagedPaths = unmanagedStagedPaths(staged.value.stdout.split("\n").filter((line) => line !== ""));
+    const stagedPaths = unmanagedStagedPaths(staged.value);
     if (stagedPaths.length > 0) {
       findings.push(
         `The index holds ${stagedPaths.length} staged file(s) outside the managed pathspecs; resolve them manually, because Sorage stages only its managed content.`,
       );
     }
-    const tracked = ports.git.run({ cwd: ports.vaultPath, args: GIT_ARGS.lsFiles() });
+    const tracked = ports.git.trackedPaths();
     if (!tracked.ok) return err(tracked.error);
-    const trackedPaths = tracked.value.stdout.split("\n").filter((line) => line !== "");
+    const trackedPaths = tracked.value;
     trackedCount = trackedPaths.length;
     const runtimeTracked = trackedPaths.filter(isRuntimeTrackedPath);
     if (runtimeTracked.length > 0) {
@@ -777,7 +759,7 @@ export interface BackupRunPorts {
    * call it, so verify, dry-run, and preflight leave an absent directory absent.
    */
   prepareWritableContent(): Result<void, AppError>;
-  git: GitClient;
+  git: VaultGitRepository;
   /** Merge and rebase indicators read from the repository's state directories. */
   gitState(): Result<{ mergeInProgress: boolean; rebaseInProgress: boolean }, AppError>;
   /** Writes exactly one history row for this attempt (BKP-016). */
@@ -808,12 +790,6 @@ export interface BackupRunReport {
   push: "pushed" | "skipped" | "failure" | "disabled";
   commitSha: string | null;
 }
-
-function runGit(ports: BackupRunPorts, args: string[]): Result<GitRunOutcomeShape, AppError> {
-  return ports.git.run({ cwd: ports.vaultPath, args });
-}
-
-type GitRunOutcomeShape = { exitCode: number; stdout: string; stderr: string };
 
 /** Renders the configured template with the run's UTC timestamp (BKP-010). */
 export function renderBackupCommitMessage(template: string, now: Date): string {
@@ -901,9 +877,9 @@ function runUnderBackupLock(
   const verified = ports.verifyCurrentArtifacts();
   if (!verified.ok) return err(verified.error);
 
-  const branch = runGit(ports, ["symbolic-ref", "--short", "HEAD"]);
+  const branch = ports.git.currentBranch();
   if (!branch.ok) return err(branch.error);
-  const branchName = branch.value.exitCode === 0 ? branch.value.stdout.trim() : "";
+  const branchName = branch.value;
   if (branchName !== ports.configuredBranch) {
     return err(
       appError(
@@ -924,9 +900,9 @@ function runUnderBackupLock(
       ),
     );
   }
-  const staged = runGit(ports, ["diff", "--cached", "--name-only"]);
+  const staged = ports.git.stagedPaths();
   if (!staged.ok) return err(staged.error);
-  const unmanaged = unmanagedStagedPaths(staged.value.stdout.split("\n").filter((line) => line !== ""));
+  const unmanaged = unmanagedStagedPaths(staged.value);
   if (unmanaged.length > 0) {
     return err(
       appError(
@@ -939,66 +915,42 @@ function runUnderBackupLock(
     );
   }
 
-  // The writable setup precedes the exact `git add`: the change test uses the
-  // managed pathspecs unchanged, so an absent `content/` path would be a hard
-  // Git error rather than a match of nothing (section 26). Preparation creates
-  // no sentinel file, so an empty directory stages nothing and a run with no
-  // other change still reaches the clean no-change exit.
+  // The writable setup precedes staging: the change test uses the managed
+  // pathspecs unchanged, so an absent `content/` path would be a hard Git error
+  // rather than a match of nothing (section 26). Preparation creates no
+  // sentinel file, so an empty directory stages nothing and a run with no other
+  // change still reaches the clean no-change exit.
   const preparedContent = ports.prepareWritableContent();
   if (!preparedContent.ok) return err(preparedContent.error);
 
-  const added = runGit(ports, ["add", "--", ...MANAGED_PATHSPECS]);
+  const added = ports.git.stageManaged();
   if (!added.ok) return err(added.error);
-  if (added.value.exitCode !== 0) return gitStateConflict("add", added.value);
 
-  const changeTest = runGit(ports, ["diff", "--cached", "--quiet", "--", ...MANAGED_PATHSPECS]);
-  if (!changeTest.ok) return err(changeTest.error);
-  if (changeTest.value.exitCode === 0) {
+  const changed = ports.git.hasStagedManagedChanges();
+  if (!changed.ok) return err(changed.error);
+  if (!changed.value) {
     // Nothing managed changed since the last commit: no commit is created (BKP-009),
     // but an enabled push still runs so a restored or previously unpushed commit
     // reaches the remote (section 30).
     if (!ports.pushEnabled) {
       return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "disabled", commitSha: null });
     }
-    const pushed = pushToRemote(ports);
+    const pushed = ports.git.push(ports.pushTarget);
     if (!pushed.ok) return err(pushed.error);
     return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "pushed", commitSha: null });
   }
-  if (changeTest.value.exitCode !== 1) return gitStateConflict("diff --cached --quiet", changeTest.value);
 
   const message = renderBackupCommitMessage(ports.messageTemplate, ports.now());
-  const committed = runGit(ports, [
-    "-c",
-    "user.name=Sorage Backup",
-    "-c",
-    "user.email=sorage@localhost",
-    "commit",
-    "-m",
-    message,
-  ]);
+  const committed = ports.git.commit(message);
   if (!committed.ok) return err(committed.error);
-  if (committed.value.exitCode !== 0) return gitStateConflict("commit", committed.value);
-  const sha = runGit(ports, ["rev-parse", "HEAD"]);
-  if (!sha.ok) return err(sha.error);
-  const commitSha = sha.value.exitCode === 0 ? sha.value.stdout.trim() : null;
+  const commitSha = committed.value.sha;
   progress.commitSha = commitSha;
   if (!ports.pushEnabled) {
     return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "disabled", commitSha });
   }
-  const pushed = pushToRemote(ports);
+  const pushed = ports.git.push(ports.pushTarget);
   if (!pushed.ok) return err(pushed.error);
   return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "pushed", commitSha });
-}
-
-/** One atomic fast-forward push under the batch environment; a refusal classifies as auth or conflict (BKP-014, BKP-025). */
-function pushToRemote(ports: BackupRunPorts): Result<"pushed", AppError> {
-  const pushed = ports.git.run({
-    cwd: ports.vaultPath,
-    args: ["push", "--atomic", ports.pushTarget.remote, ports.pushTarget.branch],
-  });
-  if (!pushed.ok) return err(pushed.error);
-  if (pushed.value.exitCode !== 0) return err(classifyPushFailure(pushed.value));
-  return ok("pushed");
 }
 
 /**
@@ -1073,7 +1025,7 @@ export interface AsyncBackupRunPorts
   exportSnapshot(): Result<BackupExportReport, AppError> | Promise<Result<BackupExportReport, AppError>>;
   verifyCurrentArtifacts(): Promise<Result<{ verified: number }, AppError>>;
   ensureRepository(): Promise<Result<VaultGitOutcome, AppError>>;
-  git: AsyncGitClient;
+  git: AsyncVaultGitRepository;
 }
 
 export interface AsyncBackupRunCommandPorts extends AsyncBackupRunPorts {
@@ -1156,9 +1108,9 @@ async function runUnderBackupLockAsync(
   const verified = await ports.verifyCurrentArtifacts();
   if (!verified.ok) return err(verified.error);
 
-  const branch = await ports.git.run({ cwd: ports.vaultPath, args: ["symbolic-ref", "--short", "HEAD"] });
+  const branch = await ports.git.currentBranch();
   if (!branch.ok) return err(branch.error);
-  const branchName = branch.value.exitCode === 0 ? branch.value.stdout.trim() : "";
+  const branchName = branch.value;
   if (branchName !== ports.configuredBranch) {
     return err(
       appError(
@@ -1179,9 +1131,9 @@ async function runUnderBackupLockAsync(
       ),
     );
   }
-  const staged = await ports.git.run({ cwd: ports.vaultPath, args: ["diff", "--cached", "--name-only"] });
+  const staged = await ports.git.stagedPaths();
   if (!staged.ok) return err(staged.error);
-  const unmanaged = unmanagedStagedPaths(staged.value.stdout.split("\n").filter((line) => line !== ""));
+  const unmanaged = unmanagedStagedPaths(staged.value);
   if (unmanaged.length > 0) {
     return err(
       appError(
@@ -1197,52 +1149,31 @@ async function runUnderBackupLockAsync(
   const preparedContent = ports.prepareWritableContent();
   if (!preparedContent.ok) return err(preparedContent.error);
 
-  const added = await ports.git.run({ cwd: ports.vaultPath, args: ["add", "--", ...MANAGED_PATHSPECS] });
+  const added = await ports.git.stageManaged();
   if (!added.ok) return err(added.error);
-  if (added.value.exitCode !== 0) return gitStateConflict("add", added.value);
 
-  const changeTest = await ports.git.run({
-    cwd: ports.vaultPath,
-    args: ["diff", "--cached", "--quiet", "--", ...MANAGED_PATHSPECS],
-  });
-  if (!changeTest.ok) return err(changeTest.error);
-  if (changeTest.value.exitCode === 0) {
+  const changed = await ports.git.hasStagedManagedChanges();
+  if (!changed.ok) return err(changed.error);
+  if (!changed.value) {
     if (!ports.pushEnabled) {
       return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "disabled", commitSha: null });
     }
-    const pushed = await pushToRemoteAsync(ports);
+    const pushed = await ports.git.push(ports.pushTarget);
     if (!pushed.ok) return err(pushed.error);
     return ok({ outcome: "no-change", snapshot: "success", commit: "no-change", push: "pushed", commitSha: null });
   }
-  if (changeTest.value.exitCode !== 1) return gitStateConflict("diff --cached --quiet", changeTest.value);
 
   const message = renderBackupCommitMessage(ports.messageTemplate, ports.now());
-  const committed = await ports.git.run({
-    cwd: ports.vaultPath,
-    args: ["-c", "user.name=Sorage Backup", "-c", "user.email=sorage@localhost", "commit", "-m", message],
-  });
+  const committed = await ports.git.commit(message);
   if (!committed.ok) return err(committed.error);
-  if (committed.value.exitCode !== 0) return gitStateConflict("commit", committed.value);
-  const sha = await ports.git.run({ cwd: ports.vaultPath, args: ["rev-parse", "HEAD"] });
-  if (!sha.ok) return err(sha.error);
-  const commitSha = sha.value.exitCode === 0 ? sha.value.stdout.trim() : null;
+  const commitSha = committed.value.sha;
   progress.commitSha = commitSha;
   if (!ports.pushEnabled) {
     return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "disabled", commitSha });
   }
-  const pushed = await pushToRemoteAsync(ports);
+  const pushed = await ports.git.push(ports.pushTarget);
   if (!pushed.ok) return err(pushed.error);
   return ok({ outcome: "success", snapshot: "success", commit: "committed", push: "pushed", commitSha });
-}
-
-async function pushToRemoteAsync(ports: AsyncBackupRunPorts): Promise<Result<"pushed", AppError>> {
-  const pushed = await ports.git.run({
-    cwd: ports.vaultPath,
-    args: ["push", "--atomic", ports.pushTarget.remote, ports.pushTarget.branch],
-  });
-  if (!pushed.ok) return err(pushed.error);
-  if (pushed.value.exitCode !== 0) return err(classifyPushFailure(pushed.value));
-  return ok("pushed");
 }
 
 /** Asynchronous counterpart of `runBackupCommand` for `POST /api/v1/backup/run`. */

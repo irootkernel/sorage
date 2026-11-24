@@ -4,16 +4,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  type GitClient,
-  type GitRunOutcome,
-  type GitRunRequest,
-  initializeInstallation,
-  ok,
-  runBackupOnce,
-} from "@sorage/core";
+import { initializeInstallation, ok, runBackupOnce } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts, nodeEnsureVaultGit } from "../../src/backup-command-ports";
+import type { GitClient, GitRunOutcome, GitRunRequest } from "../../src/git-client";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { FakeClock } from "../../src/testkit";
 

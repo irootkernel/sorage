@@ -31,7 +31,6 @@ export * from "./inbox-marker";
 export * from "./init";
 export * from "./intent-log";
 export * from "./known-schemas";
-export * from "./launchagent";
 export * from "./memo-commands";
 export * from "./memo-protocol";
 export * from "./memo-repository";

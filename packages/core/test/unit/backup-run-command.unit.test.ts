@@ -10,7 +10,7 @@ import {
   runBackupCommand,
 } from "../../src/backup-commands";
 import { type AppError, err, ok } from "../../src/errors";
-import type { GitClient, GitRunOutcome } from "../../src/git";
+import type { VaultGitRepository } from "../../src/git";
 
 /**
  * The TASK-055 command surface (BKP-016, BKP-017): the idempotency replay
@@ -22,13 +22,16 @@ import type { GitClient, GitRunOutcome } from "../../src/git";
 function portsOf(
   options: { recorded?: { requestHash: string; responseJson: string }; runError?: AppError } = {},
 ): BackupRunCommandPorts {
-  const git: GitClient = {
-    run: (request) =>
-      ok({
-        exitCode: 0,
-        stdout: request.args[0] === "symbolic-ref" ? "main\n" : "",
-        stderr: "",
-      } satisfies GitRunOutcome),
+  const git: VaultGitRepository = {
+    initialize: () => ok(undefined),
+    autocrlf: () => ok("false"),
+    currentBranch: () => ok("main"),
+    stagedPaths: () => ok([]),
+    trackedPaths: () => ok([]),
+    stageManaged: () => ok(undefined),
+    hasStagedManagedChanges: () => ok(false),
+    commit: () => ok({ sha: "abc" }),
+    push: () => ok(undefined),
   };
   const idempotency: BackupIdempotencyPort = {
     lookup: (key, scope) =>

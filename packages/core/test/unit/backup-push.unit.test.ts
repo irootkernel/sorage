@@ -1,58 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { configureBackup, type BackupRunPorts, runBackupOnce } from "../../src/backup-commands";
-import { classifyPushFailure } from "../../src/git";
-import { ok } from "../../src/errors";
-import type { GitClient, GitRunOutcome } from "../../src/git";
+import { type BackupRunPorts, configureBackup, runBackupOnce } from "../../src/backup-commands";
+import { type AppError, appError, err, ok, type Result } from "../../src/errors";
+import type { VaultGitRepository } from "../../src/git";
 
 /**
  * The TASK-057 push and configuration matrix (BKP-011, BKP-014, BKP-025,
- * CLI-019): a refused push classifies as a missing credential or a manual
- * conflict, the engine records the push outcome separately, and the four
- * User-admin commands apply their whole group in one write.
+ * CLI-019): the run engine propagates classified push failures, records the
+ * push outcome separately, and the four User-admin commands apply their whole
+ * group in one write.
  */
 
-describe("classifyPushFailure", () => {
-  it.each([
-    "fatal: could not read Username for 'https://example.com': terminal prompts disabled",
-    "fatal: unable to get password from user",
-  ])("maps a missing credential to GIT_AUTH_REQUIRED: %s", (stderr) => {
-    const error = classifyPushFailure({
-      exitCode: 128,
-      stderr,
-      stdout: "",
-    });
-    expect(error.code).toBe("GIT_AUTH_REQUIRED");
-  });
+interface PushFakeOptions {
+  pushEnabled?: boolean | undefined;
+  hasChanges?: boolean | undefined;
+  commitResult?: Result<{ sha: string | null }, AppError> | undefined;
+  pushResult?: Result<void, AppError> | undefined;
+}
 
-  it("maps an authentication refusal to GIT_AUTH_REQUIRED", () => {
-    const error = classifyPushFailure({
-      exitCode: 128,
-      stderr: "git@example.com: Permission denied (publickey).",
-      stdout: "",
-    });
-    expect(error.code).toBe("GIT_AUTH_REQUIRED");
-  });
-
-  it("maps a non-fast-forward rejection to GIT_BACKUP_CONFLICT", () => {
-    const error = classifyPushFailure({
-      exitCode: 1,
-      stderr: "To origin\n ! [rejected] main -> main (non-fast-forward)\nerror: failed to push some refs",
-      stdout: "",
-    });
-    expect(error.code).toBe("GIT_BACKUP_CONFLICT");
-  });
-});
-
-function pushPorts(script: Array<(args: string[]) => GitRunOutcome | null>, options: { pushEnabled?: boolean } = {}) {
-  const invocations: string[][] = [];
-  const client: GitClient = {
-    run: (request) => {
-      invocations.push(request.args);
-      for (const respond of script) {
-        const outcome = respond(request.args);
-        if (outcome !== null) return ok(outcome);
-      }
-      return ok({ exitCode: 0, stdout: request.args[0] === "symbolic-ref" ? "main\n" : "", stderr: "" });
+function pushPorts(options: PushFakeOptions = {}) {
+  const pushTargets: Array<{ remote: string; branch: string }> = [];
+  const repo: VaultGitRepository = {
+    initialize: () => ok(undefined),
+    autocrlf: () => ok("false"),
+    currentBranch: () => ok("main"),
+    stagedPaths: () => ok([]),
+    trackedPaths: () => ok([]),
+    stageManaged: () => ok(undefined),
+    hasStagedManagedChanges: () => ok(options.hasChanges ?? false),
+    commit: () => options.commitResult ?? ok({ sha: "abc" }),
+    push: (target) => {
+      pushTargets.push(target);
+      return options.pushResult ?? ok(undefined);
     },
   };
   const ports: BackupRunPorts = {
@@ -68,60 +46,56 @@ function pushPorts(script: Array<(args: string[]) => GitRunOutcome | null>, opti
     verifyCurrentArtifacts: () => ok({ verified: 1 }),
     ensureRepository: () => ok({ initialized: false, existingReported: true }),
     prepareWritableContent: () => ok(undefined),
-    git: client,
+    git: repo,
     gitState: () => ok({ mergeInProgress: false, rebaseInProgress: false }),
     recordRun: () => ok(undefined),
     now: () => new Date("2026-08-30T00:00:00.000Z"),
     nextRunId: () => "run-1",
   };
-  return { ports, invocations };
+  return { ports, pushTargets };
 }
 
 describe("runBackupOnce push paths", () => {
   it("pushes atomically after a commit and records the pushed outcome", () => {
-    const { ports, invocations } = pushPorts(
-      [
-        (args) =>
-          args.includes("--quiet") && !args.includes("--name-only") ? { exitCode: 1, stdout: "", stderr: "" } : null,
-        (args) => (args[0] === "rev-parse" ? { exitCode: 0, stdout: "abc\n", stderr: "" } : null),
-      ],
-      { pushEnabled: true },
-    );
+    const { ports, pushTargets } = pushPorts({
+      hasChanges: true,
+      commitResult: ok({ sha: "abc" }),
+      pushEnabled: true,
+    });
     const report = runBackupOnce(ports);
     expect(report.ok).toBe(true);
     if (report.ok) {
       expect(report.value.outcome).toBe("success");
       expect(report.value.push).toBe("pushed");
     }
-    const push = invocations.find((args) => args[0] === "push");
-    expect(push).toEqual(["push", "--atomic", "origin", "main"]);
+    expect(pushTargets).toEqual([{ remote: "origin", branch: "main" }]);
   });
 
   it("still pushes on a no-change run so an unpushed commit reaches the remote", () => {
-    const { ports, invocations } = pushPorts([], { pushEnabled: true });
+    const { ports, pushTargets } = pushPorts({ hasChanges: false, pushEnabled: true });
     const report = runBackupOnce(ports);
     expect(report.ok).toBe(true);
     if (report.ok) {
       expect(report.value.outcome).toBe("no-change");
       expect(report.value.push).toBe("pushed");
     }
-    expect(invocations.some((args) => args[0] === "push")).toBe(true);
+    expect(pushTargets).toEqual([{ remote: "origin", branch: "main" }]);
   });
 
-  it("records the push failure with its symbolic code and keeps the commit recorded", () => {
+  it("records a GIT_BACKUP_CONFLICT push failure with its symbolic code and keeps the commit recorded", () => {
     const rows: Array<Record<string, unknown>> = [];
-    const { ports } = pushPorts(
-      [
-        (args) =>
-          args.includes("--quiet") && !args.includes("--name-only") ? { exitCode: 1, stdout: "", stderr: "" } : null,
-        (args) => (args[0] === "rev-parse" ? { exitCode: 0, stdout: "abc\n", stderr: "" } : null),
-        (args) =>
-          args[0] === "push"
-            ? { exitCode: 1, stdout: "", stderr: " ! [rejected] main -> main (non-fast-forward)" }
-            : null,
-      ],
-      { pushEnabled: true },
-    );
+    const { ports } = pushPorts({
+      hasChanges: true,
+      commitResult: ok({ sha: "abc" }),
+      pushEnabled: true,
+      pushResult: err(
+        appError(
+          "GIT_BACKUP_CONFLICT",
+          "The push was refused; resolve the remote state manually, Sorage never force pushes: ! [rejected] main -> main (non-fast-forward)",
+          { exitCode: 1 },
+        ),
+      ),
+    });
     ports.recordRun = (row) => {
       rows.push({ ...row });
       return ok(undefined);
@@ -138,20 +112,32 @@ describe("runBackupOnce push paths", () => {
     });
   });
 
-  it("classifies the disabled credential prompt as GIT_AUTH_REQUIRED", () => {
-    const { ports } = pushPorts(
-      [
-        (args) =>
-          args.includes("--quiet") && !args.includes("--name-only") ? { exitCode: 1, stdout: "", stderr: "" } : null,
-        (args) =>
-          args[0] === "push"
-            ? { exitCode: 128, stdout: "", stderr: "fatal: could not read Username: terminal prompts disabled" }
-            : null,
-      ],
-      { pushEnabled: true },
-    );
+  it("records a GIT_AUTH_REQUIRED push failure when batch credentials are missing", () => {
+    const rows: Array<Record<string, unknown>> = [];
+    const { ports } = pushPorts({
+      hasChanges: true,
+      commitResult: ok({ sha: "abc" }),
+      pushEnabled: true,
+      pushResult: err(
+        appError(
+          "GIT_AUTH_REQUIRED",
+          "Pushing to the remote needs a credential that batch mode cannot supply: fatal: could not read Username: terminal prompts disabled",
+          { exitCode: 128 },
+        ),
+      ),
+    });
+    ports.recordRun = (row) => {
+      rows.push({ ...row });
+      return ok(undefined);
+    };
     const report = runBackupOnce(ports);
     expect(!report.ok && report.error.code).toBe("GIT_AUTH_REQUIRED");
+    expect(rows[0]).toMatchObject({
+      outcome: "failure",
+      commitOutcome: "committed",
+      commitSha: "abc",
+      failureCode: "GIT_AUTH_REQUIRED",
+    });
   });
 });
 

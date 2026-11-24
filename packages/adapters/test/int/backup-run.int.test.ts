@@ -4,10 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { GitClient, GitRunOutcome, GitRunRequest } from "@sorage/core";
 import { backupStatus, initializeInstallation, ok, runBackupCommand, runBackupOnce } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts } from "../../src/backup-command-ports";
+import type { GitClient, GitRunOutcome, GitRunRequest } from "../../src/git-client";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { FakeClock } from "../../src/testkit/fakes";
 

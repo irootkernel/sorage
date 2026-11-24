@@ -10,6 +10,8 @@ import {
   type HandoffWritePort,
   ok,
   type Result,
+  type RetentionChange,
+  type TerminalTransition,
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { liveFencePaused } from "./sqlite/move-fence";
@@ -943,6 +945,89 @@ function rollbackWithConflict(
   );
 }
 
+interface MappedHandoffUpdate {
+  columns: readonly HandoffAssignment[];
+  values: readonly (string | number | null)[];
+}
+
+function mapTerminalTransition(transition: TerminalTransition, at: string): Result<MappedHandoffUpdate, AppError> {
+  switch (transition.kind) {
+    case "accept":
+      return ok({
+        columns: ["review_state", "accepted_revision", "accepted_at", "updated_at"] as readonly HandoffAssignment[],
+        values: ["accepted", transition.acceptedRevision, at, at],
+      });
+    case "decline":
+      return ok({
+        columns: ["review_state", "declined_at", "decline_reason", "updated_at"] as readonly HandoffAssignment[],
+        values: ["declined", at, transition.reason, at],
+      });
+    case "withdraw":
+      return ok({
+        columns: ["review_state", "withdrawn_at", "updated_at"] as readonly HandoffAssignment[],
+        values: ["withdrawn", at, at],
+      });
+    default: {
+      const unexpected: never = transition;
+      return err(
+        appError(
+          "INTERNAL_ERROR",
+          `Unsupported terminal transition kind: ${String((unexpected as { kind?: unknown })?.kind)}.`,
+        ),
+      );
+    }
+  }
+}
+
+function mapRetentionChange(change: RetentionChange, at: string): Result<MappedHandoffUpdate, AppError> {
+  switch (change.kind) {
+    case "pin":
+      return ok({
+        columns: ["pinned", "updated_at"] as readonly HandoffAssignment[],
+        values: [1, at],
+      });
+    case "unpin":
+      return ok({
+        columns: ["pinned", "updated_at"] as readonly HandoffAssignment[],
+        values: [0, at],
+      });
+    case "archive":
+      return ok({
+        columns: ["archived_at", "updated_at"] as readonly HandoffAssignment[],
+        values: [at, at],
+      });
+    case "unarchive":
+      return ok({
+        columns: ["archived_at", "updated_at"] as readonly HandoffAssignment[],
+        values: [null, at],
+      });
+    case "deletion-request":
+      return ok({
+        columns: ["updated_at"] as readonly HandoffAssignment[],
+        values: [at],
+      });
+    case "deletion-approve":
+      return ok({
+        columns: ["deleted_at", "current_artifact_id", "updated_at"] as readonly HandoffAssignment[],
+        values: [at, null, at],
+      });
+    case "deletion-reject":
+      return ok({
+        columns: ["updated_at"] as readonly HandoffAssignment[],
+        values: [at],
+      });
+    default: {
+      const unexpected: never = change;
+      return err(
+        appError(
+          "INTERNAL_ERROR",
+          `Unsupported retention change kind: ${String((unexpected as { kind?: unknown })?.kind)}.`,
+        ),
+      );
+    }
+  }
+}
+
 /**
  * The SQLite terminal store behind TASK-033: one transaction per transition holding
  * the compare-and-set with its domain assignments and the ledger append.
@@ -954,21 +1039,21 @@ export function createSqliteTerminalStore(
 ): import("@sorage/core").TerminalMutationPort {
   return {
     applyTerminalTransition(input) {
+      const mapped = mapTerminalTransition(input.transition, input.at);
+      if (!mapped.ok) return mapped;
+      const sets = mapped.value.columns.map((column) => `${column} = ?`).join(", ");
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
-          const columns = Object.keys(input.assignments);
-          const sets = columns.map((column) => `${column} = ?`).join(", ");
-          const values = columns.map((column) => input.assignments[column]);
           const changed = db
             .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
-            .run(...(values as never[]), input.handoffId, input.expectedRowVersion) as { changes: number };
+            .run(...(mapped.value.values as never[]), input.handoffId, input.expectedRowVersion) as {
+            changes: number;
+          };
           if (changed.changes !== 1) {
             return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
           }
-          if (input.assignments.review_state !== undefined && input.assignments.review_state !== "changes_requested") {
-            db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
-          }
+          db.prepare("UPDATE review_notes SET active = 0 WHERE handoff_id = ?").run(input.handoffId);
           ledger.append(input.event);
           db.exec("COMMIT");
           return ok({ rowVersion: input.expectedRowVersion + 1 });
@@ -1006,6 +1091,12 @@ export function createSqliteRetentionStore(
 ): import("@sorage/core").RetentionMutationPort {
   return {
     applyRetentionMutation(input) {
+      const mapped = mapRetentionChange(input.change, input.at);
+      if (!mapped.ok) return mapped;
+      const sets = mapped.value.columns.map((column) => `${column} = ?`).join(", ");
+      const contentRemoval =
+        input.change.kind === "deletion-approve" &&
+        (input.change.unlinkIntent !== undefined || input.change.removeContent === true);
       try {
         db.exec("BEGIN IMMEDIATE");
         try {
@@ -1014,7 +1105,6 @@ export function createSqliteRetentionStore(
           // or its inline record — so it races the mover the same way a
           // creation or revision does, while a pin or archive that touches no
           // content may proceed (RUN-002, SHR-011).
-          const contentRemoval = input.unlinkIntent !== undefined || input.removeContent === true;
           const pausedRetention = contentRemoval ? liveFencePaused(db) : null;
           if (pausedRetention) {
             db.exec("ROLLBACK");
@@ -1028,43 +1118,40 @@ export function createSqliteRetentionStore(
               ),
             );
           }
-          const columns = Object.keys(input.assignments);
-          const sets = columns.map((column) => `${column} = ?`).join(", ");
-          const values = columns.map((column) => input.assignments[column]);
           const changed = db
             .prepare(`UPDATE handoffs SET ${sets}, row_version = row_version + 1 WHERE id = ? AND row_version = ?`)
-            .run(...(values as never[]), input.handoffId, input.expectedRowVersion) as { changes: number };
+            .run(...(mapped.value.values as never[]), input.handoffId, input.expectedRowVersion) as {
+            changes: number;
+          };
           if (changed.changes !== 1) {
             return rollbackWithConflict(db, input.handoffId, input.expectedRowVersion);
           }
-          if (input.deletionRequest?.op === "insert") {
+          if (input.change.kind === "deletion-request") {
             db.prepare(
               "INSERT INTO deletion_requests (id, handoff_id, requested_by_kind, requested_by_id, reason, status, requested_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
             ).run(
-              input.deletionRequest.id,
+              input.change.requestId,
               input.handoffId,
-              input.deletionRequest.requestedByKind,
-              input.deletionRequest.requestedById,
-              input.deletionRequest.reason,
-              input.events[0]?.createdAt ?? new Date().toISOString(),
+              input.change.requestedByKind,
+              input.change.requestedById,
+              input.change.reason,
+              input.at,
             );
-          } else if (input.deletionRequest?.op === "resolve") {
+          } else if (input.change.kind === "deletion-approve") {
             db.prepare(
-              "UPDATE deletion_requests SET status = ?, resolved_at = ?, resolved_by_user = ?, resolution_note = ? WHERE handoff_id = ? AND status = 'pending'",
-            ).run(
-              input.deletionRequest.status,
-              input.events[0]?.createdAt ?? new Date().toISOString(),
-              input.deletionRequest.resolvedByUser,
-              input.deletionRequest.resolutionNote,
-              input.handoffId,
-            );
+              "UPDATE deletion_requests SET status = 'approved', resolved_at = ?, resolved_by_user = 'user', resolution_note = NULL WHERE handoff_id = ? AND status = 'pending'",
+            ).run(input.at, input.handoffId);
+          } else if (input.change.kind === "deletion-reject") {
+            db.prepare(
+              "UPDATE deletion_requests SET status = 'rejected', resolved_at = ?, resolved_by_user = 'user', resolution_note = ? WHERE handoff_id = ? AND status = 'pending'",
+            ).run(input.at, input.change.resolutionNote, input.handoffId);
           }
           // The honest logical-deletion signal removes current content in this
           // same domain transaction whether or not a physical unlink intent
           // exists: an approved inline Artifact leaves no file to unlink, and
           // no fake key or intent is manufactured to trigger the cleanup
           // (SHR-004, SHR-008).
-          if (input.unlinkIntent !== undefined || input.removeContent === true) {
+          if (contentRemoval && input.change.kind === "deletion-approve") {
             db.prepare("DELETE FROM review_notes WHERE handoff_id = ?").run(input.handoffId);
             db.prepare(
               "UPDATE handoffs SET read_status = 'unrecorded', read_revision = NULL, revision_read_at = NULL, processing_status = 'unrecorded', processing_started_at = NULL, processing_completed_at = NULL WHERE id = ?",
@@ -1086,30 +1173,30 @@ export function createSqliteRetentionStore(
                 return err(removal.error);
               }
             }
-            if (input.unlinkIntent !== undefined) {
+            if (input.change.unlinkIntent !== undefined) {
               db.prepare(
                 "INSERT INTO pending_fs_ops (id, op, from_path, to_path, artifact_id, created_at, attempts) VALUES (?, 'unlink', NULL, ?, ?, ?, 0)",
               ).run(
-                input.unlinkIntent.id,
-                input.unlinkIntent.toPath,
-                input.unlinkIntent.artifactId,
-                input.events[0]?.createdAt ?? new Date().toISOString(),
+                input.change.unlinkIntent.id,
+                input.change.unlinkIntent.toPath,
+                input.change.unlinkIntent.artifactId,
+                input.at,
               );
             }
           }
           for (const event of input.events) {
             ledger.append(event);
           }
-          if (input.idempotency !== undefined) {
+          if (input.change.kind === "deletion-approve" && input.change.idempotency !== undefined) {
             db.prepare(
               "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
             ).run(
-              input.idempotency.key,
-              input.idempotency.scope,
-              input.idempotency.requestHash,
-              input.idempotency.responseJson,
-              input.events[0]?.createdAt ?? new Date().toISOString(),
-              input.idempotency.expiresAt,
+              input.change.idempotency.key,
+              input.change.idempotency.scope,
+              input.change.idempotency.requestHash,
+              input.change.idempotency.responseJson,
+              input.at,
+              input.change.idempotency.expiresAt,
             );
           }
           db.exec("COMMIT");

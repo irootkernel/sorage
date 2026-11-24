@@ -25,7 +25,6 @@ import {
   appError,
   assessPreflight,
   type Configuration,
-  loadConfiguration,
   type PreflightConfigFact,
   type PreflightDatabaseFact,
   type PreflightFacts,
@@ -35,12 +34,12 @@ import {
   type PreflightResidueEntry,
   type PreflightVaultFact,
   KNOWN_SCHEMA_HISTORY,
-  parseConfigurationFile,
   err,
   ok,
   type Result,
 } from "@sorage/core";
 import { parseDocument } from "yaml";
+import { loadConfiguration, parseConfigurationFile } from "./config-codec";
 import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { execMigrationSegments, migrate } from "./sqlite/migrator";

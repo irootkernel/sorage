@@ -16,9 +16,7 @@ import {
   isManagedStorageKey,
   isManagedVaultPath,
   nextDueAt,
-  parseConfigurationFile,
   KNOWN_SCHEMA_HISTORY,
-  probeConfigurationPath,
   VAULT_OPEN_RECOVERY,
   verifyVaultPolicyFiles,
   verifyVaultArtifacts,
@@ -27,6 +25,7 @@ import {
   appError,
 } from "@sorage/core";
 import { createNodeArtifactStore } from "./artifact-store";
+import { parseConfigurationFile, probeConfigurationPath } from "./config-codec";
 import {
   inspectArtifactStorageLayout,
   validateArtifactContentLinks,

@@ -31,6 +31,7 @@ import {
   type Result,
   removeParticipant,
   showChannel,
+  SystemClock,
   successEnvelope,
   isRetryableWaitListingFailure,
   waitForChannelMessages,
@@ -468,9 +469,10 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
     };
     const intervalSeconds = typeof options.interval === "number" ? options.interval : 2;
     const timeoutSeconds = typeof options.timeout === "number" ? options.timeout : 60;
+    const clock = new SystemClock();
     // The deadline is measured from invocation, before the start admission and
     // the once-only validation run (section 38.5).
-    const deadlineAt = Date.now() + timeoutSeconds * 1000;
+    const deadlineAt = clock.now().getTime() + timeoutSeconds * 1000;
     const listing = {
       channelRef,
       ...(options.after === undefined ? {} : { after: options.after }),
@@ -553,7 +555,7 @@ export function registerChannelCommands(program: Command, output: ChannelCliOutp
       }
     };
 
-    const waited = waitForChannelMessages({ intervalSeconds, deadlineAt, sleepMs: blockingSleepMs, poll });
+    const waited = waitForChannelMessages({ intervalSeconds, deadlineAt, clock, sleepMs: blockingSleepMs, poll });
     if (!waited.ok) return fail(channelError(waited.error));
     if (waited.value.timedOut) {
       if (json) {

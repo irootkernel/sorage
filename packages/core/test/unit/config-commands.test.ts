@@ -1,41 +1,51 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseConfigurationFile } from "../../src/config";
-import { setConfigurationValue, type ConfigCommandPorts, type ConfigCommandStore } from "../../src/config-commands";
+import { defaultConfiguration } from "../../src/config";
+import {
+  type ConfigCommandPorts,
+  type ConfigCommandStore,
+  type ConfigTextCodec,
+  setConfigurationValue,
+} from "../../src/config-commands";
+import { ok } from "../../src/errors";
 
-const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-const exampleText = readFileSync(`${repoRoot}docs/specs/examples/config.example.yaml`, "utf8");
+const UUID = "9d57384c-030e-4ff7-90ca-c615d8043db2";
+const sampleConfig = defaultConfiguration(UUID);
+const exampleText = JSON.stringify(sampleConfig, null, 2);
 
 function sha256Of(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** A store double that records the write expectation and otherwise serves the example file. */
+/** A store double that records the write expectation and serves the sample file through a fake codec. */
 function recordingStore(): {
   ports: ConfigCommandPorts;
   writeExpectation: () => { revision?: number; etag?: string } | undefined;
 } {
-  const parsed = parseConfigurationFile(exampleText);
-  if (!parsed.ok) throw new Error("the example configuration must parse for the double");
   let expectation: { revision?: number; etag?: string } | undefined;
   const store: ConfigCommandStore = {
-    read: () => ({ ok: true, value: { config: parsed.value.config, etag: sha256Of(exampleText), revision: 1 } }),
+    read: () => ({
+      ok: true,
+      value: { config: structuredClone(sampleConfig), etag: sha256Of(exampleText), revision: 1 },
+    }),
     readForOperation: () => ({
       ok: true,
-      value: { config: parsed.value.config, etag: sha256Of(exampleText), revision: 1 },
+      value: { config: structuredClone(sampleConfig), etag: sha256Of(exampleText), revision: 1 },
     }),
     readText: () => exampleText,
     write: (_config, expect) => {
       expectation = expect;
-      return { ok: true, value: { config: parsed.value.config, etag: sha256Of(exampleText) } };
+      return { ok: true, value: { config: structuredClone(sampleConfig), etag: sha256Of(exampleText) } };
     },
     writeRaw: (_text, _expect) => ({ ok: true, value: { etag: sha256Of(exampleText) } }),
+  };
+  const codec: ConfigTextCodec = {
+    parse: () => ok(structuredClone(sampleConfig)),
   };
   return {
     ports: {
       store,
+      codec,
       configFile: "/tmp/sorage-test/config.yaml",
       userHome: "/tmp/sorage-test-user",
       sorageHome: "/tmp/sorage-test",

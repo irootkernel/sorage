@@ -10,10 +10,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { loadConfiguration } from "@sorage/core";
-import { createNodeInitPorts } from "../../src/init-ports";
 import { initializeInstallation } from "@sorage/core";
+import { describe, expect, it } from "vitest";
+import { loadConfiguration } from "../../src/config-codec";
+import { createNodeInitPorts } from "../../src/init-ports";
 import { openVault } from "../../src/vault";
 import { withTempHome } from "../../src/testkit/temp-home";
 import { FakeClock } from "../../src/testkit/fakes";

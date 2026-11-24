@@ -9,12 +9,12 @@ import {
   backupVerify,
   exportSnapshot,
   initializeInstallation,
-  parseConfigurationFile,
   runBackupOnce,
   vaultGitattributesContent,
 } from "@sorage/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeBackupCommandPorts, nodeEnsureVaultGit } from "../../src/backup-command-ports";
+import { parseConfigurationFile } from "../../src/config-codec";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { inspectPreflight } from "../../src/preflight";
 import { FakeClock } from "../../src/testkit/fakes";

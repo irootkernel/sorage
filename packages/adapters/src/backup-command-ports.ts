@@ -32,7 +32,6 @@ import {
   type AppError,
   appError,
   type AsyncBackupRunCommandPorts,
-  type AsyncGitClient,
   type BackupCensus,
   type BackupExportPorts,
   type BackupRestorePorts,
@@ -51,7 +50,6 @@ import {
   err,
   expandConfigurationPath,
   exportSnapshot,
-  type GitClient,
   isManagedContentStorageKey,
   isManagedStorageKey,
   isCanonicalUuid,
@@ -113,7 +111,8 @@ import {
   restoreExchangeRecords,
 } from "./exchange-records";
 import { fsyncDirectory } from "./fs-atomic";
-import { createNodeAsyncGitClient, createNodeGitClient } from "./git-client";
+import { type AsyncGitClient, createNodeAsyncGitClient, createNodeGitClient, type GitClient } from "./git-client";
+import { createNodeAsyncVaultGitRepository, createNodeVaultGitRepository } from "./vault-git-repository";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { collectVaultGarbage, createSqliteIntentLog } from "./intent-log";
 import { acquireLock, createNodeLockProbePorts, evaluateStaleness, isPidAlive, parseLockRecord } from "./lockfile";
@@ -1964,7 +1963,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       if (!vaultPorts.ok) return err(vaultPorts.error);
       return ok({
         ...vaultPorts.value,
-        git: createNodeGitClient(),
+        git: createNodeVaultGitRepository(vaultPath, gitClient),
         configuredBranch: view.value.backupBranch,
         repositoryExists: () => ok(existsSync(join(vaultPath, ".git"))),
         repositorySignals: () =>
@@ -2012,7 +2011,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
       const view = installation();
       if (!view.ok) return err(view.error);
       const vaultPath = view.value.vaultPath;
-      const git = gitClient;
+      const git = createNodeVaultGitRepository(vaultPath, gitClient);
       return ok({
         vaultPath,
         messageTemplate: view.value.commitMessageTemplate,
@@ -2224,7 +2223,7 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           return ok({ verified: recorded.value.length });
         },
         ensureRepository: () => nodeEnsureVaultGitAsync(vaultPath, installationId, clock, backupBranch, asyncGitClient),
-        git: asyncGitClient,
+        git: createNodeAsyncVaultGitRepository(vaultPath, asyncGitClient),
       });
     },
 
@@ -2767,7 +2766,7 @@ export function nodeEnsureVaultGit(
       if (!reasserted.ok) return err(reasserted.error);
       return ok(undefined);
     },
-    git: createNodeGitClient(),
+    git: createNodeVaultGitRepository(vaultPath, createNodeGitClient()),
   });
 }
 
@@ -2788,6 +2787,6 @@ export function nodeEnsureVaultGitAsync(
       if (!reasserted.ok) return err(reasserted.error);
       return ok(undefined);
     },
-    git,
+    git: createNodeAsyncVaultGitRepository(vaultPath, git),
   });
 }

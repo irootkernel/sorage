@@ -14,28 +14,42 @@ import { validateHandoffObservations } from "./reporting-commands";
  * transaction leaves the tombstone with an unlink intent the drain completes.
  */
 
+export type RetentionChange =
+  | { kind: "pin" }
+  | { kind: "unpin" }
+  | { kind: "archive" }
+  | { kind: "unarchive" }
+  | {
+      kind: "deletion-request";
+      requestId: string;
+      requestedByKind: string;
+      requestedById: string | null;
+      reason: string | null;
+    }
+  | {
+      kind: "deletion-approve";
+      /**
+       * The honest logical-deletion signal: current content — its Artifact rows
+       * and records — is removed in this transaction whether or not a physical
+       * unlink intent exists, so an approved inline Artifact leaves no orphaned
+       * record and no fake intent is manufactured (SHR-004, SHR-008).
+       */
+      removeContent: boolean;
+      unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
+      idempotency?:
+        | { key: string; scope: string; requestHash: string; responseJson: string; expiresAt: string }
+        | undefined;
+    }
+  | { kind: "deletion-reject"; resolutionNote: string | null };
+
 export interface RetentionMutationPort {
   /** Applies one retention decision in a single transaction with its events. */
   applyRetentionMutation(input: {
     handoffId: string;
     expectedRowVersion: number;
-    assignments: Record<string, string | number | null>;
+    change: RetentionChange;
+    at: string;
     events: NewDomainEvent[];
-    deletionRequest?:
-      | { op: "insert"; id: string; requestedByKind: string; requestedById: string | null; reason: string | null }
-      | { op: "resolve"; status: "approved" | "rejected"; resolvedByUser: string; resolutionNote: string | null }
-      | undefined;
-    unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
-    /**
-     * The honest logical-deletion signal: current content — its Artifact rows
-     * and records — is removed in this transaction whether or not a physical
-     * unlink intent exists, so an approved inline Artifact leaves no orphaned
-     * record and no fake intent is manufactured (SHR-004, SHR-008).
-     */
-    removeContent?: boolean | undefined;
-    idempotency?:
-      | { key: string; scope: string; requestHash: string; responseJson: string; expiresAt: string }
-      | undefined;
   }): Result<{ rowVersion: number }, AppError>;
   /** Looks up one recorded idempotency key in its scope (section 17.3). */
   idempotencyLookup(key: string, scope: string): Result<{ requestHash: string; responseJson: string } | null, AppError>;
@@ -128,24 +142,16 @@ function load(ports: RetentionPorts, handoffId: string) {
 function apply(
   ports: RetentionPorts,
   handoff: { id: string; rowVersion: number },
-  assignments: Record<string, string | number | null>,
+  change: RetentionChange,
+  at: string,
   events: NewDomainEvent[],
-  extras: {
-    deletionRequest?: Parameters<RetentionMutationPort["applyRetentionMutation"]>[0]["deletionRequest"];
-    unlinkIntent?: { id: string; toPath: string; artifactId: string } | undefined;
-    removeContent?: boolean | undefined;
-    idempotency?: Parameters<RetentionMutationPort["applyRetentionMutation"]>[0]["idempotency"];
-  } = {},
 ): Result<{ rowVersion: number }, AppError> {
   return ports.retention.applyRetentionMutation({
     handoffId: handoff.id,
     expectedRowVersion: handoff.rowVersion,
-    assignments,
+    change,
+    at,
     events,
-    deletionRequest: extras.deletionRequest === undefined ? undefined : extras.deletionRequest,
-    unlinkIntent: extras.unlinkIntent === undefined ? undefined : extras.unlinkIntent,
-    removeContent: extras.removeContent,
-    idempotency: extras.idempotency === undefined ? undefined : extras.idempotency,
   });
 }
 
@@ -161,7 +167,7 @@ export function pinHandoff(ports: RetentionPorts, input: RetentionMutationInput)
   });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
-  const applied = apply(ports, handoff, { pinned: 1, updated_at: now }, [
+  const applied = apply(ports, handoff, { kind: "pin" }, now, [
     {
       id: ports.ids.next(),
       handoffId: handoff.id,
@@ -193,7 +199,7 @@ export function unpinHandoff(ports: RetentionPorts, input: RetentionMutationInpu
   });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
-  const applied = apply(ports, handoff, { pinned: 0, updated_at: now }, [
+  const applied = apply(ports, handoff, { kind: "unpin" }, now, [
     {
       id: ports.ids.next(),
       handoffId: handoff.id,
@@ -228,7 +234,7 @@ export function archiveHandoff(
   });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
-  const applied = apply(ports, handoff, { archived_at: now, updated_at: now }, [
+  const applied = apply(ports, handoff, { kind: "archive" }, now, [
     {
       id: ports.ids.next(),
       handoffId: handoff.id,
@@ -263,7 +269,7 @@ export function unarchiveHandoff(
   });
   if (!outcome.ok) return err(outcome.error);
   const now = ports.clock.now().toISOString();
-  const applied = apply(ports, handoff, { archived_at: null, updated_at: now }, [
+  const applied = apply(ports, handoff, { kind: "unarchive" }, now, [
     {
       id: ports.ids.next(),
       handoffId: handoff.id,
@@ -304,13 +310,23 @@ export function requestDeletion(
       : role.value === "recipient"
         ? handoff.recipientProjectId
         : (handoff.senderProjectId ?? handoff.senderWorkspaceKey);
+  const eventId = ports.ids.next();
+  const requestId = ports.ids.next();
   const applied = apply(
     ports,
     handoff,
-    { updated_at: now },
+    {
+      kind: "deletion-request",
+      requestId,
+      requestedByKind:
+        role.value === "user" ? "user" : role.value === "recipient" ? "registered_project" : handoff.senderKind,
+      requestedById,
+      reason: input.reason ?? null,
+    },
+    now,
     [
       {
-        id: ports.ids.next(),
+        id: eventId,
         handoffId: handoff.id,
         eventType: "DELETION_REQUESTED",
         actor:
@@ -326,16 +342,6 @@ export function requestDeletion(
         createdAt: now,
       },
     ],
-    {
-      deletionRequest: {
-        op: "insert",
-        id: ports.ids.next(),
-        requestedByKind:
-          role.value === "user" ? "user" : role.value === "recipient" ? "registered_project" : handoff.senderKind,
-        requestedById,
-        reason: input.reason ?? null,
-      },
-    },
   );
   if (!applied.ok) return err(applied.error);
   return ok({ handoffId: handoff.id, reviewState: handoff.reviewState, rowVersion: applied.value.rowVersion });
@@ -448,20 +454,8 @@ export function approveDeletion(
   const applied = apply(
     ports,
     handoff,
-    { deleted_at: now, current_artifact_id: null, updated_at: now },
-    [
-      {
-        id: ports.ids.next(),
-        handoffId: handoff.id,
-        eventType: "DELETION_APPROVED",
-        actor: USER_ACTOR,
-        rowVersion: handoff.rowVersion + 1,
-        metadata: { priorGitCommitsMayRetainContent: true },
-        createdAt: now,
-      },
-    ],
     {
-      deletionRequest: { op: "resolve", status: "approved", resolvedByUser: "user", resolutionNote: null },
+      kind: "deletion-approve",
       // Logical content removal always accompanies the approval; the physical
       // unlink intent exists only for a retired file-backed Artifact, and an
       // inline record leaves through the same transaction's reference-proof
@@ -482,6 +476,18 @@ export function approveDeletion(
             }
           : undefined,
     },
+    now,
+    [
+      {
+        id: ports.ids.next(),
+        handoffId: handoff.id,
+        eventType: "DELETION_APPROVED",
+        actor: USER_ACTOR,
+        rowVersion: handoff.rowVersion + 1,
+        metadata: { priorGitCommitsMayRetainContent: true },
+        createdAt: now,
+      },
+    ],
   );
   if (!applied.ok) return err(applied.error);
   // Execute the committed unlink, then complete it with its system event (CP-6).
@@ -547,7 +553,11 @@ export function rejectDeletion(
   const applied = apply(
     ports,
     handoff,
-    { updated_at: now },
+    {
+      kind: "deletion-reject",
+      resolutionNote: input.reason ?? null,
+    },
+    now,
     [
       {
         id: ports.ids.next(),
@@ -559,14 +569,6 @@ export function rejectDeletion(
         createdAt: now,
       },
     ],
-    {
-      deletionRequest: {
-        op: "resolve",
-        status: "rejected",
-        resolvedByUser: "user",
-        resolutionNote: input.reason ?? null,
-      },
-    },
   );
   if (!applied.ok) return err(applied.error);
   return ok({ handoffId: handoff.id, reviewState: handoff.reviewState, rowVersion: applied.value.rowVersion });

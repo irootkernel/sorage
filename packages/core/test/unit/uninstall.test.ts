@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type Configuration, defaultConfiguration } from "../../src/config";
 import { type AppError, ok, type Result } from "../../src/errors";
-import type { LaunchAgentPorts } from "../../src/launchagent";
-import { type UninstallPorts, uninstallInstallation } from "../../src/uninstall";
+import { type BackgroundServicePort, type UninstallPorts, uninstallInstallation } from "../../src/uninstall";
 
 function portsFor(config: Configuration | null): UninstallPorts & {
   removedDirs: string[];
@@ -11,7 +10,6 @@ function portsFor(config: Configuration | null): UninstallPorts & {
 } {
   const removedDirs: string[] = [];
   const removedFiles: string[] = [];
-  const _agentUninstalled = false;
   let daemonStopCalls = 0;
   const existing = new Set<string>([
     "/home/state",
@@ -20,16 +18,16 @@ function portsFor(config: Configuration | null): UninstallPorts & {
     "/home/config.yaml",
     "/home/config.yaml.bak",
   ]);
-  const launchAgent: LaunchAgentPorts = {
-    bootstrap: () => {
-      throw new Error("uninstall never bootstraps");
+  const launchAgent: BackgroundServicePort = {
+    install: () => {
+      throw new Error("uninstall never installs");
     },
-    bootout: () => ok({ wasLoaded: true }),
-    isLoaded: () => true,
-    writePlist: () => ok(null),
-    readPlist: () => "<plist/>",
-    removePlist: () => {},
-    ensureDirectory: () => {},
+    uninstall: () =>
+      ok({
+        wasLoaded: true,
+        plistRemoved: true,
+        plistPath: "/users/gul/Library/LaunchAgents/xyz.rootkernel.sorage.plist",
+      }),
   };
   const ports: UninstallPorts = {
     home: "/home",
@@ -47,8 +45,6 @@ function portsFor(config: Configuration | null): UninstallPorts & {
       return ok({ stopped: true });
     },
     launchAgent,
-    agentsDirectory: "/users/gul/Library/LaunchAgents",
-    uid: 501,
     removeDirectory: (path) => {
       removedDirs.push(path);
       existing.delete(path);

@@ -6,7 +6,7 @@ import { connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createNodeBackupCommandPorts } from "@sorage/adapters/src/backup-command-ports";
-import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
+import { createNodeConfigCommandPorts, probeConfigurationPath } from "@sorage/adapters/src/config-command-ports";
 import * as daemonCommandPorts from "@sorage/adapters/src/daemon-command-ports";
 import { appCommandErrorOf, schemaAdmissionOf } from "@sorage/adapters/src/daemon-command-ports";
 import { createNodeDoctorPorts } from "@sorage/adapters/src/doctor";
@@ -29,11 +29,7 @@ import { createNodeInboxMarkerPorts, isNodeInboxMarkerEnabled } from "@sorage/ad
 // Deep import: the adapters index also exports the testkit, which is vitest-only and
 // must never load inside the shipped CLI process.
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
-import {
-  createNodeLaunchAgentPorts,
-  launchAgentsDirectory,
-  launchAgentUid,
-} from "@sorage/adapters/src/launchagent-ports";
+import { createNodeBackgroundServicePort } from "@sorage/adapters/src/launchagent-ports";
 import { createLogger, type Logger } from "@sorage/adapters/src/logging";
 import { createNodeProjectPorts } from "@sorage/adapters/src/project-command-ports";
 import { type CoveredReadStorage, openCoveredReadStorage } from "@sorage/adapters/src/read-storage";
@@ -77,7 +73,6 @@ import {
   type HandoffView,
   hasBlockingCheck,
   initializeInstallation,
-  installLaunchAgent,
   type ListedProject,
   type ListQuery,
   largeContentDisclosureMessage,
@@ -89,7 +84,6 @@ import {
   ok,
   parseLeafValue,
   pinHandoff,
-  probeConfigurationPath,
   type Result,
   readHandoffTimeline,
   readRecipientComment,
@@ -397,9 +391,7 @@ export function buildProgram(
               ? ok({ stopped: true })
               : err(appError("DAEMON_UNAVAILABLE", "sorage daemon stop did not end the daemon."));
           },
-          launchAgent: createNodeLaunchAgentPorts(),
-          agentsDirectory: launchAgentsDirectory(),
-          uid: launchAgentUid(),
+          launchAgent: createNodeBackgroundServicePort(),
           removeDirectory: (path) => rmSync(path, { recursive: true, force: true }),
           removeFile: (path) => rmSync(path, { force: true }),
           exists: (path) => existsSync(path),
@@ -3590,14 +3582,12 @@ function applyInitChoices(
     lines.push(`Bound ${project.value.binding.bindingKind} ${project.value.binding.directory}\n`);
   }
   if (choices.installService) {
-    const installed = installLaunchAgent(createNodeLaunchAgentPorts(), {
+    const installed = createNodeBackgroundServicePort().install({
       program: {
         binaryPath: process.execPath,
         scriptArgs: process.argv[1]?.endsWith("main.ts") ? [process.argv[1] as string] : [],
       },
       sorageHome: homePaths.home,
-      agentsDirectory: launchAgentsDirectory(),
-      uid: launchAgentUid(),
     });
     if (!installed.ok) {
       reportExitCode(renderAppError(installed.error, ports, json));

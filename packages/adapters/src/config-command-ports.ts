@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { appError, err, ok } from "@sorage/core";
 import type { ConfigCommandPorts } from "@sorage/core";
+import { createYamlConfigTextCodec, probeConfigurationPath } from "./config-codec";
 import { createConfigStore, type ConfigStoreFs } from "./config-store";
 import { createHomePaths, type HomeEnvironment } from "./home";
 import { createNodeLockProbePorts, type LockClock } from "./lockfile";
@@ -31,6 +32,7 @@ export function createNodeConfigCommandPorts(options: NodeConfigCommandPortsOpti
   });
   return {
     store,
+    codec: createYamlConfigTextCodec(),
     configFile: home.configFile,
     userHome,
     sorageHome: home.home,
@@ -47,3 +49,5 @@ export function createNodeConfigCommandPorts(options: NodeConfigCommandPortsOpti
     },
   };
 }
+
+export { probeConfigurationPath };
