@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AppError, Configuration, Result } from "@sorage/core";
-import { appError, errorEnvelope, errorSpec } from "@sorage/core";
+import { appError, errorEnvelope, errorSpec, sleepWithinDeadline } from "@sorage/core";
 import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
 import { daemonStartAdmissionRefusal } from "@sorage/adapters/src/daemon-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
@@ -17,6 +17,9 @@ import { selfInvocationArgv } from "./self-invocation";
 
 export const DAEMON_START_TIMEOUT_MS = 10_000;
 export const DAEMON_STOP_GRACE_MS = 10_000;
+const DAEMON_START_INITIAL_POLL_MS = 200;
+const DAEMON_STOP_INITIAL_POLL_MS = 100;
+const DAEMON_POLL_MAX_INTERVAL_MS = 1_000;
 
 export interface DaemonCommandPorts {
   out: (text: string) => void;
@@ -109,7 +112,7 @@ function liveDaemon(ports: DaemonRuntimePorts): DaemonRunRecord | null {
 export function daemonStart(
   runtime: DaemonRuntimePorts,
   ports: DaemonCommandPorts,
-  options: { startTimeoutMs?: number } = {},
+  options: { startTimeoutMs?: number; now?: () => number; sleepMs?: (milliseconds: number) => void } = {},
 ): number {
   const config = configured(runtime);
   if (config === null) return fail(ports, 78, "Sorage has not been initialized.", "sorage init");
@@ -132,10 +135,14 @@ export function daemonStart(
     return renderTypedRefusal(admission, ports);
   }
   runtime.spawnDaemon();
-  const deadline = Date.now() + (options.startTimeoutMs ?? DAEMON_START_TIMEOUT_MS);
+  const now = options.now ?? Date.now;
+  const sleep = options.sleepMs ?? blockingSleepMs;
+  const deadline = now() + (options.startTimeoutMs ?? DAEMON_START_TIMEOUT_MS);
+  let intervalMs = DAEMON_START_INITIAL_POLL_MS;
   let ready = runtime.healthConfirms(config.host, config.port, config.installationId);
-  while (Date.now() < deadline && !ready) {
-    blockingSleepMs(200);
+  while (!ready && sleepWithinDeadline(deadline - 1, now(), intervalMs, sleep)) {
+    intervalMs = Math.min(intervalMs * 2, DAEMON_POLL_MAX_INTERVAL_MS);
+    if (now() >= deadline) break;
     ready = runtime.healthConfirms(config.host, config.port, config.installationId);
   }
   if (!ready) {
@@ -152,7 +159,7 @@ export function daemonStart(
 export function daemonStop(
   runtime: DaemonRuntimePorts,
   ports: DaemonCommandPorts,
-  options: { stopGraceMs?: number } = {},
+  options: { stopGraceMs?: number; now?: () => number; sleepMs?: (milliseconds: number) => void } = {},
 ): number {
   const record = liveDaemon(runtime);
   if (record === null) {
@@ -160,11 +167,17 @@ export function daemonStop(
     return fail(ports, 69, "no live daemon record was found", "sorage daemon start");
   }
   runtime.signal(record.pid, "SIGTERM");
-  const deadline = Date.now() + (options.stopGraceMs ?? DAEMON_STOP_GRACE_MS);
-  while (Date.now() < deadline && runtime.isPidAlive(record.pid)) {
-    blockingSleepMs(100);
+  const now = options.now ?? Date.now;
+  const sleep = options.sleepMs ?? blockingSleepMs;
+  const deadline = now() + (options.stopGraceMs ?? DAEMON_STOP_GRACE_MS);
+  let intervalMs = DAEMON_STOP_INITIAL_POLL_MS;
+  let alive = runtime.isPidAlive(record.pid);
+  while (alive && sleepWithinDeadline(deadline - 1, now(), intervalMs, sleep)) {
+    intervalMs = Math.min(intervalMs * 2, DAEMON_POLL_MAX_INTERVAL_MS);
+    if (now() >= deadline) break;
+    alive = runtime.isPidAlive(record.pid);
   }
-  if (runtime.isPidAlive(record.pid)) {
+  if (alive) {
     return renderDomainError(
       ports,
       "SERVICE_PAUSED",

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { showConfiguration, SystemClock } from "@sorage/core";
+import { showConfiguration, sleepWithinDeadline, SystemClock } from "@sorage/core";
 import type { AppError, Configuration, Result } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
@@ -35,6 +35,8 @@ export interface WebRuntimePorts {
 }
 
 export const WEB_START_TIMEOUT_MS = 10_000;
+const WEB_START_INITIAL_POLL_MS = 200;
+const WEB_START_POLL_MAX_INTERVAL_MS = 1_000;
 
 export function createWebRuntimePorts(stateDir: string): WebRuntimePorts {
   return {
@@ -81,7 +83,12 @@ export interface WebOutcome {
 export function runWebCommand(
   ports: WebRuntimePorts,
   output: WebCommandPorts,
-  options: { openBrowser: boolean; startTimeoutMs?: number },
+  options: {
+    openBrowser: boolean;
+    startTimeoutMs?: number;
+    now?: () => number;
+    sleepMs?: (milliseconds: number) => void;
+  },
 ): number {
   const config = ports.readConfig();
   if (!config.ok) {
@@ -93,10 +100,14 @@ export function runWebCommand(
   if (!ports.probeDaemon(host, port)) {
     ports.spawnDaemon();
     daemonStarted = true;
-    const deadline = Date.now() + (options.startTimeoutMs ?? WEB_START_TIMEOUT_MS);
+    const now = options.now ?? Date.now;
+    const sleep = options.sleepMs ?? blockingSleepMs;
+    const deadline = now() + (options.startTimeoutMs ?? WEB_START_TIMEOUT_MS);
+    let intervalMs = WEB_START_INITIAL_POLL_MS;
     let ready = ports.probeDaemon(host, port);
-    while (Date.now() < deadline && !ready) {
-      blockingSleepMs(200);
+    while (!ready && sleepWithinDeadline(deadline - 1, now(), intervalMs, sleep)) {
+      intervalMs = Math.min(intervalMs * 2, WEB_START_POLL_MAX_INTERVAL_MS);
+      if (now() >= deadline) break;
       ready = ports.probeDaemon(host, port);
     }
     if (!ready) {

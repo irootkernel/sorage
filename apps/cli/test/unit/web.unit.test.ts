@@ -112,4 +112,141 @@ describe("runWebCommand", () => {
     // The bracketed literal is reachable in a browser; a dead 127.0.0.1 URL is not.
     expect(opened).toEqual([`http://[::1]:46321/#s=${SECRET}`]);
   });
+
+  it("doubles start polling from 200ms, caps at 1000ms, clamps before deadline, and fails cleanly when unready", () => {
+    let time = 0;
+    const sleeps: number[] = [];
+    const postSpawnProbeTimes: number[] = [];
+    let spawned = false;
+    const harness = sink();
+    const code = runWebCommand(
+      ports({
+        spawnDaemon: () => {
+          spawned = true;
+        },
+        probeDaemon: () => {
+          if (spawned) postSpawnProbeTimes.push(time);
+          return false;
+        },
+      }),
+      harness.ports,
+      {
+        openBrowser: false,
+        startTimeoutMs: 2_500,
+        now: () => time,
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+          time += ms;
+        },
+      },
+    );
+    expect(code).toBe(69);
+    expect(sleeps).toEqual([200, 400, 800, 1_000, 99]);
+    expect(postSpawnProbeTimes).toEqual([0, 200, 600, 1_400, 2_400, 2_499]);
+    expect(postSpawnProbeTimes.every((t) => t < 2_500)).toBe(true);
+    expect(harness.err.join("")).toContain("DAEMON_UNAVAILABLE");
+  });
+
+  it("succeeds when the strictly pre-deadline final readiness probe answers ready", () => {
+    let time = 0;
+    const sleeps: number[] = [];
+    const postSpawnProbeTimes: number[] = [];
+    let spawned = false;
+    const harness = sink();
+    const code = runWebCommand(
+      ports({
+        spawnDaemon: () => {
+          spawned = true;
+        },
+        probeDaemon: () => {
+          if (!spawned) return false;
+          postSpawnProbeTimes.push(time);
+          return postSpawnProbeTimes.length === 6;
+        },
+      }),
+      harness.ports,
+      {
+        openBrowser: false,
+        startTimeoutMs: 2_500,
+        now: () => time,
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+          time += ms;
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(sleeps).toEqual([200, 400, 800, 1_000, 99]);
+    expect(postSpawnProbeTimes).toEqual([0, 200, 600, 1_400, 2_400, 2_499]);
+    expect(JSON.parse(harness.out.join("")).daemonStarted).toBe(true);
+  });
+
+  it.each([
+    ["at exact deadline", 1],
+    ["after deadline", 20],
+  ])("refuses newly ready daemon after scheduler oversleep %s without probing post-deadline", (_label, extraMs) => {
+    let time = 0;
+    const sleeps: number[] = [];
+    const postSpawnProbeTimes: number[] = [];
+    let spawned = false;
+    const harness = sink();
+    const code = runWebCommand(
+      ports({
+        spawnDaemon: () => {
+          spawned = true;
+        },
+        probeDaemon: () => {
+          if (!spawned) return false;
+          postSpawnProbeTimes.push(time);
+          return time >= 2_500;
+        },
+      }),
+      harness.ports,
+      {
+        openBrowser: false,
+        startTimeoutMs: 2_500,
+        now: () => time,
+        sleepMs: (ms) => {
+          const callIndex = sleeps.length;
+          sleeps.push(ms);
+          time += ms + (callIndex === 4 ? extraMs : 0);
+        },
+      },
+    );
+    expect(code).toBe(69);
+    expect(sleeps).toEqual([200, 400, 800, 1_000, 99]);
+    expect(postSpawnProbeTimes).toEqual([0, 200, 600, 1_400, 2_400]);
+    expect(time).toBe(2_499 + extraMs);
+    expect(harness.err.join("")).toContain("DAEMON_UNAVAILABLE");
+  });
+
+  it("zero-timeout oracle probes once post-spawn without sleeping on both ready and unready outcomes", () => {
+    for (const readyAfterSpawn of [true, false]) {
+      let time = 0;
+      const sleeps: number[] = [];
+      let probes = 0;
+      const harness = sink();
+      const code = runWebCommand(
+        ports({
+          probeDaemon: () => {
+            probes += 1;
+            return probes > 1 && readyAfterSpawn;
+          },
+        }),
+        harness.ports,
+        {
+          openBrowser: false,
+          startTimeoutMs: 0,
+          now: () => time,
+          sleepMs: (ms) => {
+            sleeps.push(ms);
+            time += ms;
+          },
+        },
+      );
+      expect(code).toBe(readyAfterSpawn ? 0 : 69);
+      expect(sleeps).toEqual([]);
+      expect(probes).toBe(2);
+    }
+  });
 });

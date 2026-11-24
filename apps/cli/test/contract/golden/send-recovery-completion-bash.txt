@@ -3,8 +3,79 @@ _sorage() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   commands="accept archive backup channel comment completion config daemon decline delete doctor events exchange fetch get inbox init mcp memo outbox pin preflight processing project review revise send token unarchive uninstall unpin vault version web withdraw"
   option_words="--as --as-user --confirm --cursor --expected-row-version --json --limit"
-  case "${COMP_WORDS[1]}" in
-    send) option_words="$option_words --to --title --file --body --supersedes --allow-external-source --allow-unregistered --idempotency-key --replay-only" ;;
+  case "${COMP_WORDS[1]} ${COMP_WORDS[2]}" in
+    'config set') option_words="$option_words --expected-revision" ;;
+    'memo add') option_words="$option_words --project --title --body --body-file --idempotency-key --replay-only" ;;
+    'memo list') option_words="$option_words --project --all-projects --state --query" ;;
+    'memo show') option_words="$option_words --project" ;;
+    'memo update') option_words="$option_words --project --title --body --body-file --idempotency-key --replay-only" ;;
+    'memo done') option_words="$option_words --project --idempotency-key --replay-only" ;;
+    'memo dismiss') option_words="$option_words --project --idempotency-key --replay-only" ;;
+    'memo reopen') option_words="$option_words --project --idempotency-key --replay-only" ;;
+    'channel create') option_words="$option_words --title --main" ;;
+    'channel add') option_words="$option_words --role" ;;
+    'channel post') option_words="$option_words --from --kind --to --ref --body --body-file" ;;
+    'channel messages') option_words="$option_words --all --after --from --kind --wait --interval --timeout" ;;
+    'channel ack') option_words="$option_words --note" ;;
+    'channel list') option_words="$option_words --state" ;;
+    'exchange create') option_words="$option_words --project --operation-id --replay-only --member --goal --criterion" ;;
+    'exchange join') option_words="$option_words --project --replace-claim --pause-version --decision --operation-id --replay-only" ;;
+    'exchange session') option_words="$option_words --project --replace-claim --pause-version --decision --operation-id --replay-only --stdin-lifetime" ;;
+    'exchange renew') option_words="$option_words --project --claim" ;;
+    'exchange release') option_words="$option_words --project --claim" ;;
+    'exchange roster') option_words="$option_words --project --operation-id --replay-only --reason --roster-version --pause-version --add --remove" ;;
+    'exchange owner-correct') option_words="$option_words --project --operation-id --replay-only --reason --request --ownership-version --roster-version --pause-version --acceptance-owner --assignee" ;;
+    'exchange request-disposition') option_words="$option_words --project --operation-id --replay-only --claim --reason --request --ownership-version --disposition --follow-up" ;;
+    'exchange stop') option_words="$option_words --project --operation-id --replay-only --reason --roster-version --pause-version" ;;
+    'exchange pause') option_words="$option_words --project --operation-id --replay-only --claim --reason --question" ;;
+    'exchange propose') option_words="$option_words --project --operation-id --replay-only --claim --roster-version --work-revision --summary --criterion --report --disposition" ;;
+    'exchange vote') option_words="$option_words --project --operation-id --replay-only --claim --proposal-version --vote --objection --accept" ;;
+    'exchange material-revalidate') option_words="$option_words --project --operation-id --replay-only --claim --source" ;;
+    'exchange cleanup') option_words="$option_words --project" ;;
+    'exchange inspect') option_words="$option_words --project" ;;
+    'exchange notice-list') option_words="$option_words --project --claim" ;;
+    'exchange notice-acquire') option_words="$option_words --project --incident --claim" ;;
+    'exchange notice-ack') option_words="$option_words --project --operation-id --replay-only --claim --incident --reporting-claim" ;;
+    'exchange history') option_words="$option_words --project --after-seq --history-cursor" ;;
+    'exchange wait') option_words="$option_words --project --history-cursor --timeout --interval" ;;
+    'exchange send') option_words="$option_words --project --operation-id --replay-only --claim --body --file --accept --kind --to --reply-to" ;;
+    'exchange request') option_words="$option_words --project --operation-id --replay-only --claim --assignee --condition --criterion --reply-to" ;;
+    'exchange report') option_words="$option_words --project --operation-id --replay-only --claim --body --file --accept --request --assignment-version --evidence" ;;
+    'exchange accept') option_words="$option_words --project --operation-id --replay-only --claim --accept" ;;
+    'exchange material-register') option_words="$option_words --project --operation-id --replay-only --claim --kind --source --offset --length --access --value" ;;
+    'exchange material-read') option_words="$option_words --project --offset" ;;
+    'exchange confirm-read') option_words="$option_words --project --claim --range" ;;
+    'exchange recover') option_words="$option_words --project --operation-id" ;;
+    'project add') option_words="$option_words --name --slug --dir" ;;
+    'project rename') option_words="$option_words --name" ;;
+    'project bind') option_words="$option_words --dir" ;;
+    'project unbind') option_words="$option_words --dir" ;;
+    'project rebind') option_words="$option_words --from --to" ;;
+    'project resolve') option_words="$option_words --path" ;;
+    'comment set') option_words="$option_words --text --file --purpose --expected-revision" ;;
+    'processing start') option_words="$option_words --expected-revision --comment-text --comment-file" ;;
+    'processing complete') option_words="$option_words --expected-revision --comment-text --comment-file" ;;
+    'review set') option_words="$option_words --text --file --target-revision" ;;
+    'delete request') option_words="$option_words --reason" ;;
+    'delete approve') option_words="$option_words --confirm-pinned --idempotency-key" ;;
+    'delete reject') option_words="$option_words --reason" ;;
+    'vault move') option_words="$option_words --to" ;;
+    'backup run') option_words="$option_words --idempotency-key" ;;
+    'backup enable') option_words="$option_words --daily-at --timezone" ;;
+    'backup enable-push') option_words="$option_words --remote --branch" ;;
+    'backup restore') option_words="$option_words --from --dry-run" ;;
+    *)
+      case "${COMP_WORDS[1]}" in
+      init) option_words="$option_words --vault --non-interactive --reconfigure --initialize-git --port --install-service --start-daemon --enable-daily-backup --backup-at --timezone" ;;
+      exchange) option_words="$option_words --project" ;;
+      send) option_words="$option_words --to --title --file --body --supersedes --allow-external-source --allow-unregistered --idempotency-key --replay-only" ;;
+      inbox) option_words="$option_words --state --sender --recipient --updated-since --updated-until --include-archived --include-deleted --wait --interval --timeout" ;;
+      outbox) option_words="$option_words --current-workspace --state --sender --recipient --updated-since --updated-until --include-archived --include-deleted" ;;
+      revise) option_words="$option_words --body --file --no-change --reason --idempotency-key --allow-external-source" ;;
+      accept) option_words="$option_words --expected-revision" ;;
+      decline) option_words="$option_words --reason" ;;
+      esac
+      ;;
   esac
   if [[ "${COMP_CWORD}" -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )

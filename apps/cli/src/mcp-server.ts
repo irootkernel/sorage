@@ -348,14 +348,17 @@ export function publishedInputSchema(tool: McpTool): Record<string, unknown> {
 const COMMUNICATION_CONTEXT =
   "Sorage internal communication tool. Exchanging or recording messages is not project implementation or execution of the work described in a message. Use this tool for requested communication while planning. ";
 
+let cachedToolsListResult: Array<Record<string, unknown>> | undefined;
+
 /** The `tools/list` entries, in the catalogue's pinned order and key order. */
 export function toolsListResult(): Array<Record<string, unknown>> {
-  return MCP_TOOLS.map((entry) => ({
+  cachedToolsListResult ??= MCP_TOOLS.map((entry) => ({
     name: entry.name,
     description: COMMUNICATION_CONTEXT + entry.description,
     inputSchema: publishedInputSchema(entry),
     annotations: entry.annotations,
   }));
+  return cachedToolsListResult;
 }
 
 export function initializeResult(requestedVersion: unknown): Record<string, unknown> {

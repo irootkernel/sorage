@@ -94,5 +94,49 @@ describe("additive CLI send recovery snapshots", () => {
     );
     expect(z.status, z.stderr).toBe(0);
     expect(z.stdout.split("\n")).toContain("--replay-only");
+    for (const [group, subcommand, prefix, expected] of [
+      ["memo", "add", "--ti", "--title"],
+      ["channel", "post", "--ki", "--kind"],
+      ["exchange", "send", "--op", "--operation-id"],
+    ] as const) {
+      const subBash = spawnSync(
+        "bash",
+        [
+          "-c",
+          `source "$1"; COMP_WORDS=(sorage ${group} ${subcommand} ${prefix}); COMP_CWORD=3; _sorage; printf "%s\\n" "\${COMPREPLY[@]}"`,
+          "completion",
+          bash,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(subBash.status, `${group} ${subcommand} bash: ${subBash.stderr}`).toBe(0);
+      expect(subBash.stdout.trim().split("\n"), `${group} ${subcommand} bash`).toContain(expected);
+      const subZsh = spawnSync(
+        "zsh",
+        [
+          "-f",
+          "-c",
+          `source "$1"; _describe() { :; }; _arguments() { print -l -- "$@"; }; words=(sorage ${group} ${subcommand} ${prefix}); _sorage`,
+          "completion",
+          zsh,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(subZsh.status, `${group} ${subcommand} zsh: ${subZsh.stderr}`).toBe(0);
+      expect(subZsh.stdout.split("\n"), `${group} ${subcommand} zsh`).toContain(expected);
+    }
+    const hiddenOptBash = spawnSync(
+      "bash",
+      [
+        "-c",
+        `source "$1"; COMP_WORDS=(sorage memo list --re); COMP_CWORD=3; _sorage; printf "%s\\n" "\${COMPREPLY[@]}"`,
+        "completion",
+        bash,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(hiddenOptBash.status, hiddenOptBash.stderr).toBe(0);
+    expect(hiddenOptBash.stdout.trim()).not.toContain("--replay-only");
+    expect(readFileSync(zsh, "utf8")).not.toContain("daemon serve");
   });
 });

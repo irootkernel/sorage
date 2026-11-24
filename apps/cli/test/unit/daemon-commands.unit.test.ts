@@ -201,3 +201,198 @@ describe("daemon status (RUN-013)", () => {
     expect(runtime.calls.removed).toBe(true);
   });
 });
+
+function fakeClock(oversleepOnCall?: { index: number; extraMs: number }) {
+  let time = 0;
+  const sleeps: number[] = [];
+  return {
+    now: () => time,
+    sleepMs: (ms: number) => {
+      const callIndex = sleeps.length;
+      sleeps.push(ms);
+      const extra = oversleepOnCall && oversleepOnCall.index === callIndex ? oversleepOnCall.extraMs : 0;
+      time += ms + extra;
+    },
+    sleeps,
+  };
+}
+
+describe("daemon start/stop bounded geometric polling (TASK-160)", () => {
+  it("daemonStart doubles from 200ms, caps at 1000ms, clamps before deadline, and fails cleanly when unready", () => {
+    const clock = fakeClock();
+    const runtime = ports({ health: false });
+    const probeTimes: number[] = [];
+    runtime.healthConfirms = () => {
+      probeTimes.push(clock.now());
+      return false;
+    };
+    const harness = sink();
+    expect(daemonStart(runtime, harness.ports, { startTimeoutMs: 2_500, now: clock.now, sleepMs: clock.sleepMs })).toBe(
+      69,
+    );
+    expect(clock.sleeps).toEqual([200, 400, 800, 1_000, 99]);
+    expect(probeTimes).toEqual([0, 200, 600, 1_400, 2_400, 2_499]);
+    expect(probeTimes.every((t) => t < 2_500)).toBe(true);
+    expect(JSON.parse(harness.err.join("")).error.code).toBe("DAEMON_UNAVAILABLE");
+  });
+
+  it("daemonStart succeeds on the strictly pre-deadline final readiness probe", () => {
+    const clock = fakeClock();
+    const runtime = ports({ record: RECORD, health: false });
+    const probeTimes: number[] = [];
+    runtime.healthConfirms = () => {
+      probeTimes.push(clock.now());
+      return probeTimes.length === 6;
+    };
+    const harness = sink();
+    expect(daemonStart(runtime, harness.ports, { startTimeoutMs: 2_500, now: clock.now, sleepMs: clock.sleepMs })).toBe(
+      0,
+    );
+    expect(clock.sleeps).toEqual([200, 400, 800, 1_000, 99]);
+    expect(probeTimes).toEqual([0, 200, 600, 1_400, 2_400, 2_499]);
+    expect(JSON.parse(harness.out.join("")).ok).toBe(true);
+  });
+
+  it.each([
+    ["at exact deadline", 1],
+    ["after deadline", 20],
+  ])(
+    "daemonStart refuses newly ready daemon after scheduler oversleep %s without probing post-deadline",
+    (_label, extraMs) => {
+      const clock = fakeClock({ index: 4, extraMs });
+      const runtime = ports({ record: RECORD, health: false });
+      const probeTimes: number[] = [];
+      runtime.healthConfirms = () => {
+        probeTimes.push(clock.now());
+        return clock.now() >= 2_500;
+      };
+      const harness = sink();
+      expect(
+        daemonStart(runtime, harness.ports, { startTimeoutMs: 2_500, now: clock.now, sleepMs: clock.sleepMs }),
+      ).toBe(69);
+      expect(clock.sleeps).toEqual([200, 400, 800, 1_000, 99]);
+      expect(probeTimes).toEqual([0, 200, 600, 1_400, 2_400]);
+      expect(clock.now()).toBe(2_499 + extraMs);
+      expect(JSON.parse(harness.err.join("")).error.code).toBe("DAEMON_UNAVAILABLE");
+    },
+  );
+
+  it("daemonStart zero-timeout oracle probes once without sleeping on both ready and unready outcomes", () => {
+    for (const health of [true, false]) {
+      const clock = fakeClock();
+      const runtime = ports({ record: RECORD, health });
+      let probes = 0;
+      runtime.healthConfirms = () => {
+        probes += 1;
+        return health;
+      };
+      const harness = sink();
+      expect(daemonStart(runtime, harness.ports, { startTimeoutMs: 0, now: clock.now, sleepMs: clock.sleepMs })).toBe(
+        health ? 0 : 69,
+      );
+      expect(clock.sleeps).toEqual([]);
+      expect(probes).toBe(1);
+    }
+  });
+
+  it("daemonStop doubles from 100ms, caps at 1000ms, clamps before deadline, and fails with SERVICE_PAUSED when alive", () => {
+    const clock = fakeClock();
+    const runtime = ports({ record: RECORD, alive: true });
+    const postSignalProbeTimes: number[] = [];
+    let signalled = false;
+    const origSignal = runtime.signal;
+    runtime.signal = (pid, name) => {
+      signalled = true;
+      return origSignal(pid, name);
+    };
+    runtime.isPidAlive = () => {
+      if (signalled) postSignalProbeTimes.push(clock.now());
+      return true;
+    };
+    const harness = sink();
+    expect(daemonStop(runtime, harness.ports, { stopGraceMs: 3_000, now: clock.now, sleepMs: clock.sleepMs })).toBe(75);
+    expect(clock.sleeps).toEqual([100, 200, 400, 800, 1_000, 499]);
+    expect(postSignalProbeTimes).toEqual([0, 100, 300, 700, 1_500, 2_500, 2_999]);
+    expect(postSignalProbeTimes.every((t) => t < 3_000)).toBe(true);
+    expect(JSON.parse(harness.err.join("")).error.code).toBe("SERVICE_PAUSED");
+  });
+
+  it("daemonStop succeeds when the strictly pre-deadline final probe observes process exit", () => {
+    const clock = fakeClock();
+    const runtime = ports({ record: RECORD, alive: true });
+    const postSignalProbeTimes: number[] = [];
+    let signalled = false;
+    const origSignal = runtime.signal;
+    runtime.signal = (pid, name) => {
+      signalled = true;
+      return origSignal(pid, name);
+    };
+    runtime.isPidAlive = () => {
+      if (!signalled) return true;
+      postSignalProbeTimes.push(clock.now());
+      return postSignalProbeTimes.length < 7;
+    };
+    const harness = sink();
+    expect(daemonStop(runtime, harness.ports, { stopGraceMs: 3_000, now: clock.now, sleepMs: clock.sleepMs })).toBe(0);
+    expect(clock.sleeps).toEqual([100, 200, 400, 800, 1_000, 499]);
+    expect(postSignalProbeTimes).toEqual([0, 100, 300, 700, 1_500, 2_500, 2_999]);
+    expect(runtime.calls.removed).toBe(true);
+  });
+
+  it.each([
+    ["at exact deadline", 1],
+    ["after deadline", 20],
+  ])(
+    "daemonStop refuses late process exit after scheduler oversleep %s without probing post-deadline",
+    (_label, extraMs) => {
+      const clock = fakeClock({ index: 5, extraMs });
+      const runtime = ports({ record: RECORD, alive: true });
+      const postSignalProbeTimes: number[] = [];
+      let signalled = false;
+      const origSignal = runtime.signal;
+      runtime.signal = (pid, name) => {
+        signalled = true;
+        return origSignal(pid, name);
+      };
+      runtime.isPidAlive = () => {
+        if (!signalled) return true;
+        postSignalProbeTimes.push(clock.now());
+        return clock.now() < 3_000;
+      };
+      const harness = sink();
+      expect(daemonStop(runtime, harness.ports, { stopGraceMs: 3_000, now: clock.now, sleepMs: clock.sleepMs })).toBe(
+        75,
+      );
+      expect(clock.sleeps).toEqual([100, 200, 400, 800, 1_000, 499]);
+      expect(postSignalProbeTimes).toEqual([0, 100, 300, 700, 1_500, 2_500]);
+      expect(clock.now()).toBe(2_999 + extraMs);
+      expect(runtime.calls.removed).toBe(false);
+      expect(JSON.parse(harness.err.join("")).error.code).toBe("SERVICE_PAUSED");
+    },
+  );
+
+  it("daemonStop zero-timeout oracle probes once after SIGTERM without sleeping", () => {
+    for (const dies of [true, false]) {
+      const clock = fakeClock();
+      const runtime = ports({ record: RECORD, alive: true });
+      let signalled = false;
+      let postSignalProbes = 0;
+      const origSignal = runtime.signal;
+      runtime.signal = (pid, name) => {
+        signalled = true;
+        return origSignal(pid, name);
+      };
+      runtime.isPidAlive = () => {
+        if (!signalled) return true;
+        postSignalProbes += 1;
+        return !dies;
+      };
+      const harness = sink();
+      expect(daemonStop(runtime, harness.ports, { stopGraceMs: 0, now: clock.now, sleepMs: clock.sleepMs })).toBe(
+        dies ? 0 : 75,
+      );
+      expect(clock.sleeps).toEqual([]);
+      expect(postSignalProbes).toBe(1);
+    }
+  });
+});

@@ -844,6 +844,100 @@ describe("sot-check", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("the traceability reverse index is absent");
   });
+
+  it("checks skills Markdown hard-wrap and relative links while skipping leading YAML frontmatter", () => {
+    const valid = runCheck(
+      docFixture((root) => {
+        const dir = join(root, "skills", "sample");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "ref.md"), "# Ref\n");
+        writeFileSync(
+          join(dir, "SKILL.md"),
+          [
+            "---",
+            "name: sample",
+            "description: Multi-field frontmatter with [ignored](missing-in-frontmatter.md)",
+            "---",
+            "",
+            "# Sample",
+            "",
+            "See [ref](ref.md) on one unbroken line.",
+            "",
+          ].join("\n"),
+        );
+      }),
+    );
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const wrapped = runCheck(
+      docFixture((root) => {
+        const dir = join(root, "skills", "sample");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, "SKILL.md"),
+          [
+            "---",
+            "name: sample",
+            "description: Frontmatter lines are skipped.",
+            "---",
+            "",
+            "First wrapped line",
+            "second wrapped line.",
+            "",
+          ].join("\n"),
+        );
+      }),
+    );
+    expect(wrapped.status).toBe(1);
+    expect(wrapped.stderr).toContain("skills/sample/SKILL.md:7");
+    expect(wrapped.stderr).toContain("hard-wrapped prose");
+
+    const brokenLink = runCheck(
+      docFixture((root) => {
+        const dir = join(root, "skills", "sample");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, "SKILL.md"),
+          [
+            "---",
+            "name: sample",
+            "description: Frontmatter lines are skipped.",
+            "---",
+            "",
+            "See [missing](no-such-ref.md).",
+            "",
+          ].join("\n"),
+        );
+      }),
+    );
+    expect(brokenLink.status).toBe(1);
+    expect(brokenLink.stderr).toContain("skills/sample/SKILL.md:6");
+    expect(brokenLink.stderr).toContain("unresolvable relative link 'no-such-ref.md'");
+  });
+
+  it("preserves docs hard-wrap and link checks inside leading horizontal-rule blocks", () => {
+    const docWrappedAndBroken = runCheck(
+      docFixture((root) => {
+        writeFileSync(
+          join(root, "docs", "leading-rule.md"),
+          [
+            "---",
+            "Wrapped first line with [missing](no-such-doc.md)",
+            "wrapped second line inside leading rules.",
+            "---",
+            "",
+            "Clean body paragraph.",
+            "",
+          ].join("\n"),
+        );
+      }),
+    );
+    expect(docWrappedAndBroken.status).toBe(1);
+    expect(docWrappedAndBroken.stderr).toContain("docs/leading-rule.md:3");
+    expect(docWrappedAndBroken.stderr).toContain("hard-wrapped prose");
+    expect(docWrappedAndBroken.stderr).toContain("docs/leading-rule.md:2");
+    expect(docWrappedAndBroken.stderr).toContain("unresolvable relative link 'no-such-doc.md'");
+  });
 });
 
 import { readFileSync } from "node:fs";

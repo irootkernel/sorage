@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Command } from "commander";
 import { buildProgram } from "../../src/program";
 import { admitArguments, type McpTool, MCP_TOOLS, mcpToolByName } from "../../src/mcp-catalogue";
+import { toolsListResult } from "../../src/mcp-server";
 import {
   ACCEPT_REQUIRES_ROW_VERSION,
   BODY_MUST_NOT_BE_EMPTY,
@@ -1099,5 +1100,22 @@ describe("reporting parser admission mirrors the CLI", () => {
     expect(
       argvOf("handoff_revise", { handoffId: "h", noChange: true, reason: "Original", idempotencyKey: "original" }),
     ).not.toContain("--expected-row-version");
+  });
+});
+
+describe("indexed lookup identity and tools/list memoization (TASK-160)", () => {
+  it("resolves each tool name to the exact same mutable object in MCP_TOOLS", () => {
+    for (const entry of MCP_TOOLS) {
+      expect(mcpToolByName(entry.name)).toBe(entry);
+      expect(Object.isFrozen(entry)).toBe(false);
+    }
+    expect(mcpToolByName("nonexistent_tool")).toBeUndefined();
+  });
+
+  it("memoizes toolsListResult across repeated calls", () => {
+    const first = toolsListResult();
+    const second = toolsListResult();
+    expect(second).toBe(first);
+    expect(first).toHaveLength(59);
   });
 });

@@ -36,11 +36,21 @@ function isProse(line: string): boolean {
   return !prosePrefixes.some((prefix) => trimmed.startsWith(prefix)) && !numberedPattern.test(trimmed);
 }
 
-function checkHardWrap(path: string): void {
+/** Returns the first 0-based line index after a closed leading YAML frontmatter block, or 0 if absent. */
+function frontmatterEndLine(lines: string[]): number {
+  if (lines[0]?.trim() !== "---") return 0;
+  for (let index = 1; index < lines.length; index++) {
+    if (lines[index]?.trim() === "---") return index + 1;
+  }
+  return 0;
+}
+
+function checkHardWrap(path: string, skipFrontmatter = false): void {
   const lines = readFileSync(path, "utf8").split("\n");
   let inFence = false;
   let previousProse = false;
-  for (let index = 0; index < lines.length; index++) {
+  const startLine = skipFrontmatter ? frontmatterEndLine(lines) : 0;
+  for (let index = startLine; index < lines.length; index++) {
     const line = lines[index] ?? "";
     if (line.trim().startsWith("```")) {
       inFence = !inFence;
@@ -56,10 +66,13 @@ function checkHardWrap(path: string): void {
   }
 }
 
-function checkLinks(path: string): void {
+function checkLinks(path: string, skipFrontmatter = false): void {
   const text = readFileSync(path, "utf8");
+  const lines = text.split("\n");
+  const startLine = skipFrontmatter ? frontmatterEndLine(lines) : 0;
+  const body = startLine > 0 ? lines.slice(startLine).join("\n") : text;
   const linkPattern = /\[[^\]]*\]\(([^)]+)\)/g;
-  for (const match of text.matchAll(linkPattern)) {
+  for (const match of body.matchAll(linkPattern)) {
     const target = match[1];
     if (target === undefined) continue;
     if (/^[a-z]+:\/\//i.test(target) || target.startsWith("#") || target.startsWith("mailto:")) continue;
@@ -67,7 +80,7 @@ function checkLinks(path: string): void {
     if (clean.length === 0) continue;
     const resolved = resolve(dirname(path), clean);
     if (!existsSync(resolved)) {
-      const line = text.slice(0, match.index ?? 0).split("\n").length;
+      const line = startLine + body.slice(0, match.index ?? 0).split("\n").length;
       fail(`${path}:${line}`, `unresolvable relative link '${target}'`);
     }
   }
@@ -467,6 +480,13 @@ walkFiles(docsRoot, (path) => {
   checkHardWrap(path);
   checkLinks(path);
 });
+const skillsRoot = join(root, "skills");
+if (existsSync(skillsRoot)) {
+  walkFiles(skillsRoot, (path) => {
+    checkHardWrap(path, true);
+    checkLinks(path, true);
+  });
+}
 for (const topLevel of ["README.md", "AGENTS.md"]) {
   const path = join(root, topLevel);
   if (existsSync(path)) {

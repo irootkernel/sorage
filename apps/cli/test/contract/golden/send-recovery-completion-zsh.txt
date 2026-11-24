@@ -119,15 +119,83 @@ _sorage() {
     'daemon stop:stop the daemon after a graceful drain of in-flight requests'
     'daemon restart:stop and start again; required after a server.host or server.port change'
     'daemon status:read run/daemon.json and verify installationId through health'
-    'daemon serve:internal entry point that runs the daemon in the foreground until stopped'
     'web:start the daemon when needed and open the Web control plane with a one-time session secret'
     'mcp:serve the STDIO MCP adapter whose tools mirror the messaging CLI (interface section 39)'
     'token:manage the Installation API token'
     'token rotate:replace the Installation API token, invalidating every live browser session'
   )
   _describe -t commands 'command' commands
+  case "$words[2] $words[3]" in
+    'config set') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--expected-revision'; return ;;
+    'memo add') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--title' '--body' '--body-file' '--idempotency-key' '--replay-only'; return ;;
+    'memo list') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--all-projects' '--state' '--query'; return ;;
+    'memo show') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project'; return ;;
+    'memo update') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--title' '--body' '--body-file' '--idempotency-key' '--replay-only'; return ;;
+    'memo done') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--idempotency-key' '--replay-only'; return ;;
+    'memo dismiss') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--idempotency-key' '--replay-only'; return ;;
+    'memo reopen') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--idempotency-key' '--replay-only'; return ;;
+    'channel create') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--title' '--main'; return ;;
+    'channel add') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--role'; return ;;
+    'channel post') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--from' '--kind' '--to' '--ref' '--body' '--body-file'; return ;;
+    'channel messages') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--all' '--after' '--from' '--kind' '--wait' '--interval' '--timeout'; return ;;
+    'channel ack') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--note'; return ;;
+    'channel list') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--state'; return ;;
+    'exchange create') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--member' '--goal' '--criterion'; return ;;
+    'exchange join') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--replace-claim' '--pause-version' '--decision' '--operation-id' '--replay-only'; return ;;
+    'exchange session') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--replace-claim' '--pause-version' '--decision' '--operation-id' '--replay-only' '--stdin-lifetime'; return ;;
+    'exchange renew') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--claim'; return ;;
+    'exchange release') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--claim'; return ;;
+    'exchange roster') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--reason' '--roster-version' '--pause-version' '--add' '--remove'; return ;;
+    'exchange owner-correct') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--reason' '--request' '--ownership-version' '--roster-version' '--pause-version' '--acceptance-owner' '--assignee'; return ;;
+    'exchange request-disposition') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--reason' '--request' '--ownership-version' '--disposition' '--follow-up'; return ;;
+    'exchange stop') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--reason' '--roster-version' '--pause-version'; return ;;
+    'exchange pause') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--reason' '--question'; return ;;
+    'exchange propose') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--roster-version' '--work-revision' '--summary' '--criterion' '--report' '--disposition'; return ;;
+    'exchange vote') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--proposal-version' '--vote' '--objection' '--accept'; return ;;
+    'exchange material-revalidate') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--source'; return ;;
+    'exchange cleanup') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project'; return ;;
+    'exchange inspect') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project'; return ;;
+    'exchange notice-list') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--claim'; return ;;
+    'exchange notice-acquire') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--incident' '--claim'; return ;;
+    'exchange notice-ack') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--incident' '--reporting-claim'; return ;;
+    'exchange history') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--after-seq' '--history-cursor'; return ;;
+    'exchange wait') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--history-cursor' '--timeout' '--interval'; return ;;
+    'exchange send') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--body' '--file' '--accept' '--kind' '--to' '--reply-to'; return ;;
+    'exchange request') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--assignee' '--condition' '--criterion' '--reply-to'; return ;;
+    'exchange report') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--body' '--file' '--accept' '--request' '--assignment-version' '--evidence'; return ;;
+    'exchange accept') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--accept'; return ;;
+    'exchange material-register') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id' '--replay-only' '--claim' '--kind' '--source' '--offset' '--length' '--access' '--value'; return ;;
+    'exchange material-read') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--offset'; return ;;
+    'exchange confirm-read') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--claim' '--range'; return ;;
+    'exchange recover') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project' '--operation-id'; return ;;
+    'project add') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--name' '--slug' '--dir'; return ;;
+    'project rename') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--name'; return ;;
+    'project bind') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--dir'; return ;;
+    'project unbind') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--dir'; return ;;
+    'project rebind') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--from' '--to'; return ;;
+    'project resolve') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--path'; return ;;
+    'comment set') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--text' '--file' '--purpose' '--expected-revision'; return ;;
+    'processing start') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--expected-revision' '--comment-text' '--comment-file'; return ;;
+    'processing complete') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--expected-revision' '--comment-text' '--comment-file'; return ;;
+    'review set') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--text' '--file' '--target-revision'; return ;;
+    'delete request') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--reason'; return ;;
+    'delete approve') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--confirm-pinned' '--idempotency-key'; return ;;
+    'delete reject') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--reason'; return ;;
+    'vault move') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--to'; return ;;
+    'backup run') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--idempotency-key'; return ;;
+    'backup enable') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--daily-at' '--timezone'; return ;;
+    'backup enable-push') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--remote' '--branch'; return ;;
+    'backup restore') _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--from' '--dry-run'; return ;;
+  esac
   case "$words[2]" in
+    init) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--vault' '--non-interactive' '--reconfigure' '--initialize-git' '--port' '--install-service' '--start-daemon' '--enable-daily-backup' '--backup-at' '--timezone'; return ;;
+    exchange) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--project'; return ;;
     send) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--to' '--title' '--file' '--body' '--supersedes' '--allow-external-source' '--allow-unregistered' '--idempotency-key' '--replay-only'; return ;;
+    inbox) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--state' '--sender' '--recipient' '--updated-since' '--updated-until' '--include-archived' '--include-deleted' '--wait' '--interval' '--timeout'; return ;;
+    outbox) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--current-workspace' '--state' '--sender' '--recipient' '--updated-since' '--updated-until' '--include-archived' '--include-deleted'; return ;;
+    revise) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--body' '--file' '--no-change' '--reason' '--idempotency-key' '--allow-external-source'; return ;;
+    accept) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--expected-revision'; return ;;
+    decline) _arguments '--as' '--as-user' '--confirm' '--expected-row-version' '--limit' '--cursor' '--json' '--reason'; return ;;
   esac
   _arguments \
       '--as'

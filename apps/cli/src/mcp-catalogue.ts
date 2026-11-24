@@ -46,6 +46,45 @@ interface OptionMapping {
   form: "pair" | "flag" | "repeat";
 }
 
+interface McpOptionSpec extends OptionMapping {
+  type: PropertyType;
+  schema?: Record<string, unknown>;
+  /** `true` marks schema-required; a placeholder string also names the CLI option for required-option guards. */
+  required?: boolean | string;
+  /** When true, integer schemas place `maximum` before `schema` keys (Exchange golden order). */
+  maxFirst?: boolean;
+}
+
+interface McpPositionalSpec {
+  property: string;
+  argument: string;
+  type?: PropertyType;
+  schema?: Record<string, unknown>;
+  optional?: boolean;
+  /** When true, missing positional enforcement stays in `tool.guard` rather than pre-guard `REQUIRED_POSITIONALS`. */
+  guardOrder?: boolean;
+}
+
+interface McpToolSpec {
+  name: string;
+  description: string;
+  annotations: McpToolAnnotations;
+  mirrorsIntegerBounds: boolean;
+  command: string[];
+  options?: McpOptionSpec[];
+  positionals?: McpPositionalSpec[];
+  /** Explicit `properties`/`inputSchema.properties` key order when it differs from `[...positionals, ...options]`. */
+  propertyOrder?: string[];
+  /** Additional schema-required properties beyond non-optional positionals and required options. */
+  required?: string[];
+  /** Emit `required: []` even when empty (Exchange golden shape). */
+  emitEmptyRequired?: boolean;
+  /** Optional JSON Schema combinators (`oneOf`, `allOf`, `not`). */
+  extra?: Record<string, unknown>;
+  argv?: (arguments_: Record<string, unknown>) => string[];
+  guard?: (arguments_: Record<string, unknown>) => string | undefined;
+}
+
 export interface McpTool {
   name: string;
   description: string;
@@ -130,52 +169,131 @@ function optionsArgv(
   };
 }
 
+const DERIVED_REQUIRED_POSITIONALS = new Map<string, ReadonlyArray<{ property: string; argument: string }>>();
+
+function optionSchema(option: McpOptionSpec): Record<string, unknown> {
+  if (option.maxFirst) {
+    return {
+      type: option.type,
+      ...(option.type === "integer" ? { maximum: Number.MAX_SAFE_INTEGER } : {}),
+      ...option.schema,
+    };
+  }
+  if (option.schema !== undefined) {
+    return "type" in option.schema ? option.schema : { type: option.type, ...option.schema };
+  }
+  if (option.type === "stringArray") {
+    return { type: "array", items: { type: "string" }, minItems: 1 };
+  }
+  if (option.type === "integerArray") {
+    return { type: "array", items: { type: "integer" }, minItems: 1 };
+  }
+  return { type: option.type };
+}
+
+function positionalSchema(positional: McpPositionalSpec): Record<string, unknown> {
+  const type = positional.type ?? "string";
+  if (positional.schema !== undefined) {
+    return "type" in positional.schema ? positional.schema : { type, ...positional.schema };
+  }
+  return { type };
+}
+
+/**
+ * Derives a tool's `properties`, `inputSchema`, `argv`, `guard`, and pre-guard
+ * required-positional metadata from one declarative specification while preserving
+ * exact MCP-005 golden key order and CLI parser admission precedence.
+ */
+function defineMcpTool(spec: McpToolSpec): McpTool {
+  const positionals = spec.positionals ?? [];
+  const options = spec.options ?? [];
+  const entries = new Map<string, { type: PropertyType; schema: Record<string, unknown> }>();
+  for (const positional of positionals) {
+    entries.set(positional.property, {
+      type: positional.type ?? "string",
+      schema: positionalSchema(positional),
+    });
+  }
+  for (const option of options) {
+    entries.set(option.property, {
+      type: option.type,
+      schema: optionSchema(option),
+    });
+  }
+  const orderedKeys = spec.propertyOrder ?? [
+    ...positionals.map(({ property }) => property),
+    ...options.map(({ property }) => property),
+  ];
+  const properties: Record<string, PropertySpec> = {};
+  const schemaProperties: Record<string, unknown> = {};
+  for (const key of orderedKeys) {
+    const entry = entries.get(key);
+    if (entry === undefined) throw new Error(`MCP tool ${spec.name} references unknown property ${key}`);
+    properties[key] = { type: entry.type };
+    schemaProperties[key] = entry.schema;
+  }
+  const required = [
+    ...positionals.filter((p) => !p.optional).map((p) => p.property),
+    ...options.filter((o) => o.required !== undefined && o.required !== false).map((o) => o.property),
+    ...(spec.required ?? []),
+  ];
+  const inputSchema: Record<string, unknown> = {
+    type: "object",
+    properties: schemaProperties,
+    ...(required.length > 0 || spec.emitEmptyRequired ? { required } : {}),
+    ...spec.extra,
+  };
+  const preGuardPositionals = positionals
+    .filter((p) => !p.optional && !p.guardOrder)
+    .map(({ property, argument }) => ({ property, argument }));
+  if (preGuardPositionals.length > 0) {
+    DERIVED_REQUIRED_POSITIONALS.set(spec.name, preGuardPositionals);
+  }
+  return {
+    name: spec.name,
+    description: spec.description,
+    annotations: spec.annotations,
+    mirrorsIntegerBounds: spec.mirrorsIntegerBounds,
+    properties,
+    inputSchema,
+    argv:
+      spec.argv ??
+      optionsArgv(spec.command, options, (arguments_) =>
+        positionals.flatMap(({ property }) => {
+          const value = arguments_[property];
+          if (value === undefined) return [];
+          return Array.isArray(value) ? value.map((item) => String(item)) : [String(value)];
+        }),
+      ),
+    guard: spec.guard ?? (() => undefined),
+  };
+}
+
+const NON_NEGATIVE_SAFE_INT = { type: "integer", minimum: 0, maximum: 9007199254740991 };
+const POSITIVE_SAFE_INT = { type: "integer", minimum: 1, maximum: 9007199254740991 };
+const HANDOFF_ID_POSITIONAL: McpPositionalSpec = { property: "handoffId", argument: "handoff-id" };
+
 const HANDOFF_TOOLS: McpTool[] = [
-  {
+  defineMcpTool({
     name: "handoff_send",
     description: "hand one current document to one or more recipient Projects, one Handoff each",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      to: { type: "stringArray" },
-      title: { type: "string" },
-      body: { type: "string" },
-      file: { type: "string" },
-      supersedes: { type: "string" },
-      allowUnregistered: { type: "boolean" },
-      idempotencyKey: { type: "string" },
-      replayOnly: { type: "boolean" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        to: { type: "array", items: { type: "string" }, minItems: 1 },
-        title: { type: "string" },
-        body: { type: "string" },
-        file: { type: "string" },
-        supersedes: { type: "string" },
-        allowUnregistered: { type: "boolean" },
-        idempotencyKey: { type: "string" },
-        replayOnly: { type: "boolean" },
-      },
-      required: ["to", "title"],
+    command: ["send"],
+    options: [
+      { property: "to", flag: "--to", form: "repeat", type: "stringArray", required: true },
+      { property: "title", flag: "--title", form: "pair", type: "string", required: true },
+      { property: "body", flag: "--body", form: "pair", type: "string" },
+      { property: "file", flag: "--file", form: "pair", type: "string" },
+      { property: "supersedes", flag: "--supersedes", form: "pair", type: "string" },
+      { property: "allowUnregistered", flag: "--allow-unregistered", form: "flag", type: "boolean" },
+      { property: "idempotencyKey", flag: "--idempotency-key", form: "pair", type: "string" },
+      { property: "replayOnly", flag: "--replay-only", form: "flag", type: "boolean" },
+    ],
+    extra: {
       oneOf: [{ required: ["body"] }, { required: ["file"] }],
       allOf: [REPLAY_ONLY_WITH_KEY],
     },
-    argv: optionsArgv(
-      ["send"],
-      [
-        { property: "to", flag: "--to", form: "repeat" },
-        { property: "title", flag: "--title", form: "pair" },
-        { property: "body", flag: "--body", form: "pair" },
-        { property: "file", flag: "--file", form: "pair" },
-        { property: "supersedes", flag: "--supersedes", form: "pair" },
-        { property: "allowUnregistered", flag: "--allow-unregistered", form: "flag" },
-        { property: "idempotencyKey", flag: "--idempotency-key", form: "pair" },
-        { property: "replayOnly", flag: "--replay-only", form: "flag" },
-      ],
-      () => [],
-    ),
     guard: (a) => {
       if (a.title === undefined) return requiredOptionSentence("--title <title>");
       if ((a.body !== undefined) === (a.file !== undefined)) return SEND_TAKES_ONE_SOURCE;
@@ -184,42 +302,40 @@ const HANDOFF_TOOLS: McpTool[] = [
         return SEND_REPLAY_ONLY_KEY;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_inbox",
     description: "list the Handoffs sent to the resolved recipient Project",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      state: { type: "string" },
-      sender: { type: "string" },
-      recipient: { type: "string" },
-      updatedSince: { type: "string" },
-      updatedUntil: { type: "string" },
-      includeArchived: { type: "boolean" },
-      includeDeleted: { type: "boolean" },
-      limit: { type: "integer" },
-      cursor: { type: "string" },
-      wait: { type: "boolean" },
-      timeout: { type: "integer" },
-      interval: { type: "integer" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        state: { type: "string" },
-        sender: { type: "string" },
-        recipient: { type: "string" },
-        updatedSince: { type: "string" },
-        updatedUntil: { type: "string" },
-        includeArchived: { type: "boolean" },
-        includeDeleted: { type: "boolean" },
-        limit: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        cursor: { type: "string" },
-        wait: { type: "boolean", default: false },
-        timeout: { type: "integer", minimum: 0, maximum: 9007199254740991, default: 30 },
-        interval: { type: "integer", minimum: 0, maximum: 9007199254740991, default: 2 },
+    command: ["inbox"],
+    options: [
+      { property: "state", flag: "--state", form: "pair", type: "string" },
+      { property: "sender", flag: "--sender", form: "pair", type: "string" },
+      { property: "recipient", flag: "--recipient", form: "pair", type: "string" },
+      { property: "updatedSince", flag: "--updated-since", form: "pair", type: "string" },
+      { property: "updatedUntil", flag: "--updated-until", form: "pair", type: "string" },
+      { property: "includeArchived", flag: "--include-archived", form: "flag", type: "boolean" },
+      { property: "includeDeleted", flag: "--include-deleted", form: "flag", type: "boolean" },
+      { property: "limit", flag: "--limit", form: "pair", type: "integer", schema: NON_NEGATIVE_SAFE_INT },
+      { property: "cursor", flag: "--cursor", form: "pair", type: "string" },
+      { property: "wait", flag: "--wait", form: "flag", type: "boolean", schema: { type: "boolean", default: false } },
+      {
+        property: "timeout",
+        flag: "--timeout",
+        form: "pair",
+        type: "integer",
+        schema: { ...NON_NEGATIVE_SAFE_INT, default: 30 },
       },
+      {
+        property: "interval",
+        flag: "--interval",
+        form: "pair",
+        type: "integer",
+        schema: { ...NON_NEGATIVE_SAFE_INT, default: 2 },
+      },
+    ],
+    extra: {
       allOf: [
         {
           if: { required: ["wait"], properties: { wait: { const: true } } },
@@ -258,187 +374,136 @@ const HANDOFF_TOOLS: McpTool[] = [
       if (a.wait === true && typeof a.interval === "number" && a.interval < 1) return INBOX_WAIT_WHOLE_SECONDS;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_outbox",
     description: "list the Handoffs the resolved sender sent",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      currentWorkspace: { type: "boolean" },
-      state: { type: "string" },
-      sender: { type: "string" },
-      recipient: { type: "string" },
-      updatedSince: { type: "string" },
-      updatedUntil: { type: "string" },
-      includeArchived: { type: "boolean" },
-      includeDeleted: { type: "boolean" },
-      limit: { type: "integer" },
-      cursor: { type: "string" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        currentWorkspace: { type: "boolean" },
-        state: { type: "string" },
-        sender: { type: "string" },
-        recipient: { type: "string" },
-        updatedSince: { type: "string" },
-        updatedUntil: { type: "string" },
-        includeArchived: { type: "boolean" },
-        includeDeleted: { type: "boolean" },
-        limit: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        cursor: { type: "string" },
-      },
-    },
-    argv: optionsArgv(
-      ["outbox"],
-      [
-        { property: "currentWorkspace", flag: "--current-workspace", form: "flag" },
-        { property: "state", flag: "--state", form: "pair" },
-        { property: "sender", flag: "--sender", form: "pair" },
-        { property: "recipient", flag: "--recipient", form: "pair" },
-        { property: "updatedSince", flag: "--updated-since", form: "pair" },
-        { property: "updatedUntil", flag: "--updated-until", form: "pair" },
-        { property: "includeArchived", flag: "--include-archived", form: "flag" },
-        { property: "includeDeleted", flag: "--include-deleted", form: "flag" },
-        { property: "limit", flag: "--limit", form: "pair" },
-        { property: "cursor", flag: "--cursor", form: "pair" },
-      ],
-      () => [],
-    ),
-    guard: () => undefined,
-  },
-  {
+    command: ["outbox"],
+    options: [
+      { property: "currentWorkspace", flag: "--current-workspace", form: "flag", type: "boolean" },
+      { property: "state", flag: "--state", form: "pair", type: "string" },
+      { property: "sender", flag: "--sender", form: "pair", type: "string" },
+      { property: "recipient", flag: "--recipient", form: "pair", type: "string" },
+      { property: "updatedSince", flag: "--updated-since", form: "pair", type: "string" },
+      { property: "updatedUntil", flag: "--updated-until", form: "pair", type: "string" },
+      { property: "includeArchived", flag: "--include-archived", form: "flag", type: "boolean" },
+      { property: "includeDeleted", flag: "--include-deleted", form: "flag", type: "boolean" },
+      { property: "limit", flag: "--limit", form: "pair", type: "integer", schema: NON_NEGATIVE_SAFE_INT },
+      { property: "cursor", flag: "--cursor", form: "pair", type: "string" },
+    ],
+  }),
+  defineMcpTool({
     name: "handoff_get",
     description: "read one Handoff's metadata; records nothing",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" } },
-    inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
-    argv: optionsArgv(["get"], [], (a) => [String(a.handoffId)]),
-    guard: () => undefined,
-  },
-  {
+    command: ["get"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+  }),
+  defineMcpTool({
     name: "handoff_events",
     description: "read the bounded recent metadata timeline; records nothing",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" } },
-    inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
-    argv: optionsArgv(["events"], [], (a) => [String(a.handoffId)]),
-    guard: () => undefined,
-  },
-  {
+    command: ["events"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+  }),
+  defineMcpTool({
     name: "handoff_fetch",
     description:
       "read the current document's metadata and local path; does not edit the document, report processing or accept it",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" } },
-    inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
-    argv: optionsArgv(["fetch"], [], (a) => [String(a.handoffId)]),
-    guard: () => undefined,
-  },
-  {
+    command: ["fetch"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+  }),
+  defineMcpTool({
     name: "handoff_review_show",
     description: "read the current Review Note; records nothing",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" } },
-    inputSchema: { type: "object", properties: { handoffId: { type: "string" } }, required: ["handoffId"] },
-    argv: optionsArgv(["review", "show"], [], (a) => [String(a.handoffId)]),
-    guard: () => undefined,
-  },
+    command: ["review", "show"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+  }),
   ...handoffReportingTools(),
-  {
+  defineMcpTool({
     name: "handoff_review_set",
     description: "create or update this Handoff's Review Note as the recipient or the User",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      handoffId: { type: "string" },
-      text: { type: "string" },
-      file: { type: "string" },
-      targetRevision: { type: "integer" },
-      expectedRowVersion: { type: "integer" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        handoffId: { type: "string" },
-        text: { type: "string" },
-        file: { type: "string" },
-        targetRevision: { type: "integer", minimum: 1, maximum: 9007199254740991 },
-        expectedRowVersion: { type: "integer", minimum: 1, maximum: 9007199254740991 },
+    command: ["review", "set"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+    options: [
+      { property: "text", flag: "--text", form: "pair", type: "string" },
+      { property: "file", flag: "--file", form: "pair", type: "string" },
+      {
+        property: "targetRevision",
+        flag: "--target-revision",
+        form: "pair",
+        type: "integer",
+        schema: POSITIVE_SAFE_INT,
+        required: true,
       },
-      required: ["handoffId", "targetRevision", "expectedRowVersion"],
-      oneOf: [{ required: ["text"] }, { required: ["file"] }],
-    },
-    argv: optionsArgv(
-      ["review", "set"],
-      [
-        { property: "text", flag: "--text", form: "pair" },
-        { property: "file", flag: "--file", form: "pair" },
-        { property: "targetRevision", flag: "--target-revision", form: "pair" },
-        { property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" },
-      ],
-      (a) => [String(a.handoffId)],
-    ),
+      {
+        property: "expectedRowVersion",
+        flag: "--expected-row-version",
+        form: "pair",
+        type: "integer",
+        schema: POSITIVE_SAFE_INT,
+        required: true,
+      },
+    ],
+    extra: { oneOf: [{ required: ["text"] }, { required: ["file"] }] },
     guard: (a) => {
       if (a.targetRevision === undefined) return requiredOptionSentence("--target-revision <n>");
       if (a.expectedRowVersion === undefined) return "this command requires --expected-row-version";
       return (a.text !== undefined) === (a.file !== undefined) ? REVIEW_SET_ONE_SOURCE : undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_review_withdraw",
     description: "withdraw this Handoff's current Review Note as the recipient, whichever actor authored it",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" }, expectedRowVersion: { type: "integer" } },
-    inputSchema: {
-      type: "object",
-      properties: {
-        handoffId: { type: "string" },
-        expectedRowVersion: { type: "integer", minimum: 1, maximum: 9007199254740991 },
+    command: ["review", "withdraw"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+    options: [
+      {
+        property: "expectedRowVersion",
+        flag: "--expected-row-version",
+        form: "pair",
+        type: "integer",
+        schema: POSITIVE_SAFE_INT,
+        required: true,
       },
-      required: ["handoffId", "expectedRowVersion"],
-    },
-    argv: optionsArgv(
-      ["review", "withdraw"],
-      [{ property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" }],
-      (a) => [String(a.handoffId)],
-    ),
+    ],
     guard: (a) => (a.expectedRowVersion === undefined ? "this command requires --expected-row-version" : undefined),
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_revise",
     description:
       "replace the current Artifact or resolve the Review Note; expectedRowVersion is required for fresh mutation and optional only for successful recorded replay",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      handoffId: { type: "string" },
-      body: { type: "string" },
-      file: { type: "string" },
-      noChange: { type: "boolean" },
-      reason: { type: "string" },
-      expectedRowVersion: { type: "integer" },
-      idempotencyKey: { type: "string" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        handoffId: { type: "string" },
-        body: { type: "string" },
-        file: { type: "string" },
-        noChange: { type: "boolean" },
-        reason: { type: "string" },
-        expectedRowVersion: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        idempotencyKey: { type: "string" },
+    command: ["revise"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+    options: [
+      { property: "body", flag: "--body", form: "pair", type: "string" },
+      { property: "file", flag: "--file", form: "pair", type: "string" },
+      { property: "noChange", flag: "--no-change", form: "flag", type: "boolean" },
+      { property: "reason", flag: "--reason", form: "pair", type: "string" },
+      {
+        property: "expectedRowVersion",
+        flag: "--expected-row-version",
+        form: "pair",
+        type: "integer",
+        schema: NON_NEGATIVE_SAFE_INT,
       },
-      required: ["handoffId"],
+      { property: "idempotencyKey", flag: "--idempotency-key", form: "pair", type: "string" },
+    ],
+    extra: {
       oneOf: [
         { required: ["body"] },
         { required: ["file"] },
@@ -457,108 +522,85 @@ const HANDOFF_TOOLS: McpTool[] = [
         },
       ] satisfies Array<Record<string, unknown>>,
     },
-    argv: optionsArgv(
-      ["revise"],
-      [
-        { property: "body", flag: "--body", form: "pair" },
-        { property: "file", flag: "--file", form: "pair" },
-        { property: "noChange", flag: "--no-change", form: "flag" },
-        { property: "reason", flag: "--reason", form: "pair" },
-        { property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" },
-        { property: "idempotencyKey", flag: "--idempotency-key", form: "pair" },
-      ],
-      (a) => [String(a.handoffId)],
-    ),
     guard: (a) => {
       const supplied = [a.body !== undefined, a.file !== undefined, a.noChange === true].filter(Boolean).length;
       if (supplied !== 1) return REVISE_ONE_SOURCE;
       if (a.body !== undefined && String(a.body).trim() === "") return BODY_MUST_NOT_BE_EMPTY;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_accept",
     description: "accept the exact Revision as the recipient, closing the exchange",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      handoffId: { type: "string" },
-      expectedRevision: { type: "integer" },
-      expectedRowVersion: { type: "integer" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        handoffId: { type: "string" },
-        expectedRevision: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        expectedRowVersion: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+    command: ["accept"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+    options: [
+      {
+        property: "expectedRevision",
+        flag: "--expected-revision",
+        form: "pair",
+        type: "integer",
+        schema: NON_NEGATIVE_SAFE_INT,
+        required: true,
       },
-      required: ["handoffId", "expectedRevision", "expectedRowVersion"],
-    },
-    argv: optionsArgv(
-      ["accept"],
-      [
-        { property: "expectedRevision", flag: "--expected-revision", form: "pair" },
-        { property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" },
-      ],
-      (a) => [String(a.handoffId)],
-    ),
+      {
+        property: "expectedRowVersion",
+        flag: "--expected-row-version",
+        form: "pair",
+        type: "integer",
+        schema: NON_NEGATIVE_SAFE_INT,
+        required: true,
+      },
+    ],
     guard: (a) => {
       if (a.expectedRevision === undefined) return requiredOptionSentence("--expected-revision <n>");
       if (a.expectedRowVersion === undefined) return ACCEPT_REQUIRES_ROW_VERSION;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_decline",
     description: "decline the Handoff as the recipient with a recorded reason",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" }, reason: { type: "string" }, expectedRowVersion: { type: "integer" } },
-    inputSchema: {
-      type: "object",
-      properties: {
-        handoffId: { type: "string" },
-        reason: { type: "string" },
-        expectedRowVersion: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+    command: ["decline"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+    options: [
+      { property: "reason", flag: "--reason", form: "pair", type: "string", required: true },
+      {
+        property: "expectedRowVersion",
+        flag: "--expected-row-version",
+        form: "pair",
+        type: "integer",
+        schema: NON_NEGATIVE_SAFE_INT,
+        required: true,
       },
-      required: ["handoffId", "reason", "expectedRowVersion"],
-    },
-    argv: optionsArgv(
-      ["decline"],
-      [
-        { property: "reason", flag: "--reason", form: "pair" },
-        { property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" },
-      ],
-      (a) => [String(a.handoffId)],
-    ),
+    ],
     guard: (a) => {
       if (a.reason === undefined) return requiredOptionSentence("--reason <text>");
       if (a.expectedRowVersion === undefined) return DECLINE_REQUIRES_ROW_VERSION;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "handoff_withdraw",
     description: "withdraw the Handoff as the sender before the recipient has engaged",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { handoffId: { type: "string" }, expectedRowVersion: { type: "integer" } },
-    inputSchema: {
-      type: "object",
-      properties: {
-        handoffId: { type: "string" },
-        expectedRowVersion: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+    command: ["withdraw"],
+    positionals: [HANDOFF_ID_POSITIONAL],
+    options: [
+      {
+        property: "expectedRowVersion",
+        flag: "--expected-row-version",
+        form: "pair",
+        type: "integer",
+        schema: NON_NEGATIVE_SAFE_INT,
       },
-      required: ["handoffId"],
-    },
-    argv: optionsArgv(
-      ["withdraw"],
-      [{ property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" }],
-      (a) => [String(a.handoffId)],
-    ),
-    guard: () => undefined,
-  },
+    ],
+  }),
 ];
 
 function pair(a: Record<string, unknown>, property: string, flag: string): string[] {
@@ -575,38 +617,43 @@ function handoffReportingTools(): McpTool[] {
   return (["comment_show", "comment_set", "processing_start", "processing_complete"] as const).map((operation) => {
     const show = operation === "comment_show";
     const set = operation === "comment_set";
-    const properties: Record<string, PropertySpec> = { handoffId: { type: "string" } };
-    const schemaProperties: Record<string, unknown> = { handoffId: { type: "string" } };
-    const mappings: OptionMapping[] = [];
-    if (!show) {
-      for (const [property, flag] of [
-        ["expectedRevision", "--expected-revision"],
-        ["expectedRowVersion", "--expected-row-version"],
-      ] as const) {
-        properties[property] = { type: "integer" };
-        schemaProperties[property] = { type: "integer", minimum: 1, maximum: 9007199254740991 };
-        mappings.push({ property, flag, form: "pair" });
-      }
-      const sources: Array<[string, string]> = set
-        ? [
-            ["text", "--text"],
-            ["file", "--file"],
-            ["purpose", "--purpose"],
-          ]
-        : [
-            ["commentText", "--comment-text"],
-            ["commentFile", "--comment-file"],
-          ];
-      for (const [property, flag] of sources) {
-        properties[property] = { type: "string" };
-        schemaProperties[property] =
-          property === "purpose"
-            ? { type: "string", enum: ["general", "change_request"], default: "general" }
-            : { type: "string" };
-        mappings.push({ property, flag, form: "pair" });
-      }
-    }
-    return {
+    const options: McpOptionSpec[] = show
+      ? []
+      : [
+          {
+            property: "expectedRevision",
+            flag: "--expected-revision",
+            form: "pair",
+            type: "integer",
+            schema: POSITIVE_SAFE_INT,
+            required: true,
+          },
+          {
+            property: "expectedRowVersion",
+            flag: "--expected-row-version",
+            form: "pair",
+            type: "integer",
+            schema: POSITIVE_SAFE_INT,
+            required: true,
+          },
+          ...(set
+            ? ([
+                { property: "text", flag: "--text", form: "pair", type: "string" },
+                { property: "file", flag: "--file", form: "pair", type: "string" },
+                {
+                  property: "purpose",
+                  flag: "--purpose",
+                  form: "pair",
+                  type: "string",
+                  schema: { type: "string", enum: ["general", "change_request"], default: "general" },
+                },
+              ] satisfies McpOptionSpec[])
+            : ([
+                { property: "commentText", flag: "--comment-text", form: "pair", type: "string" },
+                { property: "commentFile", flag: "--comment-file", form: "pair", type: "string" },
+              ] satisfies McpOptionSpec[])),
+        ];
+    return defineMcpTool({
       name: `handoff_${operation}`,
       description: show
         ? "read the retained recipient comment; records nothing"
@@ -615,18 +662,14 @@ function handoffReportingTools(): McpTool[] {
           : `${operation === "processing_start" ? "start" : "complete"} processing with an optional general comment`,
       annotations: COMMUNICATION,
       mirrorsIntegerBounds: true,
-      properties,
-      inputSchema: {
-        type: "object",
-        properties: schemaProperties,
-        required: show ? ["handoffId"] : ["handoffId", "expectedRevision", "expectedRowVersion"],
-        ...(set
-          ? { oneOf: [{ required: ["text"] }, { required: ["file"] }] }
-          : show
-            ? {}
-            : { not: { required: ["commentText", "commentFile"] } }),
-      },
-      argv: optionsArgv(operation.split("_"), mappings, (a) => [String(a.handoffId)]),
+      command: operation.split("_"),
+      positionals: [HANDOFF_ID_POSITIONAL],
+      options,
+      ...(set
+        ? { extra: { oneOf: [{ required: ["text"] }, { required: ["file"] }] } }
+        : show
+          ? {}
+          : { extra: { not: { required: ["commentText", "commentFile"] } } }),
       guard: (a) => {
         if (show) return undefined;
         if (a.expectedRevision === undefined) return requiredOptionSentence("--expected-revision <n>");
@@ -638,34 +681,32 @@ function handoffReportingTools(): McpTool[] {
           ? "processing requires --expected-row-version and at most one comment source"
           : undefined;
       },
-    };
+    });
   });
 }
 
 const MEMO_TOOLS: McpTool[] = [
-  {
+  defineMcpTool({
     name: "memo_list",
     description: "list Project Memos, open by default",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: false,
-    properties: {
-      project: { type: "string" },
-      allProjects: { type: "boolean" },
-      state: { type: "string" },
-      query: { type: "string" },
-      cursor: { type: "string" },
-      limit: { type: "integer" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        project: { type: "string" },
-        allProjects: { type: "boolean" },
-        state: { type: "string", enum: ["open", "done", "dismissed", "all"], default: "open" },
-        query: { type: "string" },
-        cursor: { type: "string" },
-        limit: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+    command: ["memo", "list"],
+    options: [
+      { property: "project", flag: "--project", form: "pair", type: "string" },
+      { property: "allProjects", flag: "--all-projects", form: "flag", type: "boolean" },
+      {
+        property: "state",
+        flag: "--state",
+        form: "pair",
+        type: "string",
+        schema: { type: "string", enum: ["open", "done", "dismissed", "all"], default: "open" },
       },
+      { property: "query", flag: "--query", form: "pair", type: "string" },
+      { property: "cursor", flag: "--cursor", form: "pair", type: "string" },
+      { property: "limit", flag: "--limit", form: "pair", type: "integer", schema: NON_NEGATIVE_SAFE_INT },
+    ],
+    extra: {
       allOf: [
         {
           if: { required: ["project"], properties: { allProjects: { const: true } } },
@@ -674,36 +715,16 @@ const MEMO_TOOLS: McpTool[] = [
         },
       ] satisfies Array<Record<string, unknown>>,
     },
-    argv: optionsArgv(
-      ["memo", "list"],
-      [
-        { property: "project", flag: "--project", form: "pair" },
-        { property: "allProjects", flag: "--all-projects", form: "flag" },
-        { property: "state", flag: "--state", form: "pair" },
-        { property: "query", flag: "--query", form: "pair" },
-        { property: "cursor", flag: "--cursor", form: "pair" },
-        { property: "limit", flag: "--limit", form: "pair" },
-      ],
-      () => [],
-    ),
-    guard: () => undefined,
-  },
-  {
+  }),
+  defineMcpTool({
     name: "memo_show",
     description: "show one complete Memo",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: false,
-    properties: { memoId: { type: "string" }, project: { type: "string" } },
-    inputSchema: {
-      type: "object",
-      properties: { memoId: { type: "string" }, project: { type: "string" } },
-      required: ["memoId"],
-    },
-    argv: optionsArgv(["memo", "show"], [{ property: "project", flag: "--project", form: "pair" }], (a) => [
-      String(a.memoId),
-    ]),
-    guard: () => undefined,
-  },
+    command: ["memo", "show"],
+    positionals: [{ property: "memoId", argument: "id" }],
+    options: [{ property: "project", flag: "--project", form: "pair", type: "string" }],
+  }),
   ...(["add", "update", "done", "dismiss", "reopen"] as const).map((operation) => memoMutationTool(operation)),
 ];
 
@@ -715,168 +736,129 @@ function memoMutationTool(operation: "add" | "update" | "done" | "dismiss" | "re
     dismiss: "dismiss a Memo without claiming work was done",
     reopen: "reopen a closed Memo without executing its content",
   } as const;
-  const properties: Record<string, PropertySpec> = {
-    idempotencyKey: { type: "string" },
-    replayOnly: { type: "boolean" },
-  };
-  const schemaProperties: Record<string, unknown> = {
-    idempotencyKey: { type: "string" },
-    replayOnly: { type: "boolean" },
-  };
-  if (operation === "add" || operation === "update") {
-    properties.title = { type: "string" };
-    properties.body = { type: "string" };
-    properties.bodyFile = { type: "string" };
-    schemaProperties.title = { type: "string" };
-    schemaProperties.body = { type: "string" };
-    schemaProperties.bodyFile = { type: "string" };
-  }
-  if (operation !== "add") {
-    properties.memoId = { type: "string" };
-    properties.expectedRowVersion = { type: "integer" };
-    schemaProperties.memoId = { type: "string" };
-    schemaProperties.expectedRowVersion = { type: "integer", minimum: 0, maximum: 9007199254740991 };
-  }
-  properties.project = { type: "string" };
-  schemaProperties.project = { type: "string" };
-  const mappings: OptionMapping[] = [
-    { property: "title", flag: "--title", form: "pair" },
-    { property: "body", flag: "--body", form: "pair" },
-    { property: "bodyFile", flag: "--body-file", form: "pair" },
-    { property: "expectedRowVersion", flag: "--expected-row-version", form: "pair" },
-    { property: "project", flag: "--project", form: "pair" },
-    { property: "idempotencyKey", flag: "--idempotency-key", form: "pair" },
-    { property: "replayOnly", flag: "--replay-only", form: "flag" },
+  const hasContent = operation === "add" || operation === "update";
+  const options: McpOptionSpec[] = [
+    ...(hasContent
+      ? ([
+          { property: "title", flag: "--title", form: "pair", type: "string", required: operation === "add" },
+          { property: "body", flag: "--body", form: "pair", type: "string" },
+          { property: "bodyFile", flag: "--body-file", form: "pair", type: "string" },
+        ] satisfies McpOptionSpec[])
+      : []),
+    ...(operation === "add"
+      ? []
+      : ([
+          {
+            property: "expectedRowVersion",
+            flag: "--expected-row-version",
+            form: "pair",
+            type: "integer",
+            schema: NON_NEGATIVE_SAFE_INT,
+            required: true,
+          },
+        ] satisfies McpOptionSpec[])),
+    { property: "project", flag: "--project", form: "pair", type: "string" },
+    { property: "idempotencyKey", flag: "--idempotency-key", form: "pair", type: "string" },
+    { property: "replayOnly", flag: "--replay-only", form: "flag", type: "boolean" },
   ];
-  return {
+  // Every cross-field rule of the Memo CLI answers coded (MEMO_INVALID_INPUT),
+  // so no layer-2 guard exists and every refusal flows to the child.
+  return defineMcpTool({
     name: `memo_${operation}`,
     description: descriptions[operation],
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: false,
-    properties,
-    inputSchema:
-      operation === "add"
-        ? {
-            type: "object",
-            properties: schemaProperties,
-            required: ["title"],
-            allOf: [{ not: { allOf: [{ required: ["body"] }, { required: ["bodyFile"] }] } }, REPLAY_ONLY_WITH_KEY],
-          }
-        : {
-            type: "object",
-            properties: schemaProperties,
-            required: ["memoId", "expectedRowVersion"],
-            allOf: [
-              // The body-source exclusion and the at-least-one rule exist only
-              // where the command declares the body properties (EE nit 1).
-              ...(operation === "update"
-                ? [
-                    { not: { allOf: [{ required: ["body"] }, { required: ["bodyFile"] }] } },
-                    { anyOf: [{ required: ["title"] }, { required: ["body"] }, { required: ["bodyFile"] }] },
-                  ]
-                : []),
-              REPLAY_ONLY_WITH_KEY,
-            ],
-          },
-    argv:
-      operation === "add"
-        ? optionsArgv(["memo", "add"], mappings, () => [])
-        : optionsArgv(["memo", operation], mappings, (a) => [String(a.memoId)]),
-    // Every cross-field rule of the Memo CLI answers coded (MEMO_INVALID_INPUT),
-    // so no layer-2 guard exists and every refusal flows to the child.
-    guard: () => undefined,
-  };
+    command: ["memo", operation],
+    positionals: operation === "add" ? [] : [{ property: "memoId", argument: "id" }],
+    options,
+    propertyOrder: [
+      "idempotencyKey",
+      "replayOnly",
+      ...(hasContent ? ["title", "body", "bodyFile"] : []),
+      ...(operation === "add" ? [] : ["memoId", "expectedRowVersion"]),
+      "project",
+    ],
+    extra: {
+      allOf: [
+        // The body-source exclusion and the at-least-one rule exist only
+        // where the command declares the body properties (EE nit 1).
+        ...(hasContent ? [{ not: { allOf: [{ required: ["body"] }, { required: ["bodyFile"] }] } }] : []),
+        ...(operation === "update"
+          ? [{ anyOf: [{ required: ["title"] }, { required: ["body"] }, { required: ["bodyFile"] }] }]
+          : []),
+        REPLAY_ONLY_WITH_KEY,
+      ],
+    },
+  });
 }
 
+const CHANNEL_REF_POSITIONAL: McpPositionalSpec = { property: "channel", argument: "channel" };
+
 const CHANNEL_TOOLS: McpTool[] = [
-  {
+  defineMcpTool({
     name: "channel_create",
     description: "create an open Channel with its single main participant",
     annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { name: { type: "string" }, title: { type: "string" }, main: { type: "string" } },
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        title: { type: "string" },
-        main: { type: "string", default: "main" },
-      },
-      required: ["name"],
-    },
-    argv: optionsArgv(
-      ["channel", "create"],
-      [
-        { property: "title", flag: "--title", form: "pair" },
-        { property: "main", flag: "--main", form: "pair" },
-      ],
-      (a) => [String(a.name)],
-    ),
-    guard: () => undefined,
-  },
-  {
+    command: ["channel", "create"],
+    positionals: [{ property: "name", argument: "name" }],
+    options: [
+      { property: "title", flag: "--title", form: "pair", type: "string" },
+      { property: "main", flag: "--main", form: "pair", type: "string", schema: { type: "string", default: "main" } },
+    ],
+  }),
+  defineMcpTool({
     name: "channel_add",
     description: "register a worker or judge participant on an open Channel",
     annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { channel: { type: "string" }, handle: { type: "string" }, role: { type: "string" } },
-    inputSchema: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        handle: { type: "string" },
-        role: { type: "string", enum: ["worker", "judge"] },
+    command: ["channel", "add"],
+    positionals: [CHANNEL_REF_POSITIONAL, { property: "handle", argument: "handle" }],
+    options: [
+      {
+        property: "role",
+        flag: "--role",
+        form: "pair",
+        type: "string",
+        schema: { type: "string", enum: ["worker", "judge"] },
+        required: true,
       },
-      required: ["channel", "handle", "role"],
-    },
-    argv: optionsArgv(["channel", "add"], [{ property: "role", flag: "--role", form: "pair" }], (a) => [
-      String(a.channel),
-      String(a.handle),
-    ]),
+    ],
     // A bad role value is the CLI's own coded CHN_INVALID_INPUT; only its
     // absence mirrors the parser's required-option exit 2.
     guard: (a) => (a.role === undefined ? requiredOptionSentence("--role <role>") : undefined),
-  },
-  {
+  }),
+  defineMcpTool({
     name: "channel_remove",
     description: "remove a participant idempotently; reversible by re-adding the handle",
     annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { channel: { type: "string" }, handle: { type: "string" } },
-    inputSchema: {
-      type: "object",
-      properties: { channel: { type: "string" }, handle: { type: "string" } },
-      required: ["channel", "handle"],
-    },
-    argv: optionsArgv(["channel", "remove"], [], (a) => [String(a.channel), String(a.handle)]),
-    guard: () => undefined,
-  },
-  {
+    command: ["channel", "remove"],
+    positionals: [CHANNEL_REF_POSITIONAL, { property: "handle", argument: "handle" }],
+  }),
+  defineMcpTool({
     name: "channel_post",
     description: "post one attributed message upstream through the shared content interface",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      channel: { type: "string" },
-      from: { type: "string" },
-      kind: { type: "string" },
-      body: { type: "string" },
-      bodyFile: { type: "string" },
-      to: { type: "string" },
-      ref: { type: "string" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        from: { type: "string" },
-        kind: { type: "string", enum: KINDS },
-        body: { type: "string" },
-        bodyFile: { type: "string" },
-        to: { type: "string" },
-        ref: { type: "string" },
+    command: ["channel", "post"],
+    positionals: [CHANNEL_REF_POSITIONAL],
+    options: [
+      { property: "from", flag: "--from", form: "pair", type: "string", required: true },
+      {
+        property: "kind",
+        flag: "--kind",
+        form: "pair",
+        type: "string",
+        schema: { type: "string", enum: KINDS },
+        required: true,
       },
-      required: ["channel", "from", "kind"],
+      { property: "body", flag: "--body", form: "pair", type: "string" },
+      { property: "bodyFile", flag: "--body-file", form: "pair", type: "string" },
+      { property: "to", flag: "--to", form: "pair", type: "string" },
+      { property: "ref", flag: "--ref", form: "pair", type: "string" },
+    ],
+    extra: {
       oneOf: [{ required: ["body"] }, { required: ["bodyFile"] }],
       allOf: [
         {
@@ -891,56 +873,42 @@ const CHANNEL_TOOLS: McpTool[] = [
         },
       ] satisfies Array<Record<string, unknown>>,
     },
-    argv: optionsArgv(
-      ["channel", "post"],
-      [
-        { property: "from", flag: "--from", form: "pair" },
-        { property: "kind", flag: "--kind", form: "pair" },
-        { property: "body", flag: "--body", form: "pair" },
-        { property: "bodyFile", flag: "--body-file", form: "pair" },
-        { property: "to", flag: "--to", form: "pair" },
-        { property: "ref", flag: "--ref", form: "pair" },
-      ],
-      (a) => [String(a.channel)],
-    ),
     guard: (a) => {
       if (a.from === undefined) return requiredOptionSentence("--from <handle>");
       if (a.kind === undefined) return requiredOptionSentence("--kind <kind>");
       if (!KINDS.includes(String(a.kind))) return KIND_CHOICES;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "channel_messages",
     description: "list messages with full inline bodies; unhandled oldest first by default",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {
-      channel: { type: "string" },
-      all: { type: "boolean" },
-      after: { type: "integer" },
-      from: { type: "string" },
-      kind: { type: "string" },
-      limit: { type: "integer" },
-      wait: { type: "boolean" },
-      timeout: { type: "integer" },
-      interval: { type: "integer" },
-    },
-    inputSchema: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        all: { type: "boolean", default: false },
-        after: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        from: { type: "string" },
-        kind: { type: "string", enum: KINDS },
-        limit: { type: "integer", minimum: 0, maximum: 9007199254740991 },
-        wait: { type: "boolean", default: false },
-        timeout: { type: "integer", minimum: 0, maximum: 9007199254740991, default: 30 },
-        interval: { type: "integer", minimum: 0, maximum: 9007199254740991, default: 2 },
+    command: ["channel", "messages"],
+    positionals: [CHANNEL_REF_POSITIONAL],
+    options: [
+      { property: "all", flag: "--all", form: "flag", type: "boolean", schema: { type: "boolean", default: false } },
+      { property: "after", flag: "--after", form: "pair", type: "integer", schema: NON_NEGATIVE_SAFE_INT },
+      { property: "from", flag: "--from", form: "pair", type: "string" },
+      { property: "kind", flag: "--kind", form: "pair", type: "string", schema: { type: "string", enum: KINDS } },
+      { property: "limit", flag: "--limit", form: "pair", type: "integer", schema: NON_NEGATIVE_SAFE_INT },
+      { property: "wait", flag: "--wait", form: "flag", type: "boolean", schema: { type: "boolean", default: false } },
+      {
+        property: "timeout",
+        flag: "--timeout",
+        form: "pair",
+        type: "integer",
+        schema: { ...NON_NEGATIVE_SAFE_INT, default: 30 },
       },
-      required: ["channel"],
-    },
+      {
+        property: "interval",
+        flag: "--interval",
+        form: "pair",
+        type: "integer",
+        schema: { ...NON_NEGATIVE_SAFE_INT, default: 2 },
+      },
+    ],
     argv: (a) => {
       const argv = [
         "channel",
@@ -964,94 +932,78 @@ const CHANNEL_TOOLS: McpTool[] = [
       if (a.wait !== true && (a.timeout !== undefined || a.interval !== undefined)) return CHANNEL_WAIT_ONLY_OPTIONS;
       return undefined;
     },
-  },
-  {
+  }),
+  defineMcpTool({
     name: "channel_ack",
     description: "record the User handling decision for the named messages",
     annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { channel: { type: "string" }, seq: { type: "integerArray" }, note: { type: "string" } },
-    inputSchema: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        seq: { type: "array", items: { type: "integer", minimum: 1, maximum: 9007199254740991 }, minItems: 1 },
-        note: { type: "string" },
+    command: ["channel", "ack"],
+    positionals: [
+      CHANNEL_REF_POSITIONAL,
+      {
+        property: "seq",
+        argument: "seq...",
+        type: "integerArray",
+        schema: { type: "array", items: POSITIVE_SAFE_INT, minItems: 1 },
       },
-      required: ["channel", "seq"],
-    },
-    argv: optionsArgv(["channel", "ack"], [{ property: "note", flag: "--note", form: "pair" }], (a) => [
-      String(a.channel),
-      ...(a.seq as number[]).map((seq) => String(seq)),
-    ]),
+    ],
+    options: [{ property: "note", flag: "--note", form: "pair", type: "string" }],
     // An absent or empty seq is the required variadic missing (the generic
     // positional check); a seq item below 1 or above the safe range is the
     // CLI's coded CHN_INVALID_INPUT and flows to the child.
-    guard: () => undefined,
-  },
-  {
+  }),
+  defineMcpTool({
     name: "channel_close",
     description: "terminal idempotent close; freezes posting, keeps reads and acks",
     annotations: IDEMPOTENT_COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { channel: { type: "string" } },
-    inputSchema: { type: "object", properties: { channel: { type: "string" } }, required: ["channel"] },
-    argv: optionsArgv(["channel", "close"], [], (a) => [String(a.channel)]),
-    guard: () => undefined,
-  },
-  {
+    command: ["channel", "close"],
+    positionals: [CHANNEL_REF_POSITIONAL],
+  }),
+  defineMcpTool({
     name: "channel_list",
     description: "list Channels with both identifiers",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { state: { type: "string" } },
-    inputSchema: {
-      type: "object",
-      properties: { state: { type: "string", enum: ["open", "closed", "all"], default: "all" } },
-    },
-    argv: optionsArgv(["channel", "list"], [{ property: "state", flag: "--state", form: "pair" }], () => []),
-    guard: () => undefined,
-  },
-  {
+    command: ["channel", "list"],
+    options: [
+      {
+        property: "state",
+        flag: "--state",
+        form: "pair",
+        type: "string",
+        schema: { type: "string", enum: ["open", "closed", "all"], default: "all" },
+      },
+    ],
+  }),
+  defineMcpTool({
     name: "channel_show",
     description: "show one Channel with its complete participant roster and counts",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { channel: { type: "string" } },
-    inputSchema: { type: "object", properties: { channel: { type: "string" } }, required: ["channel"] },
-    argv: optionsArgv(["channel", "show"], [], (a) => [String(a.channel)]),
-    guard: () => undefined,
-  },
+    command: ["channel", "show"],
+    positionals: [CHANNEL_REF_POSITIONAL],
+  }),
 ];
 
 const PROJECT_TOOLS: McpTool[] = [
-  {
+  defineMcpTool({
     name: "project_list",
     description: "list every Project with its binding count, flagging unbound Projects",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: {},
-    inputSchema: { type: "object", properties: {} },
-    argv: optionsArgv(["project", "list"], [], () => []),
-    guard: () => undefined,
-  },
-  {
+    command: ["project", "list"],
+  }),
+  defineMcpTool({
     name: "project_show",
     description: "show one Project with every binding, its counts, and its lifecycle state",
     annotations: COMMUNICATION,
     mirrorsIntegerBounds: true,
-    properties: { project: { type: "string" } },
-    inputSchema: { type: "object", properties: { project: { type: "string" } }, required: ["project"] },
-    argv: optionsArgv(["project", "show"], [], (a) => [String(a.project)]),
-    guard: () => undefined,
-  },
+    command: ["project", "show"],
+    positionals: [{ property: "project", argument: "project" }],
+  }),
 ];
-
-interface ExchangeToolOption extends OptionMapping {
-  type: PropertyType;
-  schema?: Record<string, unknown>;
-  required?: string;
-}
 
 const exchangePair = (
   property: string,
@@ -1059,16 +1011,17 @@ const exchangePair = (
   required?: string,
   type: PropertyType = "string",
   schema?: Record<string, unknown>,
-): ExchangeToolOption => ({
+): McpOptionSpec => ({
   property,
   flag,
   form: "pair",
   type,
+  ...(type === "integer" ? { maxFirst: true } : {}),
   ...(required ? { required } : {}),
   ...(schema ? { schema } : {}),
 });
 
-const exchangeList = (property: string, flag: string): ExchangeToolOption => ({
+const exchangeList = (property: string, flag: string): McpOptionSpec => ({
   property,
   flag,
   form: "repeat",
@@ -1076,7 +1029,7 @@ const exchangeList = (property: string, flag: string): ExchangeToolOption => ({
   schema: { type: "array", items: { type: "string" }, minItems: 1 },
 });
 
-const exchangeFlag = (property: string, flag: string): ExchangeToolOption => ({
+const exchangeFlag = (property: string, flag: string): McpOptionSpec => ({
   property,
   flag,
   form: "flag",
@@ -1112,7 +1065,7 @@ const confirmControl = exchangeFlag("confirm", "--confirm");
 function exchangeTool(
   command: string,
   description: string,
-  options: ExchangeToolOption[],
+  options: McpOptionSpec[],
   settings: {
     positionals?: (typeof exchangeId)[];
     optionalPositionals?: boolean;
@@ -1123,48 +1076,29 @@ function exchangeTool(
 ): McpTool {
   const positionals = settings.positionals ?? [exchangeId];
   const allOptions = [exchangeProject, ...options];
-  const properties: Record<string, PropertySpec> = Object.fromEntries(
-    [...positionals.map(({ property }) => ({ property, type: "string" as const })), ...allOptions].map(
-      ({ property, type }) => [property, { type }],
-    ),
-  );
-  const schema = Object.fromEntries(
-    [...positionals.map(({ property }) => exchangePair(property, "")), ...allOptions].map(
-      ({ property, type, schema }) => [
-        property,
-        {
-          type,
-          ...(type === "integer" ? { maximum: Number.MAX_SAFE_INTEGER } : {}),
-          ...schema,
-        },
-      ],
-    ),
-  );
-  return {
+  return defineMcpTool({
     name: `exchange_${command.replaceAll("-", "_")}`,
     description,
     annotations: settings.idempotent ? IDEMPOTENT_COMMUNICATION : COMMUNICATION,
-    properties,
-    inputSchema: {
-      type: "object",
-      properties: schema,
-      required: [
-        ...(settings.optionalPositionals ? [] : positionals.map(({ property }) => property)),
-        ...allOptions.filter(({ required }) => required !== undefined).map(({ property }) => property),
-        ...(settings.required ?? []),
-      ],
-      ...settings.schema,
-    },
     mirrorsIntegerBounds: false,
-    argv: optionsArgv(["exchange", command], allOptions, (args) =>
-      positionals.flatMap(({ property }) => (args[property] === undefined ? [] : [String(args[property])])),
-    ),
+    command: ["exchange", command],
+    positionals: positionals.map((positional) => ({
+      ...positional,
+      ...(settings.optionalPositionals ? { optional: true } : {}),
+      guardOrder: true,
+    })),
+    options: allOptions,
+    ...(settings.required !== undefined ? { required: settings.required } : {}),
+    emitEmptyRequired: true,
+    ...(settings.schema !== undefined ? { extra: settings.schema } : {}),
     guard: (args) => {
       // Commander parses the global limit before checking required command operands.
       if (typeof args.limit === "number" && (!Number.isSafeInteger(args.limit) || args.limit < 0)) {
         return `option '--limit <n>' argument '${args.limit}' is invalid. ${NON_NEGATIVE_INTEGER}`;
       }
-      const required = allOptions.find(({ property, required }) => required && args[property] === undefined);
+      const required = allOptions.find(
+        ({ property, required }) => typeof required === "string" && args[property] === undefined,
+      );
       if (required) return requiredOptionSentence(`${required.flag} <${required.required}>`);
       const missing = settings.optionalPositionals
         ? undefined
@@ -1172,7 +1106,7 @@ function exchangeTool(
       if (missing) return requiredArgumentSentence(missing.argument);
       return undefined;
     },
-  };
+  });
 }
 
 const EXCHANGE_TOOLS: McpTool[] = [
@@ -1515,53 +1449,14 @@ export const MCP_TOOLS: readonly McpTool[] = [
   ...EXCHANGE_TOOLS,
 ];
 
+const MCP_TOOLS_BY_NAME = new Map<string, McpTool>(MCP_TOOLS.map((tool) => [tool.name, tool]));
+
 export function mcpToolByName(name: string): McpTool | undefined {
-  return MCP_TOOLS.find((tool) => tool.name === name);
+  return MCP_TOOLS_BY_NAME.get(name);
 }
 
-const HANDOFF_ID = [{ property: "handoffId", argument: "handoff-id" }] as const;
-const MEMO_ID = [{ property: "memoId", argument: "id" }] as const;
-const CHANNEL_REF = [{ property: "channel", argument: "channel" }] as const;
-
-/**
- * The positional argument every command declares, with commander's own
- * argument names: admission layer 2 refuses an absent positional (an empty
- * `seq` array counts as absent) with commander's missing-argument sentence,
- * so no builder ever stringifies `undefined` into an operand.
- */
-const REQUIRED_POSITIONALS: Record<string, ReadonlyArray<{ property: string; argument: string }>> = {
-  handoff_get: HANDOFF_ID,
-  handoff_events: HANDOFF_ID,
-  handoff_fetch: HANDOFF_ID,
-  handoff_review_show: HANDOFF_ID,
-  handoff_comment_show: HANDOFF_ID,
-  handoff_comment_set: HANDOFF_ID,
-  handoff_processing_start: HANDOFF_ID,
-  handoff_processing_complete: HANDOFF_ID,
-  handoff_review_set: HANDOFF_ID,
-  handoff_review_withdraw: HANDOFF_ID,
-  handoff_revise: HANDOFF_ID,
-  handoff_accept: HANDOFF_ID,
-  handoff_decline: HANDOFF_ID,
-  handoff_withdraw: HANDOFF_ID,
-  memo_show: MEMO_ID,
-  memo_update: [...MEMO_ID],
-  memo_done: MEMO_ID,
-  memo_dismiss: MEMO_ID,
-  memo_reopen: MEMO_ID,
-  channel_create: [{ property: "name", argument: "name" }],
-  channel_add: [...CHANNEL_REF, { property: "handle", argument: "handle" }],
-  channel_remove: [...CHANNEL_REF, { property: "handle", argument: "handle" }],
-  channel_post: CHANNEL_REF,
-  channel_messages: CHANNEL_REF,
-  channel_ack: [...CHANNEL_REF, { property: "seq", argument: "seq..." }],
-  channel_close: CHANNEL_REF,
-  channel_show: CHANNEL_REF,
-  project_show: [{ property: "project", argument: "project" }],
-};
-
 function requiredPositionalsOf(name: string): ReadonlyArray<{ property: string; argument: string }> {
-  return REQUIRED_POSITIONALS[name] ?? [];
+  return DERIVED_REQUIRED_POSITIONALS.get(name) ?? [];
 }
 
 export interface ArgumentsAdmission {

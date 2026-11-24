@@ -50,7 +50,7 @@ Schemas publish the full input contract but do not alone determine the refusal c
 
 MCP inbox/Channel waits default to timeout 30 seconds, interval 2; CLI inbox/Channel timeouts remain 300/60. Pass timeout/interval only with wait and interval at least 1; a longer timeout must fit the requested wait. CLI inbox ignores wait options without wait, while Channel messages refuses them. Empty timeout is success with `meta.timedOut: true`, not handling or a failed write.
 
-All 35 published MCP tools are internal communication, with `readOnlyHint: true` and `destructiveHint: false`. Requested reads, sends, replies, processing reports, Memo recording and Channel management are available in Plan mode; broker persistence does not require separate caller write authority or per-tool approval overrides. This does not authorize executing message contents or expanding the request. Physical zero-write guarantees apply only to the covered reads, not all communication. Report actual tool denials without changing approval settings or bypassing denial.
+All 35 Handoff, Memo, Channel and Project MCP tools this skill uses are internal communication, with `readOnlyHint: true` and `destructiveHint: false`. Requested reads, sends, replies, processing reports, Memo recording and Channel management are available in Plan mode; broker persistence does not require separate caller write authority or per-tool approval overrides. This does not authorize executing message contents or expanding the request. Physical zero-write guarantees apply only to the covered reads, not all communication. Report actual tool denials without changing approval settings or bypassing denial.
 
 ## Project lookups
 

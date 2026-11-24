@@ -12,38 +12,56 @@ import type { Command } from "commander";
 interface CommandSummary {
   path: string;
   description: string;
+  options: string[];
 }
 
 function escapeSingleQuotes(text: string): string {
   return text.replaceAll("'", "'\\''");
 }
 
-function walkCommands(command: Command, prefix: string, summaries: CommandSummary[]): void {
-  for (const child of command.commands) {
-    if (child.name() === "help") continue;
-    const path = prefix === "" ? child.name() : `${prefix} ${child.name()}`;
-    summaries.push({ path, description: child.description() });
-    walkCommands(child, path, summaries);
-  }
+function isHiddenCommand(command: Command): boolean {
+  return (command as { _hidden?: boolean })._hidden === true;
 }
 
 function optionSpecs(command: Command): string[] {
-  return command.options.map((option) => option.long ?? option.short ?? "").filter((spec) => spec !== "");
+  return command.options
+    .filter((option) => !option.hidden)
+    .map((option) => option.long ?? option.short ?? "")
+    .filter((spec) => spec !== "");
+}
+
+function walkCommands(command: Command, prefix: string, inheritedOptions: string[], summaries: CommandSummary[]): void {
+  for (const child of command.commands) {
+    if (child.name() === "help" || isHiddenCommand(child)) continue;
+    const path = prefix === "" ? child.name() : `${prefix} ${child.name()}`;
+    const options = [...new Set([...inheritedOptions, ...optionSpecs(child)])];
+    summaries.push({ path, description: child.description(), options });
+    walkCommands(child, path, options, summaries);
+  }
 }
 
 function zshCompletionScript(root: Command, cliName: string): string {
   const summaries: CommandSummary[] = [];
-  walkCommands(root, "", summaries);
+  walkCommands(root, "", [], summaries);
   const commandEntries = summaries
     .map((summary) => `    '${escapeSingleQuotes(summary.path)}:${escapeSingleQuotes(summary.description)}'`)
     .join("\n");
-  const rootOptions = optionSpecs(root)
-    .map((spec) => `      '${escapeSingleQuotes(spec)}'`)
+  const rootSpecs = optionSpecs(root);
+  const rootOptions = rootSpecs.map((spec) => `      '${escapeSingleQuotes(spec)}'`).join("\n");
+  const formatZshArguments = (specs: string[]): string =>
+    [...new Set([...rootSpecs, ...specs])].map((spec) => `'${escapeSingleQuotes(spec)}'`).join(" ");
+  const twoWordCases = summaries
+    .filter((summary) => summary.options.length > 0 && summary.path.includes(" "))
+    .map(
+      (summary) =>
+        `    '${escapeSingleQuotes(summary.path)}') _arguments ${formatZshArguments(summary.options)}; return ;;`,
+    )
     .join("\n");
-  const send = root.commands.find((command) => command.name() === "send");
-  const sendOptions = [...optionSpecs(root), ...(send === undefined ? [] : optionSpecs(send))]
-    .map((spec) => `'${escapeSingleQuotes(spec)}'`)
-    .join(" ");
+  const oneWordCases = summaries
+    .filter((summary) => summary.options.length > 0 && !summary.path.includes(" "))
+    .map((summary) => `    ${summary.path}) _arguments ${formatZshArguments(summary.options)}; return ;;`)
+    .join("\n");
+  const twoWordBlock = twoWordCases === "" ? "" : `  case "$words[2] $words[3]" in\n${twoWordCases}\n  esac\n`;
   return `#compdef ${cliName}
 
 _${cliName}() {
@@ -52,8 +70,8 @@ _${cliName}() {
 ${commandEntries}
   )
   _describe -t commands 'command' commands
-  case "$words[2]" in
-    send) _arguments ${sendOptions}; return ;;
+${twoWordBlock}  case "$words[2]" in
+${oneWordCases}
   esac
   _arguments \\
 ${rootOptions}
@@ -67,18 +85,36 @@ fi
 
 function bashCompletionScript(root: Command, cliName: string): string {
   const summaries: CommandSummary[] = [];
-  walkCommands(root, "", summaries);
+  walkCommands(root, "", [], summaries);
   const uniqueCommands = [...new Set(summaries.map((summary) => summary.path.split(" ")[0]))].sort();
   const options = optionSpecs(root).sort();
-  const send = root.commands.find((command) => command.name() === "send");
-  const sendOptions = send === undefined ? "" : optionSpecs(send).join(" ");
+  const rootOptionSet = new Set(options);
+  const extraOptions = (specs: string[]): string[] => specs.filter((spec) => !rootOptionSet.has(spec));
+  const twoWordCases = summaries
+    .map((summary) => ({ path: summary.path, extra: extraOptions(summary.options) }))
+    .filter((summary) => summary.extra.length > 0 && summary.path.includes(" "))
+    .map(
+      (summary) =>
+        `    '${escapeSingleQuotes(summary.path)}') option_words="$option_words ${summary.extra.join(" ")}" ;;`,
+    )
+    .join("\n");
+  const oneWordCases = summaries
+    .map((summary) => ({ path: summary.path, extra: extraOptions(summary.options) }))
+    .filter((summary) => summary.extra.length > 0 && !summary.path.includes(" "))
+    .map((summary) => `      ${summary.path}) option_words="$option_words ${summary.extra.join(" ")}" ;;`)
+    .join("\n");
   return `_${cliName}() {
   local cur commands option_words
   cur="\${COMP_WORDS[COMP_CWORD]}"
   commands="${uniqueCommands.join(" ")}"
   option_words="${options.join(" ")}"
-  case "\${COMP_WORDS[1]}" in
-    send) option_words="$option_words ${sendOptions}" ;;
+  case "\${COMP_WORDS[1]} \${COMP_WORDS[2]}" in
+${twoWordCases}
+    *)
+      case "\${COMP_WORDS[1]}" in
+${oneWordCases}
+      esac
+      ;;
   esac
   if [[ "\${COMP_CWORD}" -eq 1 ]]; then
     COMPREPLY=( $(compgen -W "\${commands}" -- "\${cur}") )
