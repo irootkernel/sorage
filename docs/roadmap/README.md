@@ -23,10 +23,10 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-023`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
-- **Next eligible Task:** None
+- **Next eligible Task:** `TASK-161`
 
 EPIC-013 and TASK-087 through TASK-094 retain their completed M7 acceptance. TASK-095 is a separately authorized post-release correction; it does not reopen a completed Epic. Its publication boundary is the explicitly authorized replacement of v0.1.2, with the runtime version unchanged.
 
@@ -117,7 +117,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-020` | Pre-release simplification | M9 | Completed | `TASK-135` to `TASK-138` |
 | `EPIC-021` | Exchange peer collaboration between Projects | M10 | Completed | `TASK-139` to `TASK-146` |
 | `EPIC-022` | M11 non-breaking defect fixes, hot-path performance and v17 indexes | M11 | Completed | `TASK-147` to `TASK-154` |
-| `EPIC-023` | M11 golden-preserving internal architecture cleanup | M11 | In Progress | `TASK-155` to `TASK-160`, `TASK-165` to `TASK-167` |
+| `EPIC-023` | M11 golden-preserving internal architecture cleanup | M11 | Completed | `TASK-155` to `TASK-160`, `TASK-165` to `TASK-167` |
 | `EPIC-024` | M11 targeted contract modernizations and qualification | M11 | Planned | `TASK-161` to `TASK-164` |
 
 ## EPIC-001: Foundation and toolchain
@@ -667,7 +667,7 @@ The reviewed `error-renderings.json` diff changes only the common `INTERNAL_ERRO
 
 ## EPIC-023: M11 golden-preserving internal architecture cleanup
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M11
 - **Objective:** Restore Clean Architecture boundaries across `packages/core`, `packages/adapters`, `apps/cli` and `apps/daemon`, eliminate every runtime circular dependency, decompose monolithic God files, unify shared infrastructure and MCP tool declarations, and keep all public CLI, HTTP, MCP and backup golden contracts unchanged.
 - **Detailed SOT:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md), whose [section 7](../todo/m11-architecture-refactoring-dossier.md#7-epic-023-execution-specification) holds the per-Task execution specification.
