@@ -286,7 +286,7 @@ describe("native send receipt inspection", () => {
     expect(createHash("sha256").update(readFileSync(leaf)).digest("hex")).toBe(artifact.sha256);
     const before = [inventory(home), inventory(vault)];
     const source = fileURLToPath(new URL("../../src/send-recovery.ts", import.meta.url));
-    const core = fileURLToPath(new URL("../../../core/src/send-recovery.ts", import.meta.url));
+    const core = fileURLToPath(new URL("../../../core/src/handoff/send-recovery.ts", import.meta.url));
     const native = spawnSync(
       "bun",
       [

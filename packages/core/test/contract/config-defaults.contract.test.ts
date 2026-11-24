@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { defaultConfiguration } from "../../src/config";
+import { defaultConfiguration } from "../../src/config/config";
 
 /**
  * Contract snapshot for the configuration defaults (CFG-020): the committed golden

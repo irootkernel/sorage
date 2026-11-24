@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type Configuration, defaultConfiguration } from "../../src/config";
-import { type AppError, ok, type Result } from "../../src/errors";
-import { type BackgroundServicePort, type UninstallPorts, uninstallInstallation } from "../../src/uninstall";
+import { type Configuration, defaultConfiguration } from "../../src/config/config";
+import { type AppError, ok, type Result } from "../../src/shared/errors";
+import { type BackgroundServicePort, type UninstallPorts, uninstallInstallation } from "../../src/runtime/uninstall";
 
 function portsFor(config: Configuration | null): UninstallPorts & {
   removedDirs: string[];

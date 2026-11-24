@@ -7,7 +7,7 @@ import {
   knownSchemaMaximum,
   schemaSurfaceFloor,
   schemaSurfaceSupports,
-} from "../../src/known-schemas";
+} from "../../src/shared/known-schemas";
 
 const ROWS = (versions: number[]) =>
   versions.map((version) => ({

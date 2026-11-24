@@ -5,7 +5,7 @@ import {
   memoTextBodySource,
   type MemoHashRequest,
   type MemoBodyByteSource,
-} from "../../src/memo-request-hash";
+} from "../../src/memo/memo-request-hash";
 
 /**
  * The composer must reproduce the legacy

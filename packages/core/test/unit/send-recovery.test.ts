@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
-import { type SendOutcome, sendRequestHash } from "../../src/handoff-commands";
-import type { Project, ProjectBinding } from "../../src/projects";
+import { type AppError, appError, err, ok, type Result } from "../../src/shared/errors";
+import { type SendOutcome, sendRequestHash } from "../../src/handoff/handoff-commands";
+import type { Project, ProjectBinding } from "../../src/project/projects";
 import {
   recoverSend,
   type SendRecoveryHandoff,
@@ -10,7 +10,7 @@ import {
   type SendRecoveryPorts,
   type SendRecoveryReadPort,
   type SendRecoveryReceipt,
-} from "../../src/send-recovery";
+} from "../../src/handoff/send-recovery";
 import { workspaceKey } from "../../src/primitives/identity";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;

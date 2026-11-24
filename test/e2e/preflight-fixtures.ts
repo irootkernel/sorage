@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import type { SorageSqlite } from "../../packages/adapters/src/sqlite/connection";
 import { migrate } from "../../packages/adapters/src/sqlite/migrator";
 import { productionMigrationPlan } from "../../packages/adapters/src/sqlite/migrations";
-import { knownSchemaMaximum } from "../../packages/core/src/known-schemas";
+import { knownSchemaMaximum } from "../../packages/core/src/shared/known-schemas";
 
 /** Example installation id from docs/specs/examples/config.example.yaml. */
 export const INSTALLATION_ID = "9d57384c-030e-4ff7-90ca-c615d8043db2";

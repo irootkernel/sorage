@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { validateSnapshot } from "../../src/backup-commands";
-import type { SnapshotData } from "../../src/backup-snapshot";
+import { validateSnapshot } from "../../src/backup/backup-restore";
+import type { SnapshotData } from "../../src/backup/snapshot/backup-snapshot";
 import {
   classifySnapshotArtifactBody,
   classifySnapshotEvent,
@@ -11,10 +11,14 @@ import {
   serializeMemoSnapshotV3,
   snapshotFilesV3,
   validateSnapshotHandoffV3,
-} from "../../src/content-snapshot";
-import { ok } from "../../src/errors";
-import { parseSnapshotBodyContent, parseVersionedSnapshotManifest, snapshotFilesV2 } from "../../src/memo-snapshot";
-import type { Memo } from "../../src/memos";
+} from "../../src/backup/snapshot/content-snapshot";
+import { ok } from "../../src/shared/errors";
+import {
+  parseSnapshotBodyContent,
+  parseVersionedSnapshotManifest,
+  snapshotFilesV2,
+} from "../../src/backup/snapshot/memo-snapshot";
+import type { Memo } from "../../src/memo/memos";
 import { canonicalJson } from "../../src/primitives/json";
 
 const USER = { kind: "user" as const, id: null };

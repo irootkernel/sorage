@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ok } from "../../src/index";
-import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
-import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/projects";
+import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project/project-commands";
+import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/project/projects";
 import { workspaceKey } from "../../src/primitives/identity";
 import {
   type CommitSenderBindingFact,
   resolveSenderIdentity,
   revalidateSenderAtCommit,
-} from "../../src/workspace-identity";
+} from "../../src/project/workspace-identity";
 
 const projects: Project[] = [
   {

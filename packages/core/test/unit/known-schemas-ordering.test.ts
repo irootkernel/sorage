@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { admitAppliedHistory, KNOWN_SCHEMA_HISTORY } from "../../src/known-schemas";
+import { admitAppliedHistory, KNOWN_SCHEMA_HISTORY } from "../../src/shared/known-schemas";
 
 const HISTORY = KNOWN_SCHEMA_HISTORY;
 const FUTURE_VERSION = Math.max(...HISTORY.map((entry) => entry.version)) + 1;

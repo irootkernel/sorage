@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateSnapshot } from "../../src/backup-commands";
+import { validateSnapshot } from "../../src/backup/backup-restore";
 import { canonicalJson } from "../../src/primitives/json";
 import { sha256OfText } from "../../src/primitives/validation";
-import { snapshotFilesV3, validateSnapshotHandoffV3 } from "../../src/content-snapshot";
-import { snapshotEventTypeAllowed } from "../../src/events";
+import { snapshotFilesV3, validateSnapshotHandoffV3 } from "../../src/backup/snapshot/content-snapshot";
+import { snapshotEventTypeAllowed } from "../../src/shared/events";
 import {
   reportingSnapshotBase,
   type SnapshotDataV4,
@@ -11,8 +11,8 @@ import {
   snapshotFilesV4,
   upgradeSnapshotHandoff,
   validateSnapshotHandoffV4,
-} from "../../src/handoff-reporting-snapshot";
-import { parseVersionedSnapshotManifest } from "../../src/memo-snapshot";
+} from "../../src/backup/snapshot/handoff-reporting-snapshot";
+import { parseVersionedSnapshotManifest } from "../../src/backup/snapshot/memo-snapshot";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const HANDOFF = "22222222-2222-4222-8222-222222222222";

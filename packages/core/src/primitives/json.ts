@@ -1,4 +1,4 @@
-import { appError, err, ok, type Result } from "../errors";
+import { appError, err, ok, type Result } from "../shared/errors";
 import { isPlainObject } from "./validation";
 
 function sortKeys(value: unknown): unknown {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppError, Clock } from "../../src/index";
 import { appError, err, ok } from "../../src/index";
-import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
+import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project/project-commands";
 import {
   addProject,
   archiveProject,
@@ -13,8 +13,8 @@ import {
   showProject,
   unarchiveProject,
   unbindProject,
-} from "../../src/project-commands";
-import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/projects";
+} from "../../src/project/project-commands";
+import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/project/projects";
 
 const TEST_ACTOR = { kind: "user", id: null } as const;
 

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { errorSpec, ok as okResult, type AppError, type Result } from "../../src/errors";
-import type { ArtifactStore, StagedFile } from "../../src/artifacts";
+import { errorSpec, ok as okResult, type AppError, type Result } from "../../src/shared/errors";
+import type { ArtifactStore, StagedFile } from "../../src/content/artifacts";
 import {
   checkExternalSource,
   checkVaultContainment,
   classifyMimeType,
   prepareArtifactImport,
   sanitizeStoredName,
-} from "../../src/import-policy";
+} from "../../src/content/import-policy";
 
 describe("sanitizeStoredName", () => {
   it("keeps an ordinary name unchanged", () => {

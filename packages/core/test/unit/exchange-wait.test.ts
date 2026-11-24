@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { appError, err, ok } from "../../src/errors";
+import { appError, err, ok } from "../../src/shared/errors";
 import {
   encodeExchangeHistoryCursor,
   type ExchangeHistoryCursor,
   exchangeProjection,
   readExchangeHistoryCursor,
   waitForExchangeActivity,
-} from "../../src/exchange-wait";
+} from "../../src/exchange/exchange-wait";
 
 const exchangeId = "11111111-1111-4111-8111-111111111111";
 const projectId = "22222222-2222-4222-8222-222222222222";

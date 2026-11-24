@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { errorSpec, ok, type AppError, type Result } from "../../src/errors";
-import type { ArtifactStore } from "../../src/artifacts";
-import { resolveArtifactForRead, verifyVaultArtifacts } from "../../src/artifact-integrity";
+import { errorSpec, ok, type AppError, type Result } from "../../src/shared/errors";
+import type { ArtifactStore } from "../../src/content/artifacts";
+import { resolveArtifactForRead, verifyVaultArtifacts } from "../../src/content/artifact-integrity";
 
 const KEY = "artifacts/h-1/a-1/doc.md";
 const SHA = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";

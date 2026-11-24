@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { waitForChannelMessages } from "../../src/channels";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
-import type { Clock } from "../../src/ids";
+import { waitForChannelMessages } from "../../src/channel/channel-wait";
+import { type AppError, appError, err, ok, type Result } from "../../src/shared/errors";
+import type { Clock } from "../../src/primitives/ids";
 
 /**
  * The rebuilt Channel wait of CHN-007 and section 38.5: pending-inclusive,

@@ -1,20 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type BackupRestorePorts, backupRestore, validateSnapshot } from "../../src/backup-commands";
-import type { SnapshotEvent } from "../../src/backup-snapshot";
-import * as contentSnapshot from "../../src/content-snapshot";
-import { ok } from "../../src/errors";
-import * as exchangeLifecycle from "../../src/exchange-lifecycle";
-import { validateExchangeNoticeInventory } from "../../src/exchange-notice-snapshot";
-import * as exchangeNotices from "../../src/exchange-notices";
+import { type BackupRestorePorts, backupRestore, validateSnapshot } from "../../src/backup/backup-restore";
+import type { SnapshotEvent } from "../../src/backup/snapshot/backup-snapshot";
+import * as contentSnapshot from "../../src/backup/snapshot/content-snapshot";
+import { ok } from "../../src/shared/errors";
+import * as exchangeLifecycle from "../../src/exchange/exchange-lifecycle";
+import { validateExchangeNoticeInventory } from "../../src/backup/snapshot/exchange-notice-snapshot";
+import * as exchangeNotices from "../../src/exchange/exchange-notices";
 import {
   EXCHANGE_SNAPSHOT_FILE,
   type ExchangeSnapshotRecord,
   type SnapshotDataV5,
   snapshotFilesV5,
-} from "../../src/exchange-snapshot";
-import type { ExchangeCollaboration } from "../../src/exchanges";
-import * as handoffReportingSnapshot from "../../src/handoff-reporting-snapshot";
-import { type SnapshotHandoffV4, validateReportingSnapshotEvent } from "../../src/handoff-reporting-snapshot";
+} from "../../src/backup/snapshot/exchange-snapshot";
+import type { ExchangeCollaboration } from "../../src/exchange/exchanges";
+import * as handoffReportingSnapshot from "../../src/backup/snapshot/handoff-reporting-snapshot";
+import {
+  type SnapshotHandoffV4,
+  validateReportingSnapshotEvent,
+} from "../../src/backup/snapshot/handoff-reporting-snapshot";
 import { sha256OfText } from "../../src/primitives/validation";
 
 const ALPHA = "11111111-1111-4111-8111-111111111111";

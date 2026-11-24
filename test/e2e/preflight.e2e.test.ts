@@ -21,7 +21,7 @@ import {
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { knownSchemaMaximum } from "../../packages/core/src/known-schemas";
+import { knownSchemaMaximum } from "../../packages/core/src/shared/known-schemas";
 import { git, makeTempDir, sorage, storageProof } from "./helpers";
 import {
   configText,

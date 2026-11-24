@@ -3,7 +3,7 @@ import {
   compareHandoffObservations,
   validateCommentText,
   validateHandoffObservations,
-} from "../../src/reporting-commands";
+} from "../../src/handoff/reporting-commands";
 
 describe("Handoff reporting scalar and observation admission", () => {
   it.each([0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(

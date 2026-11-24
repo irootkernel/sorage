@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ok } from "../../src/index";
-import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project-commands";
-import { resolveWorkspaceActor, workspaceRootOf } from "../../src/project-commands";
-import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/projects";
+import type { ProjectBindingFsPort, ProjectCommandPorts } from "../../src/project/project-commands";
+import { resolveWorkspaceActor, workspaceRootOf } from "../../src/project/project-commands";
+import type { Project, ProjectBinding, ProjectRepositoryPort } from "../../src/project/projects";
 
 /**
  * Section 22.2 resolution over an in-memory binding set: the algorithm is a pure

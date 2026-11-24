@@ -10,7 +10,7 @@ import {
   type PreflightReport,
   type PreflightResidueEntry,
   type PreflightStatus,
-} from "../../src/preflight";
+} from "../../src/runtime/preflight";
 
 const permittedResidue: PreflightResidueEntry[] = [
   { kind: "directory", name: "logs" },

@@ -180,51 +180,109 @@ for (const file of files) {
 }
 
 // Tarjan's strongly connected components algorithm.
-let nextIndex = 0;
-const indices = new Map<string, number>();
-const lowlinks = new Map<string, number>();
-const onStack = new Set<string>();
-const stack: string[] = [];
-const cycles: string[][] = [];
+function findStronglyConnectedCycles(adjacency: Map<string, Set<string>>): string[][] {
+  let nextIndex = 0;
+  const indices = new Map<string, number>();
+  const lowlinks = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const found: string[][] = [];
 
-function strongConnect(node: string): void {
-  indices.set(node, nextIndex);
-  lowlinks.set(node, nextIndex);
-  nextIndex += 1;
-  stack.push(node);
-  onStack.add(node);
+  function strongConnect(node: string): void {
+    indices.set(node, nextIndex);
+    lowlinks.set(node, nextIndex);
+    nextIndex += 1;
+    stack.push(node);
+    onStack.add(node);
 
-  const neighbors = [...(graph.get(node) ?? [])].sort();
-  for (const neighbor of neighbors) {
-    if (!indices.has(neighbor)) {
-      strongConnect(neighbor);
-      lowlinks.set(node, Math.min(lowlinks.get(node) as number, lowlinks.get(neighbor) as number));
-    } else if (onStack.has(neighbor)) {
-      lowlinks.set(node, Math.min(lowlinks.get(node) as number, indices.get(neighbor) as number));
+    const neighbors = [...(adjacency.get(node) ?? [])].sort();
+    for (const neighbor of neighbors) {
+      if (!indices.has(neighbor)) {
+        strongConnect(neighbor);
+        lowlinks.set(node, Math.min(lowlinks.get(node) as number, lowlinks.get(neighbor) as number));
+      } else if (onStack.has(neighbor)) {
+        lowlinks.set(node, Math.min(lowlinks.get(node) as number, indices.get(neighbor) as number));
+      }
+    }
+
+    if (lowlinks.get(node) === indices.get(node)) {
+      const component: string[] = [];
+      for (;;) {
+        const member = stack.pop() as string;
+        onStack.delete(member);
+        component.push(member);
+        if (member === node) break;
+      }
+      if (component.length > 1) {
+        found.push(component.sort());
+      } else if (component.length === 1 && adjacency.get(node)?.has(node)) {
+        found.push([node, node]);
+      }
     }
   }
 
-  if (lowlinks.get(node) === indices.get(node)) {
-    const component: string[] = [];
-    for (;;) {
-      const member = stack.pop() as string;
-      onStack.delete(member);
-      component.push(member);
-      if (member === node) break;
-    }
-    if (component.length > 1) {
-      cycles.push(component.map(relPath).sort());
-    } else if (component.length === 1 && graph.get(node)?.has(node)) {
-      cycles.push([relPath(node), relPath(node)]);
-    }
+  for (const node of [...adjacency.keys()].sort()) {
+    if (!indices.has(node)) strongConnect(node);
+  }
+  return found;
+}
+
+const cycles = findStronglyConnectedCycles(graph).map((component) => component.map(relPath).sort());
+
+// Core inter-directory runtime DAG check (ADR-0038, TASK-166):
+// Projects resolved runtime edges inside packages/core/src/<subdir>/** onto both
+// leaf subdirectories (distinguishing backup vs backup/snapshot) and top-level
+// subdirectories (rolling backup/snapshot up into backup), excluding root files
+// such as index.ts and version.ts.
+const coreSrcDir = resolve(root, "packages/core/src");
+
+function coreSubdirectoryKeys(filePath: string): { leaf: string; top: string } | null {
+  const rel = relative(coreSrcDir, filePath).split("\\").join("/");
+  if (rel.startsWith("..") || !rel.includes("/")) return null;
+  const leaf = rel.slice(0, rel.lastIndexOf("/"));
+  const top = rel.slice(0, rel.indexOf("/"));
+  return { leaf, top };
+}
+
+const coreLeafDirGraph = new Map<string, Set<string>>();
+const coreTopDirGraph = new Map<string, Set<string>>();
+
+function addDirEdge(targetGraph: Map<string, Set<string>>, fromDir: string, toDir: string): void {
+  if (fromDir === toDir) return;
+  let edges = targetGraph.get(fromDir);
+  if (edges === undefined) {
+    edges = new Set();
+    targetGraph.set(fromDir, edges);
+  }
+  edges.add(toDir);
+  if (!targetGraph.has(toDir)) {
+    targetGraph.set(toDir, new Set());
   }
 }
 
-for (const node of [...graph.keys()].sort()) {
-  if (!indices.has(node)) strongConnect(node);
+for (const [fromFile, targets] of graph.entries()) {
+  const fromKeys = coreSubdirectoryKeys(fromFile);
+  if (fromKeys === null) continue;
+  for (const toFile of targets) {
+    const toKeys = coreSubdirectoryKeys(toFile);
+    if (toKeys === null) continue;
+    addDirEdge(coreLeafDirGraph, fromKeys.leaf, toKeys.leaf);
+    addDirEdge(coreTopDirGraph, fromKeys.top, toKeys.top);
+  }
 }
 
-if (unresolvedErrors.length > 0 || cycles.length > 0) {
+const coreLeafDirCycles = findStronglyConnectedCycles(coreLeafDirGraph);
+const leafCycleKeys = new Set(coreLeafDirCycles.map((cycle) => cycle.join(" <-> ")));
+const coreTopOnlyDirCycles = findStronglyConnectedCycles(coreTopDirGraph).filter(
+  (cycle) => !leafCycleKeys.has(cycle.join(" <-> ")),
+);
+
+if (
+  unresolvedErrors.length > 0 ||
+  cycles.length > 0 ||
+  coreLeafDirCycles.length > 0 ||
+  coreTopOnlyDirCycles.length > 0
+) {
   console.error("cycle check failed:");
   for (const error of unresolvedErrors) {
     console.error(`  ${error}`);
@@ -232,7 +290,15 @@ if (unresolvedErrors.length > 0 || cycles.length > 0) {
   for (const cycle of cycles) {
     console.error(`  runtime cycle: ${cycle.join(" <-> ")}`);
   }
+  for (const cycle of coreLeafDirCycles) {
+    console.error(`  core directory cycle: ${cycle.join(" <-> ")}`);
+  }
+  for (const cycle of coreTopOnlyDirCycles) {
+    console.error(`  core directory cycle (top-level rollup): ${cycle.join(" <-> ")}`);
+  }
   process.exit(1);
 }
 
-console.log(`cycle check passed: zero runtime circular dependencies across ${String(files.length)} files.`);
+console.log(
+  `cycle check passed: zero runtime circular dependencies across ${String(files.length)} files and zero core directory cycles.`,
+);

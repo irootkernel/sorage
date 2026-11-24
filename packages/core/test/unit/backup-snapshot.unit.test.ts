@@ -7,7 +7,7 @@ import {
   type SnapshotData,
   snapshotFiles,
   snapshotManifest,
-} from "../../src/backup-snapshot";
+} from "../../src/backup/snapshot/backup-snapshot";
 import { canonicalJson, canonicalJsonLine } from "../../src/primitives/json";
 
 /**

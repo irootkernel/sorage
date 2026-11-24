@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { type BackupCensus, backupVerify, ensureVaultGitRepository } from "../../src/backup-commands";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
-import { isRuntimeTrackedPath, type VaultGitRepository } from "../../src/git";
+import { type BackupCensus, backupVerify } from "../../src/backup/backup-verify";
+import { ensureVaultGitRepository } from "../../src/backup/vault-git";
+import { type AppError, appError, err, ok, type Result } from "../../src/shared/errors";
+import { isRuntimeTrackedPath, type VaultGitRepository } from "../../src/backup/git";
 
 /**
  * The TASK-053 decision matrix (INIT-007, BKP-001, BKP-004, BKP-022): Git

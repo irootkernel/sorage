@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveProjectSlug, validateProjectSlug } from "../../src/project-commands";
+import { deriveProjectSlug, validateProjectSlug } from "../../src/project/project-commands";
 
 describe("slug derivation from a display name in any script", () => {
   it("derives the documented latin examples", () => {

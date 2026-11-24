@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { errorSpec } from "../../src/errors";
-import type { SendOutcome, SentHandoff } from "../../src/handoff-commands";
-import { parseSendRecoveryOutcome } from "../../src/send-recovery";
+import { errorSpec } from "../../src/shared/errors";
+import type { SendOutcome, SentHandoff } from "../../src/handoff/handoff-commands";
+import { parseSendRecoveryOutcome } from "../../src/handoff/send-recovery";
 
 const outcomes = JSON.parse(readFileSync(new URL("./golden/send-recovery.json", import.meta.url), "utf8")) as [
   SendOutcome,

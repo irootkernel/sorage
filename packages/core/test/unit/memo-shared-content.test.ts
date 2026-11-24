@@ -5,13 +5,13 @@ import {
   publicMemoOf,
   MEMO_BODY_BYTES,
   type MemoSnapshot,
-} from "../../src/memos";
+} from "../../src/memo/memos";
 import {
   memoPreviewOf,
   parseMemoDetail,
   parseStoredMemoReceipt,
   serializeMemoReceiptForStorage,
-} from "../../src/memo-protocol";
+} from "../../src/memo/memo-protocol";
 
 /**
  * Shared-content Memo core: the routed-body invariants (inline threshold,

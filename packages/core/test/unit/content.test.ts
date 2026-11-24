@@ -18,10 +18,10 @@ import {
   validateCommonContentEventMetadata,
   validateContentRecord,
   type ContentRecord,
-} from "../../src/content";
+} from "../../src/content/content";
 import { sha256OfBytes, sha256OfText, utf8ByteLength } from "../../src/primitives/validation";
-import { ok } from "../../src/errors";
-import { buildStorageKey } from "../../src/artifacts";
+import { ok } from "../../src/shared/errors";
+import { buildStorageKey } from "../../src/content/artifacts";
 
 const UUID = "0123abcd-0000-4000-8000-000000000001";
 const OWNER = "0123abcd-0000-4000-8000-0000000000ff";
@@ -292,7 +292,7 @@ describe("fetch cache identity", () => {
 
 describe("error catalogue rows", () => {
   it("carries the SOT HTTP and exit mappings for the content codes", async () => {
-    const { errorSpec } = await import("../../src/errors");
+    const { errorSpec } = await import("../../src/shared/errors");
     expect(errorSpec("CONTENT_MATERIALIZING")).toMatchObject({ httpStatus: 409, exitCode: 75 });
     expect(errorSpec("CONTENT_CORRUPTED")).toMatchObject({ httpStatus: 409, exitCode: 73 });
   });

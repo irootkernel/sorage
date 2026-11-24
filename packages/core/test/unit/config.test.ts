@@ -9,7 +9,7 @@ import {
   expandConfiguration,
   expandConfigurationPath,
   validateConfiguration,
-} from "../../src/config";
+} from "../../src/config/config";
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const schemaPath = `${repoRoot}docs/specs/schemas/config.schema.json`;

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { appError, err, ok } from "../../src/errors";
+import { appError, err, ok } from "../../src/shared/errors";
 import {
   commitExchangeBusiness,
   type ExchangeBusinessRepository,
   planExchangeBusiness,
-} from "../../src/exchange-use-cases";
+} from "../../src/exchange/exchange-use-cases";
 import {
   authorizeExchangeJoin,
   type ExchangeBusinessInput,
@@ -18,7 +18,7 @@ import {
   runExchangeCommand,
   unconfirmedExchangeRanges,
   validateExchangeExternal,
-} from "../../src/exchanges";
+} from "../../src/exchange/exchanges";
 
 const exchangeId = "11111111-1111-4111-8111-111111111111";
 const now = new Date("2026-11-20T00:00:00.000Z");

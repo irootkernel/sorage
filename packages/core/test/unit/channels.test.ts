@@ -1,37 +1,39 @@
 import { describe, expect, it } from "vitest";
-import type { AppError, Result } from "../../src/errors";
+import type { AppError, Result } from "../../src/shared/errors";
+import { addParticipant, closeChannel, createChannel, removeParticipant } from "../../src/channel/channel-commands";
+import { channelError } from "../../src/channel/channel-errors";
+import {
+  type ChannelEventInput,
+  channelDomainEvent,
+  validateChannelEventMetadata,
+} from "../../src/channel/channel-events";
+import { ackMessages, postMessage } from "../../src/channel/channel-messages";
 import {
   type AcceptedChannelBody,
-  ackMessages,
-  addParticipant,
   CHANNEL_NAME_BYTES,
-  type ChannelCommandPorts,
-  type ChannelContentPlan,
-  type ChannelEventInput,
-  type ChannelReader,
   type ChannelRecord,
-  type ChannelRepository,
-  type ChannelTransaction,
-  channelBodyRoutesFile,
-  channelDomainEvent,
-  channelError,
-  checkChannelBodyText,
-  closeChannel,
-  createChannel,
   isChannelUuid,
   type MessageRecord,
-  normalizeChannelTitle,
   type ParticipantRecord,
-  postMessage,
-  removeParticipant,
-  validateChannelEventMetadata,
+} from "../../src/channel/channel-model";
+import type {
+  ChannelCommandPorts,
+  ChannelContentPlan,
+  ChannelReader,
+  ChannelRepository,
+  ChannelTransaction,
+} from "../../src/channel/channel-ports";
+import {
+  channelBodyRoutesFile,
+  checkChannelBodyText,
+  normalizeChannelTitle,
   validateChannelHandle,
   validateChannelName,
   validateHandleNote,
   validateMessageRef,
-} from "../../src/channels";
+} from "../../src/channel/channel-validation";
 import { utf8ByteLength } from "../../src/primitives/validation";
-import { appError, err, ok } from "../../src/errors";
+import { appError, err, ok } from "../../src/shared/errors";
 
 const CHANNEL = "aaaaaaaa-0000-4000-8000-000000000001";
 const _CONTENT = "aaaaaaaa-0000-4000-8000-0000000000c1";

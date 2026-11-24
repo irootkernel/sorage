@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { type BackupRunPorts, configureBackup, runBackupOnce } from "../../src/backup-commands";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
-import type { VaultGitRepository } from "../../src/git";
+import { configureBackup } from "../../src/backup/backup-configure";
+import { type BackupRunPorts, runBackupOnce } from "../../src/backup/backup-run";
+import { type AppError, appError, err, ok, type Result } from "../../src/shared/errors";
+import type { VaultGitRepository } from "../../src/backup/git";
 
 /**
  * The TASK-057 push and configuration matrix (BKP-011, BKP-014, BKP-025,
@@ -154,7 +155,7 @@ describe("configureBackup", () => {
       },
     } as never as Parameters<typeof configureBackup>[0] extends never
       ? never
-      : import("../../src/config").Configuration;
+      : import("../../src/config/config").Configuration;
     let writes = 0;
     return {
       writes: () => writes,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderInboxMarker } from "../../src/inbox-marker";
-import type { HandoffView } from "../../src/handoff-read";
+import { renderInboxMarker } from "../../src/handoff/inbox-marker";
+import type { HandoffView } from "../../src/handoff/handoff-read";
 
 /** The derived marker of HND-026 renders the recipient's actionable inbox as a stable, advisory Markdown view. */
 

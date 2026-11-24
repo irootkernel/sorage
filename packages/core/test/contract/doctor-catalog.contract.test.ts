@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { DOCTOR_CATALOG_0_1, DOCTOR_CATALOG_SEVERITY, notInitializedReport, type DoctorReport } from "../../src/doctor";
+import {
+  DOCTOR_CATALOG_0_1,
+  DOCTOR_CATALOG_SEVERITY,
+  notInitializedReport,
+  type DoctorReport,
+} from "../../src/runtime/doctor";
 
 /**
  * Contract snapshot for the doctor catalog (INIT-017): the committed golden files

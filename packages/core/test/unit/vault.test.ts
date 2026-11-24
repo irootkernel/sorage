@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorSpec } from "../../src/errors";
+import { errorSpec } from "../../src/shared/errors";
 import {
   parseVaultMarker,
   REQUIRED_GITATTRIBUTES_LINES,
@@ -9,7 +9,7 @@ import {
   verifyVaultPolicyFiles,
   vaultGitattributesContent,
   vaultGitignoreContent,
-} from "../../src/vault";
+} from "../../src/vault/vault";
 
 function markerBody(overrides: Record<string, unknown> = {}): string {
   return `${JSON.stringify({

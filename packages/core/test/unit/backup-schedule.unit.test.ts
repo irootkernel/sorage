@@ -5,7 +5,7 @@ import {
   nextDueAt,
   nextScheduledInstant,
   previousScheduledInstant,
-} from "../../src/backup-schedule";
+} from "../../src/backup/backup-schedule";
 
 /**
  * The DST and catch-up matrix of section 29 (BKP-026, BKP-015) against the

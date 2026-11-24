@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { backupRestore, validateSnapshot } from "../../src/backup-commands";
-import type { SnapshotData } from "../../src/backup-snapshot";
-import type { LegacySnapshotManifest } from "../../src/memo-snapshot";
-import { type AppError, errorSpec } from "../../src/errors";
-import type { VaultMarker } from "../../src/vault";
+import { backupRestore, validateSnapshot } from "../../src/backup/backup-restore";
+import type { SnapshotData } from "../../src/backup/snapshot/backup-snapshot";
+import type { LegacySnapshotManifest } from "../../src/backup/snapshot/memo-snapshot";
+import { type AppError, errorSpec } from "../../src/shared/errors";
+import type { VaultMarker } from "../../src/vault/vault";
 
 /**
  * The section-32 decision matrix of `backup restore` (BKP-021, RUN-014): a

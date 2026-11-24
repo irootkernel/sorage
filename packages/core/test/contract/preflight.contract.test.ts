@@ -9,7 +9,7 @@ import {
   preflightEnvelope,
   preflightExitCode,
   type PreflightFacts,
-} from "../../src/preflight";
+} from "../../src/runtime/preflight";
 
 /**
  * Contract snapshot for the version-1 preflight report (PFL-003, PFL-007).

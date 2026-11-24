@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { largeContentDisclosureMessage } from "../../src/memo-commands";
+import { largeContentDisclosureMessage } from "../../src/memo/memo-commands";
 
 /**
  * The WR2/WR3 large-content disclosure wording (SHR-011, interface 38.7): the

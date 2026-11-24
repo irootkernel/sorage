@@ -4,9 +4,9 @@ import {
   type BackupRunRow,
   renderBackupCommitMessage,
   runBackupOnce,
-} from "../../src/backup-commands";
-import { type AppError, appError, err, ok, type Result } from "../../src/errors";
-import type { VaultGitRepository } from "../../src/git";
+} from "../../src/backup/backup-run";
+import { type AppError, appError, err, ok, type Result } from "../../src/shared/errors";
+import type { VaultGitRepository } from "../../src/backup/git";
 
 /**
  * The TASK-054 run matrix (BKP-006, BKP-009, BKP-010, BKP-013, BKP-024): the

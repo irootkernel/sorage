@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type AppError, ok, type Result } from "../../src/errors";
-import type { ArtifactReadHandle } from "../../src/artifacts";
-import { fetchHandoff, prepareHandoffFetch } from "../../src/handoff-read";
-import type { HandoffArtifactSummary, HandoffReadPorts, HandoffView } from "../../src/handoff-read";
-import type { NewDomainEvent } from "../../src/events";
+import { type AppError, ok, type Result } from "../../src/shared/errors";
+import type { ArtifactReadHandle } from "../../src/content/artifacts";
+import { fetchHandoff, prepareHandoffFetch } from "../../src/handoff/handoff-read";
+import type { HandoffArtifactSummary, HandoffReadPorts, HandoffView } from "../../src/handoff/handoff-read";
+import type { NewDomainEvent } from "../../src/shared/events";
 
 /**
  * The serving preparation and settlement order of section 11.3 and HND-012/

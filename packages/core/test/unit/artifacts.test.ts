@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStorageKey, isManagedStorageKey } from "../../src/artifacts";
+import { buildStorageKey, isManagedStorageKey } from "../../src/content/artifacts";
 
 describe("buildStorageKey", () => {
   it("builds artifacts/<handoff-id>/<artifact-id>/<stored-name> (VLT-020)", () => {

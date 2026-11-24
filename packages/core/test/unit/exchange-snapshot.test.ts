@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { validateSnapshot } from "../../src/backup-commands";
-import { validateExchangeCollaboration } from "../../src/exchange-collaboration-snapshot";
+import { validateSnapshot } from "../../src/backup/backup-restore";
+import { validateExchangeCollaboration } from "../../src/backup/snapshot/exchange-collaboration-snapshot";
 import { canonicalJson } from "../../src/primitives/json";
 import { sha256OfText } from "../../src/primitives/validation";
 import {
@@ -8,9 +8,9 @@ import {
   parseExchangeSnapshot,
   type SnapshotDataV5,
   snapshotFilesV5,
-} from "../../src/exchange-snapshot";
-import { snapshotFilesV4 } from "../../src/handoff-reporting-snapshot";
-import { parseVersionedSnapshotManifest } from "../../src/memo-snapshot";
+} from "../../src/backup/snapshot/exchange-snapshot";
+import { snapshotFilesV4 } from "../../src/backup/snapshot/handoff-reporting-snapshot";
+import { parseVersionedSnapshotManifest } from "../../src/backup/snapshot/memo-snapshot";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const PEER = "22222222-2222-4222-8222-222222222222";

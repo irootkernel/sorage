@@ -76,7 +76,7 @@ Every pre-work probe ran against the unmodified checkout with `SORAGE_HOME` isol
 
 ## 3. `SchemaSurface` `"exchange"` floor rationale (`TASK-152`)
 
-`packages/core/src/known-schemas.ts` tracks per-surface minimum schema floors for every shipped domain (`operational: 1`, `preflight: 1`, `send-replay: 4`, `memo: 7`, `channel: 11`), but M10 omitted `"exchange"` from `SchemaSurface`. `TASK-152` adds `"exchange"` with `SCHEMA_SURFACE_FLOORS.exchange = 16` (`16 / exchange-notices`) rather than `13` (`exchange-foundation`) because:
+`packages/core/src/shared/known-schemas.ts` tracks per-surface minimum schema floors for every shipped domain (`operational: 1`, `preflight: 1`, `send-replay: 4`, `memo: 7`, `channel: 11`), but M10 omitted `"exchange"` from `SchemaSurface`. `TASK-152` adds `"exchange"` with `SCHEMA_SURFACE_FLOORS.exchange = 16` (`16 / exchange-notices`) rather than `13` (`exchange-foundation`) because:
 
 - `memo: 7` and `channel: 11` both reflect the first shipped schema containing that domain's complete table set (`v0.1.2` for Memo, `v0.1.3` for Channel `channels-v2`).
 - Exchange first shipped in `v0.1.5` at schema `16`, and Exchange operations across collaboration, lifecycle and notice commands depend on tables introduced across migrations `13` through `16` (`exchanges`, `exchange_claims`, `exchange_transitions`, `exchange_notice_presence`, `exchange_notice_claims`, `exchange_notice_issues`); versions `13`–`15` were unreleased intermediate EPIC-021 increments.

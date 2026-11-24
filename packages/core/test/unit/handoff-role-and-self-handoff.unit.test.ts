@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type AppError, err, ok } from "../../src/errors";
-import { sendHandoffs, sendRequestHash, type SendInput, type SendPorts } from "../../src/handoff-commands";
+import { type AppError, err, ok } from "../../src/shared/errors";
+import { sendHandoffs, sendRequestHash, type SendInput, type SendPorts } from "../../src/handoff/handoff-commands";
 import {
   fetchHandoff,
   getHandoff,
@@ -9,14 +9,19 @@ import {
   type HandoffReadPorts,
   type HandoffView,
   type ReadActorInput,
-} from "../../src/handoff-read";
-import type { ProjectCommandPorts } from "../../src/project-commands";
-import type { Project, ProjectBinding } from "../../src/projects";
-import { reportingRole, setRecipientComment } from "../../src/reporting-commands";
-import { requestDeletion, type RetentionPorts } from "../../src/retention-commands";
-import { setReviewNote, type ReviewPorts } from "../../src/review-commands";
-import { reviseHandoff, type RevisionPorts } from "../../src/revision-commands";
-import { acceptHandoff, declineHandoff, withdrawHandoff, type TerminalPorts } from "../../src/terminal-commands";
+} from "../../src/handoff/handoff-read";
+import type { ProjectCommandPorts } from "../../src/project/project-commands";
+import type { Project, ProjectBinding } from "../../src/project/projects";
+import { reportingRole, setRecipientComment } from "../../src/handoff/reporting-commands";
+import { requestDeletion, type RetentionPorts } from "../../src/handoff/retention-commands";
+import { setReviewNote, type ReviewPorts } from "../../src/handoff/review-commands";
+import { reviseHandoff, type RevisionPorts } from "../../src/handoff/revision-commands";
+import {
+  acceptHandoff,
+  declineHandoff,
+  withdrawHandoff,
+  type TerminalPorts,
+} from "../../src/handoff/terminal-commands";
 import { workspaceKey } from "../../src/primitives/identity";
 
 const INSTALLATION = "00000000-0000-4000-8000-0000000000i1";

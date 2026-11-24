@@ -213,4 +213,92 @@ describe("cycle gate", () => {
     expect(result.stderr).toContain("packages/core/src/dyn-a.ts");
     expect(result.stderr).toContain("packages/core/src/dyn-b.ts");
   });
+
+  it("fails with exit 1 on a core inter-directory runtime cycle with zero file-level cycles", () => {
+    const root = makeFixture((r) => {
+      mkdirSync(join(r, "packages/core/src/alpha"), { recursive: true });
+      mkdirSync(join(r, "packages/core/src/beta"), { recursive: true });
+      writeFileSync(join(r, "packages/core/src/alpha/a2.ts"), "export const a2 = 2;\n");
+      writeFileSync(join(r, "packages/core/src/beta/b1.ts"), "export const b1 = 1;\n");
+      writeFileSync(
+        join(r, "packages/core/src/alpha/a1.ts"),
+        'import { b1 } from "../beta/b1";\nexport const a1 = b1;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/beta/b2.ts"),
+        'import { a2 } from "../alpha/a2";\nexport const b2 = a2;\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("core directory cycle: alpha <-> beta");
+    expect(result.stderr).not.toContain("runtime cycle:");
+  });
+
+  it("fails with exit 1 on a nested backup <-> backup/snapshot runtime directory cycle", () => {
+    const root = makeFixture((r) => {
+      mkdirSync(join(r, "packages/core/src/backup/snapshot"), { recursive: true });
+      writeFileSync(join(r, "packages/core/src/backup/helper.ts"), "export const helper = 1;\n");
+      writeFileSync(join(r, "packages/core/src/backup/snapshot/reader.ts"), "export const reader = 2;\n");
+      writeFileSync(
+        join(r, "packages/core/src/backup/entry.ts"),
+        'import { reader } from "./snapshot/reader";\nexport const entry = reader;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/backup/snapshot/writer.ts"),
+        'import { helper } from "../helper";\nexport const writer = helper;\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("core directory cycle: backup <-> backup/snapshot");
+    expect(result.stderr).not.toContain("runtime cycle:");
+  });
+
+  it("fails with exit 1 when only the top-level core directory rollup exposes a cycle", () => {
+    const root = makeFixture((r) => {
+      mkdirSync(join(r, "packages/core/src/backup/snapshot"), { recursive: true });
+      mkdirSync(join(r, "packages/core/src/other"), { recursive: true });
+      writeFileSync(join(r, "packages/core/src/backup/snapshot/leaf.ts"), "export const leaf = 1;\n");
+      writeFileSync(
+        join(r, "packages/core/src/other/bridge.ts"),
+        'import { leaf } from "../backup/snapshot/leaf";\nexport const bridge = leaf;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/backup/entry.ts"),
+        'import { bridge } from "../other/bridge";\nexport const entry = bridge;\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("core directory cycle (top-level rollup): backup <-> other");
+    expect(result.stderr).not.toContain("runtime cycle:");
+  });
+
+  it("passes on an acyclic multi-directory core layout with root barrel re-exports and type-only reverse edges", () => {
+    const root = makeFixture((r) => {
+      mkdirSync(join(r, "packages/core/src/shared"), { recursive: true });
+      mkdirSync(join(r, "packages/core/src/domain"), { recursive: true });
+      writeFileSync(
+        join(r, "packages/core/src/shared/base.ts"),
+        'import type { DomainShape } from "../domain/model";\nexport type BaseRef = DomainShape;\nexport const base = 1;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/domain/model.ts"),
+        'import { base } from "../shared/base";\nexport type DomainShape = { base: number };\nexport const model = base;\n',
+      );
+      writeFileSync(
+        join(r, "packages/core/src/index.ts"),
+        'export * from "./shared/base";\nexport * from "./domain/model";\n',
+      );
+    });
+    const result = runScript("check-cycles.ts", root);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("passes on the real repository core directory layout", () => {
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+    const result = runScript("check-cycles.ts", repoRoot);
+    expect(result.exitCode).toBe(0);
+  });
 });

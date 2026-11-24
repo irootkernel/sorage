@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { appError, err, ok } from "../../src/errors";
-import type { HandoffListFilters, HandoffReadPorts, HandoffView, ListQuery } from "../../src/handoff-read";
-import { listInbox, waitForNewInboxItems } from "../../src/handoff-read";
+import { appError, err, ok } from "../../src/shared/errors";
+import type { HandoffListFilters, HandoffReadPorts, HandoffView, ListQuery } from "../../src/handoff/handoff-read";
+import { listInbox, waitForNewInboxItems } from "../../src/handoff/handoff-read";
 
 /**
  * The `inbox --wait` semantics of CLI-020 at the use-case level: the wait wakes only

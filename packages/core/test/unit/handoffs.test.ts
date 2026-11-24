@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorSpec } from "../../src/errors";
+import { errorSpec } from "../../src/shared/errors";
 import {
   type ActorRole,
   deriveNextActors,
@@ -11,7 +11,7 @@ import {
   REVIEW_STATES,
   TERMINAL_REVIEW_STATES,
   USER_ADMIN_OPERATIONS,
-} from "../../src/handoffs";
+} from "../../src/handoff/handoffs";
 
 /**
  * The exhaustive section 4.2 matrix: every cell of the transition table, including

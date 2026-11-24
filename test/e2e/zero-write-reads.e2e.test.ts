@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import { MIGRATIONS } from "../../packages/adapters/src/sqlite/migrations";
 import { migrate } from "../../packages/adapters/src/sqlite/migrator";
-import { knownSchemaMaximum } from "../../packages/core/src/known-schemas";
+import { knownSchemaMaximum } from "../../packages/core/src/shared/known-schemas";
 import {
   BINARY,
   envelopeOf,

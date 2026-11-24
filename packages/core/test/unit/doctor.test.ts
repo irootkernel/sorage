@@ -7,7 +7,7 @@ import {
   runDoctor,
   type CheckOutcome,
   type DoctorPorts,
-} from "../../src/doctor";
+} from "../../src/runtime/doctor";
 
 describe("the doctor catalog", () => {
   it("holds exactly the twenty-one documented ids in the section 35 order", () => {

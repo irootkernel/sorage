@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { ok } from "../../src/errors";
-import type { HandoffView } from "../../src/handoff-read";
+import { ok } from "../../src/shared/errors";
+import type { HandoffView } from "../../src/handoff/handoff-read";
 import {
   completeProcessing,
   type RecipientComment,
   type ReportMutation,
   setRecipientComment,
   startProcessing,
-} from "../../src/reporting-commands";
-import { type ReviewPorts, removeReviewNote, setReviewNote, withdrawReviewNote } from "../../src/review-commands";
+} from "../../src/handoff/reporting-commands";
+import {
+  type ReviewPorts,
+  removeReviewNote,
+  setReviewNote,
+  withdrawReviewNote,
+} from "../../src/handoff/review-commands";
 
 const NOW = "2026-10-27T10:00:00.000Z";
 const request = {

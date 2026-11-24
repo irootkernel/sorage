@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isWellFormedToken, MINIMUM_TOKEN_BYTES, rotateApiToken, tokensEqual } from "../../src/tokens";
-import { appError } from "../../src/errors";
+import { isWellFormedToken, MINIMUM_TOKEN_BYTES, rotateApiToken, tokensEqual } from "../../src/runtime/tokens";
+import { appError } from "../../src/shared/errors";
 
 describe("token well-formedness (SEC-020)", () => {
   it("accepts base64url strings decoding to at least 32 bytes", () => {

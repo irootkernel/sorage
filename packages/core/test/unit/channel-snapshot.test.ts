@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { SnapshotEvent } from "../../src/backup-snapshot";
+import type { SnapshotEvent } from "../../src/backup/snapshot/backup-snapshot";
 import { canonicalJson } from "../../src/primitives/json";
 import {
   channelContentFilePath,
@@ -11,9 +11,13 @@ import {
   validateSnapshotChannelContent,
   validateSnapshotChannelHistory,
   validateSnapshotChannelShard,
-} from "../../src/channel-snapshot";
-import type { ChannelContentFileExport, SnapshotChannelShard, SnapshotDataV3 } from "../../src/content-snapshot";
-import type { ContentSnapshotManifest } from "../../src/memo-snapshot";
+} from "../../src/backup/snapshot/channel-snapshot";
+import type {
+  ChannelContentFileExport,
+  SnapshotChannelShard,
+  SnapshotDataV3,
+} from "../../src/backup/snapshot/content-snapshot";
+import type { ContentSnapshotManifest } from "../../src/backup/snapshot/memo-snapshot";
 
 /**
  * The rebuilt format-3 Channel snapshot validators (section 38.8, section 38.9

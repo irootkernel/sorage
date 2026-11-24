@@ -4,13 +4,11 @@ import {
   type BackupIdempotencyPort,
   type BackupRunCommandPorts,
   type BackupRunRow,
-  type BackupStatusPorts,
-  type BackupStatusReport,
-  backupStatus,
   runBackupCommand,
-} from "../../src/backup-commands";
-import { type AppError, err, ok } from "../../src/errors";
-import type { VaultGitRepository } from "../../src/git";
+} from "../../src/backup/backup-run";
+import { type BackupStatusPorts, type BackupStatusReport, backupStatus } from "../../src/backup/backup-status";
+import { type AppError, err, ok } from "../../src/shared/errors";
+import type { VaultGitRepository } from "../../src/backup/git";
 
 /**
  * The TASK-055 command surface (BKP-016, BKP-017): the idempotency replay

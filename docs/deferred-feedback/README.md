@@ -60,7 +60,7 @@ These items surfaced while the [2026-11-24 EPIC-023 execution refinement](../gov
 
 ### Full Result conversion of Exchange storage methods
 
-- **Impact:** Exchange storage methods behind the core `ExchangeBusinessRepository` port (`packages/core/src/exchange-use-cases.ts`) return plain values and abort by throwing a carried `AppError`, which `runInTransaction` turns into a rollback and a typed error. `TASK-158` converts only adapter-owned orchestration; a full conversion changes a core port and its use cases.
+- **Impact:** Exchange storage methods behind the core `ExchangeBusinessRepository` port (`packages/core/src/exchange/exchange-use-cases.ts`) return plain values and abort by throwing a carried `AppError`, which `runInTransaction` turns into a rollback and a typed error. `TASK-158` converts only adapter-owned orchestration; a full conversion changes a core port and its use cases.
 - **Owner:** `docs/deferred-feedback/README.md` (scoped out of `TASK-158`)
 - **Re-entry:** Change the repository port methods to return `Result`, update `commitExchangeBusiness` and `planExchangeBusiness`, and prove rollback, `storageFailure` precedence and the `commitAttempted` cleanup path with focused failure tests.
 

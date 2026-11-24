@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { exportSnapshot, validateSnapshot } from "../../src/backup-commands";
-import type { SnapshotData, SnapshotEvent, SnapshotFile } from "../../src/backup-snapshot";
-import type { SnapshotChannelShard, SnapshotDataV3, SnapshotMemoV3 } from "../../src/content-snapshot";
-import { ok } from "../../src/errors";
+import { exportSnapshot } from "../../src/backup/backup-export";
+import { validateSnapshot } from "../../src/backup/backup-restore";
+import type { SnapshotData, SnapshotEvent, SnapshotFile } from "../../src/backup/snapshot/backup-snapshot";
+import type { SnapshotChannelShard, SnapshotDataV3, SnapshotMemoV3 } from "../../src/backup/snapshot/content-snapshot";
+import { ok } from "../../src/shared/errors";
 import {
   EXCHANGE_SNAPSHOT_FILE,
   type ExchangeSnapshotRecord,
@@ -11,9 +12,9 @@ import {
   parseExchangeSnapshot,
   type SnapshotDataV5,
   snapshotFilesV5,
-} from "../../src/exchange-snapshot";
-import type { SnapshotHandoffV4 } from "../../src/handoff-reporting-snapshot";
-import { type ExchangeSnapshotManifest, parseVersionedSnapshotManifest } from "../../src/memo-snapshot";
+} from "../../src/backup/snapshot/exchange-snapshot";
+import type { SnapshotHandoffV4 } from "../../src/backup/snapshot/handoff-reporting-snapshot";
+import { type ExchangeSnapshotManifest, parseVersionedSnapshotManifest } from "../../src/backup/snapshot/memo-snapshot";
 import { canonicalJson } from "../../src/primitives/json";
 import { sha256OfText, utf8ByteLength } from "../../src/primitives/validation";
 

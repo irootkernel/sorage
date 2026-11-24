@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { defaultConfiguration } from "../../src/config";
+import { defaultConfiguration } from "../../src/config/config";
 import {
   type ConfigCommandPorts,
   type ConfigCommandStore,
   type ConfigTextCodec,
   setConfigurationValue,
-} from "../../src/config-commands";
-import { ok } from "../../src/errors";
+} from "../../src/config/config-commands";
+import { ok } from "../../src/shared/errors";
 
 const UUID = "9d57384c-030e-4ff7-90ca-c615d8043db2";
 const sampleConfig = defaultConfiguration(UUID);
