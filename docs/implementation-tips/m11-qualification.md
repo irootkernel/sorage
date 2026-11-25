@@ -1,6 +1,6 @@
 # M11 Architecture Hardening and Modernization Qualification Map
 
-This guidance document records the reproducible pre-work baselines captured in `TASK-147` against unmodified `HEAD` (`f842225`, runtime `SORAGE_VERSION = "0.1.5"`, schema `16`, global backup format `5`), the target verification matrix for `EPIC-022` through `EPIC-024`, and the `SchemaSurface` `"exchange"` floor rationale. Normative requirements live in [required-specification.md](../specs/required-specification.md), [ADR-0038](../architecture-decision-records/README.md#adr-0038-m11-non-breaking-hardening-v17-index-migration-and-internal-architecture-cleanup), [interfaces-and-operations.md](../specs/interfaces-and-operations.md#42-m11-hardening-schema-v17-and-contract-classification) and [Gate M11](../specs/testing-and-acceptance.md#912-gate-m11-architecture-hardening-and-modernization-end-of-epic-022-epic-023-and-epic-024); delivery status lives solely in [the roadmap](../roadmap/README.md).
+This guidance document records the reproducible pre-work baselines captured in `TASK-147` against unmodified `HEAD` (`f842225`, runtime `SORAGE_VERSION = "0.1.5"`, schema `16`, global backup format `5`), the target verification matrix for `EPIC-022` through `EPIC-024`, the `SchemaSurface` `"exchange"` floor rationale, and the assembled candidate evidence and its verification limits from `TASK-163`. Normative requirements live in [required-specification.md](../specs/required-specification.md), [ADR-0038](../architecture-decision-records/README.md#adr-0038-m11-non-breaking-hardening-v17-index-migration-and-internal-architecture-cleanup), [interfaces-and-operations.md](../specs/interfaces-and-operations.md#42-m11-hardening-schema-v17-and-contract-classification) and [Gate M11](../specs/testing-and-acceptance.md#912-gate-m11-architecture-hardening-and-modernization-end-of-epic-022-epic-023-and-epic-024); delivery status lives solely in [the roadmap](../roadmap/README.md).
 
 ## 1. Baseline environment and commit metadata
 
@@ -99,7 +99,7 @@ Every pre-work probe ran against the unmodified checkout with `SORAGE_HOME` isol
 
 ## 6. Observed `EPIC-022` and `TASK-159` before/after qualification results
 
-The table below records the post-implementation measurements captured in isolated temporary `SORAGE_HOME` directories on the same Apple M5 Pro / macOS `27.0.1` / Bun `1.4.2` / Node `26.7.0` environment after completing `TASK-151` through `TASK-154` (`EPIC-022`) and `TASK-159` (`EPIC-023`). The `EPIC-023` integrated gate (`TASK-167`) and final end-of-milestone M11 repeat (`TASK-163`) remain explicitly open.
+The table below records the post-implementation measurements captured in isolated temporary `SORAGE_HOME` directories on the same Apple M5 Pro / macOS `27.0.1` / Bun `1.4.2` / Node `26.7.0` environment after completing `TASK-151` through `TASK-154` (`EPIC-022`) and `TASK-159` (`EPIC-023`). The `EPIC-023` integrated gate (`TASK-167`) and the assembled M11 re-measurement were still open at the time of this record.
 
 | Metric | Pre-work baseline (`f842225`) | Post-implementation observed | Owning task / commit | Improvement |
 |---|---|---|---|---|
@@ -111,3 +111,76 @@ The table below records the post-implementation measurements captured in isolate
 | Metric 3: Daemon `GET /api/v1/health` during 64 MiB sweep | `31` probes; p95 `0.87 ms`, max `31.81 ms` | `5` probes; median `1.10 ms`, p95 `1.22 ms`, max `7.30 ms` (concurrent Memo `POST` `3.21 ms`, `PATCH` `1.94 ms`) | `8aa1f80` (`TASK-152`) + `0f2ead5` (`TASK-153`) | `~4.4×` lower max latency; live concurrent Memo mutations |
 | Metric 4: 10 MiB Exchange `planRead` (160 × 64 KiB pages) | `1,677,721,600` bytes (`1,600 MiB`, `160×`), `623.60 ms` (median `3.732 ms`) | `20,905,984` bytes (`19.94 MiB`, `1.99×`), `18.41 ms` (median `0.073 ms`, p95 `0.183 ms`); activation re-read `0` bytes | `69d9876` (`TASK-154`) | `80.25×` less disk I/O, `33.9×` faster total, `51×` faster median page |
 | Metric 5: Compiled `sorage exchange renew` cold spawn | `71.98 ms` median (`70.42–73.76 ms`), eager `@sorage/daemon` static import (`apps/cli/src/main.ts` 3,973 lines) | `68.76 ms` median (min `66.94 ms`, mean `68.91 ms`, p95/max `72.09 ms`, 1 warm-up + 10/10 cold `ok: true`); `main.ts` `52` lines; `0` static closure paths to `@sorage/daemon` from non-serve entry points (`main.ts`, `program.ts`, `internal-probes.ts`, `mcp-server.ts`); `0` daemon module evaluations on renew/probes/MCP (managed Bun + compiled embedded-bundle initializer CFG) | `TASK-159` (`EPIC-023` integrated gate open in `TASK-167`; final M11 repeat open in `TASK-163`) | `-3.22 ms` (`-4.5%`, `1.05×` faster); `@sorage/daemon` initialization eliminated from non-daemon CLI invocations |
+
+## 7. Assembled M11 qualification observations
+
+### 7.1 Exact source and complete automated gate
+
+The assembled product commit is `1723cfe807726d3f7f2792615aa1990dc72390b2`, built from a detached checkout on Apple M5 Pro, macOS `27.0.1` build `26A434`, with managed Bun `1.4.2` and Node `26.7.0`. The complete `make test` ran once through the configured Gaori `test` command with its 3,600-second timeout. The child and runner both exited 0 in 207.940 seconds. The tracked worktree stayed byte-identical to that commit. The detached checkout used a local link to the existing managed toolchain.
+
+| Gate stage | Passing files | Passing tests |
+|---|---:|---:|
+| Unit | 88 | 1,191 |
+| Integration | 142 | 1,684 |
+| Contract | 21 | 152 |
+| Compiled E2E | 52 | 248 |
+| Release AJ-16 | 1 | 1 |
+| Total | 304 | 3,276 |
+
+Preparation passed the managed toolchain, version, format, Web embedding, lint, typecheck, import, runtime cycle, dependency and Source of Truth checks. The ordered gate packaged once before integration and reused the signed binary for the compiled journeys and release check. It covered the applicable prior journeys through AJ-37, all 14 Web E2E suites, and both compiled tests in the [MCP sandbox suite](../../test/e2e/mcp-sandboxed-client.e2e.test.ts). The axe report found zero violations on Dashboard, Inbox, Compose, Projects, Settings and Diagnostics. The axe suite reports findings on those six routes and does not fail on the number of violations.
+
+The candidate's signed darwin-arm64 SHA-256 is `5053d371c19f94806ff4d4aca1b5b60fe0983e2d1c540d6d1a57095a3bb8cdb1`. Its two unsigned compilations matched at `93b3a2dddf340297a4811020cf6f1ba0fec12864f435e6a196ba2829d1dbaf02`. The annotated `v0.1.5` tag object `aa5e98d47c63729536ec5643904ba893c2ec1174` resolves to release commit `878ba9d61c489d1df56ef31a62b5349946232510`. Building that authentic detached predecessor with `make deps build` produced SHA-256 `1d5f19d8ed5e40b68899399ea8b6609fa6703bb46944891435d59d943ca6f102`. Both source revisions set `SORAGE_VERSION` to `"0.1.5"`. The source revision, executable digest, and supported schema (16 for the predecessor and 17 for the candidate) distinguish the two builds.
+
+Under [the evidence reuse rules](../governance/README.md#181-proportionate-verification-and-review), the complete gate applies to this qualification record. Subsequent edits cover the TASK-163 roadmap projection and the documentation for Master's revised metric 5 criterion. The Web source and embedded bytes match the prior independently inspected TASK-162 implementation. The compiled suite and that earlier rendered evidence cover the unchanged browser behavior. The earlier independent observation identified pre-existing narrow-screen overflow on Dashboard, Compose and Backup, recorded in [deferred feedback](../deferred-feedback/README.md#narrow-web-layout-overflow).
+
+### 7.2 Authentic predecessor upgrade, refusal and rollback
+
+| Step | Observed result |
+|---|---|
+| 1. Seed and preserve the schema-16 predecessor | The built `v0.1.5` predecessor restored a Format 1 donor generated from the frozen legacy revision fixture carrying the ADR-0031 short ID, then created synthetic Projects, Handoffs with recipient processing and comments, inline and file-backed Memos, a Channel message, Exchange collaboration data, and a connection-check notice acknowledgement. The connection-check age used the existing synthetic CLI contract fixture technique. The verified Format 5 donor contained 3 Projects, 3 Handoffs, 3 Artifacts, 2 Memos, 1 Channel, and 2 Exchanges. Its manifest SHA-256 is `4ae082fe8dd0661fcf337876fd93a928a689e0697955b2d11b12a21c19b5d488`. A separate predecessor restore and `vault verify` passed before the upgrade. |
+| 2. Inspect before upgrading | The candidate's `preflight --json` returned `upgrade_required` and exit 78. The SQLite main file and WAL digests stayed identical through the inspection. |
+| 3. Upgrade in place | The candidate's `backup run --as-user --json` installed migration `17 / m11-secondary-indexes-v1`. Subsequent `preflight --json` was `compatible` with exit 0, `doctor --json` reported zero blocking checks, and `backup verify` and `vault verify` passed. All 12 indexes were present. The compared domain tables, operational Exchange rows involved in the fixture, and Artifact identities including `ac9d65873` matched their pre-upgrade values. |
+| 4. Reject forward access from the predecessor | On the upgraded home, predecessor `vault status --json`, `project list --json`, `memo list --json` and `doctor --json` each exited 78 with `STORAGE_SCHEMA_UNSUPPORTED`. Its `preflight --json` returned `unsupported` with exit 78. The database and WAL bytes matched before and after each command. |
+| 5. Restore with the matching predecessor | A fresh separate home and Vault accepted dry-run and confirmed restore from the retained donor. The dry-run preserved the target DB and WAL bytes. `vault verify` exited 0, schema remained 16, and the retained business identities, normalized content bytes and digests, and metadata matched the source. The donor file inventory was byte-identical afterward. |
+| 6. Exercise Format 1–5 and short-ID compatibility | The exact aggregate passed the [frozen snapshot characterization matrix](../../packages/adapters/test/int/snapshot-characterization.int.test.ts), including dry-run and restore for all five formats, exact content and target file modes, and positive verification. It also passed the [legacy revision tests](../../packages/adapters/test/int/legacy-revise-upgrade.int.test.ts) exercising the short ID through Formats 1, 2 and current Format 5. The signed candidate also independently ran native `backup restore --dry-run`, confirmed `backup restore`, and `vault verify` in a separate home for each of Formats 1–5. Private copies of the original frozen fixtures substituted `ac9d65873` for one Artifact ID and adjusted its references and Artifact path. Each restore retained that ID and storage key, the file SHA-256 `bd3daf8408a492559e048bb8061311085f3056001415289100548212d51ab1c5`, and mode `0444`. All five Vault verifications found zero blocking issues, and each donor remained byte-identical through the drill. |
+
+The in-place comparison used the stored rows directly. All 16 files in the non-Git Vault inventory, including the 11 snapshot files, matched the retained predecessor donor byte for byte after the upgrade. Restore parity follows the backup contract. Restores construct new internal content-record IDs, leave bindings, operational receipts and claims empty, and preserve Exchange working-material metadata with the working bytes unavailable. The drill compared the identities and content joins the snapshot retains, including the short Artifact storage key, alongside integrity verification. The guarded old executable was the restored home's matched reader. The upgraded live home was kept separate during rollback.
+
+### 7.3 Performance re-measurement
+
+| TASK-147 baseline | Canonical pre-work result | Fresh assembled result |
+|---|---|---|
+| 1. SQLite opens and locks | `send` / `revise` / `doctor` opened 12 / 12 / 9 connections, with 6 / 6 / 0 total and 4 / 4 / 0 empty-migrator `BEGIN IMMEDIATE` locks | 2 / 2 / 2 file connections, 2 / 2 / 0 total write locks, zero empty-migrator locks and zero foreign-key-off toggles. Counted unique connections and SQL through Bun SQLite `exec`, `prepare` and `query` on successful in-process file send, file revise and diagnostic commands. |
+| 2. Handoff listing SQL | 303 statements for 50 returned rows, 1.294 ms | 1 statement for 50 rows on a 60-Handoff two-Project fixture, 1.108 ms. The actual inbox projection used the recipient/updating-order index. |
+| 3. Health during background work | Maximum 2,313.22 ms during the 1.5-second Git push and 31.81 ms during the 64 MiB sweep | Maximum 11.780 ms across 663 probes during the local push, and 1.769 ms across 10 probes during the 67,108,864-byte sweep. The push completed successfully in 1,890.062 ms. The sweep checked one Artifact in 34.184 ms with zero mismatches. An authenticated loopback probe ran in a separate OS process with a READY barrier. The idle maximum was 1.827 ms across 143 probes. |
+| 4. Exchange paged reading | 1,677,721,600 bytes read and 623.60 ms for 160 pages of 64 KiB over 10 MiB | 20,905,984 bytes returned by 321 native file reads, about 80.25× fewer bytes than the pre-work probe. The reconstructed 10,485,760-byte payload matched exactly. The read-count instrument recorded 269.286 ms total and 1.577 ms median per page. Those timings describe the instrumented run and are not equivalent to the timed-only measurements in section 6. |
+| 5. Compiled `exchange renew` cold spawn | 71.98 ms median, with daemon eagerly initialized | The signed candidate's 10 cold spawns had a 75.405 ms median after one warm-up. The comparable plain managed Bun compile measured 86.572 ms median on the candidate and 93.454 ms on a fresh `f842225` baseline in the same session. Both candidate series failed the original comparison to 71.98 ms. Both medians pass Master's revised Gate M11 cutoff of at most 1,000 ms, and all 20 timed candidate samples also fall within the cutoff. |
+
+For the paired timing, each executable came from `bun build --compile apps/cli/src/main.ts` with the same output basename and no package re-signing. Both used the same two-Project Exchange fixture and a successful renewal as warm-up. The ten cold samples per binary alternated order with a 50 ms pause between spawns, and every renewal succeeded. The fresh baseline ranged from 75.462 to 126.347 ms and the comparable candidate from 76.222 to 140.424 ms. The signed series ranged from 71.563 to 86.119 ms. The candidate median was lower than the fresh baseline median in this session, with overlapping sample ranges. The paired samples do not establish a startup speedup, and the cause of the gap from TASK-147's recorded timing is unverified. The 71.98 ms baseline and the failed original comparison remain historical evidence. Master's [2026-11-25 criterion decision](../governance/README.md#task-163-cold-start-qualification-criterion-2026-11-25) uses the same successful median measurements with the 1,000 ms cutoff.
+
+The packaged binary's embedded loader calls the daemon initializer only from the `daemon serve` branch. The exact aggregate also passed the [managed Bun bootstrap checks](../../apps/cli/test/int/cli-lazy-bootstrap.int.test.ts), which observe zero daemon module entries on renew, internal probes and the MCP entry. The loader evidence supports the zero-daemon-initialization criterion alongside the measured cold-spawn cutoff.
+
+### 7.4 Schema 17 query plans
+
+All 12 indexes appeared in 17 observed plans on the seeded `ANALYZE` corpus from the [schema 17 plan suite](../../packages/adapters/test/int/schema-v17-indexes.int.test.ts). There were no unindexed full-table scans or temporary ordering B-trees in those plans. The index walks below cover the unbounded ordering queries.
+
+| Index | Representative observed plan |
+|---|---|
+| `idx_content_records_storage_key` | `SEARCH c USING INDEX idx_content_records_storage_key (storage_key>?)` |
+| `idx_pending_fs_ops_op_to_path` | `SEARCH pending_fs_ops USING COVERING INDEX idx_pending_fs_ops_op_to_path (op=? AND to_path=?)` |
+| `idx_project_memos_content_record` | `SEARCH project_memos USING COVERING INDEX idx_project_memos_content_record (content_record_id=?)` |
+| `idx_handoffs_recipient_updated` | `SEARCH handoffs USING INDEX idx_handoffs_recipient_updated (recipient_project_id=?)` |
+| `idx_handoffs_sender_updated` | `SEARCH handoffs USING INDEX idx_handoffs_sender_updated (sender_project_id=?)` |
+| `idx_handoffs_updated` | `SCAN handoffs USING INDEX idx_handoffs_updated` |
+| `idx_events_created` | `SCAN events USING INDEX idx_events_created` |
+| `idx_exchange_claims_project` | `SEARCH exchange_claims USING COVERING INDEX idx_exchange_claims_project (project_id=?)` |
+| `idx_exchange_notice_claims_project` | `SEARCH exchange_notice_claims USING COVERING INDEX idx_exchange_notice_claims_project (project_id=?)` |
+| `idx_exchange_materials_content` | `SEARCH exchange_materials USING COVERING INDEX idx_exchange_materials_content (content_id=?)` |
+| `idx_exchange_cleanup_items_content` | `SEARCH exchange_cleanup_items USING COVERING INDEX idx_exchange_cleanup_items_content (content_id=?)` |
+| `idx_idempotency_keys_scope_expires` | `SEARCH idempotency_keys USING INDEX idx_idempotency_keys_scope_expires (scope>? AND scope<?)` |
+
+### 7.5 Skill evidence and qualification outcome
+
+Both shipped copies of `exchange-loop.md` were byte-identical, with SHA-256 `a2cba154c5e622d09143d685de8d2575bcae5bfbed5bd7ca9ae42f13393294ed`. Source of Truth checking covered the shipped skill source, and the complete gate included the compiled MCP sandbox tests. The [prior copied-skill observations](exchange-qualification.md#independently-copied-exchange-skills) apply to the recorded copied files, harness versions, permissions and synthetic Exchange scenarios. No new independent copied-skill run was performed for this qualification.
+
+The complete automated gate, authentic predecessor/rollback drill, frozen restore coverage, and 12 query plans support the assembled source. Metrics 1–4 improved against the recorded baselines. The existing successful timing series and loader evidence satisfy the revised metric 5 criterion on that source. The changelog disposition is `intentional no-note`.
