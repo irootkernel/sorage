@@ -90,6 +90,10 @@ try {
   // cannot create a false reproducibility mismatch.
   scratch = realpathSync(mkdtempSync(join(tmpdir(), "sorage-package-")));
   const second = join(scratch, "sorage");
+  execFileSync(process.execPath, ["--no-install", join(root, "scripts/build-web-assets.ts"), "--check"], {
+    cwd: root,
+    stdio: "inherit",
+  });
   compile(sourceBinary);
   compile(second);
   const firstDigest = sha256(sourceBinary);

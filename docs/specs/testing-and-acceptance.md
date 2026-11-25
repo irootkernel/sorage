@@ -15,15 +15,15 @@ The toolchain is normative, fixed by ADR-0016 in [../architecture-decision-recor
 
 | Target | Contents |
 |---|---|
-| `test-prepare` | Frozen dependency installation, automatic formatting with Biome, lint and the real import/dependency-boundary and runtime cycle (`check:cycles`) checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
+| `test-prepare` | Frozen dependency installation, automatic formatting with Biome, deterministic Web asset generation, lint and the real import/dependency-boundary and runtime cycle (`check:cycles`) checks (NFR-014), TypeScript strict typecheck (NFR-001), the assertion that the running Bun matches `.bun-version` (NFR-017), and the product-version consistency check across the runtime source, workspace manifests, and internal dependency declarations (NFR-003, NFR-012) |
 | `test-unit` | Pure domain and application tests with no filesystem and no database |
 | `test-int` | Build a current `dist/sorage`, then run SQLite, filesystem, config, Git, and platform adapters against temporary fixtures, including a run against a clean temporary `SORAGE_HOME` with no ecosystem tool installed (GEN-010) |
 | `test-contract` | CLI JSON envelopes, HTTP DTOs, error bodies, exit-code categories, the symbolic-error to HTTP-status matrix (API-011), pagination cursors, the `doctor` catalog (INIT-017), and the config schema |
 | `test-e2e` | Build a current `dist/sorage`, then ordinary compiled journeys including Playwright and axe-core; excludes only release-specific AJ-16 and performs no signing or reproducibility builds |
 | `test-release` | Run `package`, then AJ-16 against the exact signed versioned candidate and matching metadata; missing or mismatched artifacts fail rather than skip |
 | `test` | Serial preparation, unit, package once, integration, contract, ordinary E2E, then release AJ-16, even under `make -j`; raw test stages reuse the signed candidate without intermediate builds, and a failed stage stops the gate |
-| `build` | `bun build --compile` producing `dist/sorage` |
-| `package` | The signed source-install binary plus the versioned `darwin-arm64` release candidate, checksum, and manifest |
+| `build` | Generate the Web embedding, then run `bun build --compile` to produce `dist/sorage` |
+| `package` | Check the tracked Web embedding for drift, then produce the signed source-install binary plus the versioned `darwin-arm64` release candidate, checksum, and manifest |
 
 The raw `bun run test:int`, `bun run test:e2e` and `bun run test:release` scripts run their selected suites without preparation. Prepare current-source outputs first: `make build` for focused integration or ordinary E2E, and `make package` for release qualification. The release script selects only AJ-16 and fails if no tests match; its candidate, signed digest, checksum and manifest must agree. A normal build deliberately withdraws release metadata, so do not run it between packaging and release qualification. Packaging compares two independent unsigned compilations with the same basename before signing; it removes its unique temporary reproducibility output and any owned staged/candidate files on failure. Successful `make package` retains the final distribution outputs.
 
@@ -435,7 +435,7 @@ M7 acceptance for MEM-007, MEM-013 to MEM-015, MEM-020, MEM-021, and MEM-023. Th
 
 #### AJ-21-B: Browser acceptance
 
-Owner: TASK-092. Use the real authenticated daemon serving apps/daemon/src/web-app.ts and a real browser, not a separate demo or only fake HTTP/component tests. These checks require no new skill implementation.
+Owner: TASK-092. Use a real browser and the authenticated compiled daemon serving the embedded HTML, CSS and JavaScript generated from `apps/daemon/src/web/`. Neither a separate demo nor mock-only HTTP or component tests satisfy browser acceptance. These checks require no new skill implementation.
 
 - [ ] Open the selected Project's Memos view, observe the Open default, create and edit a Memo, navigate away, reload/restart the browser and daemon, and retrieve the committed content.
 - [ ] Exercise Done, Dismissed, and All filters, search and pagination, explicit all-project selection, full detail, and reopened editing without any Handoff sender/recipient or Accepted control.

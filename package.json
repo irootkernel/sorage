@@ -27,6 +27,7 @@
     "test:contract": "/bin/sh scripts/toolchain.sh script test:contract",
     "test:e2e": "/bin/sh scripts/toolchain.sh script test:e2e",
     "test:release": "/bin/sh scripts/toolchain.sh script test:release",
+    "build:web": "/bin/sh scripts/toolchain.sh script build:web",
     "build:cli": "/bin/sh scripts/toolchain.sh script build:cli",
     "package": "/bin/sh scripts/toolchain.sh script package",
     "check:sot": "/bin/sh scripts/toolchain.sh script check:sot"

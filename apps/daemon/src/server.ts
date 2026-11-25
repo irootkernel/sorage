@@ -3,7 +3,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { type AppError, appError, type IdGenerator, newRequestId, successEnvelope } from "@sorage/core";
 import { bearerValue, type SessionService } from "./auth";
-import { WEB_APP_JS, WEB_CSS, WEB_INDEX_HTML } from "./web-app";
+import { WEB_APP_JS, WEB_CSS, WEB_INDEX_HTML } from "./web-assets.generated";
 import { compileRoutes, type RouteEntryInternal } from "./route-kit";
 import { rawHeaderValues, readJsonBody, sendError, sendJson, sendRaw, type DaemonRequestContext } from "./http-kit";
 

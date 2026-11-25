@@ -5,6 +5,8 @@
     "includes": [
       "packages/**/*.ts",
       "apps/**/*.ts",
+      "apps/daemon/src/web/**/*.css",
+      "!apps/daemon/src/web-assets.generated.ts",
       "scripts/**/*.ts",
       "test/**/*.ts",
       "*.ts",

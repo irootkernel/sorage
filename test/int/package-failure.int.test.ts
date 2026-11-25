@@ -4,8 +4,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +25,10 @@ describe("package failure cleanup", () => {
       const pipeline = readFileSync(new URL("../../scripts/package.ts", import.meta.url), "utf8")
         .replace('import { assertManagedBun } from "./toolchain-runtime";\n', "")
         .replace("assertManagedBun();", "")
+        .replace(
+          /^ {2}execFileSync\(process\.execPath, \["--no-install", join\(root, "scripts\/build-web-assets\.ts"\), "--check"\], \{[\s\S]*?^ {2}\}\);\n/m,
+          "",
+        )
         .replace("execFileSync(process.execPath,", 'execFileSync("bun",');
       // Isolate compiler/signer faults; runtime admission is tested separately.
       writeFileSync(join(root, "scripts/package.ts"), pipeline);

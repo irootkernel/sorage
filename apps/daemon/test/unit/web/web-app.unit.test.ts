@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
-import { WEB_APP_JS } from "../../src/web-app";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 interface MockNode {
   tag: string;
@@ -137,7 +135,7 @@ interface ScheduledTimer {
   cancelled: boolean;
 }
 
-function createHarness(options: {
+async function harness(options: {
   hash?: string;
   fetchImpl: (
     url: string,
@@ -148,6 +146,7 @@ function createHarness(options: {
     json(): Promise<unknown>;
   }>;
 }) {
+  vi.resetModules();
   const rootRef: { current: MockNode | null } = { current: null };
   const bodyRoot = makeNode("body", rootRef);
   rootRef.current = bodyRoot;
@@ -182,37 +181,7 @@ function createHarness(options: {
   const windowListeners: Record<string, Array<() => void>> = {};
   const fetchCalls: Array<{ url: string; init: unknown }> = [];
 
-  const patchedScript = WEB_APP_JS.replace(
-    '  enterSessionOrRoute();\n  window.addEventListener("hashchange", enterSessionOrRoute);\n})();',
-    `  window.__test = {
-    renderMarkdownSafe: renderMarkdownSafe,
-    decodeHashSegment: decodeHashSegment,
-    hashQuery: hashQuery,
-    fetchAllHandoffs: fetchAllHandoffs,
-    route: route,
-    memoEditor: memoEditor,
-    memoDrafts: memoDrafts,
-    memoClearEditorTimer: memoClearEditorTimer,
-  };
-  enterSessionOrRoute();
-  window.addEventListener("hashchange", enterSessionOrRoute);
-})();`,
-  );
-
   const windowObj: {
-    __test?: {
-      renderMarkdownSafe(text: string): MockNode;
-      decodeHashSegment(value: string): string;
-      hashQuery(): string;
-      fetchAllHandoffs(
-        baseUrl: string,
-        isStale?: () => boolean,
-      ): Promise<{ stale?: boolean; status?: number; body?: { data?: { handoffs?: unknown[] } } }>;
-      route(): void;
-      memoEditor(container: MockNode, projectId: string, memo: unknown): void;
-      memoDrafts: Record<string, { title: string; body: string }>;
-      memoClearEditorTimer(): void;
-    };
     addEventListener(type: string, fn: () => void): void;
     confirm(): boolean;
   } = {
@@ -223,7 +192,7 @@ function createHarness(options: {
     confirm: () => true,
   };
 
-  runInNewContext(patchedScript, {
+  const globals = {
     window: windowObj,
     document: {
       createElement: (tag: string) => makeNode(tag, rootRef),
@@ -258,11 +227,24 @@ function createHarness(options: {
       const entry = timers.find((item) => item.id === id);
       if (entry) entry.cancelled = true;
     },
-  });
-
-  if (!windowObj.__test) throw new Error("Failed to attach web-app test hook");
+  };
+  for (const [name, value] of Object.entries(globals)) vi.stubGlobal(name, value);
+  const { route } = await import("../../../src/web/main");
+  const { fetchAllHandoffs } = await import("../../../src/web/api");
+  const { decodeHashSegment, hashQuery } = await import("../../../src/web/hash");
+  const { renderMarkdownSafe } = await import("../../../src/web/markdown");
+  const { memoEditor } = await import("../../../src/web/memos/views");
+  const { memoState } = await import("../../../src/web/memos/state");
   return {
-    api: windowObj.__test,
+    api: {
+      route,
+      fetchAllHandoffs,
+      decodeHashSegment,
+      hashQuery,
+      renderMarkdownSafe: (input: string) => renderMarkdownSafe(input) as unknown as MockNode,
+      memoEditor,
+      memoState,
+    },
     viewNode,
     sessionNote,
     location: locationObj,
@@ -287,9 +269,11 @@ async function flushMicrotasks(turns = 60): Promise<void> {
   for (let i = 0; i < turns; i++) await Promise.resolve();
 }
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("TASK-150 Web UI script unit behavior", () => {
-  it("renders Markdown angle brackets and ampersands via textContent without double-escaping (#5)", () => {
-    const h = createHarness({
+  it("renders Markdown angle brackets and ampersands via textContent without double-escaping (#5)", async () => {
+    const h = await harness({
       hash: "#/diagnostics",
       fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ ok: true, data: { checks: [] } }) }),
     });
@@ -312,7 +296,7 @@ describe("TASK-150 Web UI script unit behavior", () => {
   });
 
   it("percent-encodes listing filter values and handles malformed hash segments safely (#6a)", async () => {
-    const h = createHarness({
+    const h = await harness({
       hash: "#/inbox?sender=alpha%2Bbeta%26includeDeleted%3Dtrue&state=a%3Fb%23c%25d",
       fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ ok: true, data: { handoffs: [] } }) }),
     });
@@ -354,7 +338,7 @@ describe("TASK-150 Web UI script unit behavior", () => {
       pushOutcome: "failure",
       failureCode: "BACKUP_PUSH_FAILED",
     });
-    const h = createHarness({
+    const h = await harness({
       hash: "#/backup",
       fetchImpl: async () => ({
         status: 200,
@@ -394,7 +378,7 @@ describe("TASK-150 Web UI script unit behavior", () => {
     // Include an overlapping item (h-200) plus 5 new items to prove cross-page dedup.
     const page2 = [makeRow(200), ...Array.from({ length: 5 }, (_, i) => makeRow(201 + i))];
 
-    const h = createHarness({
+    const h = await harness({
       hash: "#/dashboard",
       fetchImpl: async (url) => {
         if (url.startsWith("/api/v1/backup/status")) {
@@ -441,17 +425,17 @@ describe("TASK-150 Web UI script unit behavior", () => {
     // Repeated cursor stops cleanly without infinite recursion.
     let staleFlag = false;
     const staleResult = await h.api.fetchAllHandoffs("/api/v1/handoffs?asUser=true&limit=200", () => staleFlag);
-    expect(staleResult.status).toBe(200);
+    expect("status" in staleResult && staleResult.status).toBe(200);
     staleFlag = true;
     const abortedResult = await h.api.fetchAllHandoffs("/api/v1/handoffs?asUser=true&limit=200", () => staleFlag);
-    expect(abortedResult.stale).toBe(true);
+    expect("stale" in abortedResult && abortedResult.stale).toBe(true);
   });
 
   it("debounces Memo editor preview/byte-counting while keeping drafts synced, flushing on submit, and clearing on teardown (#6d)", async () => {
     const projectId = "a1000000-0000-4000-8000-000000000001";
     const installationId = "a1000000-0000-4000-8000-000000000002";
     const postedBodies: string[] = [];
-    const h = createHarness({
+    const h = await harness({
       hash: "#/diagnostics",
       fetchImpl: async (url, init) => {
         if (url === "/api/v1/health")
@@ -486,7 +470,7 @@ describe("TASK-150 Web UI script unit behavior", () => {
 
     const mount = makeNode("div", { current: h.viewNode });
     h.viewNode.replaceChildren(mount);
-    h.api.memoEditor(mount, projectId, null);
+    h.api.memoEditor(mount as unknown as HTMLElement, projectId, null);
     await flushMicrotasks();
 
     const titleInput = walk(mount, (node) => node.tag === "input")[0];
@@ -503,7 +487,7 @@ describe("TASK-150 Web UI script unit behavior", () => {
       bodyInput.dispatch("input");
     }
     // Draft is synchronized immediately on input while expensive byte-counting is deferred.
-    expect(h.api.memoDrafts[`new:${projectId}`]).toEqual({ title: "Fast title", body: "Line <15> & burst" });
+    expect(h.api.memoState.drafts[`new:${projectId}`]).toEqual({ title: "Fast title", body: "Line <15> & burst" });
     expect(h.encodeCount()).toBe(0);
     expect(h.activeTimers()).toHaveLength(1);
 

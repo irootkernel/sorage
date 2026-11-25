@@ -9,6 +9,7 @@ const preparation = [
   "run check:toolchain",
   "run check:version",
   "run format",
+  "run build:web",
   "run check:lint",
   "run check:typecheck",
   "run check:import-boundaries",

@@ -485,7 +485,11 @@ The workspace is five packages â€” `core`, `adapters`, `cli`, `daemon`, `web` â€
 
 ### Amendment (2026-10-28): actual frontend and package boundaries
 
-ADR-0036 replaces the Vite/Preact and fixed-five-package prescription. The current Web UI is a no-build static SPA served by `apps/daemon/src/web-app.ts`, with its actual script/style assets; the unused `apps/web` placeholder and its incidental package/configuration assertions are removed. Keep the Bun pin, SQLite driver, strict types, actual dependency-direction checks and ADR-0023 distribution guarantees. Package count and a future framework choice are not product guarantees. No new frontend pipeline is introduced.
+ADR-0036 replaces the Vite/Preact and fixed-five-package prescription. The Web UI remains a framework-free static SPA served by the daemon, with the current build-time asset embedding described in the amendment below. The unused `apps/web` placeholder and its incidental package/configuration assertions are removed. Keep the Bun pin, SQLite driver, strict types, actual dependency-direction checks and ADR-0023 distribution guarantees. Package count and a future framework choice are not product guarantees.
+
+### Amendment (2026-11-25): checked browser assets
+
+[ADR-0040](#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding) introduces deterministic Bun embedding of the browser TypeScript, CSS and HTML owned by the daemon. The compiled single binary retains the framework-free SPA and serves its assets without a runtime asset directory.
 
 ## ADR-0017: Browser authentication and the local network boundary
 
@@ -876,7 +880,7 @@ Implement CLI, local HTTP, Web, and the existing Sorage skill over one applicati
 
 The shared normalized application request and DB receipt are the sole Memo replay authority. The existing HTTP idempotent wrapper hashes raw bodies and returns cached envelopes; Memo routes use the ordinary authenticated handler with its legacy idempotent flag unset or false, forwarding the key after strict bounded input validation. Execute and replay-only are separate application modes over the same request identity. CLI --replay-only and HTTP Idempotency-Mode: replay-only recover uncertain outcomes without executing on an absent/expired receipt, returning MEMO_REPLAY_UNAVAILABLE instead. Valid exact receipts return historical outcome data with replayed=true in a fresh envelope. The server Clock decides expiry; client time, unchanged Installation identity, and reauthentication do not prove receipt continuity after restore. Do not change Handoff routes, export all receipts, or add another cache/service.
 
-Extend the browser assets actually served from apps/daemon/src/web-app.ts and reuse its safe renderer; apps/web remains a stub and no frontend migration is included. One active pending record is stored before first dispatch and gates Memo writes across same-tab navigation/reload. Unknown attempts recover through replay-only. Evidence may settle the attempt, or an explicit Abandon retry and continue confirmation may retire it while preserving a bounded passive outcome-unknown notice. Persist that local transition before unlocking; no cancellation, deletion, replacement submission, or outcome claim is implied. Expiry never silently clears the record, storage failure cannot unlock, and a late original response cannot affect a newer active attempt. Passive notices are not a submission queue or server ledger and have explicit local retention controls. Reads and other clients remain available.
+Extend the daemon-served browser assets and reuse the shared safe renderer. TASK-092 originally extended the inline asset; see the 2026-11-25 amendment for the current source layout. One active pending record is stored before first dispatch and gates Memo writes across same-tab navigation/reload. Unknown attempts recover through replay-only. Evidence may settle the attempt, or an explicit Abandon retry and continue confirmation may retire it while preserving a bounded passive outcome-unknown notice. Persist that local transition before unlocking; no cancellation, deletion, replacement submission, or outcome claim is implied. Expiry never silently clears the record, storage failure cannot unlock, and a late original response cannot affect a newer active attempt. Passive notices are not a submission queue or server ledger and have explicit local retention controls. Reads and other clients remain available.
 
 Put the Memo contract explicitly in the authority order after shared security and before testing/traceability. Shared documents retain common protections and explicitly distinguish unchanged format-1/Handoff rules from Memo extensions. Format 2 fixes the closed Memo field set, canonical UTF-8 file bytes including the final LF, raw-file SHA-256 as lowercase hexadecimal, and memoDigests keys relative to snapshots/. Verify exact inventory and canonical UUID-derived paths before import, not merely parsed values; the Memo contract owns the detailed byte and path rules.
 
@@ -891,7 +895,7 @@ Put the Memo contract explicitly in the authority order after shared security an
 - Add named authors or cross-project access control | rejected for M7: User provenance is sufficient under the existing single-OS-user trust model and does not invent a human/AI authentication boundary.
 - Add hard deletion, body revision history, or multi-machine sync now | rejected: these require distinct retention or distribution decisions and are not needed for the restart/reminder scenario.
 - Stack the legacy HTTP cache above Memo receipts | rejected: raw JSON equality differs from normalized request equality, cached responses can retain replayed=false, and two authorities disagree across daemon restart or CLI/HTTP replay.
-- Move the shipped frontend into apps/web during Memo work | rejected: the current production asset owner is web-app.ts in apps/daemon; a package migration adds unrelated delivery risk.
+- Move the shipped frontend into apps/web during Memo work | rejected: the daemon owns the production browser assets and a separate package migration adds unrelated delivery risk.
 - Leave digest encoding, hash bytes, or relative-path roots to implementations | rejected: independent exporter/verifier implementations need one byte-level contract and deterministic fixtures.
 - Replace the tab's unresolved attempt on another submit, or add a pending queue | rejected: replacement loses the original key and a queue adds coordination. Explicit abandonment preserves an unknown-outcome notice before unlocking; notices are passive, not retryable submissions.
 - Trust the original 24-hour timer and Installation ID across restore | rejected: restore keeps the ID and Memo data but not operational receipts; a recovery write could create a duplicate. Replay-only never executes on a miss, including the server-side expiry boundary.
@@ -927,6 +931,10 @@ Alternatives considered: reusing `VAULT_INTEGRITY_ERROR` or `ARTIFACT_CORRUPTED`
 Compatibility is additive and non-breaking: one new error code and Memo-only parsing/recovery behavior, with no envelope field or existing Handoff output change. No data migration is needed. The required edits are the Memo and shared error catalogues, contextual recovery implementation, and CLI contract snapshots. TASK-090 owns this clarification and its review/regression checks; no Task identity, dependency, milestone, or remaining review budget changes.
 
 - **2026-11-25 replay authority amendment:** [ADR-0039](#adr-0039-daemon-http-idempotency-unification-onto-core-sqlite-receipts) makes Core SQLite receipts the replay authority for Handoff and Backup HTTP as well as Memo HTTP. The per-server in-flight guard applies to the five Handoff and Backup routes. Memo execute and replay-only admission and response contracts retain their existing scope.
+
+### Amendment (2026-11-25): Memo browser modules
+
+[ADR-0040](#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding) places Memo views, recovery, validation and state under the daemon browser source tree. Leaf state connects recovery to its current renderer without a runtime import cycle. The versioned tab state, replay-only recovery and passive notice behavior retain the original contract.
 
 ## ADR-0028: Non-mutating installation preflight in M8
 
@@ -1589,6 +1597,10 @@ Registration adds EPIC-020 and TASK-135 through TASK-138, the temporary dossier 
 
 The repository can reduce repeated setup, review scope and unused structure while retaining the final safety and release guarantees. Independent reviewers assess the actual affected boundary rather than a mandatory whole-system checklist for every edit. Performance improvement remains unquantified until measured. Version edits, installation, consumer activation, commits and publication keep their separate authorization.
 
+### Amendment (2026-11-25): asset generation and packaging
+
+[ADR-0040](#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding) orders browser asset generation after formatting in `test-prepare`, generates before ordinary CLI compilation, and checks the tracked embedding for drift before packaging. Release packaging continues to verify independent double compilation and sign the resulting binary.
+
 ## ADR-0037: Exchange as a separate peer-collaboration domain in M10
 
 - **Status:** Accepted
@@ -1739,7 +1751,8 @@ The daemon eliminates ~200 lines of fragile stream-spooling and response-patchin
 
 ## ADR-0040: Separated Web UI assets with minimal build-time embedding
 
-- **Status:** Proposed
+- **Status:** Accepted
+- **Adopted:** 2026-11-25 by TASK-162 with runtime behavior preserved and deterministic embedded asset generation.
 - **Date:** 2026-11-22
 - **Design owner:** TASK-162 under [EPIC-024](../roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification).
 - **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).

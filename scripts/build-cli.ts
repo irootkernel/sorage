@@ -13,6 +13,10 @@ import { SORAGE_VERSION } from "../packages/core/src/version";
 assertManagedBun();
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+execFileSync(process.execPath, ["--no-install", join(root, "scripts/build-web-assets.ts")], {
+  cwd: root,
+  stdio: "inherit",
+});
 const releaseBase = `sorage-v${SORAGE_VERSION}-darwin-arm64`;
 for (const file of [releaseBase, `${releaseBase}.sha256`, `${releaseBase}.manifest.json`, "package.json"]) {
   rmSync(join(root, "dist", file), { force: true });

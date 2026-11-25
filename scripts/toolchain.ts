@@ -99,6 +99,7 @@ if (command === "sync") {
     "check:cycles": "check-cycles.ts",
     "check:dependency-boundaries": "check-dependency-boundaries.ts",
     "check:sot": "sot-check.ts",
+    "build:web": "build-web-assets.ts",
     "build:cli": "build-cli.ts",
     package: "package.ts",
   };

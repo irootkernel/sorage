@@ -164,7 +164,7 @@ From TASK-127, Memo CLI `add`, `update`, `done`, `dismiss` and `reopen`, in exec
 
 ## 10. Web behavior
 
-Implement the Memo view in the shipped browser assets owned by `apps/daemon/src/web-app.ts`, served by `apps/daemon/src/server.ts`. At this design baseline `apps/web/src/index.ts` is a stub, not the production frontend. Reuse the current navigation, API helper, and `renderMarkdownSafe` path, with Memo-specific bounded request handling and the pending gate below. M7 does not move the frontend to `apps/web`, add a framework, or introduce a second asset pipeline. Test the assets that the actual daemon serves, not a disconnected stub or a new demo.
+Implement the Memo view in the browser source modules under `apps/daemon/src/web/memos/`. The compiled daemon serves the generated HTML, CSS and JavaScript embedded in the binary. Reuse the shared navigation, API helper and safe Markdown renderer with Memo-specific bounded request handling and the pending gate below. The browser uses the existing Web authentication and transport. Test the assets the actual daemon serves in a real browser. A disconnected stub or demo cannot satisfy this requirement.
 
 Add Memos as a separate Project view beside Handoffs. A selected Project opens its open Memos by default. A separately explicit all-project view is available; show Project name on every row. State filters are Open, Done, Dismissed, and All. Rows show title, preview, state, and updated time; detail shows full sanitized Markdown and provenance/timestamps. Provide plain-text title/body editing, a read-only preview, and a visible character/byte-limit error. Do not add a sender/recipient picker or an Accepted button.
 

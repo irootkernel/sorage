@@ -34,6 +34,7 @@ test-prepare:
 	$(BUN) run check:toolchain
 	$(BUN) run check:version
 	$(BUN) run format
+	$(BUN) run build:web
 	$(BUN) run check:lint
 	$(BUN) run check:typecheck
 	$(BUN) run check:import-boundaries

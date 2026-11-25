@@ -42,7 +42,7 @@ The toolchain is fixed by ADR-0016 and is not a per-Task choice:
 - Vitest launched by the project runner under managed Node for unit, integration and contract tests; native Bun and compiled regressions retain production-engine coverage. Playwright drives Web end-to-end from milestone M2.
 - `commander` as the single source of the CLI surface, so help text, JSON output, and shell completion stay in agreement.
 - The `yaml` package used through its Document API rather than `parse`/`stringify`, because only the document tree preserves existing comments and key order across a write (CFG-018).
-- The Web control plane ships as a no-build static SPA served by the daemon under `apps/daemon/src/web-app.ts`: one HTML document, one external script, and one external stylesheet, all CSP-safe by construction. A Vite and Preact build remains a candidate if the SPA outgrows this shape; the required behavior (WEB-001 to WEB-019) is framework-independent.
+- The Web control plane uses browser-only TypeScript, CSS and HTML under `apps/daemon/src/web/`. The managed Bun build embeds one HTML document, one script and one stylesheet in the daemon while retaining its framework-free runtime and CSP. Ordinary CLI compilation generates the embedding first. Use `bun run build:web -- --check` to check the tracked embedding for drift. Packaging performs the same check before compiling, and the compiled daemon serves the embedded bytes directly.
 - `bun build --compile` for release binaries, followed by ad-hoc codesigning and architecture-specific GitHub Release assets. `make package` compiles twice into scratch outputs that keep the exact `sorage` basename - the compiled binary embeds its own name, so the reproducibility probe must compare like with like - and fails on any digest mismatch. It signs `dist/sorage`, verifies that exact staged copy, and publishes the same signed bytes as `dist/sorage-v0.1.5-darwin-arm64` with a two-space checksum file and a manifest carrying the version, HEAD revision, target, asset basename, signed digest, reproducible unsigned digest, and signature mode. `make test-release` prepares the package and runs AJ-16 against the versioned candidate through a clean isolated account; missing or mismatched artifacts fail the test; a bare `make build` removes all three candidate files so unsigned output cannot retain stale release metadata.
 - `make test` as the single verification gate: preparation, unit, package once, raw integration, contract, raw ordinary E2E and raw release AJ-16, in order even under `make -j`, stopping on the first failed stage. Integration and both journey selections reuse that signed candidate without another build. Standalone `make test-int` and `make test-e2e` each build a current executable; ordinary E2E excludes only AJ-16 and does no release-only signing or reproducibility work. `make build` compiles `dist/sorage` and `make package` produces the signed source-install binary and GitHub Release candidates (NFR-016).
 - Record shipped outcomes in the root [CHANGELOG.md](../../CHANGELOG.md). Keep the next planned version under `Unreleased` until that version is published; do not treat the changelog as a second status authority.
@@ -278,7 +278,7 @@ The nine-case functional walkthrough observed storage without imperative-body ex
 
 ## 13. Web
 
-Project Memo screens are composed into the existing daemon-served `web-app.ts` asset through `web-memos.ts`; there is no second build pipeline or `apps/web` migration. They reuse the API helper and safe Markdown renderer. The tab's versioned `sorage-memo-recovery-v1` session-storage value contains one active original request and at most 32 passive abandoned notices. A verified replacement write precedes dispatch, settlement, and abandonment; failed or malformed storage blocks writes. Recovery uses the original material in replay-only mode, and callbacks check active key and Installation before changing state. Notices omit bodies and retry payloads and are removed only explicitly. Neither a same-Installation restore nor browser elapsed time establishes receipt continuity.
+Project Memo screens compose with the daemon-served browser application through `web/memos/`. Its leaf state module connects recovery and the renderer without a runtime cycle. They reuse the API helper and safe Markdown renderer. The tab's versioned `sorage-memo-recovery-v1` session-storage value contains one active original request and at most 32 passive abandoned notices. A verified replacement write precedes dispatch, settlement, and abandonment; failed or malformed storage blocks writes. Recovery uses the original material in replay-only mode, and callbacks check active key and Installation before changing state. Notices omit bodies and retry payloads and are removed only explicitly. Neither a same-Installation restore nor browser elapsed time establishes receipt continuity.
 
 AJ-21-B drives the compiled daemon's actual assets with Chromium, including native CLI conflicts, exact CRLF preservation, browser composition events, slow/lost/malformed responses, local-storage failures, same-tab authentication after daemon restart, real restore with and without the original Memo, receipt expiry, explicit abandonment, notice capacity, and late-response isolation. Browser input automation exercises Korean text and composition guards; it is not a physical OS input-method qualification. Session storage can survive a same-tab reload but is not durable Memo storage and may disappear on tab closure, browser data removal, or browser restart. The separate AJ-21-S skill walkthrough belongs to its own delivery owner.
 
@@ -352,17 +352,16 @@ Those same targets run on the developer's macOS machine, so a check that cannot 
 
 ## 18. Package selection
 
-The runtime dependency set is fixed by ADR-0016 rather than chosen per Task:
+The runtime and verification dependency choices follow ADR-0016 and its amendments. The daemon's Web application uses browser-native APIs and the [ADR-0040](../architecture-decision-records/README.md#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding) managed Bun embedding pipeline.
 
 | Package | Why this one |
 |---|---|
 | `bun:sqlite` | Ships with the pinned runtime, is synchronous, and embeds into a compiled binary with no native module |
 | `commander` | One declaration produces help text, parsing, and shell completion, which keeps CLI-001 and CLI-015 in agreement |
 | `yaml` | Its Document API is the only practical way to preserve comments and key order across a configuration write (CFG-018) |
-| `vitest` | The ecosystem-standard runner, executed through Bun for unit, integration, and contract suites |
+| `vitest` | The ecosystem-standard runner, launched under managed Node for unit, integration, and contract suites |
 | `playwright` | Web end-to-end coverage from milestone M2, including the browser session exchange |
 | `axe-core` | Accessibility checks inside `make test-e2e`, as engineering practice rather than a release gate (WEB-018) |
-| `preact` with `vite` | A small SPA runtime and a build that emits static assets the daemon can serve without a Node runtime |
 
 Any addition to this set is a material change and MUST satisfy: active maintenance, TypeScript support, a small runtime surface, deterministic behavior, a clean security history, streaming support where it handles Artifact bytes, testability, and no adapter type leaking into `core`.
 

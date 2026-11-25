@@ -1,13 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
-import { WEB_MEMOS_JS } from "../../src/web-memos";
-import { WEB_APP_JS } from "../../src/web-app";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApiResult } from "../../../src/web/types";
 
 const projectId = "a1000000-0000-4000-8000-000000000001";
 const installationId = "a1000000-0000-4000-8000-000000000002";
 type Response = { status: number; body: Record<string, unknown> };
-function harness() {
+const stub = vi.hoisted(() => ({
+  impl: (_path: string, _init?: RequestInit): Promise<Response> => Promise.reject(new Error("No API stub installed")),
+}));
+
+vi.mock(import("../../../src/web/api"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  api: <T = unknown>(path: string, init?: RequestInit) => stub.impl(path, init) as Promise<ApiResult<T>>,
+}));
+
+afterEach(() => vi.unstubAllGlobals());
+
+async function harness() {
+  vi.resetModules();
   let raw: string | null = null;
   let failWrite = false;
   let failRead = false;
@@ -17,55 +27,54 @@ function harness() {
     body: {},
   });
   const calls: Array<{ headers: Record<string, string>; body: string }> = [];
-  const app = runInNewContext(
-    WEB_MEMOS_JS +
-      `;({
-    submit: function () { return memoSubmit("add", "${projectId}", null, "Reminder", { projectId: "${projectId}", title: "Reminder", body: "한글\\r\\n" }); },
-    retry: function () { return memoDispatch(memoRecovery.active, true); },
-    abandon: memoAbandon,
-    state: function () { return memoRecovery; },
-    locked: memoLocked,
-    message: function () { return memoStorageError || memoMessage; },
-    receipt: memoReceipt,
-    validate: memoStoredState
-  })`,
-    {
-      sessionStorage: {
-        getItem() {
-          if (failRead) throw new Error("read");
-          return raw;
-        },
-        setItem(_key: string, value: string) {
-          if (failWrite) throw new Error("write");
-          raw = value;
-        },
+  const globals = {
+    sessionStorage: {
+      getItem() {
+        if (failRead) throw new Error("read");
+        return raw;
       },
-      document: { querySelectorAll: () => [], getElementById: () => null },
-      location: { origin: "http://127.0.0.1:12345" },
-      window: { confirm: () => confirm },
-      crypto: { randomUUID },
-      TextEncoder,
-      AbortController,
-      setTimeout,
-      clearTimeout,
-      api: async (path: string, init: { headers: Record<string, string>; body: string }) => {
-        if (path === "/api/v1/health") return { status: 200, body: { ok: true, data: { installationId } } };
-        if (init.body) {
-          expect(JSON.parse(raw ?? "null").active).not.toBeNull();
-          calls.push(init);
-          return reply(init);
-        }
-        return { status: 200, body: { ok: true, data: {} } };
+      setItem(_key: string, value: string) {
+        if (failWrite) throw new Error("write");
+        raw = value;
       },
     },
-  ) as {
-    submit(): Promise<void>;
-    retry(): Promise<void>;
-    abandon(): void;
-    state(): { active: Record<string, unknown> | null; notices: Array<Record<string, unknown>> };
-    locked(): boolean;
-    message(): string;
-    validate(value: unknown): boolean;
+    document: { querySelectorAll: () => [], getElementById: () => null },
+    location: { origin: "http://127.0.0.1:12345" },
+    history: { replaceState() {} },
+    window: { confirm: () => confirm, addEventListener() {} },
+    fetch: () => Promise.reject(new Error("Expected the API stub")),
+    crypto: { randomUUID },
+    TextEncoder,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  };
+  for (const [name, value] of Object.entries(globals)) vi.stubGlobal(name, value);
+  stub.impl = async (path, init) => {
+    if (path === "/api/v1/health") return { status: 200, body: { ok: true, data: { installationId } } };
+    if (typeof init?.body === "string") {
+      expect(JSON.parse(raw ?? "null").active).not.toBeNull();
+      const call = { headers: init.headers as Record<string, string>, body: init.body };
+      calls.push(call);
+      return reply(call);
+    }
+    return { status: 200, body: { ok: true, data: {} } };
+  };
+  const recovery = await import("../../../src/web/memos/recovery");
+  const state = await import("../../../src/web/memos/state");
+  const app = {
+    submit: () =>
+      recovery.memoSubmit("add", projectId, null, "Reminder", { projectId, title: "Reminder", body: "한글\r\n" }),
+    retry: () => {
+      const pending = state.memoState.recovery.active;
+      if (!pending) throw new Error("Expected an active Memo request");
+      return recovery.memoDispatch(pending, true);
+    },
+    abandon: recovery.memoAbandon,
+    state: () => state.memoState.recovery,
+    locked: recovery.memoLocked,
+    message: () => state.memoState.storageError || state.memoState.message,
+    validate: recovery.memoStoredState,
   };
   return {
     app,
@@ -91,9 +100,8 @@ const refusal = () => ({
 });
 
 describe("served Memo recovery state machine", () => {
-  it("parses the assembled shipped script and persists before dispatch with no fallback after uncertainty", async () => {
-    expect(() => new Function(WEB_APP_JS)).not.toThrow();
-    const f = harness();
+  it("persists before dispatch with no fallback after uncertainty", async () => {
+    const f = await harness();
     await f.app.submit();
     const original = f.raw();
     expect(f.app.locked()).toBe(true);
@@ -107,19 +115,19 @@ describe("served Memo recovery state machine", () => {
     expect(f.app.locked()).toBe(true);
   });
   it("settles only a validated first-dispatch refusal and preserves uncertain malformed responses", async () => {
-    const f = harness();
+    const f = await harness();
     f.reply(async () => refusal());
     await f.app.submit();
     expect(f.app.state().active).toBeNull();
     expect(f.app.locked()).toBe(false);
-    const bad = harness();
+    const bad = await harness();
     bad.reply(async () => ({ status: 200, body: { ok: true, data: { changed: true, replayed: false, memo: {} } } }));
     await bad.app.submit();
     expect(bad.app.locked()).toBe(true);
     expect(bad.app.state().active).not.toBeNull();
   });
   it("settles a first SERVICE_PAUSED refusal at its catalogued HTTP status", async () => {
-    const f = harness();
+    const f = await harness();
     f.reply(async () => ({
       status: 423,
       body: {
@@ -135,7 +143,7 @@ describe("served Memo recovery state machine", () => {
   });
   it("never dispatches when the initial record cannot be written or read", async () => {
     for (const failure of ["failWrite", "failRead"] as const) {
-      const f = harness();
+      const f = await harness();
       f[failure]();
       await f.app.submit();
       expect(f.calls).toHaveLength(0);
@@ -144,13 +152,13 @@ describe("served Memo recovery state machine", () => {
     }
   });
   it("cancels abandonment without mutation and fails closed if its atomic replacement cannot be saved", async () => {
-    const cancelled = harness();
+    const cancelled = await harness();
     await cancelled.app.submit();
     const original = cancelled.raw();
     cancelled.cancel();
     cancelled.app.abandon();
     expect(cancelled.raw()).toBe(original);
-    const failed = harness();
+    const failed = await harness();
     await failed.app.submit();
     const active = failed.raw();
     failed.failWrite();
@@ -160,7 +168,7 @@ describe("served Memo recovery state machine", () => {
     expect(failed.calls).toHaveLength(1);
   });
   it("atomically retires a request into a bounded metadata-only passive notice without sending", async () => {
-    const f = harness();
+    const f = await harness();
     await f.app.submit();
     const original = f.app.state().active;
     f.app.abandon();

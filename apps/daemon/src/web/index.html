@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sorage</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header>
+<h1>Sorage</h1>
+<nav>
+<a href="#/dashboard" data-nav>Dashboard</a>
+<a href="#/projects" data-nav>Projects</a>
+<a href="#/memos" data-nav>Memos</a>
+<a href="#/compose" data-nav>Compose</a>
+<a href="#/inbox" data-nav>Inbox</a>
+<a href="#/outbox" data-nav>Outbox</a>
+<a href="#/deletion-requests" data-nav>Deletion Requests</a>
+<a href="#/backup" data-nav>Backup</a>
+<a href="#/settings" data-nav>Settings</a>
+<a href="#/diagnostics" data-nav>Diagnostics</a>
+</nav>
+<p id="session-note" role="status">This is the Sorage control plane. Run <code>sorage web</code> to open it with a one-time session secret.</p>
+</header>
+<aside id="memo-recovery" aria-label="Memo request recovery"></aside>
+<main id="view"></main>
+<script src="/assets/app.js"></script>
+</body>
+</html>

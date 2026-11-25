@@ -10,6 +10,7 @@ This file records concise shipped outcomes and the planned next stable release.
 - **One-way additive schema upgrade (`17 / m11-secondary-indexes-v1`):** Append twelve secondary, foreign-key, and sort indexes with no table rebuilds, switch Memo receipt scanning in `content-store.ts` to a `BINARY`-indexable prefix range (`scope >= 'memo:' AND scope < 'memo;'`), and add `"exchange"` (floor `16`) to `SchemaSurface` while keeping global backup format `5` and Format 1–5 legacy restore readers unchanged; guarded v0.1.5 binaries fail closed with `STORAGE_SCHEMA_UNSUPPORTED` on upgraded v17 databases, and rollback restores a verified pre-upgrade backup with its matching prior executable into a separate empty home and Vault.
 - Complete options for visible subcommands in Bash and Zsh and omit the internal `daemon serve` command from suggestions.
 - **Breaking HTTP replay changes:** Return semantic SQLite receipt outcomes in fresh Handoff and Backup HTTP envelopes, return `422 CONFIG_INVALID` for a duplicate or empty `Idempotency-Key` header or a header/body key mismatch, return `409 IDEMPOTENCY_CONFLICT` for an in-flight request with the same scope and header key, and return `413 ARTIFACT_TOO_LARGE` for oversized keyed uploads.
+- Compile the daemon's browser modules and stylesheet into the single binary at build time, with a packaging check for stale embedded assets.
 
 ### Fixed
 

@@ -52,6 +52,16 @@ describe("import-boundary gate", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("@sorage/core must not import @sorage/adapters");
   });
+
+  it.each(["node:fs", "@sorage/core", "pkg", "../server"])("rejects browser import %s", (specifier) => {
+    const root = makeFixture((r) => {
+      mkdirSync(join(r, "apps/daemon/src/web"));
+      writeFileSync(join(r, "apps/daemon/src/web/illegal.ts"), `import "${specifier}";\n`);
+    });
+    const result = runScript("check-import-boundaries.ts", root);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(`browser source may import only relative modules within src/web, not ${specifier}`);
+  });
 });
 
 describe("dependency-boundary gate", () => {

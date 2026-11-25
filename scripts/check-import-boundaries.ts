@@ -1,6 +1,6 @@
 // Enforces the package import rules of docs/implementation-tips/README.md section 2 (NFR-014).
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   APP_ADAPTERS_ALLOWLIST,
   ECOSYSTEM_TOOLS,
@@ -113,6 +113,23 @@ for (const ws of enumerateWorkspaceDirectories(root)) {
 }
 
 checkAllowlistExportsAlignment();
+const browserRoot = join(root, "apps/daemon/src/web");
+if (existsSync(browserRoot)) {
+  walkSourceFiles(browserRoot, (path) => {
+    for (const match of stripComments(readFileSync(path, "utf8")).matchAll(IMPORT_SPEC_PATTERN)) {
+      const spec = match[1];
+      if (spec === undefined) continue;
+      const withinBrowser = relative(browserRoot, resolve(dirname(path), spec));
+      if (
+        !(spec.startsWith("./") || spec.startsWith("../")) ||
+        withinBrowser === ".." ||
+        withinBrowser.startsWith("../")
+      ) {
+        violations.push(`${path}: browser source may import only relative modules within src/web, not ${spec}`);
+      }
+    }
+  });
+}
 
 reportViolationsAndExit("import-boundary check failed:", violations);
 

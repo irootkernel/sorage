@@ -77,3 +77,11 @@ These items surfaced while the [2026-11-24 EPIC-023 execution refinement](../gov
 - **Impact:** The adapter's commit-time `atOrBelow` treats a `/` root correctly, while core `isAtOrBelow` in `project-commands.ts` does not. `TASK-158` moves revalidation into core with a root-safe helper and leaves `resolveWorkspaceActor` unchanged, so the two paths still differ for a binding at `/`.
 - **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
 - **Re-entry:** Switch `resolveWorkspaceActor` and `checkedBindingTarget` to the root-safe helper with a focused unit test for a `/` binding.
+
+## EPIC-024 TASK-162 browser observation
+
+### Narrow Web layout overflow
+
+- **Impact:** At a 390 CSS pixel viewport, Dashboard, New Handoff (Compose), and Backup can extend past the viewport and require page-wide horizontal scrolling. The same three views overflowed in the pre-extraction binary and in the extracted-asset candidate.
+- **Owner:** `docs/deferred-feedback/README.md` (observed during TASK-162 browser verification)
+- **Re-entry:** Adjust the three views' narrow layout in a focused Web follow-up and add a compiled-browser regression at 390 CSS pixels that checks document width and access to the existing controls. Verify the desktop layout in the same pass.
