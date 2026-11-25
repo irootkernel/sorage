@@ -10,7 +10,7 @@ Do not expose authentication material or copy output containing secrets into an 
 
 ## Release-candidate verification
 
-The commands below verify the v0.1.5 packaging identity. Follow the [M10 Exchange storage upgrade and rollback procedure](#m10-exchange-storage-upgrade-and-rollback) before replacing the executable for an existing Installation.
+The commands below verify packaging while `SORAGE_VERSION` remains `"0.1.5"` pending a separately authorized version bump. The planned M11 release is `v0.1.6` and remains Unreleased. Use the reviewed source revision and signed digest to identify the build, and keep the retained predecessor executable outside `dist/` before packaging. The [M11 procedure](#m11-schema-v17-upgrade-and-rollback) covers the qualified upgrade from schema 16 to 17. For an earlier schema, use its matching historical procedure, such as the [M10 procedure](#m10-exchange-storage-upgrade-and-rollback) for schema 15 to 16.
 
 Before publication, build and inspect the Apple Silicon macOS candidate from the reviewed checkout:
 
@@ -168,6 +168,32 @@ Run the reviewed new executable's `preflight` on the intended earlier Installati
 For rollback, leave the upgraded home intact. With the retained executable, initialize a separate empty home and Vault, run `backup restore --from <verified-pre-upgrade-vault> --dry-run --as-user`, then repeat it with `--confirm` in place of `--dry-run`. Run `vault verify --as-user` and inspect restored Handoff, Memo, Channel and available Exchange records. Restore recreates the backed-up Installation identity, so make an explicit cutover before allowing either home to write. The earlier backup can recover only the data it captured. Preserve any needed later data with the new executable before switching.
 
 Format 5 carries the compact Exchange inventory. Restore retains the Exchange state, outstanding obligations and any accepted completion summary. The restored Installation starts with empty session leases, notice claims, and Project directory bindings. Active and Paused records can have omitted working payloads. Completed records can have intentionally retired payloads. Detailed Exchange working bytes live only in Installation state. Use an available retained source if those bytes are needed after restore. The `gitBackup.snapshot.redactWorkspacePaths` setting controls whether local path descriptors appear in the snapshot. Even with redaction disabled, a restored Installation has no Project directory bindings and the old path is not authority to read the original. For an Active Exchange, rebind the supplying Project to its intended workspace and join under that Project. Use its current claim to run `exchange material-revalidate` for the exact reference, then verify the retrieved bytes and digest. For a Paused Exchange, follow [authorized resumption](#exchange-completion-and-cleanup) before revalidating. For a Completed Exchange, use inspect or join to read the retained outcome. Consult the [retention contract](../specs/interfaces-and-operations.md#working-retention-cleanup-and-backup) when restoring an unfinished Exchange.
+
+## M11 schema v17 upgrade and rollback
+
+M11 upgrades schema 16 to `17 / m11-secondary-indexes-v1` in one direction. The migration adds 12 secondary, foreign-key, and sort indexes without rebuilding tables. Global backup format 5, the Format 1–5 restore readers, and existing ADR-0031 short Artifact IDs are preserved. [M11 qualification](../implementation-tips/m11-qualification.md#72-authentic-predecessor-upgrade-refusal-and-rollback) records the tested executable revisions and digests, database and WAL observations, and restore results.
+
+### Upgrade the intended home
+
+Set `LIVE_HOME` to the absolute path of the intended schema-16 home. Set `OLD_SORAGE` and `NEW_SORAGE` to the absolute paths of the retained v0.1.5 executable and the reviewed M11 executable, respectively. Verify each executable against its known source revision and SHA-256. Both builds still report the same runtime version. For a rehearsal, use a separate temporary home and Vault and follow the [copied-home isolation procedure](#m9-shared-content-upgrade-and-rollback) before making any command call.
+
+1. Stop CLI writers, the daemon, its LaunchAgent, and external schedulers. Preserve the settings and disable scheduling and remote push for the transition. Run `SORAGE_HOME="$LIVE_HOME" "$OLD_SORAGE" backup run --as-user --json` and `SORAGE_HOME="$LIVE_HOME" "$OLD_SORAGE" backup verify --as-user --json`. Keep an immutable copy of the verified pre-upgrade Vault and its matching executable. Record the executable revision and digest, the backup manifest digest, and the Vault Git commit when available. Rehearse the separate-home restore below with that pair before upgrading.
+2. Run `SORAGE_HOME="$LIVE_HOME" "$NEW_SORAGE" preflight --json`. On the schema-16 home, expect `upgrade_required` with exit 78. Preflight changes neither database nor WAL bytes. Determine the cause of any other result before proceeding.
+3. Run `SORAGE_HOME="$LIVE_HOME" "$NEW_SORAGE" backup run --as-user --json` to apply schema 17 and export the first upgraded backup. Run the new executable's `preflight --json` again and require `compatible` with exit 0. With the same executable and explicit home, run `doctor --json`, `backup verify --as-user --json`, and `vault verify --json`. Check the expected domain records and require zero blocking findings before deliberately restoring service, scheduling, or push.
+
+Keep the old executable and all old writers away from the upgraded home and its backup destination. On the upgraded home, the guarded v0.1.5 executable returns `STORAGE_SCHEMA_UNSUPPORTED` and exit 78 for `vault status --json`, `project list --json`, `memo list --json`, and `doctor --json`. Its `preflight --json` returns `unsupported` and exit 78. The database and WAL bytes remained unchanged for all five refusals in the drill.
+
+### Restore a separate rollback home
+
+Keep the upgraded home intact. Set `ROLLBACK_HOME` and `ROLLBACK_VAULT` to separate, fresh empty locations and `PRE_UPGRADE_VAULT` to the retained verified pre-upgrade backup. With writers stopped on the rollback home, initialize it using `SORAGE_HOME="$ROLLBACK_HOME" "$OLD_SORAGE" init --vault "$ROLLBACK_VAULT" --non-interactive --json`. Run `SORAGE_HOME="$ROLLBACK_HOME" "$OLD_SORAGE" backup restore --from "$PRE_UPGRADE_VAULT" --dry-run --as-user --json`. When the plan matches the intended backup and destination, repeat with `--confirm` in place of `--dry-run`, then run `SORAGE_HOME="$ROLLBACK_HOME" "$OLD_SORAGE" vault verify --json` and inspect the restored records.
+
+The backup contains the data captured at its snapshot. Preserve any needed post-backup data with the new executable before switching. Restore adopts the original Installation identity, so select one home for the cutover before restarting any writers. Use the retained [Exchange recovery guidance](#m10-exchange-storage-upgrade-and-rollback) for working materials and bindings omitted from the backup.
+
+### Handoff and replay after upgrade or restore
+
+Under HND-027, a fresh send from a resolved registered Project to itself fails all-or-nothing with `HANDOFF_INVALID_INPUT` (HTTP 422, CLI exit 64). Pre-M11 self-Handoff rows remain readable and restorable with deterministic role resolution. ADR-0039 uses semantic SQLite receipts for eligible Handoff and Backup HTTP replays and returns a fresh response envelope. See [HTTP idempotency](../specs/interfaces-and-operations.md#173-idempotency) for the route and key rules.
+
+An in-place upgrade preserves existing SQLite receipts under their existing expiration rules. Restore excludes operational `idempotency_keys` receipts. If an operation's outcome is unknown, preserve the original key, input, Installation, actor context, and observed version. Use the operation's supported replay-only path for Handoff send or Memo, and inspect current records read-only when no such path is available. A missing receipt leaves the original outcome unknown. Ordinary retries can execute on a miss, so keep the original material and require a separate decision before another mutation.
 
 ## Choose an Exchange skill and transport
 

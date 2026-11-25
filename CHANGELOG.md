@@ -6,16 +6,16 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- **Breaking behavior restriction:** Refuse fresh self-handoffs where the resolved registered sender Project equals a recipient Project (`HANDOFF_INVALID_INPUT`, HTTP 422, CLI exit 64, all-or-nothing across single and fan-out sends on CLI, HTTP, and MCP), while preserving User and unregistered-Workspace sends, pre-M11 idempotency replay, and pre-M11 rows with unified role resolution and `PRJ-020` inherited-workspace sender authority.
-- **One-way additive schema upgrade (`17 / m11-secondary-indexes-v1`):** Append twelve secondary, foreign-key, and sort indexes with no table rebuilds, switch Memo receipt scanning in `content-store.ts` to a `BINARY`-indexable prefix range (`scope >= 'memo:' AND scope < 'memo;'`), and add `"exchange"` (floor `16`) to `SchemaSurface` while keeping global backup format `5` and Format 1–5 legacy restore readers unchanged; guarded v0.1.5 binaries fail closed with `STORAGE_SCHEMA_UNSUPPORTED` on upgraded v17 databases, and rollback restores a verified pre-upgrade backup with its matching prior executable into a separate empty home and Vault.
+- **Reject fresh registered-Project self-handoffs (ADR-0038, breaking)** all-or-nothing for single and fan-out sends through CLI, HTTP, and MCP (`HANDOFF_INVALID_INPUT`, HTTP 422, CLI exit 64), preserving User and unregistered Workspace sends, pre-M11 rows and replay with unified sender/recipient role resolution, and inherited-workspace authority (`PRJ-020`).
+- **Upgrade storage one-way to schema 17 (`m11-secondary-indexes-v1`, ADR-0038, breaking for older executables)** with 12 additive indexes and no table rebuilds, indexed Memo receipt scans, and a CLI schema-surface floor of 16 for `exchange`, preserving backup format 5, Format 1–5 restore support, and short Artifact IDs, with [matched-binary rollback into a separate home](docs/ops/README.md#m11-schema-v17-upgrade-and-rollback) because guarded v0.1.5 refuses schema 17 (`STORAGE_SCHEMA_UNSUPPORTED`, exit 78).
 - Complete options for visible subcommands in Bash and Zsh and omit the internal `daemon serve` command from suggestions.
-- **Breaking HTTP replay changes:** Return semantic SQLite receipt outcomes in fresh Handoff and Backup HTTP envelopes, return `422 CONFIG_INVALID` for a duplicate or empty `Idempotency-Key` header or a header/body key mismatch, return `409 IDEMPOTENCY_CONFLICT` for an in-flight request with the same scope and header key, and return `413 ARTIFACT_TOO_LARGE` for oversized keyed uploads.
-- Compile the daemon's browser modules and stylesheet into the single binary at build time, with a packaging check for stale embedded assets.
+- **Use semantic SQLite receipts on five keyed Handoff and Backup HTTP routes (ADR-0039, breaking)** so eligible replays return the committed outcome with `replayed: true` and a fresh envelope and `X-Request-Id`, with `422 CONFIG_INVALID` for duplicate or empty `Idempotency-Key` headers or differing trimmed header/body keys, `409 IDEMPOTENCY_CONFLICT` for a concurrent duplicate on the same daemon with the same scope and trimmed header key, and `413 ARTIFACT_TOO_LARGE` for oversized keyed uploads.
+- **Embed framework-free Web assets at build time (ADR-0040)** in the single executable, with packaging checking the tracked HTML, CSS, and JavaScript embedding for drift before compilation.
 
 ### Fixed
 
 - Enforce User-admin context (`asUser: true`) on HTTP Handoff `archive`, `unarchive`, and `deletion-reject` routes and forward optional `reason` on `deletion-reject`.
-- Apply sender and recipient filters in the Web UI and HTTP Handoff listing, with pagination cursors bound to both filters.
+- Honor `?sender=` and `?recipient=` in HTTP and Web Handoff listings, with pagination cursors bound to both filters.
 - Restore `--as-user` enforcement, `--expected-revision` forwarding, and human/JSON output parity when `sorage config set` routes through a running daemon.
 - Reject non-empty malformed or non-object JSON request bodies on daemon HTTP routes (`CONFIG_INVALID` 422 on general routes, `UNAUTHENTICATED` 401 on `/api/v1/session`) instead of silently falling back to `{}`.
 - Route `VAULT_MOVED` structured logging through the resolved installation home and configured logger instead of global `process.env.SORAGE_HOME` and `homedir()`.
