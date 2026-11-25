@@ -1711,7 +1711,7 @@ The five `idempotent: true` Handoff and Backup HTTP routes in `apps/daemon/src/d
 
 ### Decision
 
-Retire the daemon in-memory `idempotencyStore`, `spoolRequestBody`, `replayableRequest` and `response.end` monkey-patch in `TASK-161` after completing an explicit route-by-route Core receipt inventory across all six operations listed in `interfaces-and-operations.md` section 17.3. Make Core SQLite `idempotency_keys` the sole replay authority for Handoff, Backup and Memo HTTP routes alike, retaining only a lightweight per-server `inFlightKeys: Set<string>` guard to reject concurrent in-flight duplicates during asynchronous multipart streaming.
+Retire the daemon in-memory `idempotencyStore`, `spoolRequestBody`, `replayableRequest` and `response.end` monkey-patch in `TASK-161` after completing an explicit route-by-route Core receipt inventory across all six operations listed in `interfaces-and-operations.md` section 17.3 and hardening three Core receipt paths (`reviseHandoff` receipt-hit sender/user authorization preserving non-hit error precedence, `reviseHandoff` and `approveDeletion` post-rollback `racedReplay` recheck, and restructuring `runBackupOnce`/`runBackupOnceAsync` so `runBackupCommand`/`runBackupCommandAsync` re-check `idempotency.lookup` after acquiring `backup.lock` and record receipts before releasing the lock with adapter PK-conflict handling and unchanged scheduler behavior). Make Core SQLite `idempotency_keys` the sole replay authority for Handoff, Backup and Memo HTTP routes alike, retaining only a lightweight per-server `inFlightKeys: Set<string>` guard keyed by `${scope}:${key}` on the five Handoff/Backup routes (leaving Memo routes untouched) to reject concurrent in-flight duplicates during asynchronous multipart streaming, while decomposing `apps/daemon/src/domain-routes.ts` onto `http-kit.ts` (type-only `./auth`, distinct `sendError`/`respondError`, shared `rawHeaderValues`) and pre-compiled `route-kit.ts` and fixing the `GET /api/v1/handoffs` `?sender=`/`?recipient=` query parameter mapping (`senderSlug`/`recipientSlug`).
 
 ### Alternatives considered
 
@@ -1720,7 +1720,7 @@ Retire the daemon in-memory `idempotencyStore`, `spoolRequestBody`, `replayableR
 
 ### Compatibility impact
 
-**Breaking for HTTP replay envelope and hash semantics on legacy Handoff and Backup routes:** replaces raw-HTTP-byte hashing and verbatim old-envelope replay with semantic request hashing and fresh-envelope (`X-Request-Id`) replay of the committed Core outcome, matching the M7 Memo replay model. Legitimate multipart retries with regenerated boundaries now succeed instead of spuriously conflicting.
+**Breaking for HTTP replay envelope, hash, scope, key-header validation, in-flight concurrency, and oversized-upload semantics on legacy Handoff and Backup routes:** replaces raw-HTTP-byte hashing and verbatim old-envelope replay with semantic request hashing, `(key, scope)` scope-partitioned isolation, and fresh-envelope (`X-Request-Id`) replay of the committed Core outcome, matching the M7 Memo replay model. Legitimate multipart retries with regenerated boundaries now succeed instead of spuriously conflicting. Removing raw-body request spooling shifts oversized keyed `POST /api/v1/handoffs/upload` rejection from `422 CONFIG_INVALID` spool-size bounds to mid-stream `413 ARTIFACT_TOO_LARGE` with zero `state/uploads` spools left. In addition, the five keyed Handoff/Backup routes now reject duplicate or empty `Idempotency-Key` headers and header-vs-body `idempotencyKey` mismatches with `422 CONFIG_INVALID` (previously body took precedence) and reject concurrent same-scope in-flight duplicates with `409 IDEMPOTENCY_CONFLICT`. Fixing `GET /api/v1/handoffs` `?sender=`/`?recipient=` to `senderSlug`/`recipientSlug` is a non-breaking defect fix restoring documented filter behavior.
 
 ### Migration impact
 
@@ -1728,11 +1728,11 @@ None for stored SQLite schema or Vault files. Existing unexpired `idempotency_ke
 
 ### Required Source of Truth edits and roadmap impact
 
-`TASK-161` records the six-operation Core receipt inventory, accepts or revises `ADR-0039`, amends `docs/specs/interfaces-and-operations.md` section 17.3, `docs/architecture/README.md` section 3.9, `docs/specs/project-memos.md` line 146, `docs/specs/required-specification.md` (`MEM-013`) and `ADR-0027` (dated amendment), and populates `TASK-161` citations and reverse-index entries before removing `idempotencyStore`.
+`TASK-161` records the six-operation Core receipt inventory, accepts or revises `ADR-0039`, amends `docs/specs/interfaces-and-operations.md` sections 17.3, 18.5 and 18.8 and adds section 42.4, amends `docs/specs/testing-and-acceptance.md` (`AJ-22`), `docs/architecture/README.md` sections 3.9, 25 and 30, `docs/specs/project-memos.md` section 9, `docs/specs/security-reliability.md` sections 1.2 and 8, `docs/specs/required-specification.md` (line 17 and `MEM-013`), `docs/implementation-tips/README.md` section 11, `docs/deferred-feedback/README.md` (removing the resolved filter entry), `CHANGELOG.md` (`## v0.1.6 - Unreleased` entry + superseded spool wording cleanup), `ADR-0027` (dated amendment), and `"proposed ADR-0039"` status labels in `docs/README.md`, `docs/roadmap/README.md`, `docs/specs/traceability.md` and `docs/todo/README.md` (keeping `docs/governance/README.md:296` historical), and populates `TASK-161` citations by appending to existing `docs/specs/traceability.md` section-3 reverse-index rows and updating section-2 group map rows before removing `idempotencyStore`.
 
 ### Consequences
 
-The daemon eliminates ~200 lines of fragile stream-spooling and response-patching code, unifies idempotency semantics across CLI, HTTP, Handoff, Memo and Backup, and eliminates upload triple-copying and daemon RAM leaks.
+The daemon eliminates ~200 lines of fragile stream-spooling and response-patching code, unifies idempotency semantics across CLI, HTTP, Handoff, Memo and Backup, closes three Core receipt auth/race edge cases, fixes HTTP Handoff sender/recipient filtering, and eliminates upload triple-copying and daemon RAM leaks.
 
 ## ADR-0040: Separated Web UI assets with minimal build-time embedding
 
@@ -1743,21 +1743,21 @@ The daemon eliminates ~200 lines of fragile stream-spooling and response-patchin
 
 ### Problem
 
-`apps/daemon/src/web-app.ts` (1,183 LOC) and `apps/daemon/src/web-memos.ts` (517 LOC) embed the entire browser application (HTML, CSS and JavaScript) inside TypeScript template literals spliced together via string interpolation and undeclared closure globals. Neither `tsc` nor `biome` checks the embedded JavaScript or CSS, which allowed concrete defects (double-escaped Markdown preview, unencoded URL interpolation, broken backup-run deduplication) to survive static gates.
+`apps/daemon/src/web-app.ts` (1,262 LOC) and `apps/daemon/src/web-memos.ts` (544 LOC) embed the entire browser application (HTML, CSS and JavaScript) inside TypeScript template literals spliced together via string interpolation and undeclared closure globals. Neither `tsc` nor `biome` checks the embedded JavaScript or CSS, which allowed concrete defects (double-escaped Markdown preview, unencoded URL interpolation, broken backup-run deduplication) to survive static gates.
 
 ### Decision
 
-Extract the daemon-served Web UI from template literals into real source modules under `apps/daemon/src/web/` (`.ts` and `.css`) checked by `tsc` and `biome`, and introduce a minimal build-time Bun bundle/embed script that emits the static asset module consumed by `apps/daemon/src/server.ts`. Wire that generation step into `make test-prepare` and `build:cli` so both Node-hosted `vitest` tests and the compiled single-file Bun executable serve identical verified assets with zero new runtime dependencies and no frontend framework.
+Extract the daemon-served Web UI from template literals into real acyclic source modules under `apps/daemon/src/web/` (`.ts`, `.css` and `index.html`, with leaf `memos/state.ts` eliminating view/recovery cycles) checked by an isolated browser-only `apps/daemon/src/web/tsconfig.json` (`extends: "../../../../tsconfig.base.json"`, `types: []`) plus `apps/daemon/test/unit/web/tsconfig.json` (`extends: "../../../../../tsconfig.base.json"`, `types: ["bun"]`) for migrated browser unit tests (both checked by `scripts/check-typecheck.ts` with `existsSync` guards and excluded from `apps/daemon/tsconfig.json`) and Biome (`biome.json` adding `apps/daemon/src/web/**/*.css` and excluding `!apps/daemon/src/web-assets.generated.ts`). Introduce a minimal deterministic build-time Bun bundle/embed script (`scripts/build-web-assets.ts` importing `assertManagedBun` and `toolchainRoot` from `./toolchain-runtime`, explicit `Bun.build` `root`, `bun run build:web` with `--check` drift guard and `--out <path>`, `minify: false`, `format: "iife"`, `target: "browser"`, `sourcemap: "none"`) emitting Git-tracked `apps/daemon/src/web-assets.generated.ts` consumed by `apps/daemon/src/server.ts`. Wire that generation step into `Makefile` `test-prepare` (`format` -> `build:web` -> `check:lint`), `scripts/build-cli.ts`, and standalone `--check` verification in `scripts/package.ts` (updating `test/int/make-gate.int.test.ts` and `test/int/package-failure.int.test.ts`) so clean checkouts, Node-hosted `vitest` tests, and reproducible compiled single-file Bun executables serve identical verified assets with zero new runtime dependencies and no frontend framework.
 
 ### Alternatives considered
 
-- **Keep inline TypeScript template literals indefinitely:** rejected because 1,700+ lines of untyped, unlinted browser code cannot be maintained safely across future changes.
+- **Keep inline TypeScript template literals indefinitely:** rejected because 1,800+ lines of untyped, unlinted browser code cannot be maintained safely across future changes.
 - **Adopt an external frontend framework and toolchain (React, Preact, Vite):** rejected because Sorage's local daemon SPA stays framework-free, lightweight and self-contained inside the single compiled executable (`ADR-0023`).
 - **Serve loose static files from disk at runtime:** rejected because it breaks single-binary distribution and introduces runtime asset-path discovery failures.
 
 ### Compatibility impact
 
-Non-breaking at runtime: served routes, CSP headers (`script-src 'self'`), zero-cookie bearer session model, accessibility and single-binary distribution remain unchanged. Developer build and `test-prepare` pipelines gain one deterministic asset-generation step.
+Non-breaking at runtime: served routes, CSP headers (`script-src 'self'`), zero-cookie bearer session model, accessibility and single-binary distribution remain unchanged. Developer build, `test-prepare` and `package` pipelines gain one deterministic asset-generation step guarded by `bun run build:web -- --check`.
 
 ### Migration impact
 
@@ -1765,8 +1765,8 @@ None. No database, Vault, configuration or backup format changes.
 
 ### Required Source of Truth edits and roadmap impact
 
-`TASK-162` accepts or revises `ADR-0040`, adds dated amendments to `ADR-0016` (replacing the 2026-10-28 "no-build" sentence while preserving framework-free embedded serving), `ADR-0027` and `ADR-0036`, updates `docs/architecture/README.md` section 15 and `docs/specs/testing-and-acceptance.md` section 1 for the asset generation step in `test-prepare`, and populates `TASK-162` citations and reverse-index entries.
+`TASK-162` accepts or revises `ADR-0040`, adds dated amendments to `ADR-0016` (replacing the 2026-10-28 "no-build" sentence while preserving framework-free embedded serving), `ADR-0027` (also updating stale `web-app.ts` references) and `ADR-0036`, updates `docs/architecture/README.md` sections 15, 25 and 30, `docs/specs/project-memos.md` section 10, `docs/specs/testing-and-acceptance.md` section 1 and `AJ-21-B`, `docs/specs/interfaces-and-operations.md` (section 24.1 and new section 42.5), `docs/implementation-tips/README.md` (sections 2, 13 and 18), `docs/implementation-tips/toolchains.md` (including Bun-upgrade regeneration note), `docs/implementation-tips/memo-qualification.md` (updating line 14 links atomically with file extraction/deletion), `"proposed ADR-0040"` status labels across `docs/README.md`, `docs/roadmap/README.md`, `docs/specs/required-specification.md`, `docs/specs/traceability.md` (including line 65 staging sentence) and `docs/todo/README.md`, and `CHANGELOG.md` (`## v0.1.6 - Unreleased` entry), and populates `TASK-162`, `TASK-163` and `TASK-164` citations by appending to existing `docs/specs/traceability.md` section-3 reverse-index rows and updating section-2 group map rows.
 
 ### Consequences
 
-The Web UI gains full TypeScript typechecking and Biome formatting/linting while keeping zero frontend framework dependencies and single-binary distribution intact. The small cost is one deterministic build-time asset-embed script shared by `test-prepare` and `build:cli`.
+The Web UI gains full isolated browser TypeScript typechecking and Biome `.ts`/`.css` formatting and linting while keeping zero frontend framework dependencies and reproducible single-binary distribution intact. The small cost is one deterministic build-time asset-embed script shared by `test-prepare`, `build:cli` and `package`.
