@@ -2054,16 +2054,21 @@ export function createNodeBackupCommandPorts(options: NodeBackupCommandPortsOpti
           record: (input) =>
             withDatabase((db) => {
               try {
-                db.prepare(
-                  "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-                ).run(
-                  input.key,
-                  input.scope,
-                  input.requestHash,
-                  input.responseJson,
-                  clock.now().toISOString(),
-                  input.expiresAt,
-                );
+                const result = db
+                  .prepare(
+                    "INSERT INTO idempotency_keys (key, scope, request_hash, response_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(key, scope) DO NOTHING",
+                  )
+                  .run(
+                    input.key,
+                    input.scope,
+                    input.requestHash,
+                    input.responseJson,
+                    clock.now().toISOString(),
+                    input.expiresAt,
+                  ) as { changes: number };
+                if (Number(result.changes) === 0) {
+                  return err(appError("IDEMPOTENCY_CONFLICT", "This backup idempotency key already has a receipt."));
+                }
                 return ok(undefined);
               } catch (error) {
                 return err(appError("INTERNAL_ERROR", `Recording the idempotency key failed: ${messageOf(error)}.`));

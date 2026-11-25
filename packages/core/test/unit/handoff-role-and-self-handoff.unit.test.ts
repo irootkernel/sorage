@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type AppError, err, ok } from "../../src/shared/errors";
+import { type AppError, appError, err, ok } from "../../src/shared/errors";
 import { sendHandoffs, sendRequestHash, type SendInput, type SendPorts } from "../../src/handoff/handoff-commands";
 import {
   fetchHandoff,
@@ -13,7 +13,7 @@ import {
 import type { ProjectCommandPorts } from "../../src/project/project-commands";
 import type { Project, ProjectBinding } from "../../src/project/projects";
 import { reportingRole, setRecipientComment } from "../../src/handoff/reporting-commands";
-import { requestDeletion, type RetentionPorts } from "../../src/handoff/retention-commands";
+import { approveDeletion, requestDeletion, type RetentionPorts } from "../../src/handoff/retention-commands";
 import { setReviewNote, type ReviewPorts } from "../../src/handoff/review-commands";
 import { reviseHandoff, type RevisionPorts } from "../../src/handoff/revision-commands";
 import {
@@ -481,6 +481,106 @@ describe("unified resolveHandoffParticipantRole across all 5 core modules", () =
     };
     return { readPorts, revisionPorts, terminalPorts, retentionPorts, reviewPorts };
   }
+
+  const keyedVariants = [
+    { name: "content", body: "revised", contentSha256: createHash("sha256").update("revised").digest("hex") },
+    { name: "no-change", noChange: true, reason: "leave as-is", contentSha256: "no-change:leave as-is" },
+  ];
+  const replayProjects = [makeProject(ALPHA_ID, "alpha"), makeProject(BETA_ID, "beta")];
+  const replayBindings = [
+    makeBinding("b-alpha", ALPHA_ID, "/workspaces/alpha"),
+    makeBinding("b-beta", BETA_ID, "/workspaces/beta"),
+  ];
+
+  it.each(keyedVariants)(
+    "requires sender authority on a $name receipt hit and preserves terminal and deleted refusals on a miss",
+    (variant) => {
+      const handoff = makeHandoffView({ reviewState: "accepted" });
+      const { revisionPorts } = makeAllPorts(handoff, replayProjects, replayBindings);
+      const input = {
+        ...variant,
+        path: "/workspaces/beta",
+        userHome: "/home/tester",
+        as: undefined,
+        asUser: false,
+        handoffId: handoff.id,
+        idempotencyKey: "key",
+        expectedRowVersion: 1,
+      };
+      expect(reviseHandoff(revisionPorts, input)).toMatchObject({ ok: false, error: { code: "HANDOFF_TERMINAL" } });
+      handoff.deletedAt = NOW;
+      expect(reviseHandoff(revisionPorts, input)).toMatchObject({ ok: false, error: { code: "HANDOFF_DELETED" } });
+      handoff.deletedAt = null;
+      revisionPorts.revisions.idempotencyLookup = () =>
+        ok({
+          requestHash: sendRequestHash({
+            to: [handoff.id],
+            title: handoff.title,
+            contentSha256: variant.contentSha256,
+            kind: "body",
+          }),
+          responseJson: JSON.stringify({ handoffId: handoff.id, rowVersion: 2 }),
+        });
+      expect(reviseHandoff(revisionPorts, input)).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+      expect(reviseHandoff(revisionPorts, { ...input, path: "/workspaces/alpha" })).toMatchObject({
+        ok: true,
+        value: { rowVersion: 2, replayed: true },
+      });
+    },
+  );
+
+  it.each(keyedVariants)("rechecks a $name receipt after a rolled-back revision", (variant) => {
+    const handoff = makeHandoffView({
+      reviewState: variant.noChange ? "changes_requested" : "awaiting_recipient",
+      hasReviewNote: variant.noChange === true,
+    });
+    const { revisionPorts } = makeAllPorts(handoff, replayProjects, replayBindings);
+    let receipt: { requestHash: string; responseJson: string } | null = null;
+    revisionPorts.revisions.idempotencyLookup = () => ok(receipt);
+    const race = (mutation: { idempotency?: { requestHash: string; responseJson: string } | undefined }) => {
+      receipt = mutation.idempotency ?? null;
+      return err(appError("ROW_VERSION_CONFLICT", "a concurrent revision won"));
+    };
+    revisionPorts.revisions.applyContentRevision = race;
+    revisionPorts.revisions.applyNoChangeResolution = race;
+    expect(
+      reviseHandoff(revisionPorts, {
+        ...variant,
+        path: "/workspaces/alpha",
+        userHome: "/home/tester",
+        as: undefined,
+        asUser: false,
+        handoffId: handoff.id,
+        idempotencyKey: "key",
+        expectedRowVersion: 1,
+      }),
+    ).toMatchObject({ ok: true, value: { rowVersion: 2, replayed: true } });
+  });
+
+  it("rechecks a deletion approval receipt after a rolled-back mutation", () => {
+    const handoff = makeHandoffView({ reviewState: "accepted" });
+    const { retentionPorts } = makeAllPorts(handoff, replayProjects, replayBindings);
+    let receipt: { requestHash: string; responseJson: string } | null = null;
+    retentionPorts.retention.findPendingRequest = () => ok({ id: "pending-deletion" });
+    retentionPorts.retention.idempotencyLookup = () => ok(receipt);
+    retentionPorts.retention.applyRetentionMutation = ({ change }) => {
+      if (change.kind !== "deletion-approve") throw new Error("expected approval");
+      receipt = change.idempotency ?? null;
+      return err(appError("ROW_VERSION_CONFLICT", "a concurrent approval won"));
+    };
+    expect(
+      approveDeletion(retentionPorts, {
+        path: "/workspaces/alpha",
+        userHome: "/home/tester",
+        as: undefined,
+        asUser: true,
+        handoffId: handoff.id,
+        confirm: true,
+        idempotencyKey: "key",
+        expectedRowVersion: 1,
+      }),
+    ).toMatchObject({ ok: true, value: { deleted: true, rowVersion: 2, replayed: true } });
+  });
 
   it("calls resolveWorkspaceActor once (not multiple times) during participant role resolution", () => {
     const spies = { realPath: 0, listBindings: 0, listProjects: 0, listBindingsForProject: 0 };

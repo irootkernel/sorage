@@ -1,19 +1,8 @@
-import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { appError } from "@sorage/core";
 import { describe, expect, it } from "vitest";
-import {
-  CONTENT_SECURITY_POLICY,
-  createDaemonServer,
-  isHostAllowed,
-  isLoopbackBindAddress,
-  readJsonBody,
-  SECURITY_HEADERS,
-  spoolRequestBody,
-} from "../../src/server";
+import { createDaemonServer, isHostAllowed, isLoopbackBindAddress } from "../../src/server";
+import { CONTENT_SECURITY_POLICY, rawHeaderValues, readJsonBody, SECURITY_HEADERS } from "../../src/http-kit";
 
 describe("the loopback bind guard (SEC-001)", () => {
   it("accepts only the loopback literals as bind addresses", () => {
@@ -152,42 +141,12 @@ describe("the JSON body reader cap", () => {
   });
 });
 
-describe("spoolRequestBody stream-error settlement", () => {
-  it("resolves cleanly with INTERNAL_ERROR when the write stream errors after request end", async () => {
-    const spoolRoot = mkdtempSync(join(tmpdir(), "sorage-spool-err-"));
-    try {
-      const request = new EventEmitter();
-      const fakeStream = Object.assign(new EventEmitter(), {
-        destroyed: false,
-        write: () => true,
-        end: (_cb?: () => void) => {
-          // Simulate ENOSPC/EIO during flush after request 'end': Node emits
-          // 'error' then 'close' without invoking the end/finish callback.
-          setImmediate(() => {
-            fakeStream.emit("error", new Error("ENOSPC"));
-            fakeStream.emit("close");
-          });
-        },
-        destroy: () => {
-          fakeStream.destroyed = true;
-        },
-      });
-      const spool = spoolRequestBody(request as unknown as IncomingMessage, 1024, spoolRoot, () => fakeStream);
-      request.emit("data", Buffer.from('{"ok":true}'));
-      request.emit("end");
-
-      const settled = await Promise.race([
-        spool.finished.then(() => "resolved" as const),
-        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
-      ]);
-      expect(settled).toBe("resolved");
-      expect(spool.error?.code).toBe("INTERNAL_ERROR");
-      expect(fakeStream.destroyed).toBe(true);
-      // Repeated reads of .hash must not throw ERR_CRYPTO_HASH_FINALIZED.
-      expect(spool.hash).toBe(spool.hash);
-      spool.discard();
-    } finally {
-      rmSync(spoolRoot, { recursive: true, force: true });
-    }
+describe("rawHeaderValues", () => {
+  it("retains duplicate and empty wire values without coalescing them", () => {
+    const request = {
+      rawHeaders: ["Idempotency-Key", "one", "Accept", "*/*", "idempotency-key", ""],
+    } as IncomingMessage;
+    expect(rawHeaderValues(request, "idempotency-key")).toEqual(["one", ""]);
+    expect(rawHeaderValues(request, "missing")).toEqual([]);
   });
 });

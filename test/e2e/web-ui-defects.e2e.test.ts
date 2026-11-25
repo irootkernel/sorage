@@ -24,6 +24,7 @@ let unregisteredWorkspaceKey = "";
 let totalAwaiting = 0;
 let totalDeleted = 0;
 const cleanup: Array<() => void> = [];
+const matchingFilterTitle = "Matching Sender and Recipient";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -90,6 +91,10 @@ beforeAll(async () => {
   cli(["config", "set", "server.port", String(port), "--as-user"]);
   const added = cli(["project", "add", "--name", "Alpha", "--dir", work]);
   projectId = added.project.id as string;
+  const receiver = join(home, "filter-receiver");
+  mkdirSync(receiver);
+  cli(["project", "add", "--name", "Filter Receiver", "--dir", receiver]);
+  cli(["send", "--to", "filter-receiver", "--title", matchingFilterTitle, "--body", "Filter fixture"], work);
 
   // 1. Handoff with angle brackets, ampersands, and hostile markup for #5.
   const mdBody = [
@@ -150,9 +155,9 @@ beforeAll(async () => {
     db.close();
   }
 
-  // Seed 202 additional awaiting_recipient Handoffs -> 205 awaiting + 1 deleted = 206 total (>200).
+  // Seed 202 additional awaiting Handoffs to exercise totals beyond the 200-row page.
   seedBulkHandoffs(projectId, 202);
-  totalAwaiting = 205;
+  totalAwaiting = 206;
 
   // Run one backup so lastAttempt/lastSuccess/lastCommit share one run.id (#6b).
   cli(["backup", "run"]);
@@ -243,6 +248,14 @@ describe("TASK-150 Web UI defect fixes (#5 and #6)", () => {
       await page.goto(`${origin}/#/inbox`);
       await page.waitForSelector("table tbody tr");
       capturedUrls.length = 0;
+
+      await page.getByLabel("Sender slug", { exact: true }).fill("alpha");
+      await page.getByLabel("Recipient slug", { exact: true }).fill("filter-receiver");
+      await page.getByRole("button", { name: "Apply", exact: true }).click();
+      const filteredRows = page.locator("table tbody tr");
+      await browserExpect(filteredRows).toHaveCount(1);
+      await browserExpect(filteredRows.first()).toContainText(matchingFilterTitle);
+      await page.getByLabel("Recipient slug", { exact: true }).fill("");
 
       const injectedSender = "alpha+beta&includeDeleted=true?x=1%20";
       await page.getByLabel("Sender slug", { exact: true }).fill(injectedSender);

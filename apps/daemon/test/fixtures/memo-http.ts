@@ -57,8 +57,6 @@ export async function memoHttpFixture(clock?: Clock, cli = memoCliFixture()) {
       endpoints: { installationId: "memo-test", version: "test" },
       auth,
       domainRoutes: createDomainRoutes({
-        vaultPath: () => join(cli.home, "vault"),
-        config: undefined,
         database: db,
         ...(clock ? { memoClock: clock } : {}),
       }),

@@ -50,7 +50,7 @@ const routes: FlatRoute[] = [
     (route) => ({ method: route.method, pattern: route.path }),
   ),
   ...configRoutes({}).map((route) => ({ method: route.method, pattern: route.path })),
-  ...createDomainRoutes({ vaultPath: () => null, config: undefined }).map((route) => ({
+  ...createDomainRoutes({}).map((route) => ({
     method: route.method,
     pattern: route.pattern,
   })),

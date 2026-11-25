@@ -74,10 +74,16 @@ interface TestResponse {
 
 function call(
   path: string,
-  init?: { method?: string; bearer?: string | null; body?: unknown; extra?: Record<string, string>; rawBody?: Buffer },
+  init?: {
+    method?: string;
+    bearer?: string | null;
+    body?: unknown;
+    extra?: Record<string, string | string[]>;
+    rawBody?: Buffer;
+  },
 ): Promise<TestResponse> {
   return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = {
+    const headers: Record<string, string | string[]> = {
       host: `127.0.0.1:${port}`,
       ...(init?.bearer !== undefined && init?.bearer !== null ? { authorization: `Bearer ${init.bearer}` } : {}),
       ...(init?.extra ?? {}),
@@ -208,7 +214,7 @@ beforeAll(async () => {
     auth,
     tokenRotate: () => tokenStore.rotate(),
     config: createDaemonConfigService({ host: "127.0.0.1", port, startedAt: "2026-08-30T00:00:00.000Z" }),
-    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined }),
+    domainRoutes: createDomainRoutes({}),
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   closer.push(() => server.close());
@@ -528,6 +534,132 @@ describe("the handoff lifecycle", () => {
 });
 
 describe("the Idempotency-Key replay (API-012)", () => {
+  it("refuses empty, duplicate, and header/body conflicting keys after authentication", async () => {
+    const path = "/api/v1/handoffs/import-path";
+    const body = { to: ["web-app"], title: "Key admission", body: "One", asUser: true, idempotencyKey: "body-key" };
+    for (const key of [" ", ["one", "two"], "different-key"]) {
+      const refused = await call(path, {
+        method: "POST",
+        bearer: apiToken,
+        extra: { "idempotency-key": key },
+        body,
+      });
+      expect(refused.status, refused.body).toBe(422);
+      expect(json(refused).error.code).toBe("CONFIG_INVALID");
+    }
+    const valid = await call(path, {
+      method: "POST",
+      bearer: apiToken,
+      extra: { "idempotency-key": "body-key" },
+      body: { ...body, idempotencyKey: " body-key " },
+    });
+    expect(valid.status, valid.body).toBe(201);
+  });
+
+  it("applies sender and recipient filters and binds both to the listing cursor", async () => {
+    const parties = ["Filter Sender", "Filter Receiver", "Filter Other"];
+    for (const name of parties) {
+      const dir = join(home, name);
+      mkdirSync(dir, { recursive: true });
+      const result = await call("/api/v1/projects", {
+        method: "POST",
+        bearer: apiToken,
+        body: { name, dir, asUser: true },
+      });
+      expect(result.status, result.body).toBe(201);
+    }
+    for (const [as, to, title] of [
+      ["filter-sender", "filter-receiver", "First matching"],
+      ["filter-sender", "filter-receiver", "Second matching"],
+      ["filter-sender", "filter-other", "Other recipient"],
+      ["filter-other", "filter-receiver", "Other sender"],
+    ]) {
+      const result = await call("/api/v1/handoffs/import-path", {
+        method: "POST",
+        bearer: apiToken,
+        body: { to: [to], title, body: title, as },
+      });
+      expect(result.status, result.body).toBe(201);
+    }
+    const root = "/api/v1/handoffs?asUser=true";
+    const sender = await call(`${root}&sender=filter-sender`, { bearer: apiToken });
+    expect(
+      json(sender)
+        .data.handoffs.map((h: { title: string }) => h.title)
+        .sort(),
+    ).toEqual(["First matching", "Other recipient", "Second matching"]);
+    const recipient = await call(`${root}&recipient=filter-receiver`, { bearer: apiToken });
+    expect(
+      json(recipient)
+        .data.handoffs.map((h: { title: string }) => h.title)
+        .sort(),
+    ).toEqual(["First matching", "Other sender", "Second matching"]);
+    const sameFilters = `${root}&sender=filter-sender&recipient=filter-receiver&limit=1`;
+    const page = await call(sameFilters, { bearer: apiToken });
+    expect(page.status).toBe(200);
+    const firstPage = json(page).data;
+    expect(firstPage.handoffs).toHaveLength(1);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    expect(firstPage.nextCursor).not.toBe("");
+    const cursor = encodeURIComponent(firstPage.nextCursor);
+    const next = await call(`${sameFilters}&cursor=${cursor}`, { bearer: apiToken });
+    expect(next.status).toBe(200);
+    const nextPage = json(next).data;
+    expect(nextPage.handoffs).toHaveLength(1);
+    expect([firstPage.handoffs[0].title, nextPage.handoffs[0].title].sort()).toEqual([
+      "First matching",
+      "Second matching",
+    ]);
+    expect(nextPage.nextCursor).toBeNull();
+    for (const filters of [
+      "sender=filter-other&recipient=filter-receiver",
+      "sender=filter-sender&recipient=filter-other",
+    ]) {
+      const mismatch = await call(`${root}&${filters}&limit=1&cursor=${cursor}`, { bearer: apiToken });
+      expect(json(mismatch).error.code).toBe("CURSOR_INVALID");
+    }
+  });
+
+  it("replays an identical deletion approval and conflicts when confirmPinned changes", async () => {
+    const created = await call("/api/v1/handoffs/import-path", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["web-app"], title: "Deletion receipt", body: "Once", asUser: true },
+    });
+    expect(created.status, created.body).toBe(201);
+    const handoff = `/api/v1/handoffs/${json(created).data.handoffs[0].handoffId}`;
+    const accepted = await call(`${handoff}/accept`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app", expectedRevision: 1, expectedRowVersion: 1 },
+    });
+    expect(accepted.status, accepted.body).toBe(200);
+    const requested = await call(`${handoff}/deletion-request`, {
+      method: "POST",
+      bearer: apiToken,
+      body: { as: "web-app", expectedRowVersion: 2 },
+    });
+    expect(requested.status, requested.body).toBe(200);
+    const request = {
+      method: "POST",
+      bearer: apiToken,
+      extra: { "idempotency-key": "task161-deletion-receipt" },
+      body: { asUser: true, confirm: true, expectedRowVersion: 3 },
+    };
+    const first = await call(`${handoff}/deletion-approve`, request);
+    expect(first.status, first.body).toBe(200);
+    expect(json(first).data.deleted).toBe(true);
+    const same = await call(`${handoff}/deletion-approve`, request);
+    expect(same.status, same.body).toBe(200);
+    expect(json(same).data).toEqual({ ...json(first).data, replayed: true });
+    const changed = await call(`${handoff}/deletion-approve`, {
+      ...request,
+      body: { ...request.body, confirmPinned: json(first).data.handoffId },
+    });
+    expect(changed.status, changed.body).toBe(409);
+    expect(json(changed).error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
   it("does not replay a different HTTP sender under the same key", async () => {
     const alphaDir = join(home, "sender-alpha");
     const gammaDir = join(home, "sender-gamma");
@@ -1502,7 +1634,7 @@ describe("the SHR-015 shared-adapter classification on daemon routes", () => {
       mkdirSync(join(home, "contended"), { recursive: true });
       const database = openNodeDaemonDatabase(join(home, "state"));
       try {
-        const routes = createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined, database });
+        const routes = createDomainRoutes({ database });
         const served = await serveRoutes(routes);
         try {
           const holder = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
@@ -1867,14 +1999,16 @@ describe("TASK-148 HTTP contract defect fixes (#1, #2, #11)", () => {
     expect(revisedWithKey.status, revisedWithKey.body).toBe(200);
     expect(json(revisedWithKey).data.revision).toBe(3);
 
+    const retryBoundary = "revise-regenerated-boundary";
     const replayed = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
       method: "POST",
       bearer: browser,
-      rawBody: bodyB,
-      extra: { "content-type": `multipart/form-data; boundary=${boundaryB}`, "idempotency-key": key },
+      rawBody: multipartReviseBody(retryBoundary, 4, "large-b.md", payloadB),
+      extra: { "content-type": `multipart/form-data; boundary=${retryBoundary}`, "idempotency-key": key },
     });
     expect(replayed.status).toBe(200);
-    expect(json(replayed).data.revision).toBe(3);
+    expect(json(replayed).data).toMatchObject({ revision: 3, replayed: true });
+    expect(replayed.headers["x-request-id"]).not.toBe(revisedWithKey.headers["x-request-id"]);
 
     const conflicted = await call(`/api/v1/handoffs/${id}/revise?asUser=true`, {
       method: "POST",

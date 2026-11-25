@@ -80,6 +80,14 @@ export function renderBackupCommitMessage(template: string, now: Date): string {
 export function runBackupOnce(ports: BackupRunPorts): Result<BackupRunReport, AppError> {
   const lock = ports.lock.acquire();
   if (!lock.ok) return err(lock.error);
+  try {
+    return runBackupAttempt(ports);
+  } finally {
+    lock.value.release();
+  }
+}
+
+function runBackupAttempt(ports: BackupRunPorts): Result<BackupRunReport, AppError> {
   const id = ports.nextRunId();
   const startedAt = ports.now();
 
@@ -128,7 +136,6 @@ export function runBackupOnce(ports: BackupRunPorts): Result<BackupRunReport, Ap
         failureMessage: result.error.message,
       };
   const recorded = ports.recordRun(row);
-  lock.value.release();
   if (!recorded.ok) return err(recorded.error);
   if (!result.ok) return err(result.error);
   return ok({
@@ -263,46 +270,71 @@ export interface BackupRunCommandPorts extends BackupRunPorts {
 
 export type BackupRunCommandOutcome = BackupRunReport & { replayed: boolean };
 
+const BACKUP_RUN_SCOPE = "backup-run";
+
+function backupReceipt(ports: Pick<BackupRunCommandPorts, "idempotency" | "now" | "vaultPath">, key: string) {
+  const requestHash = hashOf(JSON.stringify({ command: "backup run", vaultPath: ports.vaultPath }));
+  const lookup = (): Result<BackupRunCommandOutcome | null, AppError> => {
+    const seen = ports.idempotency.lookup(key, BACKUP_RUN_SCOPE);
+    if (!seen.ok) return err(seen.error);
+    if (seen.value === null) return ok(null);
+    if (seen.value.requestHash !== requestHash) {
+      return err(
+        appError(
+          "IDEMPOTENCY_CONFLICT",
+          "this idempotency key was used with a different request; use a new key or replay the identical request",
+          { idempotencyKey: key },
+        ),
+      );
+    }
+    return ok({ ...(JSON.parse(seen.value.responseJson) as BackupRunReport), replayed: true });
+  };
+
+  return {
+    lookup,
+    record(run: Result<BackupRunReport, AppError>): Result<BackupRunCommandOutcome, AppError> {
+      if (!run.ok) return err(run.error);
+      const recorded = ports.idempotency.record({
+        key,
+        scope: BACKUP_RUN_SCOPE,
+        requestHash,
+        responseJson: JSON.stringify(run.value),
+        expiresAt: new Date(ports.now().getTime() + 24 * 3_600_000).toISOString(),
+      });
+      if (recorded.ok) return ok({ ...run.value, replayed: false });
+      if (recorded.error.code === "IDEMPOTENCY_CONFLICT") {
+        const latest = lookup();
+        if (!latest.ok) return err(latest.error);
+        if (latest.value !== null) return ok(latest.value);
+      }
+      return err(recorded.error);
+    },
+  };
+}
+
 export function runBackupCommand(
   ports: BackupRunCommandPorts,
   options: { idempotencyKey?: string | undefined },
 ): Result<BackupRunCommandOutcome, AppError> {
-  // The request identity of a manual run is the command itself over this
-  // Vault: there is no per-run input besides the key, so identical requests
-  // hash identically by construction.
-  const requestHash = hashOf(JSON.stringify({ command: "backup run", vaultPath: ports.vaultPath }));
-  if (options.idempotencyKey !== undefined) {
-    const seen = ports.idempotency.lookup(options.idempotencyKey, "backup-run");
-    if (!seen.ok) return err(seen.error);
-    if (seen.value !== null) {
-      if (seen.value.requestHash !== requestHash) {
-        return err(
-          appError(
-            "IDEMPOTENCY_CONFLICT",
-            "this idempotency key was used with a different request; use a new key or replay the identical request",
-            {
-              idempotencyKey: options.idempotencyKey,
-            },
-          ),
-        );
-      }
-      const replayed = JSON.parse(seen.value.responseJson) as BackupRunReport;
-      return ok({ ...replayed, replayed: true });
-    }
+  if (options.idempotencyKey === undefined) {
+    const run = runBackupOnce(ports);
+    return run.ok ? ok({ ...run.value, replayed: false }) : run;
   }
-  const run = runBackupOnce(ports);
-  if (!run.ok) return err(run.error);
-  if (options.idempotencyKey !== undefined) {
-    const recorded = ports.idempotency.record({
-      key: options.idempotencyKey,
-      scope: "backup-run",
-      requestHash,
-      responseJson: JSON.stringify(run.value),
-      expiresAt: new Date(ports.now().getTime() + 24 * 3_600_000).toISOString(),
-    });
-    if (!recorded.ok) return err(recorded.error);
+  const receipt = backupReceipt(ports, options.idempotencyKey);
+  const seen = receipt.lookup();
+  if (!seen.ok) return err(seen.error);
+  if (seen.value !== null) return ok(seen.value);
+
+  const lock = ports.lock.acquire();
+  if (!lock.ok) return err(lock.error);
+  try {
+    const latest = receipt.lookup();
+    if (!latest.ok) return err(latest.error);
+    if (latest.value !== null) return ok(latest.value);
+    return receipt.record(runBackupAttempt(ports));
+  } finally {
+    lock.value.release();
   }
-  return ok({ ...run.value, replayed: false });
 }
 
 export interface AsyncBackupRunPorts
@@ -322,61 +354,65 @@ export async function runBackupOnceAsync(ports: AsyncBackupRunPorts): Promise<Re
   const lock = ports.lock.acquire();
   if (!lock.ok) return err(lock.error);
   try {
-    const id = ports.nextRunId();
-    const startedAt = ports.now();
-    const progress: { snapshotDone: boolean; commitSha: string | null } = { snapshotDone: false, commitSha: null };
-    let result: Result<Omit<BackupRunReport, "runId">, AppError>;
-    try {
-      result = await runUnderBackupLockAsync(ports, progress);
-    } catch (error) {
-      result = err(
-        appError("INTERNAL_ERROR", `The backup run failed unexpectedly: ${messageOf(error)}.`, {
-          cause: String(error),
-        }),
-      );
-    }
-    const finishedAt = ports.now();
-    const row: BackupRunRow = result.ok
-      ? {
-          id,
-          triggeredBy: ports.triggeredBy,
-          startedAt: startedAt.toISOString(),
-          finishedAt: finishedAt.toISOString(),
-          outcome: result.value.outcome,
-          snapshotOutcome: result.value.snapshot,
-          commitOutcome: result.value.commit,
-          pushOutcome: result.value.push,
-          commitSha: result.value.commitSha,
-          failureCode: null,
-          failureMessage: null,
-        }
-      : {
-          id,
-          triggeredBy: ports.triggeredBy,
-          startedAt: startedAt.toISOString(),
-          finishedAt: finishedAt.toISOString(),
-          outcome: "failure",
-          snapshotOutcome: progress.snapshotDone ? "success" : "failure",
-          commitOutcome: progress.commitSha !== null ? "committed" : "failure",
-          pushOutcome: "failure",
-          commitSha: progress.commitSha,
-          failureCode: result.error.code,
-          failureMessage: result.error.message,
-        };
-    const recorded = ports.recordRun(row);
-    if (!recorded.ok) return err(recorded.error);
-    if (!result.ok) return err(result.error);
-    return ok({
-      runId: id,
-      outcome: result.value.outcome,
-      snapshot: result.value.snapshot,
-      commit: result.value.commit,
-      push: result.value.push,
-      commitSha: result.value.commitSha,
-    });
+    return await runBackupAttemptAsync(ports);
   } finally {
     lock.value.release();
   }
+}
+
+async function runBackupAttemptAsync(ports: AsyncBackupRunPorts): Promise<Result<BackupRunReport, AppError>> {
+  const id = ports.nextRunId();
+  const startedAt = ports.now();
+  const progress: { snapshotDone: boolean; commitSha: string | null } = { snapshotDone: false, commitSha: null };
+  let result: Result<Omit<BackupRunReport, "runId">, AppError>;
+  try {
+    result = await runUnderBackupLockAsync(ports, progress);
+  } catch (error) {
+    result = err(
+      appError("INTERNAL_ERROR", `The backup run failed unexpectedly: ${messageOf(error)}.`, {
+        cause: String(error),
+      }),
+    );
+  }
+  const finishedAt = ports.now();
+  const row: BackupRunRow = result.ok
+    ? {
+        id,
+        triggeredBy: ports.triggeredBy,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        outcome: result.value.outcome,
+        snapshotOutcome: result.value.snapshot,
+        commitOutcome: result.value.commit,
+        pushOutcome: result.value.push,
+        commitSha: result.value.commitSha,
+        failureCode: null,
+        failureMessage: null,
+      }
+    : {
+        id,
+        triggeredBy: ports.triggeredBy,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        outcome: "failure",
+        snapshotOutcome: progress.snapshotDone ? "success" : "failure",
+        commitOutcome: progress.commitSha !== null ? "committed" : "failure",
+        pushOutcome: "failure",
+        commitSha: progress.commitSha,
+        failureCode: result.error.code,
+        failureMessage: result.error.message,
+      };
+  const recorded = ports.recordRun(row);
+  if (!recorded.ok) return err(recorded.error);
+  if (!result.ok) return err(result.error);
+  return ok({
+    runId: id,
+    outcome: result.value.outcome,
+    snapshot: result.value.snapshot,
+    commit: result.value.commit,
+    push: result.value.push,
+    commitSha: result.value.commitSha,
+  });
 }
 
 async function runUnderBackupLockAsync(
@@ -466,39 +502,25 @@ export async function runBackupCommandAsync(
   ports: AsyncBackupRunCommandPorts,
   options: { idempotencyKey?: string | undefined },
 ): Promise<Result<BackupRunCommandOutcome, AppError>> {
-  const requestHash = hashOf(JSON.stringify({ command: "backup run", vaultPath: ports.vaultPath }));
-  if (options.idempotencyKey !== undefined) {
-    const seen = ports.idempotency.lookup(options.idempotencyKey, "backup-run");
-    if (!seen.ok) return err(seen.error);
-    if (seen.value !== null) {
-      if (seen.value.requestHash !== requestHash) {
-        return err(
-          appError(
-            "IDEMPOTENCY_CONFLICT",
-            "this idempotency key was used with a different request; use a new key or replay the identical request",
-            {
-              idempotencyKey: options.idempotencyKey,
-            },
-          ),
-        );
-      }
-      const replayed = JSON.parse(seen.value.responseJson) as BackupRunReport;
-      return ok({ ...replayed, replayed: true });
-    }
+  if (options.idempotencyKey === undefined) {
+    const run = await runBackupOnceAsync(ports);
+    return run.ok ? ok({ ...run.value, replayed: false }) : run;
   }
-  const run = await runBackupOnceAsync(ports);
-  if (!run.ok) return err(run.error);
-  if (options.idempotencyKey !== undefined) {
-    const recorded = ports.idempotency.record({
-      key: options.idempotencyKey,
-      scope: "backup-run",
-      requestHash,
-      responseJson: JSON.stringify(run.value),
-      expiresAt: new Date(ports.now().getTime() + 24 * 3_600_000).toISOString(),
-    });
-    if (!recorded.ok) return err(recorded.error);
+  const receipt = backupReceipt(ports, options.idempotencyKey);
+  const seen = receipt.lookup();
+  if (!seen.ok) return err(seen.error);
+  if (seen.value !== null) return ok(seen.value);
+
+  const lock = ports.lock.acquire();
+  if (!lock.ok) return err(lock.error);
+  try {
+    const latest = receipt.lookup();
+    if (!latest.ok) return err(latest.error);
+    if (latest.value !== null) return ok(latest.value);
+    return receipt.record(await runBackupAttemptAsync(ports));
+  } finally {
+    lock.value.release();
   }
-  return ok({ ...run.value, replayed: false });
 }
 
 function hashOf(value: string): string {

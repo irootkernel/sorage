@@ -2,7 +2,7 @@ import { createServer, get, request, type Server, type ServerResponse } from "no
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
 import type { ArtifactReadHandle } from "@sorage/core";
-import { streamArtifactBody } from "../../src/domain-routes";
+import { streamArtifactBody } from "../../src/routes/handoff-read-routes";
 
 /**
  * The bounded serving stream of M3-P3 (section 18.4, NFR-005): the helper

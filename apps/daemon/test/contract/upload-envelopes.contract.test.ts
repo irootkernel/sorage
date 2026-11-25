@@ -132,7 +132,7 @@ beforeAll(async () => {
     auth,
     tokenRotate: () => tokenStore.rotate(),
     config: createDaemonConfigService({ host: "127.0.0.1", port, startedAt: "2026-08-30T00:00:00.000Z" }),
-    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined }),
+    domainRoutes: createDomainRoutes({}),
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   closer.push(() => server.close());

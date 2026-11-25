@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  type AsyncBackupRunCommandPorts,
   type BackupIdempotencyPort,
   type BackupRunCommandPorts,
   type BackupRunRow,
   runBackupCommand,
+  runBackupCommandAsync,
 } from "../../src/backup/backup-run";
 import { type BackupStatusPorts, type BackupStatusReport, backupStatus } from "../../src/backup/backup-status";
-import { type AppError, err, ok } from "../../src/shared/errors";
+import { type AppError, appError, err, ok } from "../../src/shared/errors";
 import type { VaultGitRepository } from "../../src/backup/git";
 
 /**
@@ -138,6 +140,93 @@ describe("runBackupCommand idempotency", () => {
     }
     expect(runs).toBe(1);
     expect(recordedKeys).toBe(1);
+  });
+});
+
+describe.each(["sync", "async"] as const)("%s backup receipt lock discipline", (variant) => {
+  const historicalReceipt = {
+    requestHash: createHash("sha256")
+      .update(JSON.stringify({ command: "backup run", vaultPath: "/vault" }))
+      .digest("hex"),
+    responseJson: JSON.stringify({ runId: "winner" }),
+  };
+  function run(ports: BackupRunCommandPorts) {
+    if (variant === "sync") return runBackupCommand(ports, { idempotencyKey: "key" });
+    const git = ports.git;
+    const asyncPorts: AsyncBackupRunCommandPorts = {
+      ...ports,
+      verifyCurrentArtifacts: async () => ports.verifyCurrentArtifacts(),
+      ensureRepository: async () => ports.ensureRepository(),
+      git: {
+        initialize: async (branch) => git.initialize(branch),
+        autocrlf: async () => git.autocrlf(),
+        currentBranch: async () => git.currentBranch(),
+        stagedPaths: async () => git.stagedPaths(),
+        trackedPaths: async () => git.trackedPaths(),
+        stageManaged: async (...paths) => git.stageManaged(...paths),
+        hasStagedManagedChanges: async (...paths) => git.hasStagedManagedChanges(...paths),
+        commit: async (message) => git.commit(message),
+        push: async (target) => git.push(target),
+      },
+    };
+    return runBackupCommandAsync(asyncPorts, { idempotencyKey: "key" });
+  }
+
+  it("observes a competing receipt after acquiring the lock", async () => {
+    const ports = portsOf();
+    let held = false;
+    ports.lock.acquire = () => {
+      held = true;
+      return ok({
+        release: () => {
+          held = false;
+        },
+      });
+    };
+    ports.idempotency.lookup = () => ok(held ? historicalReceipt : null);
+    ports.exportSnapshot = () => {
+      throw new Error("backup must not run on replay");
+    };
+    expect(await run(ports)).toMatchObject({ ok: true, value: { runId: "winner", replayed: true } });
+    expect(held).toBe(false);
+  });
+
+  it("records after the run row and before releasing the lock, then resolves a typed collision", async () => {
+    const ports = portsOf();
+    const events: string[] = [];
+    let collided = false;
+    ports.lock.acquire = () => {
+      events.push("acquire");
+      return ok({
+        release: () => {
+          events.push("release");
+        },
+      });
+    };
+    ports.recordRun = () => {
+      events.push("row");
+      return ok(undefined);
+    };
+    ports.idempotency.lookup = () => {
+      events.push("lookup");
+      return ok(collided ? historicalReceipt : null);
+    };
+    ports.idempotency.record = () => {
+      events.push("receipt");
+      collided = true;
+      return err(appError("IDEMPOTENCY_CONFLICT", "receipt exists"));
+    };
+    expect(await run(ports)).toMatchObject({ ok: true, value: { runId: "winner", replayed: true } });
+    expect(events).toEqual(["lookup", "acquire", "lookup", "row", "receipt", "lookup", "release"]);
+  });
+
+  it("leaves a failed run unrecorded", async () => {
+    const error = appError("INTERNAL_ERROR", "run failed");
+    const ports = portsOf({ runError: error });
+    ports.idempotency.record = () => {
+      throw new Error("failed run must not record a receipt");
+    };
+    expect(await run(ports)).toEqual(err(error));
   });
 });
 

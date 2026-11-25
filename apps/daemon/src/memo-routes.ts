@@ -24,7 +24,7 @@ import {
   type Result,
 } from "@sorage/core";
 import type { RouteEntryInternal } from "./route-kit";
-import { SECURITY_HEADERS, type DaemonRequestContext } from "./server";
+import { rawHeaderValues, SECURITY_HEADERS, type DaemonRequestContext } from "./http-kit";
 import { consumeMemoMultipart } from "./memo-multipart";
 
 /** Collect bytes before one fatal decode. Overflow stops accumulation without destroying the response socket. */
@@ -52,13 +52,6 @@ function readMemoBody(request: IncomingMessage): Promise<Result<unknown>> {
     request.once("aborted", interrupted);
     request.once("error", interrupted);
   });
-}
-
-function rawHeaderValues(request: IncomingMessage, name: string): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < request.rawHeaders.length; i += 2)
-    if (request.rawHeaders[i]?.toLowerCase() === name) values.push(request.rawHeaders[i + 1] ?? "");
-  return values;
 }
 
 function queryInput(request: IncomingMessage, list: boolean): Result<Record<string, unknown>> {
@@ -93,7 +86,7 @@ function respond(response: ServerResponse, context: DaemonRequestContext, result
   );
 }
 
-/** Memo deliberately never sets idempotent: the shared DB receipt is its sole replay authority. */
+/** Memo keeps its mode-aware admission and shared DB receipts. */
 export function createMemoRoutes(options: NodeMemoPortsOptions = {}): RouteEntryInternal[] {
   // Startup maintenance belongs to the adapter composition, once per daemon's
   // route construction. Requests never create or clear another operation's spool.

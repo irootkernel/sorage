@@ -261,7 +261,7 @@ function reviseContent(
       kind: "body",
     });
     if (input.idempotencyKey !== undefined) {
-      const replayed = replay(ports, input.idempotencyKey, requestHash);
+      const replayed = replay(ports, input.idempotencyKey, requestHash, role);
       if (!replayed.ok) return err(replayed.error);
       if (replayed.value !== null) return ok(replayed.value);
     }
@@ -312,7 +312,14 @@ function reviseContent(
             }
           : undefined,
     });
-    if (!applied.ok) return err(applied.error);
+    if (!applied.ok) {
+      if (input.idempotencyKey !== undefined) {
+        const racedReplay = replay(ports, input.idempotencyKey, requestHash, role);
+        if (!racedReplay.ok) return err(racedReplay.error);
+        if (racedReplay.value !== null) return ok(racedReplay.value);
+      }
+      return err(applied.error);
+    }
     return ok({ ...response, rowVersion: applied.value.rowVersion });
   }
 
@@ -355,7 +362,7 @@ function reviseContent(
     kind: asBody ? "body" : "file",
   });
   if (input.idempotencyKey !== undefined) {
-    const replayed = replay(ports, input.idempotencyKey, requestHash);
+    const replayed = replay(ports, input.idempotencyKey, requestHash, role);
     if (!replayed.ok) return err(replayed.error);
     if (replayed.value !== null) return ok(replayed.value);
   }
@@ -524,7 +531,14 @@ function reviseContent(
           }
         : undefined,
   });
-  if (!applied.ok) return err(applied.error);
+  if (!applied.ok) {
+    if (input.idempotencyKey !== undefined) {
+      const racedReplay = replay(ports, input.idempotencyKey, requestHash, role);
+      if (!racedReplay.ok) return err(racedReplay.error);
+      if (racedReplay.value !== null) return ok(racedReplay.value);
+    }
+    return err(applied.error);
+  }
 
   // The revision committed: fire the large-content Git-history disclosure for
   // the prepared replacement body before any activation runs (SHR-011, WR2).
@@ -607,10 +621,16 @@ function reviseContent(
   return ok({ ...response, rowVersion: applied.value.rowVersion });
 }
 
-function replay(ports: RevisionPorts, key: string, requestHash: string): Result<ReviseOutcome | null, AppError> {
+function replay(
+  ports: RevisionPorts,
+  key: string,
+  requestHash: string,
+  role: "sender" | "recipient" | "user",
+): Result<ReviseOutcome | null, AppError> {
   const seen = ports.revisions.idempotencyLookup(key, "revise");
   if (!seen.ok) return err(seen.error);
   if (seen.value === null) return ok(null);
+  if (role === "recipient") return err(appError("FORBIDDEN_ACTOR", "only the sender or User can revise this Handoff"));
   if (seen.value.requestHash !== requestHash) {
     return err(
       appError(

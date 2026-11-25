@@ -209,7 +209,7 @@ beforeAll(async () => {
     }),
     tokenRotate: () => tokens.rotate(),
     config: createDaemonConfigService({ host: "127.0.0.1", port, startedAt: new Date().toISOString() }),
-    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined, database }),
+    domainRoutes: createDomainRoutes({ database }),
   });
   server.prependListener("request", (incoming, response) => {
     if (!incoming.url?.includes("/artifact/content") || nextContentResponse === undefined) return;

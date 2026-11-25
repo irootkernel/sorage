@@ -926,6 +926,8 @@ Alternatives considered: reusing `VAULT_INTEGRITY_ERROR` or `ARTIFACT_CORRUPTED`
 
 Compatibility is additive and non-breaking: one new error code and Memo-only parsing/recovery behavior, with no envelope field or existing Handoff output change. No data migration is needed. The required edits are the Memo and shared error catalogues, contextual recovery implementation, and CLI contract snapshots. TASK-090 owns this clarification and its review/regression checks; no Task identity, dependency, milestone, or remaining review budget changes.
 
+- **2026-11-25 replay authority amendment:** [ADR-0039](#adr-0039-daemon-http-idempotency-unification-onto-core-sqlite-receipts) makes Core SQLite receipts the replay authority for Handoff and Backup HTTP as well as Memo HTTP. The per-server in-flight guard applies to the five Handoff and Backup routes. Memo execute and replay-only admission and response contracts retain their existing scope.
+
 ## ADR-0028: Non-mutating installation preflight in M8
 
 - **Status:** Accepted
@@ -1700,7 +1702,8 @@ Every Epic closes in a releasable state with measurable before/after baselines a
 
 ## ADR-0039: Daemon HTTP idempotency unification onto Core SQLite receipts
 
-- **Status:** Proposed
+- **Status:** Accepted
+- **Adopted:** 2026-11-25 by TASK-161. The [six-operation inventory](../specs/interfaces-and-operations.md#173-idempotency) binds each HTTP operation to its existing Core receipt scope and semantic hash. Completion evidence is governed by the TASK-161 roadmap gate.
 - **Date:** 2026-11-22
 - **Design owner:** TASK-161 under [EPIC-024](../roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification).
 - **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).

@@ -261,6 +261,34 @@ describe("backup run command surface and status over a real installation", () =>
     expect(backupRunRows(home)).toHaveLength(1);
   });
 
+  it("reports a receipt key collision without replacing the durable winner", () => {
+    const { home } = initializedHome("sorage-run-receipt-collision-");
+    const ports = createNodeBackupCommandPorts({ env: { SORAGE_HOME: home }, userHome: home });
+    const runPorts = ports.runPorts();
+    if (!runPorts.ok) throw new Error(runPorts.error.message);
+    const receipt = {
+      key: "colliding-key",
+      scope: "backup-run",
+      requestHash: "winner-hash",
+      responseJson: '{"runId":"winner"}',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const idempotency = runPorts.value.idempotency;
+    expect(idempotency.record(receipt).ok).toBe(true);
+    expect(
+      idempotency.record({ ...receipt, requestHash: "loser-hash", responseJson: '{"runId":"loser"}' }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "IDEMPOTENCY_CONFLICT" },
+    });
+    expect(idempotency.lookup(receipt.key, receipt.scope)).toEqual(
+      ok({
+        requestHash: receipt.requestHash,
+        responseJson: receipt.responseJson,
+      }),
+    );
+  });
+
   it("treats the same backup key as a new request after 24 hours", () => {
     const { home, vault } = initializedHome("sorage-run-cmd-expiry-");
     seedOneHandoff(home, vault);

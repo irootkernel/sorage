@@ -141,7 +141,7 @@ beforeAll(async () => {
       webSecret: createNodeWebSecretStore({ stateDir, clock: { now: () => new Date() } }),
       entropy: createNodeTokenEntropy(),
     }),
-    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined, database }),
+    domainRoutes: createDomainRoutes({ database }),
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   port = (server.address() as AddressInfo).port;
@@ -157,9 +157,13 @@ describe("authenticated HTTP Handoff reporting (HPR-013)", () => {
   it("pins four routes, fresh success envelopes and typed errors beside the CLI contract", async () => {
     const id = sent();
     const actual: Record<string, unknown> = {
-      routes: createDomainRoutes({ vaultPath: () => null, config: undefined })
+      routes: createDomainRoutes({})
         .filter((route) => /\/comment$|\/processing\//.test(route.pattern))
-        .map((route) => ({ method: route.method, path: route.pattern, legacyReplay: route.idempotent === true })),
+        .map((route) => ({
+          method: route.method,
+          path: route.pattern,
+          legacyReplay: route.idempotencyScope !== undefined,
+        })),
     };
     for (const [name, operation, body] of [
       ["comment", "comment", { text: "Report", expectedRevision: 1, expectedRowVersion: 1 }],

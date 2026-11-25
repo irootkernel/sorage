@@ -16,18 +16,16 @@ export type {
   DaemonConfigService,
   DaemonConfigSnapshot,
   DaemonEndpoints,
-  DaemonRequestContext,
   DaemonRequestHandler,
   DaemonRouteHandler,
   DaemonServerOptions,
   ReadinessReport,
 } from "./server";
 export {
-  CONTENT_SECURITY_POLICY,
   createDaemonRequestHandler,
   createDaemonServer,
   daemonRoutes,
   isHostAllowed,
   isLoopbackBindAddress,
-  SECURITY_HEADERS,
 } from "./server";
+export { CONTENT_SECURITY_POLICY, SECURITY_HEADERS, type DaemonRequestContext } from "./http-kit";

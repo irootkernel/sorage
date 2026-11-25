@@ -121,7 +121,7 @@ describe("the WEB-003 date bounds across surfaces", () => {
         },
         entropy: { next: () => "e".repeat(64) },
       }),
-      domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined }),
+      domainRoutes: createDomainRoutes({}),
     });
     await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
     closer.push(() => server.close());

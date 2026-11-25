@@ -1,26 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
-import {
-  type AppError,
-  appError,
-  errorEnvelope,
-  errorSpec,
-  type IdGenerator,
-  newRequestId,
-  successEnvelope,
-} from "@sorage/core";
-import { bearerValue, type AuthenticatedContext, type SessionService } from "./auth";
+import { type AppError, appError, type IdGenerator, newRequestId, successEnvelope } from "@sorage/core";
+import { bearerValue, type SessionService } from "./auth";
 import { WEB_APP_JS, WEB_CSS, WEB_INDEX_HTML } from "./web-app";
-import {
-  allowedMethods,
-  discardReplay,
-  evaluateIdempotency,
-  matchRoute,
-  storeReplay,
-  type ReplayRecord,
-  type RouteEntryInternal,
-} from "./route-kit";
+import { compileRoutes, type RouteEntryInternal } from "./route-kit";
+import { rawHeaderValues, readJsonBody, sendError, sendJson, sendRaw, type DaemonRequestContext } from "./http-kit";
 
 /**
  * The daemon HTTP skeleton of TASK-042: loopback-only bind, the `Host` allowlist of
@@ -28,17 +13,6 @@ import {
  * response, request identifiers, the error middleware that renders API-006 bodies, and
  * the health, readiness, and version endpoints of section 18.1.
  */
-
-/** The exact `Content-Security-Policy` every daemon response carries (SEC-018). */
-export const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
-
-/** The three security headers every daemon response, success and failure alike (SEC-018). */
-export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
-  "Content-Security-Policy": CONTENT_SECURITY_POLICY,
-  "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
-});
 
 /** The bind addresses the daemon accepts; a name such as `localhost` is refused (SEC-001). */
 const LOOPBACK_BIND_ADDRESSES = new Set(["127.0.0.1", "::1"]);
@@ -55,20 +29,6 @@ export interface DaemonEndpoints {
 
 export interface ReadinessReport {
   ready: boolean;
-}
-
-export interface DaemonRequestContext {
-  requestId: string;
-  /** The authenticated bearer kind; present on every route that requires authentication. */
-  auth?: AuthenticatedContext;
-  /** Path parameters captured by the domain routing kit. */
-  params?: Record<string, string>;
-  /** The acting Project slug named by the request, mirroring the CLI's `--as`. */
-  as?: string | undefined;
-  /** True when the request asserts the local User, mirroring `--as-user`. */
-  asUser?: boolean | undefined;
-  /** The `Idempotency-Key` header of an idempotent route (API-012). */
-  idempotencyKey?: string | undefined;
 }
 
 export type DaemonRouteHandler = (
@@ -115,10 +75,6 @@ export interface DaemonServerOptions {
   onRestartRequest?: () => void;
   /** The `/api/v1` domain routes of TASK-046, supplied by the daemon runtime. */
   domainRoutes?: RouteEntryInternal[];
-  /** The daemon's Vault root, for serving Artifact content. */
-  vaultPath?: () => string | null;
-  /** Test seam and deployment override for bounded idempotency body spools. */
-  idempotencySpoolRoot?: string | undefined;
 }
 
 export interface DaemonConfigSnapshot {
@@ -182,26 +138,6 @@ export function isHostAllowed(hostHeader: string | undefined, port: number): boo
   return ALLOWED_HOST_NAMES.has(name);
 }
 
-function sendJson(response: ServerResponse, status: number, requestId: string, body: unknown): void {
-  const payload = JSON.stringify(body, null, 2);
-  response.statusCode = status;
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(name, value);
-  response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.setHeader("X-Request-Id", requestId);
-  response.end(`${payload}\n`);
-}
-
-function sendError(response: ServerResponse, requestId: string, error: AppError): void {
-  if (response.headersSent) {
-    response.destroy();
-    return;
-  }
-  const allow = error.details?.allow;
-  const spec = errorSpec(error.code);
-  if (typeof allow === "string") response.setHeader("Allow", allow);
-  sendJson(response, spec.httpStatus, requestId, errorEnvelope(error, requestId));
-}
-
 /** The health, readiness, and version endpoints of section 18.1. */
 export function daemonRoutes(options: {
   endpoints: DaemonEndpoints;
@@ -254,14 +190,6 @@ export function daemonRoutes(options: {
       },
     },
   ];
-}
-
-function sendRaw(response: ServerResponse, status: number, requestId: string, contentType: string, body: string): void {
-  response.statusCode = status;
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(name, value);
-  response.setHeader("Content-Type", contentType);
-  response.setHeader("X-Request-Id", requestId);
-  response.end(body);
 }
 
 /**
@@ -412,43 +340,6 @@ const PUBLIC_PATHS = new Set([
   "/assets/app.js",
 ]);
 
-const MAX_JSON_BODY_BYTES = 1_048_576;
-
-export async function readJsonBody(
-  request: IncomingMessage,
-  limits: {
-    maxBytes?: number;
-    code?: Parameters<typeof appError>[0];
-    message?: string;
-    invalidMessage?: string;
-  } = {},
-): Promise<Record<string, unknown>> {
-  const maxBytes = limits.maxBytes ?? MAX_JSON_BODY_BYTES;
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > maxBytes) {
-      throw appError(limits.code ?? "CONFIG_INVALID", limits.message ?? "the request body is too large");
-    }
-    if (buffer.length > 0) chunks.push(buffer);
-  }
-  if (size === 0) return {};
-  const invalidCode = limits.code ?? "CONFIG_INVALID";
-  const invalidMessage = limits.invalidMessage ?? "the request body must be a valid JSON object";
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw appError(invalidCode, invalidMessage);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw appError(invalidCode, invalidMessage);
-  }
-  return parsed as Record<string, unknown>;
-}
-
 /**
  * Builds the full request pipeline: request identifier, `Host` allowlist before routing
  * and before authentication (SEC-017), bearer authentication (SEC-019, SEC-020), route
@@ -462,6 +353,8 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
     }),
     ...configRoutes({ config: options.config, onRestartRequest: options.onRestartRequest }),
   ];
+  const domainRoutes = compileRoutes(options.domainRoutes ?? []);
+  const inFlightKeys = new Set<string>();
   const sessionPath = "/api/v1/session";
   const rotatePath = "/api/v1/token/rotate";
   const paths = new Set([...routes.map((route) => route.path), sessionPath, rotatePath]);
@@ -611,114 +504,73 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
         return;
       }
 
-      // The domain routes of TASK-046: pattern-matched, actor-named, and replay-aware.
-      if (options.domainRoutes !== undefined) {
-        const matched = matchRoute(options.domainRoutes, method, url.pathname);
-        if (matched !== null) {
-          if (matched.route.cliTokenOnly === true && auth.context.kind !== "api-token") {
+      const matched = domainRoutes.match(method, url.pathname);
+      if (matched !== null) {
+        if (matched.route.cliTokenOnly === true && auth.context.kind !== "api-token") {
+          sendError(
+            response,
+            requestId,
+            appError(
+              "FORBIDDEN_ACTOR",
+              "path-based imports are accepted only from the authenticated local CLI context",
+            ),
+          );
+          return;
+        }
+        let idempotencyKey: string | undefined;
+        let flightKey: string | undefined;
+        if (matched.route.idempotencyScope !== undefined) {
+          const headers = rawHeaderValues(request, "idempotency-key");
+          idempotencyKey = headers[0]?.trim();
+          if (headers.length > 1 || idempotencyKey === "") {
             sendError(
               response,
               requestId,
-              appError(
-                "FORBIDDEN_ACTOR",
-                "path-based imports are accepted only from the authenticated local CLI context",
-              ),
+              appError("CONFIG_INVALID", "supply exactly one nonempty Idempotency-Key header"),
             );
             return;
           }
-          const as = url.searchParams.get("as") ?? undefined;
-          const asUser = url.searchParams.get("asUser") === "true";
-          const idempotencyKey =
-            typeof request.headers["idempotency-key"] === "string"
-              ? (request.headers["idempotency-key"] as string)
-              : undefined;
-          if (matched.route.idempotent === true && idempotencyKey !== undefined) {
-            // The body is spooled to disk and hashed in flight, so an idempotent
-            // upload never sits whole in memory and the identity covers the bytes.
-            const spool = spoolRequestBody(
-              request,
-              matched.route.idempotencyBodyLimit?.() ?? MAX_JSON_BODY_BYTES,
-              options.idempotencySpoolRoot,
-            );
-            await spool.finished;
-            if (spool.error !== undefined) {
-              spool.discard();
-              sendError(response, requestId, spool.error);
-              return;
-            }
-            const requestIdentity = `${method} ${url.pathname} ${JSON.stringify({ as, asUser })} ${spool.hash}`;
-            const replay = evaluateIdempotency(idempotencyStore, idempotencyKey, requestIdentity);
-            if (replay.error !== undefined) {
-              spool.discard();
-              sendError(response, requestId, replay.error);
-              return;
-            }
-            if (replay.replayed) {
-              spool.discard();
-              sendJson(response, replay.status ?? 200, requestId, replay.body);
-              return;
-            }
-            // Capture the response bytes so a retry with the same key replays them.
-            const captured: { status: number; body: unknown } = { status: 200, body: null };
-            const originalEnd = response.end.bind(response);
-            response.end = ((chunk?: unknown, ...rest: unknown[]) => {
-              captured.status = response.statusCode;
-              if (typeof chunk === "string") {
-                try {
-                  captured.body = JSON.parse(chunk);
-                } catch {
-                  captured.body = chunk;
-                }
-              }
-              return originalEnd(chunk as never, ...(rest as never[]));
-            }) as typeof response.end;
-            const replayRequest = replayableRequest(request, spool.path);
-            try {
-              await matched.route.handler(replayRequest, response, {
+          if (idempotencyKey !== undefined) {
+            flightKey = `${matched.route.idempotencyScope}:${idempotencyKey}`;
+            if (inFlightKeys.has(flightKey)) {
+              sendError(
+                response,
                 requestId,
-                auth: auth.context,
-                params: matched.params,
-                as,
-                asUser,
-                idempotencyKey,
-              });
-              storeReplay(idempotencyStore, idempotencyKey, requestIdentity, captured.status, captured.body);
-            } catch (error) {
-              // A failed execution must not pin the key as in flight forever: the
-              // client retrying after the failure would meet a permanent conflict.
-              discardReplay(idempotencyStore, idempotencyKey);
-              throw error;
-            } finally {
-              replayRequest.destroy();
-              spool.discard();
+                appError(
+                  "IDEMPOTENCY_CONFLICT",
+                  "the same Idempotency-Key is still in flight; retry after it completes",
+                ),
+              );
+              return;
             }
-            return;
+            inFlightKeys.add(flightKey);
           }
+        }
+        try {
           await matched.route.handler(request, response, {
             requestId,
             auth: auth.context,
             params: matched.params,
-            as,
-            asUser,
+            as: url.searchParams.get("as") ?? undefined,
+            asUser: url.searchParams.get("asUser") === "true",
             idempotencyKey,
           });
-          return;
+        } finally {
+          if (flightKey !== undefined) inFlightKeys.delete(flightKey);
         }
-        for (const entry of options.domainRoutes) {
-          if (entry.pattern === url.pathname) paths.add(url.pathname);
-        }
-        const domainAllowed = allowedMethods(options.domainRoutes, url.pathname);
-        if (domainAllowed.length > 0) {
-          sendError(
-            response,
-            requestId,
-            appError("METHOD_NOT_ALLOWED", `${method} is not accepted by ${url.pathname}`, {
-              path: url.pathname,
-              allow: domainAllowed.join(", "),
-            }),
-          );
-          return;
-        }
+        return;
+      }
+      const domainAllowed = domainRoutes.allowedMethods(url.pathname);
+      if (domainAllowed.length > 0) {
+        sendError(
+          response,
+          requestId,
+          appError("METHOD_NOT_ALLOWED", `${method} is not accepted by ${url.pathname}`, {
+            path: url.pathname,
+            allow: domainAllowed.join(", "),
+          }),
+        );
+        return;
       }
 
       if (route !== undefined) {
@@ -748,134 +600,6 @@ export function createDaemonRequestHandler(options: DaemonServerOptions): Daemon
       sendError(response, requestId, error);
     }
   };
-}
-
-const idempotencyStore = new Map<string, ReplayRecord>();
-
-/** Spools one request body to disk, hashing it in flight; memory stays bounded. */
-export function spoolRequestBody(
-  request: IncomingMessage,
-  maxBytes: number,
-  spoolRoot?: string,
-  createStream?: (path: string) => {
-    write(chunk: Buffer): boolean;
-    end(cb?: () => void): unknown;
-    destroy(): unknown;
-    destroyed?: boolean;
-    on(event: string, listener: (...args: unknown[]) => void): unknown;
-    once(event: string, listener: (...args: unknown[]) => void): unknown;
-  },
-): {
-  finished: Promise<void>;
-  path: string;
-  hash: string;
-  error: AppError | undefined;
-  discard(): void;
-} {
-  const { createHash } = require("node:crypto") as typeof import("node:crypto");
-  const { createWriteStream, mkdtempSync, rmSync } = require("node:fs") as typeof import("node:fs");
-  const { tmpdir } = require("node:os") as typeof import("node:os");
-  const { join } = require("node:path") as typeof import("node:path");
-  const dir = mkdtempSync(join(spoolRoot ?? tmpdir(), "sorage-idem-"));
-  const path = join(dir, "body");
-  const digest = createHash("sha256");
-  const spoolState: { error?: AppError } = {};
-  const stream = createStream ? createStream(path) : createWriteStream(path);
-  let size = 0;
-  let requestEnded = false;
-  let closing = false;
-  let cachedHash: string | null = null;
-  const finished = new Promise<void>((resolve) => {
-    let resolved = false;
-    const resolveOnce = () => {
-      if (resolved) return;
-      resolved = true;
-      resolve();
-    };
-    const shutdown = (closeMode: "end" | "destroy") => {
-      if (closing) return;
-      closing = true;
-      if (closeMode === "destroy") {
-        stream.destroy();
-        resolveOnce();
-        return;
-      }
-      stream.end(() => resolveOnce());
-    };
-    stream.on("error", () => {
-      if (spoolState.error === undefined) {
-        spoolState.error = appError("INTERNAL_ERROR", "writing the idempotency request spool failed");
-      }
-      closing = true;
-      stream.destroy();
-      resolveOnce();
-    });
-    stream.once("close", resolveOnce);
-    request.on("data", (chunk: Buffer) => {
-      if (closing || spoolState.error !== undefined) return;
-      size += chunk.length;
-      if (size > maxBytes) {
-        spoolState.error = appError("CONFIG_INVALID", `the request body exceeds the ${maxBytes}-byte replay bound`);
-        return;
-      }
-      digest.update(chunk);
-      stream.write(chunk);
-    });
-    request.on("end", () => {
-      requestEnded = true;
-      shutdown("end");
-    });
-    request.on("error", () => {
-      if (spoolState.error === undefined) {
-        spoolState.error = appError("INTERNAL_ERROR", "the request stream failed");
-      }
-      shutdown("destroy");
-    });
-    request.on("close", () => {
-      if (!requestEnded && !closing) {
-        if (spoolState.error === undefined) {
-          spoolState.error = appError("INTERNAL_ERROR", "the request stream closed before completion");
-        }
-        shutdown("destroy");
-      }
-    });
-  });
-  return {
-    finished,
-    path,
-    get hash() {
-      if (cachedHash === null) cachedHash = digest.digest("hex");
-      return cachedHash;
-    },
-    get error() {
-      return spoolState.error;
-    },
-    discard() {
-      try {
-        if (!stream.destroyed) stream.destroy();
-      } catch {
-        // Best effort.
-      }
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // Best effort; the OS temp cleaner is the backstop.
-      }
-    },
-  };
-}
-
-/** Rebuilds a consumed request around its spooled body so a handler can re-read it. */
-function replayableRequest(request: IncomingMessage, spoolPath: string): IncomingMessage {
-  const { createReadStream, openSync } = require("node:fs") as typeof import("node:fs");
-  // Own the descriptor before the handler starts. A route is allowed to ignore
-  // its body, and cleanup may unlink the spool as soon as that handler returns.
-  const body = createReadStream(spoolPath, { fd: openSync(spoolPath, "r"), autoClose: true });
-  return Object.assign(body, {
-    method: request.method,
-    url: request.url,
-    headers: request.headers,
-  }) as unknown as IncomingMessage;
 }
 
 function isAppError(value: unknown): value is AppError {

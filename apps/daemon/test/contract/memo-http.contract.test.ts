@@ -18,7 +18,7 @@ describe("Memo HTTP additive contract", () => {
         routes: createMemoRoutes().map((route) => ({
           method: route.method,
           path: route.pattern,
-          legacyReplay: route.idempotent === true,
+          legacyReplay: route.idempotencyScope !== undefined,
         })),
       };
       async function capture(name: string, path: string, options: Parameters<typeof f.call>[1] = {}, status = 200) {

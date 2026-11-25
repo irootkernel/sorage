@@ -369,6 +369,26 @@ function deletionApprovalRequestHash(handoffId: string, confirmPinned: string | 
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+function replayDeletionApproval(
+  ports: RetentionPorts,
+  key: string,
+  requestHash: string,
+): Result<RetentionOutcome | null, AppError> {
+  const seen = ports.retention.idempotencyLookup(key, "deletion-approve");
+  if (!seen.ok) return err(seen.error);
+  if (seen.value === null) return ok(null);
+  if (seen.value.requestHash !== requestHash) {
+    return err(
+      appError(
+        "IDEMPOTENCY_CONFLICT",
+        "this idempotency key was used with a different request; use a new key or replay the identical request",
+        { idempotencyKey: key },
+      ),
+    );
+  }
+  return ok({ ...(JSON.parse(seen.value.responseJson) as RetentionOutcome), replayed: true });
+}
+
 export function approveDeletion(
   ports: RetentionPorts,
   input: ApproveDeletionInput,
@@ -384,20 +404,9 @@ export function approveDeletion(
   // recorded outcome instead of HANDOFF_DELETED on the tombstone it created (section 17.3).
   const requestHash = deletionApprovalRequestHash(input.handoffId, input.confirmPinned);
   if (input.idempotencyKey !== undefined) {
-    const seen = ports.retention.idempotencyLookup(input.idempotencyKey, "deletion-approve");
-    if (!seen.ok) return err(seen.error);
-    if (seen.value !== null) {
-      if (seen.value.requestHash !== requestHash) {
-        return err(
-          appError(
-            "IDEMPOTENCY_CONFLICT",
-            "this idempotency key was used with a different request; use a new key or replay the identical request",
-            { idempotencyKey: input.idempotencyKey },
-          ),
-        );
-      }
-      return ok({ ...(JSON.parse(seen.value.responseJson) as RetentionOutcome), replayed: true });
-    }
+    const replayed = replayDeletionApproval(ports, input.idempotencyKey, requestHash);
+    if (!replayed.ok) return err(replayed.error);
+    if (replayed.value !== null) return ok(replayed.value);
   }
   const fresh = validateHandoffObservations(input, ["expectedRowVersion"]);
   if (!fresh.ok) return err(fresh.error);
@@ -489,7 +498,14 @@ export function approveDeletion(
       },
     ],
   );
-  if (!applied.ok) return err(applied.error);
+  if (!applied.ok) {
+    if (input.idempotencyKey !== undefined) {
+      const racedReplay = replayDeletionApproval(ports, input.idempotencyKey, requestHash);
+      if (!racedReplay.ok) return err(racedReplay.error);
+      if (racedReplay.value !== null) return ok(racedReplay.value);
+    }
+    return err(applied.error);
+  }
   // Execute the committed unlink, then complete it with its system event (CP-6).
   // Both steps are post-commit work (SHR-015 category (i)): a failure is
   // disclosed as a warning and never fails the command, and the pending

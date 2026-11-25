@@ -1,153 +1,77 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
-import { appError } from "@sorage/core";
-import type { DaemonRequestContext } from "./server";
+import type { DaemonRequestContext } from "./http-kit";
 
 export type { DaemonRequestContext as RouteContext };
 
-/**
- * The tiny routing kit the `/api/v1` surface shares: pattern routes with `{param}`
- * segments, per-route CLI-token restriction (API-004), and the `Idempotency-Key`
- * replay cache that runs before any Row Version precondition (API-012).
- */
 export interface RouteEntryInternal {
   method: string;
   pattern: string;
   handler: (request: IncomingMessage, response: ServerResponse, context: DaemonRequestContext) => Promise<void> | void;
   /** True when a browser session token must not call this route (API-004). */
   cliTokenOnly?: boolean;
-  /** True when the route participates in `Idempotency-Key` replay (API-012). */
-  idempotent?: boolean;
-  /** Maximum bytes the replay spool accepts before the route consumes the body. */
-  idempotencyBodyLimit?: (() => number) | undefined;
+  idempotencyScope?: "send" | "revise" | "deletion-approve" | "backup-run";
 }
 
-export interface MatchedRoute {
+interface MatchedRoute {
   route: RouteEntryInternal;
   params: Record<string, string>;
 }
 
-export function matchRoute(routes: RouteEntryInternal[], method: string, pathname: string): MatchedRoute | null {
-  for (const route of routes) {
-    if (route.method !== method) continue;
-    const patternSegments = route.pattern.split("/");
-    const pathSegments = pathname.split("/");
-    if (patternSegments.length !== pathSegments.length) continue;
-    const params: Record<string, string> = {};
-    let matched = true;
-    for (let i = 0; i < patternSegments.length; i++) {
-      const pattern = patternSegments[i] as string;
-      const segment = pathSegments[i] as string;
-      if (pattern.startsWith("{") && pattern.endsWith("}")) {
-        params[pattern.slice(1, -1)] = decodeURIComponent(segment);
-      } else if (pattern !== segment) {
-        matched = false;
-        break;
+interface CompiledRoute {
+  route: RouteEntryInternal;
+  segments: ({ literal: string } | { parameter: string })[];
+}
+
+export interface CompiledRouteTable {
+  match(method: string, pathname: string): MatchedRoute | null;
+  allowedMethods(pathname: string): string[];
+}
+
+function matchPath(route: CompiledRoute, path: string[]): Record<string, string> | null {
+  const params: Record<string, string> = {};
+  for (const [index, segment] of route.segments.entries()) {
+    const value = path[index] as string;
+    if ("literal" in segment) {
+      if (segment.literal !== value) return null;
+    } else {
+      try {
+        params[segment.parameter] = decodeURIComponent(value);
+      } catch (error) {
+        if (error instanceof URIError) return null;
+        throw error;
       }
     }
-    if (matched) return { route, params };
   }
-  return null;
+  return params;
 }
 
-/** Collects the method-allowed set of a path across routes, for 405 responses. */
-export function allowedMethods(routes: RouteEntryInternal[], pathname: string): string[] {
-  return routes.filter((route) => matchPath(route.pattern, pathname)).map((route) => route.method);
-}
-
-function matchPath(pattern: string, pathname: string): boolean {
-  const patternSegments = pattern.split("/");
-  const pathSegments = pathname.split("/");
-  if (patternSegments.length !== pathSegments.length) return false;
-  for (let i = 0; i < patternSegments.length; i++) {
-    const pattern = patternSegments[i] as string;
-    const segment = pathSegments[i] as string;
-    if (!(pattern.startsWith("{") && pattern.endsWith("}")) && pattern !== segment) return false;
+export function compileRoutes(routes: readonly RouteEntryInternal[]): CompiledRouteTable {
+  const byLength = new Map<number, CompiledRoute[]>();
+  for (const route of routes) {
+    const segments = route.pattern
+      .split("/")
+      .map((segment) =>
+        segment.startsWith("{") && segment.endsWith("}") ? { parameter: segment.slice(1, -1) } : { literal: segment },
+      );
+    const bucket = byLength.get(segments.length);
+    if (bucket === undefined) byLength.set(segments.length, [{ route, segments }]);
+    else bucket.push({ route, segments });
   }
-  return true;
-}
-
-export interface ReplayOutcome {
-  replayed: boolean;
-  status?: number;
-  body?: unknown;
-  error?: ReturnType<typeof appError>;
-}
-
-export interface ReplayRecord {
-  requestHash: string;
-  status: number;
-  body: unknown;
-  expiresAt?: number | undefined;
-}
-
-const IDEMPOTENCY_RETENTION_MS = 24 * 3_600_000;
-
-/**
- * Evaluates one idempotent request: the same key with the same request hash replays
- * the stored response verbatim, and the same key with a different hash is
- * `IDEMPOTENCY_CONFLICT`; both run before any Row Version precondition (API-012).
- */
-export function evaluateIdempotency(
-  store: Map<string, ReplayRecord>,
-  key: string | undefined,
-  requestIdentity: string,
-  now = Date.now(),
-): ReplayOutcome {
-  if (key === undefined) return { replayed: false };
-  const requestHash = createHash("sha256").update(requestIdentity).digest("hex");
-  let stored = store.get(key);
-  if (stored?.expiresAt !== undefined && stored.expiresAt <= now) {
-    store.delete(key);
-    stored = undefined;
-  }
-  if (stored === undefined) {
-    store.set(key, { requestHash, status: -1, body: null });
-    return { replayed: false };
-  }
-  if (stored.status === -1) {
-    // A response is still being produced: a concurrent duplicate must not execute
-    // the mutation a second time (API-012).
-    return {
-      replayed: false,
-      error: appError("IDEMPOTENCY_CONFLICT", "the same Idempotency-Key is still in flight; retry after it completes"),
-    };
-  }
-  if (stored.requestHash !== requestHash) {
-    return {
-      replayed: false,
-      error: appError("IDEMPOTENCY_CONFLICT", "the same Idempotency-Key was reused with a different request"),
-    };
-  }
-  return { replayed: true, status: stored.status, body: stored.body };
-}
-
-export function storeReplay(
-  store: Map<string, ReplayRecord>,
-  key: string | undefined,
-  requestIdentity: string,
-  status: number,
-  body: unknown,
-  now = Date.now(),
-): void {
-  if (key === undefined) return;
-  // Only completed mutations are replayable. Refusals and failures describe
-  // conditions that may clear before the client retries (for example a held
-  // backup lock), so retaining them would turn a transient response permanent.
-  if (status < 200 || status >= 300) {
-    store.delete(key);
-    return;
-  }
-  const requestHash = createHash("sha256").update(requestIdentity).digest("hex");
-  store.set(key, { requestHash, status, body, expiresAt: now + IDEMPOTENCY_RETENTION_MS });
-}
-
-/**
- * Releases an in-flight marker so a failed execution leaves the key retryable: a
- * handler that throws must not pin its Idempotency-Key as permanently in flight.
- */
-export function discardReplay(store: Map<string, ReplayRecord>, key: string | undefined): void {
-  if (key === undefined) return;
-  const stored = store.get(key);
-  if (stored !== undefined && stored.status === -1) store.delete(key);
+  return {
+    match(method, pathname) {
+      const path = pathname.split("/");
+      for (const compiled of byLength.get(path.length) ?? []) {
+        if (compiled.route.method !== method) continue;
+        const params = matchPath(compiled, path);
+        if (params !== null) return { route: compiled.route, params };
+      }
+      return null;
+    },
+    allowedMethods(pathname) {
+      const path = pathname.split("/");
+      return (byLength.get(path.length) ?? [])
+        .filter((compiled) => matchPath(compiled, path) !== null)
+        .map(({ route }) => route.method);
+    },
+  };
 }

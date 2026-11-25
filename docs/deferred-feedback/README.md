@@ -38,16 +38,6 @@ The accepted TASK-115 observations disclosed auxiliary inaccuracies that remain 
 - **Owner:** `docs/deferred-feedback/README.md` (observed during EPIC-017 TASK-115)
 - **Re-entry:** A future guidance pass could add the symmetric receipt sentence — a receipt is neither proof that external work ran nor that it did not — and tighten reference wording where observers improvised conditions. Do not reopen TASK-115 for this; it was not an acceptance condition.
 
-## EPIC-022 whole-epic audit
-
-One pre-existing out-of-scope HTTP filter-key mismatch was surfaced during `TASK-150` evaluation and recorded during `EPIC-022` whole-epic validation without expanding `EPIC-022` scope.
-
-### HTTP handoff list `sender` and `recipient` query parameter mapping
-
-- **Impact:** `apps/daemon/src/domain-routes.ts` (`GET /api/v1/handoffs`) passes `filters.sender` and `filters.recipient` into `listInbox` / `listOutbox`, whereas `HandoffListFilters` reads `senderSlug` and `recipientSlug`. Querying `GET /api/v1/handoffs?sender=<slug>` or `?recipient=<slug>` therefore ignores those two optional filter parameters instead of filtering by project slug. Existing Web UI list views and CLI commands are unaffected because the Web UI does not expose sender/recipient filter inputs and the CLI populates `senderSlug`/`recipientSlug` directly.
-- **Owner:** `docs/deferred-feedback/README.md` (observed during `EPIC-022` validation; pre-existing in `apps/daemon/src/domain-routes.ts`)
-- **Re-entry:** Map `?sender=` and `?recipient=` to `senderSlug` and `recipientSlug` in `apps/daemon/src/domain-routes.ts` and add a focused `apps/daemon/test/int/domain-routes.int.test.ts` assertion verifying both filters narrow `GET /api/v1/handoffs` results. Do not reopen `EPIC-022` for this pre-existing item.
-
 ## EPIC-023 execution refinement
 
 These items surfaced while the [2026-11-24 EPIC-023 execution refinement](../governance/README.md#epic-023-execution-refinement-2026-11-24) verified the plan against the code. Each one would change a contract or a behavior outside a golden-preserving refactor, so `EPIC-023` preserves the current behavior and records the item here instead.

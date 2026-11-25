@@ -147,12 +147,7 @@ export function serveDaemon(options: ServeDaemonOptions = {}): Promise<RunningDa
     auth,
     tokenRotate: () => token.rotate(),
     config: configService,
-    domainRoutes: createDomainRoutes({
-      vaultPath: () => ports.vaultPath(),
-      config: configService,
-      database,
-    }),
-    vaultPath: () => ports.vaultPath(),
+    domainRoutes: createDomainRoutes({ database }),
     onRestartRequest: () => {
       // The controlled restart of RUN-008: answer, then run the same graceful
       // drain SEC-015 mandates for a stop - refuse mutations, let in-flight

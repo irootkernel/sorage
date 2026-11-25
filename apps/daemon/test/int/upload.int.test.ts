@@ -23,11 +23,10 @@ import { createDaemonServer } from "../../src/server";
  * staged file nor a Handoff, a fan-out returns every id under one dispatch group,
  * and the stored Artifact is byte-identical to the uploaded file.
  */
+const artifactMaxBytes = 2048;
 const home = mkdtempSync(join(tmpdir(), "sorage-upload-"));
 const recipientDir = join(home, "recipient");
-const idempotencySpoolRoot = join(home, "idempotency-spool");
 mkdirSync(recipientDir, { recursive: true });
-mkdirSync(idempotencySpoolRoot, { recursive: true });
 
 let port = 0;
 let apiToken: string;
@@ -69,11 +68,13 @@ function contentOf(id: string): Promise<Buffer> {
   });
 }
 
-function multipart(parts: Array<{ name: string; filename?: string; value: string | Buffer }>): {
+function multipart(
+  parts: Array<{ name: string; filename?: string; value: string | Buffer }>,
+  boundary = "sorage-test-boundary-7f3a9c",
+): {
   body: Buffer;
   contentType: string;
 } {
-  const boundary = "sorage-test-boundary-7f3a9c";
   const chunks: Buffer[] = [];
   for (const part of parts) {
     chunks.push(Buffer.from(`--${boundary}\r\n`));
@@ -97,9 +98,10 @@ function upload(
     bearer: string;
     parts: Array<{ name: string; filename?: string; value: string | Buffer }>;
     idempotencyKey?: string;
+    boundary?: string;
   },
 ): Promise<{ status: number; body: string }> {
-  const { body, contentType } = multipart(init.parts);
+  const { body, contentType } = multipart(init.parts, init.boundary);
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = {
       host: `127.0.0.1:${port}`,
@@ -131,7 +133,7 @@ beforeAll(async () => {
   // Shrink artifact.maxBytes so the abort case does not write a hundred megabytes.
   const shrunk = setConfigurationValue(createNodeConfigCommandPorts(), {
     key: "artifact.maxBytes",
-    rawValue: "2048",
+    rawValue: String(artifactMaxBytes),
     asUser: true,
   });
   expect(shrunk.ok).toBe(true);
@@ -149,8 +151,7 @@ beforeAll(async () => {
     auth,
     tokenRotate: () => tokenStore.rotate(),
     config: createDaemonConfigService({ host: "127.0.0.1", port, startedAt: "2026-08-30T00:00:00.000Z" }),
-    domainRoutes: createDomainRoutes({ vaultPath: () => join(home, "vault"), config: undefined }),
-    idempotencySpoolRoot,
+    domainRoutes: createDomainRoutes({}),
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   closer.push(() => server.close());
@@ -347,7 +348,7 @@ describe("browser upload (API-003, NFR-005)", () => {
     expect(titles).not.toContain("Too big");
   });
 
-  it("replays an idempotent upload through the stored response", async () => {
+  it("replays an idempotent upload through the SQLite receipt with a fresh envelope", async () => {
     const key = "99999999-8888-4777-8666-555555555555";
     const parts = [
       { name: "title", value: "Replay" },
@@ -356,10 +357,17 @@ describe("browser upload (API-003, NFR-005)", () => {
     ];
     const first = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts, idempotencyKey: key });
     expect(first.status).toBe(201);
-    const replay = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts, idempotencyKey: key });
+    const replay = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      parts,
+      idempotencyKey: key,
+      boundary: "regenerated-upload-boundary",
+    });
     expect(replay.status).toBe(201);
     expect(json(replay).data.handoffs[0].handoffId).toBe(json(first).data.handoffs[0].handoffId);
-    expect(readdirSync(idempotencySpoolRoot)).toEqual([]);
+    expect(json(replay).data.replayed).toBe(true);
+    expect(json(replay).meta.requestId).not.toBe(json(first).meta.requestId);
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
   });
 
   it("creates a Markdown Artifact from a body field named title-slug-1.md as the User", async () => {
@@ -519,6 +527,8 @@ describe("browser upload (API-003, NFR-005)", () => {
     const replay = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts, idempotencyKey: key });
     expect(replay.status).toBe(201);
     expect(json(replay).data.handoffs[0].handoffId).toBe(json(first).data.handoffs[0].handoffId);
+    expect(json(replay).data.replayed).toBe(true);
+    expect(json(replay).meta.requestId).not.toBe(json(first).meta.requestId);
     const conflict = await upload("/api/v1/handoffs/upload", {
       bearer: sessionToken,
       idempotencyKey: key,
@@ -532,14 +542,49 @@ describe("browser upload (API-003, NFR-005)", () => {
     expect(json(conflict).error.code).toBe("IDEMPOTENCY_CONFLICT");
   });
 
-  it("rejects an idempotent body above the outer replay bound without leaving a spool", async () => {
-    const oversized = await upload("/api/v1/handoffs/upload", {
-      bearer: sessionToken,
-      idempotencyKey: "99999999-8888-4777-8666-555555555556",
-      parts: [{ name: "file", filename: "huge.md", value: "x".repeat(1_100_000) }],
+  it("rejects an oversized keyed upload during streaming without leaving a spool", async () => {
+    const boundary = "sorage-incomplete-oversize-boundary";
+    const { body, contentType } = multipart(
+      [{ name: "file", filename: "huge.md", value: "x".repeat(artifactMaxBytes * 2) }],
+      boundary,
+    );
+    const partial = body.subarray(0, body.length - Buffer.byteLength(`\r\n--${boundary}--\r\n`));
+    // Withhold the closing boundary and the end of the request. Receiving the
+    // size error proves that the server applies the limit while the part streams.
+    const oversized = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: "/api/v1/handoffs/upload",
+          method: "POST",
+          agent: false,
+          headers: {
+            authorization: `Bearer ${sessionToken}`,
+            "content-type": contentType,
+            "content-length": String(body.length),
+            "idempotency-key": "99999999-8888-4777-8666-555555555556",
+          },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("error", reject);
+          response.on("end", () => {
+            resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+            outgoing.destroy();
+          });
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.setTimeout(2500, () => outgoing.destroy(new Error("no size response before the upload closed")));
+      outgoing.write(partial);
     });
-    expect(oversized.status).toBe(422);
-    expect(json(oversized).error.code).toBe("CONFIG_INVALID");
-    expect(readdirSync(idempotencySpoolRoot)).toEqual([]);
+    expect(oversized.status).toBe(413);
+    expect(json(oversized).error).toMatchObject({
+      code: "ARTIFACT_TOO_LARGE",
+      message: expect.stringContaining(`artifact.maxBytes (${artifactMaxBytes} bytes)`),
+    });
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
   });
 });
