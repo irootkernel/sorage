@@ -1670,7 +1670,7 @@ Projects gain a durable peer collaboration record with explicit acceptance and c
 - **Date:** Proposed 2026-11-22; accepted 2026-11-22
 - **Design owner:** TASK-147 under [EPIC-022](../roadmap/README.md#epic-022-m11-non-breaking-defect-fixes-hot-path-performance-and-v17-indexes) and [EPIC-023](../roadmap/README.md#epic-023-m11-golden-preserving-internal-architecture-cleanup).
 - **Qualification:** [M11 qualification and pre-work baselines](../implementation-tips/m11-qualification.md) and [Gate M11](../specs/testing-and-acceptance.md#912-gate-m11-architecture-hardening-and-modernization-end-of-epic-022-epic-023-and-epic-024).
-- **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
+- **Canonical outcomes:** [M11 qualification](../implementation-tips/m11-qualification.md) and [Interfaces and Operations §42](../specs/interfaces-and-operations.md#42-m11-hardening-schema-v17-and-contract-classification).
 
 ### Problem
 
@@ -1718,7 +1718,7 @@ Every Epic closes in a releasable state with measurable before/after baselines a
 - **Adopted:** 2026-11-25 by TASK-161. The [six-operation inventory](../specs/interfaces-and-operations.md#173-idempotency) binds each HTTP operation to its existing Core receipt scope and semantic hash. Completion evidence is governed by the TASK-161 roadmap gate.
 - **Date:** 2026-11-22
 - **Design owner:** TASK-161 under [EPIC-024](../roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification).
-- **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
+- **Canonical outcomes:** [M11 qualification](../implementation-tips/m11-qualification.md) and [Interfaces and Operations §42](../specs/interfaces-and-operations.md#42-m11-hardening-schema-v17-and-contract-classification).
 
 ### Problem
 
@@ -1755,7 +1755,7 @@ The daemon eliminates ~200 lines of fragile stream-spooling and response-patchin
 - **Adopted:** 2026-11-25 by TASK-162 with runtime behavior preserved and deterministic embedded asset generation.
 - **Date:** 2026-11-22
 - **Design owner:** TASK-162 under [EPIC-024](../roadmap/README.md#epic-024-m11-targeted-contract-modernizations-and-qualification).
-- **Detailed execution reference:** [M11 architecture hardening and modernization dossier](../todo/m11-architecture-refactoring-dossier.md).
+- **Canonical outcomes:** [M11 qualification](../implementation-tips/m11-qualification.md) and [Interfaces and Operations §42](../specs/interfaces-and-operations.md#42-m11-hardening-schema-v17-and-contract-classification).
 
 ### Problem
 
