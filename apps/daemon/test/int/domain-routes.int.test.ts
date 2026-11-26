@@ -17,6 +17,7 @@ import { request as httpRequest } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createNodeInitPorts } from "@sorage/adapters/src/init-ports";
 import * as handoffCommandPorts from "@sorage/adapters/src/handoff-command-ports";
 import { openNodeDaemonDatabase } from "@sorage/adapters/src/daemon-command-ports";
@@ -2171,5 +2172,185 @@ describe("TASK-148 HTTP contract defect fixes (#1, #2, #11)", () => {
     });
     expect(allowedUser.status).toBe(201);
     expect(countHandoffs()).toBe(before + 1);
+  });
+});
+
+describe("Handoff timeline bound parity (CLI-023, WEB-004, TASK-171)", () => {
+  it("returns identical newest-50 events in created_at DESC, id DESC order with cutoff ties and zero writes across HTTP and CLI", async () => {
+    const senderPath = join(home, "timeline-sender");
+    const recipientPath = join(home, "timeline-recipient");
+    const strangerPath = join(home, "timeline-stranger");
+    mkdirSync(senderPath, { recursive: true });
+    mkdirSync(recipientPath, { recursive: true });
+    mkdirSync(strangerPath, { recursive: true });
+
+    for (const [name, dir] of [
+      ["Timeline Sender", senderPath],
+      ["Timeline Recipient", recipientPath],
+      ["Timeline Stranger", strangerPath],
+    ] as const) {
+      const added = await call("/api/v1/projects", {
+        method: "POST",
+        bearer: apiToken,
+        body: { name, dir, asUser: true },
+      });
+      expect(added.status).toBe(201);
+    }
+
+    const targetCreated = await call("/api/v1/handoffs/import-path?as=timeline-sender", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["timeline-recipient"], title: "Timeline Target", body: "# Target\n" },
+    });
+    expect(targetCreated.status).toBe(201);
+    const targetId = String(json(targetCreated).data.handoffs[0].handoffId);
+
+    const otherCreated = await call("/api/v1/handoffs/import-path?as=timeline-sender", {
+      method: "POST",
+      bearer: apiToken,
+      body: { to: ["timeline-recipient"], title: "Timeline Other", body: "# Other\n" },
+    });
+    expect(otherCreated.status).toBe(201);
+    const otherId = String(json(otherCreated).data.handoffs[0].handoffId);
+
+    // Seed identical deterministic over-limit fixture directly into the shared SQLite database:
+    // 5 older events, 10 identical-timestamp ties spanning the 50-event cutoff (scrambled rowids),
+    // 45 newer events (out-of-order insertion), plus 10 strictly newer events on otherId.
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const insert = db.prepare(
+      "INSERT INTO events (id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at) VALUES (?, ?, NULL, ?, 'user', NULL, 1, ?, ?)",
+    );
+    const pad2 = (n: number) => String(n).padStart(2, "0");
+    try {
+      for (const n of [3, 1, 5, 2, 4]) {
+        insert.run(
+          `evt-old-${pad2(n)}`,
+          targetId,
+          "REVIEW_NOTE_UPDATED",
+          '{"secretBody":"must-not-leak","group":"old"}',
+          `2099-01-01T00:00:${pad2(n)}.000Z`,
+        );
+      }
+      for (const n of [5, 2, 9, 1, 8, 4, 10, 3, 7, 6]) {
+        insert.run(
+          `evt-tie-${pad2(n)}`,
+          targetId,
+          "REVIEW_NOTE_UPDATED",
+          '{"secretBody":"must-not-leak","group":"tie"}',
+          "2099-01-01T00:01:00.000Z",
+        );
+      }
+      const newOrder: number[] = [];
+      for (let n = 1; n <= 45; n += 2) newOrder.push(n);
+      for (let n = 44; n >= 2; n -= 2) newOrder.push(n);
+      for (const n of newOrder) {
+        insert.run(
+          `evt-new-${pad2(n)}`,
+          targetId,
+          "REVIEW_NOTE_UPDATED",
+          '{"secretBody":"must-not-leak","group":"new"}',
+          `2099-01-01T00:02:${pad2(n)}.000Z`,
+        );
+      }
+      for (let n = 1; n <= 10; n += 1) {
+        insert.run(
+          `evt-other-${pad2(n)}`,
+          otherId,
+          "REVIEW_NOTE_UPDATED",
+          '{"secretBody":"must-not-leak","group":"other"}',
+          `2099-03-01T00:00:${pad2(n)}.000Z`,
+        );
+      }
+    } finally {
+      db.close();
+    }
+
+    const expectedTop50 = [
+      ...Array.from({ length: 45 }, (_, index) => `evt-new-${pad2(45 - index)}`),
+      "evt-tie-10",
+      "evt-tie-09",
+      "evt-tie-08",
+      "evt-tie-07",
+      "evt-tie-06",
+    ];
+
+    const snapshotState = () => {
+      const checkDb = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      try {
+        const handoff = checkDb
+          .prepare(
+            "SELECT revision, row_version, review_state, first_fetched_at, review_engaged_at, updated_at FROM handoffs WHERE id = ?",
+          )
+          .get(targetId);
+        const events = checkDb.prepare("SELECT COUNT(*) AS count, MAX(rowid) AS max_rowid FROM events").get() as {
+          count: number;
+          max_rowid: number;
+        };
+        return { handoff, events };
+      } finally {
+        checkDb.close();
+      }
+    };
+
+    const before = snapshotState();
+
+    // Verify HTTP GET /api/v1/handoffs/{id}/events for sender, recipient, and User.
+    const httpRecipient = await call(`/api/v1/handoffs/${targetId}/events?as=timeline-recipient`, { bearer: apiToken });
+    expect(httpRecipient.status).toBe(200);
+    const httpEvents = json(httpRecipient).data as Array<Record<string, unknown>>;
+    expect(httpEvents).toHaveLength(50);
+    expect(httpEvents.map((entry) => entry.id)).toEqual(expectedTop50);
+
+    const httpSender = await call(`/api/v1/handoffs/${targetId}/events?as=timeline-sender`, { bearer: apiToken });
+    expect(httpSender.status).toBe(200);
+    expect(json(httpSender).data).toEqual(httpEvents);
+
+    const httpUser = await call(`/api/v1/handoffs/${targetId}/events?asUser=true`, { bearer: apiToken });
+    expect(httpUser.status).toBe(200);
+    expect(json(httpUser).data).toEqual(httpEvents);
+
+    // Non-participant Project is hidden behind HANDOFF_NOT_FOUND on HTTP.
+    const httpDenied = await call(`/api/v1/handoffs/${targetId}/events?as=timeline-stranger`, { bearer: apiToken });
+    expect(httpDenied.status).toBe(404);
+    expect(json(httpDenied).error.code).toBe("HANDOFF_NOT_FOUND");
+
+    // Verify compiled CLI `sorage events --json` against the exact same database returns identical 50 events for recipient, sender, and User.
+    const compiledBinary = fileURLToPath(new URL("../../../../dist/sorage", import.meta.url));
+    for (const [args, cwd] of [
+      [["events", targetId, "--as", "timeline-recipient", "--json"], recipientPath],
+      [["events", targetId, "--as", "timeline-sender", "--json"], senderPath],
+      [["events", targetId, "--as-user", "--json"], recipientPath],
+    ] as const) {
+      const cliRun = spawnSync(compiledBinary, [...args], {
+        cwd,
+        encoding: "utf8",
+        env: { ...process.env, SORAGE_HOME: home },
+      });
+      expect(cliRun.status, cliRun.stderr).toBe(0);
+      const cliEvents = (JSON.parse(cliRun.stdout) as { data: Array<Record<string, unknown>> }).data;
+      expect(cliEvents).toHaveLength(50);
+      expect(cliEvents.map((entry) => entry.id)).toEqual(expectedTop50);
+      expect(cliEvents).toEqual(httpEvents);
+    }
+
+    // Non-participant Project is hidden behind HANDOFF_NOT_FOUND on CLI.
+    const cliDenied = spawnSync(compiledBinary, ["events", targetId, "--as", "timeline-stranger", "--json"], {
+      cwd: strangerPath,
+      encoding: "utf8",
+      env: { ...process.env, SORAGE_HOME: home },
+    });
+    expect(cliDenied.status).toBe(66);
+    expect((JSON.parse(cliDenied.stderr) as { error: { code: string } }).error.code).toBe("HANDOFF_NOT_FOUND");
+
+    // Verify metadata-only shape, evicted boundary/cross-handoff IDs, and zero database mutation.
+    for (const evicted of ["evt-tie-05", "evt-tie-01", "evt-old-05", "evt-other-10"]) {
+      expect(httpEvents.map((entry) => entry.id)).not.toContain(evicted);
+    }
+    expect(httpEvents.some((entry) => entry.eventType === "HANDOFF_CREATED")).toBe(false);
+    for (const entry of httpEvents) {
+      expect(Object.keys(entry).sort()).toEqual(["actorId", "actorKind", "createdAt", "eventType", "id", "rowVersion"]);
+      expect(JSON.stringify(entry)).not.toContain("must-not-leak");
+    }
+    expect(snapshotState()).toEqual(before);
   });
 });

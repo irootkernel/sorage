@@ -233,4 +233,154 @@ describe("sorage review show and events", () => {
     expect((JSON.parse(stranger.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_NOT_FOUND");
     process.chdir(original);
   });
+
+  it("pins the 50-event limit, created_at DESC id DESC cutoff ties, metadata-only shape, admission, and zero writes (CLI-023, TASK-171)", () => {
+    const original = process.cwd();
+    const { home, workA, workB, handoffId } = setup();
+    try {
+      // Create a second Handoff whose strictly newer events must never leak into targetId's timeline.
+      const otherDoc = join(home, "other.md");
+      writeFileSync(otherDoc, "# Other\n");
+      const otherSend = capture();
+      expect(
+        runCli(
+          [
+            "send",
+            "--as",
+            "alpha",
+            "--to",
+            "beta",
+            "--title",
+            "Other Handoff",
+            "--file",
+            otherDoc,
+            "--allow-external-source",
+            "--json",
+          ],
+          otherSend.ports,
+        ),
+      ).toBe(0);
+      const otherHandoffId = (JSON.parse(otherSend.outText()) as { data: { handoffs: Array<{ handoffId: string }> } })
+        .data.handoffs[0]?.handoffId as string;
+
+      // Seed 60 deterministic events on handoffId (5 older, 10 tied across the 50-event cutoff in
+      // scrambled rowid order, 45 newer in non-chronological insertion order) plus 10 strictly newer
+      // events on otherHandoffId.
+      const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      const insert = db.prepare(
+        "INSERT INTO events (id, handoff_id, memo_id, event_type, actor_kind, actor_id, row_version, metadata_json, created_at) VALUES (?, ?, NULL, ?, 'user', NULL, 1, ?, ?)",
+      );
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      try {
+        for (const n of [3, 1, 5, 2, 4]) {
+          insert.run(
+            `evt-old-${pad2(n)}`,
+            handoffId,
+            "REVIEW_NOTE_UPDATED",
+            '{"secretBody":"must-not-leak","group":"old"}',
+            `2099-01-01T00:00:${pad2(n)}.000Z`,
+          );
+        }
+        // Identical created_at tie group spanning the 50-event cutoff (indices 45..49 kept, 50..54 evicted).
+        for (const n of [5, 2, 9, 1, 8, 4, 10, 3, 7, 6]) {
+          insert.run(
+            `evt-tie-${pad2(n)}`,
+            handoffId,
+            "REVIEW_NOTE_UPDATED",
+            '{"secretBody":"must-not-leak","group":"tie"}',
+            "2099-01-01T00:01:00.000Z",
+          );
+        }
+        // 45 strictly newer events inserted out of chronological order (odds ascending, then evens descending).
+        const newOrder: number[] = [];
+        for (let n = 1; n <= 45; n += 2) newOrder.push(n);
+        for (let n = 44; n >= 2; n -= 2) newOrder.push(n);
+        for (const n of newOrder) {
+          insert.run(
+            `evt-new-${pad2(n)}`,
+            handoffId,
+            "REVIEW_NOTE_UPDATED",
+            '{"secretBody":"must-not-leak","group":"new"}',
+            `2099-01-01T00:02:${pad2(n)}.000Z`,
+          );
+        }
+        // 10 strictly newer events on another Handoff to verify isolation.
+        for (let n = 1; n <= 10; n += 1) {
+          insert.run(
+            `evt-other-${pad2(n)}`,
+            otherHandoffId,
+            "REVIEW_NOTE_UPDATED",
+            '{"secretBody":"must-not-leak","group":"other"}',
+            `2099-03-01T00:00:${pad2(n)}.000Z`,
+          );
+        }
+      } finally {
+        db.close();
+      }
+
+      const expectedTop50 = [
+        ...Array.from({ length: 45 }, (_, index) => `evt-new-${pad2(45 - index)}`),
+        "evt-tie-10",
+        "evt-tie-09",
+        "evt-tie-08",
+        "evt-tie-07",
+        "evt-tie-06",
+      ];
+
+      const snapshotState = () => {
+        const checkDb = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+        try {
+          const handoff = checkDb
+            .prepare(
+              "SELECT revision, row_version, review_state, first_fetched_at, review_engaged_at, updated_at FROM handoffs WHERE id = ?",
+            )
+            .get(handoffId);
+          const events = checkDb.prepare("SELECT COUNT(*) AS count, MAX(rowid) AS max_rowid FROM events").get() as {
+            count: number;
+            max_rowid: number;
+          };
+          return { handoff, events };
+        } finally {
+          checkDb.close();
+        }
+      };
+
+      const before = snapshotState();
+
+      for (const participantDir of [workA, workB]) {
+        process.chdir(participantDir);
+        const timeline = capture();
+        expect(runCli(["events", handoffId, "--json"], timeline.ports)).toBe(0);
+        const events = (JSON.parse(timeline.outText()) as { data: Array<Record<string, unknown>> }).data;
+        expect(events).toHaveLength(50);
+        expect(events.map((entry) => entry.id)).toEqual(expectedTop50);
+        for (const evicted of ["evt-tie-05", "evt-tie-01", "evt-old-05", "evt-other-10"]) {
+          expect(events.map((entry) => entry.id)).not.toContain(evicted);
+        }
+        expect(events.some((entry) => entry.eventType === "HANDOFF_CREATED")).toBe(false);
+        for (const entry of events) {
+          expect(Object.keys(entry).sort()).toEqual([
+            "actorId",
+            "actorKind",
+            "createdAt",
+            "eventType",
+            "id",
+            "rowVersion",
+          ]);
+          expect(JSON.stringify(entry)).not.toContain("must-not-leak");
+        }
+      }
+
+      const outsider = mkdtempSync(join(tmpdir(), "sorage-detail-overflow-outsider-"));
+      homes.push(outsider);
+      process.chdir(outsider);
+      const denied = capture();
+      expect(runCli(["events", handoffId, "--json"], denied.ports)).toBe(66);
+      expect((JSON.parse(denied.errText()) as { error: { code: string } }).error.code).toBe("HANDOFF_NOT_FOUND");
+
+      expect(snapshotState()).toEqual(before);
+    } finally {
+      process.chdir(original);
+    }
+  });
 });
