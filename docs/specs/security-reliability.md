@@ -101,7 +101,7 @@ Every user-supplied path is expanded, made absolute, and `realpath`-resolved bef
 
 | Rule | Statement | Requirement |
 |---|---|---|
-| Managed-path escape | A resolved source or destination that leaves its allowed root is rejected; Vault and Project directory containment cycles are rejected | VLT-017 |
+| Managed-path escape | A resolved source or destination that leaves its allowed root is rejected; Vault and Project directory containment cycles (including `/` containing any Vault or workspace) are rejected using root-safe, segment-aware containment | VLT-017 |
 | Regular files only | Directories, sockets, named pipes, character devices, block devices, and unsupported symbolic-link chains are rejected as Artifacts | VLT-006, VLT-015, SEC-007 |
 | Copy only | Import copies with bounded-memory streaming and never moves or deletes the source | VLT-004, VLT-005, NFR-005 |
 | Size | The configured `artifact.maxBytes` limit is enforced while streaming and aborts mid-stream with `ARTIFACT_TOO_LARGE` | VLT-015 |
@@ -111,6 +111,8 @@ Every user-supplied path is expanded, made absolute, and `realpath`-resolved bef
 | Managed files | Imported Artifact files are made read-only where the filesystem supports it | VLT-008 |
 
 Because `storageKey` embeds a fresh `artifact-id`, two imports can never collide on one path, and an in-place overwrite is structurally impossible (ADR-0013).
+
+Path containment checks across Vault containment (`VLT-017`), Vault relocation self-overlap, sender downgrade detection (`PRJ-019`), and commit-time binding revalidation (`createProjectWithBinding`, `addBinding`, `replaceBinding`) use one root-safe, segment-aware check where `/` contains every absolute descendant path while sibling prefixes (`/a` vs `/a-b`) never match ([ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage)). Runtime `bindingDirectories` containment checks (`handoff-command-ports.ts` and `vault-command-ports.ts`) evaluate every valid non-`/` binding using physically resolved `workspaceRootOf(binding)` (plus `directory` when distinct) so `git_repository` working trees cannot contain the Vault. External-source checking (`checkExternalSource`, `VLT-016`) uses segment-aware containment for valid non-`/` workspace roots and stays fail-closed when `workspaceRoot === "/"` so running from `/` never treats arbitrary host files as inside a workspace. Pre-existing invalid `/` binding rows stored in SQLite (whether `directory` at `/` or `git_repository` at `/.git`) remain visible, warned by `doctor` (`bindings.nested`), and explicitly repairable via `project rebind` or `project unbind`, while being excluded from implicit workspace/descendant authority (both `directory` and `git_repository` resolution steps), `--as <slug>` when any valid non-`/` binding exists, sender downgrade checks, binding-conflict checks, and the runtime `bindingDirectories` containment census of `send`, `revise`, and `vault move` ([interfaces section 42.6](interfaces-and-operations.md#426-m11-adr-0041-public-contract-classification-and-design-boundaries)).
 
 External processes are executed with an argument array and never through a shell string; `shell: true` and string concatenation into a command line are prohibited, and every invocation has a timeout and bounded output capture (SEC-004, SEC-005).
 

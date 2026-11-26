@@ -430,12 +430,12 @@ Path rules for every `--dir`:
 - Expand `~`.
 - Convert to an absolute path.
 - Resolve symlinks.
-- Require an existing directory when a binding is registered; `project unbind` additionally accepts the recorded directory of an existing binding after that directory has vanished, normalized against its longest existing ancestor.
+- Require an existing directory when a binding is registered; `project unbind` additionally accepts the recorded directory of an existing binding after that directory has vanished, normalized against its longest existing ancestor with root-safe joining so climbing to `/` never emits a leading double slash (`//`).
 - When the directory is inside a git working tree, store the git common directory and record `bindingKind = git_repository`; otherwise store the normalized real path with `bindingKind = directory` (PRJ-017).
 - Reject a duplicate binding with `BINDING_DUPLICATE`, which also covers a directory that lies inside a repository already bound as `git_repository`, since binding a worktree or a subdirectory of a registered repository would create a second identity for the same repository; `UNIQUE(installationId, directory)` is the only uniqueness constraint (PRJ-016).
 - Reject a slug that is already taken under case-insensitive comparison with `PROJECT_SLUG_CONFLICT` (PRJ-005); the comparison is Unicode-aware, an explicit `--slug` is stored case-folded exactly like a derived one, and the folding is locale-independent, so one name produces the same slug on every machine.
-- Reject Vault and Project containment in either direction with `VAULT_CONTAINMENT` (VLT-017).
-- Allow a nested binding and report it; resolution picks the deepest match (PRJ-008).
+- Reject Vault and Project containment in either direction with `VAULT_CONTAINMENT` using root-safe, segment-aware path containment (where `/` is an ancestor of every absolute descendant path and ordinary sibling prefixes such as `/a` and `/a-b` never match), enforced across `project add`, `project bind`, and `project rebind` both before and at commit time (`createProjectWithBinding`, `addBinding`, `replaceBinding`) so no partial Project or binding is persisted (VLT-017, ADR-0041).
+- Allow a nested binding and report it; resolution picks the deepest match (PRJ-008). Pre-existing invalid `/` binding rows already stored in SQLite remain visible in `project list` and `project show`, reported as a dedicated warning in `doctor` `bindings.nested`, and explicitly repairable via `project rebind` or `project unbind` (preserving Project ID, history, and unbind protections), while being excluded from implicit descendant authority, binding-conflict interference, and runtime `bindingDirectories` containment checks as specified in [section 9](#9-actor-resolution-and-unregistered-workspaces) and [section 42.6](#426-m11-adr-0041-public-contract-classification-and-design-boundaries).
 
 A second binding names a genuinely separate directory or repository that belongs to the same logical Project, such as a docs repository; a worktree of an already-bound repository is not one, because step 2 of section 9 already resolves it to the Project and binding it would fail with `BINDING_DUPLICATE`.
 
@@ -469,10 +469,12 @@ Resolution order for every actor-resolving command:
 
 The **workspace root** of a binding is the stored directory for a `directory` binding, and the main working tree, that is the parent of the git common directory, for a `git_repository` binding.
 
-The downgrade guard compares the normalized working directory against every binding's workspace root and fails with `SENDER_IDENTITY_DOWNGRADE` unless `--allow-unregistered` is supplied, in exactly two shapes (PRJ-019):
+The downgrade guard compares the normalized working directory against every valid binding's workspace root using root-safe, segment-aware containment and fails with `SENDER_IDENTITY_DOWNGRADE` unless `--allow-unregistered` is supplied, in exactly two shapes (PRJ-019, ADR-0041):
 
-- The working directory is an ancestor of a workspace root, which is almost always a forgotten `cd` or a mistyped path rather than an intentional anonymous send.
-- The working directory is contained in a workspace root but resolves to no Project, which is what a nested independent git repository inside a bound tree looks like: its own common directory matches no binding.
+- The working directory is an ancestor of a valid workspace root — including `cwd === "/"` whenever any valid binding exists — which is almost always a forgotten `cd` or a mistyped path rather than an intentional anonymous send.
+- The working directory is contained in a valid workspace root but resolves to no Project, which is what a nested independent git repository inside a bound tree looks like: its own common directory matches no binding.
+
+Any pre-existing invalid `/` binding row (whose workspace root is `/`, whether `directory` at `/` or a hypothetical root-parent `git_repository` at `/.git`) is strictly isolated from implicit path-based authority: it does not match in `resolveWorkspaceActor` (both step 5 `git_repository` common-directory matching and step 4 `directory` matching), does not participate in `resolveSenderIdentity` or `revalidateSenderAtCommit` (including `unresolvedRoot`) downgrade checks, does not trigger `findBindingConflict` descendant rejection, and is excluded from the runtime `bindingDirectories` containment census of `send`, `revise`, and `vault move` (and from the `doctor` `bindings.nested` ancestor stack, where any legacy `/` `directory` or `git_repository` row receives a dedicated repair warning), while Git common-directory precedence for valid non-`/` repositories, deepest valid directory matching, same-depth ambiguity, explicit `--as <slug>` selection (excluding legacy `/` rows whenever the Project has any valid non-`/` binding), and explicit `project rebind`/`project unbind` repair remain preserved ([section 42.6](#426-m11-adr-0041-public-contract-classification-and-design-boundaries)).
 
 A working directory inside any worktree of a bound repository resolves to that Project and never downgrades, because step 2 folds every worktree onto the same common directory.
 
@@ -788,6 +790,8 @@ Error:
 `meta.requestId` is the only universal meta field; `meta.timedOut` is the shared timeout flag of waiting surfaces: from M9 it is added by `inbox --wait` and by the Channel wait of section 38.5, and it still appears nowhere else. Error envelopes never carry `meta.timedOut`; a wait that ends in a persistent failure reports that typed error instead of a timeout.
 
 `sorage version --json` is the deliberate exception to this envelope: it returns the compact standalone object `{"name":"sorage","version":"v0.1.2"}` so ecosystem version probes can consume the same field names and `v`-prefixed value as sibling tools. This presentation prefix applies only to the two CLI version outputs; the shared runtime source, package manifest, daemon record, and HTTP health and version DTOs retain the bare semantic version `0.1.2`.
+
+Under [accepted ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage) (`TASK-174`), `sorage web --json` and `sorage daemon start|stop|restart|status --json` follow the standard success and error envelopes above with one per-invocation `meta.requestId` (never a bare top-level object and never literal `"daemon"`). `sorage daemon restart --json` emits exactly one final success envelope on stdout or one terminal error envelope on stderr, and internal daemon start/stop calls from `sorage init --start-daemon` and `sorage uninstall` never write duplicate JSON envelopes to stdout or duplicate error envelopes to stderr (`CLI-002`). Without `--json`, `sorage web` and `sorage daemon start|stop|restart|status` emit concise human-readable text on stdout and standard human errors on stderr. [Section 42.6](#426-m11-adr-0041-public-contract-classification-and-design-boundaries) defines the exact payloads, default outputs, error-code alignment, before-and-after examples, and client migration rules.
 
 The envelope is versioned and contract-tested through `make test-contract` (NFR-003, NFR-011).
 
@@ -1530,7 +1534,7 @@ The command exits 0 when no check is `blocking`, and it is usable before and aft
 | `artifacts.checksums` | M1 | blocking | Every live Handoff's current Artifact matches its recorded SHA-256: a file-backed Artifact exists at its `storageKey`, and from M9 an inline Artifact is verified by recomputing the digest over its stored text without assuming a storage key | `sorage vault verify`, then restore the affected Handoff from backup when the Vault opens; when the Vault cannot open, the check carries that refusal's recovery; when configuration is unusable, `sorage config validate, then repair the reported keys` for a readable file, the direct owner-only access repair when it cannot be read, or the configuration-path repair when the path is a directory, a FIFO or another non-regular target, a dangling symlink, or a symlink loop (a live symlink to a regular file is followed) |
 | `content.checksums` | M9 | blocking | Every live content record's bytes match its recorded SHA-256: a file-backed record exists at its managed key, and an inline record is verified by recomputing the digest over its stored text, covering Memo, Channel, and retained-response references | `sorage vault verify`, then restore the affected records from backup when the Vault opens; when the Vault cannot open, the check carries that refusal's recovery; when configuration is unusable, `sorage config validate, then repair the reported keys` for a readable file, the direct owner-only access repair when it cannot be read, or the configuration-path repair when the path is a directory, a FIFO or another non-regular target, a dangling symlink, or a symlink loop (a live symlink to a regular file is followed) |
 | `bindings.exist` | M1 | warning | Every active Project has at least one binding and every binding directory still exists | `sorage project bind <project> --dir <path> for an unbound Project, or sorage project unbind <project> --dir <the recorded directory this warning names> for a binding whose directory vanished` |
-| `bindings.nested` | M1 | warning | Nested bindings are reported together with the Project each one resolves to | Pass `--as <project-slug>` wherever the deepest match is not the intended Project |
+| `bindings.nested` | M1 | warning | Nested directory bindings are reported together with the Project each one resolves to; pre-existing invalid legacy `/` rows (any `directory` or `git_repository` row whose workspace root is `/`) are excluded from the nesting stack and reported with an explicit repair warning (`ADR-0041`) | Pass `--as <project-slug>` wherever the deepest match is not the intended Project; for a legacy root binding, run `sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir>` or `sorage project unbind <slug> --dir <the recorded directory this warning names>` (combined when both nested and legacy root warnings occur) |
 | `bindings.ambiguous` | M1 | warning | No two bindings of the same kind alias the same directory through a bind mount or an APFS firmlink, which `realpath` does not collapse, which is the only way a resolution can raise `AMBIGUOUS_PROJECT`; `--as <project-slug>` is the documented escape | `sorage project unbind` the aliased path, or always pass `--as <project-slug>` from it |
 | `daemon.reachable` | M2 | warning | `run/daemon.json` is fresh and `/api/v1/health` returns the expected `installationId` | `sorage daemon start`, or delete a stale `run/daemon.json` |
 | `daemon.port` | M2 | warning | The configured port is not already bound by another process | Change `server.port` and restart the daemon, or stop the other process |
@@ -2431,4 +2435,232 @@ Each owning Contract or Standard Task verifies its implemented diff against this
 
 **Non-breaking at runtime:** [ADR-0040](../architecture-decision-records/README.md#adr-0040-separated-web-ui-assets-with-minimal-build-time-embedding) moves the Web source into browser-only modules and embeds deterministic build output into the compiled daemon. The same routes, public HTTP contracts, security headers, authenticated browser flows and single-binary distribution apply. Persistent database, Vault and backup formats remain compatible.
 
-**Developer build:** `build:web` regenerates the tracked Web embedding with the managed Bun version. `test-prepare` formats the browser source before embedding, ordinary builds generate it before compilation, and `package` fails on stale generated bytes.
+**Developer build:** `build:web` regenerates the tracked Web embedding with the managed Bun version. Under `ADR-0040`'s 2026-11-26 amendment ([ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage), implemented by `TASK-172`), `test-prepare` formats the browser source with Biome and then verifies the tracked embedding read-only via `bun run build:web -- --check` instead of overwriting stale bytes; explicit `bun run build:web` and standalone `make build` generate the embedding before compilation, and standalone `package` retains its pre-compilation `--check` guard.
+
+### 42.6 M11 (ADR-0041) public contract classification and design boundaries
+
+[Accepted ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage) extends `v0.1.6` with [EPIC-025](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage) (`TASK-168`–`TASK-175`). **Storage, Vault, backup, HTTP, and MCP migration impact is none:** SQLite remains at schema `17`, Vault layout remains unchanged, backup format remains `5` with Format 1–5 restore readers and `ADR-0031` short Artifact IDs intact, `ERROR_CODES` remains at `76`, and all 59 `MCP-005` tools and schemas remain unchanged. `TASK-168` is a design-only Contract Task (`intentional no-note` for `CHANGELOG.md`); under [governance section 9.3](../governance/README.md#93-contract), `TASK-174` owns the concrete Web/Daemon wire implementation, contract snapshot goldens, and reviewed breaking snapshot diff, while `TASK-175` reconciles the final `v0.1.6` release notes and operations guide.
+
+#### 42.6.1 Compatibility classification
+
+| Change (`EPIC-025` Task) | Classification | Category | Contract and migration notes |
+|---|---|---|---|
+| `sorage web --json` single cutover to standard CLI success/error envelopes (`TASK-174`) | **breaking** | CLI JSON contract | Top-level `{ url, daemonStarted, expiresAt, note }` moves into `data` inside `{ ok: true, data: { ... }, meta: { requestId } }`; `--json` failures emit standard JSON error envelopes on stderr with `RUN-009` logging instead of plain text; single-use URL appears only in success `data.url`. All nine tracked E2E consumers migrate to `data.url` in the same change. |
+| `sorage daemon start\|stop\|restart\|status --json` alignment (`TASK-174`) | **breaking** | CLI JSON contract | Per-invocation `meta.requestId` (supporting `SORAGE_TEST_REQUEST_ID`) replaces literal `"daemon"` across success and `fail()` errors (including no-live-daemon `stop`/`status`), `error.details` is always emitted, `daemon restart --json` emits one final start envelope on stdout (or one terminal error envelope on stderr) instead of two JSON objects, and direct/internal `daemonStart`/`daemonStatus` configuration fallbacks align to `NOT_INITIALIZED` / `CONFIG_INVALID` (exit 78) instead of `DAEMON_UNAVAILABLE` (matching the existing CLI `requireInitialized` gate). |
+| Default non-`--json` output for `sorage web`, `sorage daemon start\|stop\|restart`, and `sorage daemon status` failures (`TASK-174`) | **breaking** (for scripts omitting `--json`) | CLI human output contract | Commands without `--json` emit the exact human-readable stdout templates of section 42.6.3 and standard `renderAppError` human diagnostics on stderr instead of emitting JSON unconditionally (including `daemon status` error stderr, which previously emitted JSON without `--json`); `daemon status` preserves its existing two-line human success format. |
+| Internal `daemonStart`/`daemonStop` isolation in `sorage init --start-daemon` and `sorage uninstall` (`TASK-174`) | non-breaking (defect fix) | CLI envelope compliance (`CLI-002`) | Parent commands emit exactly one JSON envelope on stdout under `--json` (and one error envelope on stderr on failure) instead of leaking child daemon envelopes. |
+| Root-safe containment and legacy `/` binding isolation (`TASK-169`) | **breaking** (behavioral defect fix for invalid `/` targets and `git_repository` working-tree containment) | Path safety defect fix (`VLT-017`, `PRJ-019`) | Rejects `/` and mutual Vault/Project containment (including Vault inside a bound `git_repository` working tree during `send`/`revise`/`vault move`) across `add`, `bind`, `rebind`, and `vault move` with `VAULT_CONTAINMENT` (including commit-time checks), refuses unregistered sends from `/` when valid bindings exist with `SENDER_IDENTITY_DOWNGRADE`, keeps `checkExternalSource` fail-closed when `workspaceRoot === "/"` (preserving `VLT-016` with zero weakening), fixes `absentRealPath` `"//..."` joins, and isolates pre-existing invalid `/` rows from implicit authority and runtime `bindingDirectories` containment checks for explicit `rebind`/`unbind` repair with a dedicated `doctor` warning. `TASK-169` stays classified as a `Standard` Task because it changes no JSON envelope schema, symbolic error code (`ERROR_CODES` stays `76`), HTTP DTO, config schema, database migration, or `doctor` catalog golden (`id` and `worst` stay identical across all 21 IDs). |
+| Non-blocking Handoff upload whitespace validation and body-only title coverage (`TASK-170`) | non-breaking | Event-loop hardening and tests | Eliminates synchronous `readSync` on daemon request callback while preserving `MultipartEnginePolicy.onComplete` synchronous contract, Memo multipart sharing, UTF-8/`trim()` semantics, error precedence (`CONFIG_INVALID`, `413 ARTIFACT_TOO_LARGE`), spool cleanup, and keyed replay. |
+| Shared 50-event timeline bound regression across CLI and HTTP (`TASK-171`) | non-breaking | Verification coverage | Pins exact newest-50 `created_at DESC, id DESC` parity and zero-write behavior with timestamp ties across `sorage events --json` and `GET /api/v1/handoffs/{id}/events`. |
+| Check-first `Makefile` `test-prepare` Web asset verification (`TASK-172`) | developer build change | Build/test gate (`ADR-0040` amendment) | Replaces `bun run build:web` with read-only `bun run build:web -- --check` in `test-prepare`; developers run `bun run build:web` (or `make build`) explicitly after editing `apps/daemon/src/web/`. |
+| Narrow-viewport Web layout for Dashboard, Compose, and Backup (`TASK-173`) | non-breaking | Web UI responsiveness | Fits all three views within 390 CSS pixels with existing routes, text, and controls accessible while preserving 1280px desktop layout and `axe-a11y`. |
+
+#### 42.6.2 Boundary 1: Root-safe containment vs legacy `/` binding isolation (`TASK-169`)
+
+A single shared core helper (`isPathAtOrBelow(candidate, root)`) governs segment-aware containment for normalized absolute POSIX paths: when `root === "/"`, every absolute path starting with `"/"` is contained; when `root !== "/"`, ``candidate === root || candidate.startsWith(`${root}/`)`` so sibling prefixes (`/a` vs `/a-b`) never falsely match.
+
+- **Containment, external-source, and commit-time guard sites:**
+  - `checkVaultContainment` (`packages/core/src/content/import-policy.ts`) uses `isPathAtOrBelow` in both directions so any new or rebound `/` binding target or `/` Vault path fails with `VAULT_CONTAINMENT`.
+  - `checkExternalSource` (`packages/core/src/content/import-policy.ts`) uses segment-aware containment for valid non-`/` workspace roots while keeping `workspaceRoot === "/"` explicitly fail-closed (`inside = false`), so running from `cwd === "/"` with `--as <slug>` or `--allow-unregistered` never treats the entire filesystem as inside a workspace and `VLT-016` is never weakened.
+  - `moveVault` self-overlap (`packages/core/src/vault/vault-commands.ts`) uses `isPathAtOrBelow` in both directions so `vault move --to /` (or moving into/above the active Vault) fails with `VAULT_CONTAINMENT`.
+  - `resolveSenderIdentity` (`packages/core/src/project/workspace-identity.ts`) uses `isPathAtOrBelow` for the ancestor and inside-unresolved-root downgrade checks so `cwd === "/"` triggers `SENDER_IDENTITY_DOWNGRADE` whenever any valid non-`/` binding exists.
+  - `absentRealPath` (`packages/adapters/src/project-command-ports.ts`) uses root-safe joining so when the longest existing ancestor is `/`, it emits `/${rest}` rather than `//${rest}`.
+  - Commit-time revalidation across `createProjectWithBinding`, `addBinding`, and `replaceBinding` (`packages/adapters/src/projects.ts`) propagates resolved `physicalPath` on binding-creation inputs (`NewProjectBinding` optional `physicalPath` defaulting to `directory` when omitted, supplied by `addProject` and `bindProject` alongside `directory` and `bindingKind`), resolves `fs.realpath(vaultPath)` before `BEGIN IMMEDIATE` (preserving `SEC-009` no-filesystem-I/O-in-transaction rules), runs root-safe `checkVaultContainment` over `[workspaceRoot, physicalPath]`, and runs in-transaction `findBindingConflict` before inserting or updating so any refusal leaves zero partial Project or binding rows.
+- **Legacy `/` binding isolation (strictly separate from containment):** Under `VLT-017` ([required-specification.md](required-specification.md#7-vault-and-artifact), [ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage)), containment rejection applies to every binding or Vault creation, bind, rebind, and relocation, while a pre-existing invalid binding row whose workspace root is `/` (`binding.directory === "/"` for `directory` bindings, or `workspaceRootOf(binding) === "/"` for a hypothetical root-parent `git_repository` binding such as `/.git`) MUST NOT gain implicit authority over descendant workspaces or over `/` in path-based lookup, and MUST NOT cause an installation-wide outage for unrelated valid Projects:
+  - `project list` and `project show` keep displaying the row; explicit `project rebind <slug> --from <recorded-dir> --to <valid-dir>` and `project unbind <slug> --dir <recorded-dir> [--confirm]` locate and repair or remove the row while preserving Project ID, historical Handoffs/events, and `CONFIRMATION_REQUIRED` unbind protections.
+  - Under explicit `--as <slug>`, `resolveWorkspaceActor` excludes legacy `/` rows whenever the Project has at least one valid non-`/` binding (falling back to the recorded legacy row only when it is the Project's sole binding so `--as` does not falsely report `PROJECT_UNBOUND` before repair; until repaired, a sole-`/` Project remains fail-closed in `checkExternalSource` on `revise --as <slug>`—which evaluates `workspaceRootOf(binding)`—and on `send` invoked from `cwd === "/"`, whereas `send` always evaluates normalized `cwd` regardless of `--as`).
+  - `resolveWorkspaceActor` excludes legacy `/` rows from BOTH step 5 (`git_repository` common-directory matching) and step 4 (`directory` matching), so neither `/` nor any descendant `/...` implicitly resolves to a legacy `/` Project.
+  - `resolveSenderIdentity` and `revalidateSenderAtCommit` (including `matchDirectoryOwner` and `unresolvedRoot`) exclude legacy `/` rows from the valid-binding root set used for implicit ownership and `SENDER_IDENTITY_DOWNGRADE` matching; valid non-`/` bindings still trigger `SENDER_IDENTITY_DOWNGRADE` when running unregistered from `/` or any other ancestor/nested-repo path.
+  - `findBindingConflict` excludes legacy `/` rows from descendant `git_repository` containment while preserving exact-path duplicate detection and valid repository containment.
+  - Runtime existing-binding containment inputs (`bindingDirectoriesOf` in `packages/adapters/src/handoff-command-ports.ts` and `bindingDirectories()` in `packages/adapters/src/vault-command-ports.ts`) query both `directory` and `binding_kind`, exclude pre-existing legacy rows whose `workspaceRootOf(binding) === "/"` first, and for every remaining valid non-`/` binding emit physically resolved `workspaceRootOf(binding)` plus physically resolved `binding.directory` when distinct (deduplicated, resolved outside any write transaction to preserve `SEC-009`). This closes the pre-existing `git_repository` gap where `vault move --to /repo/vault` or file `send`/`revise` checked only `/repo/.git` instead of the working tree `/repo`, while ensuring one stale legacy `/` row does not break unrelated valid Projects' file `send`/`revise` or valid `vault move`; every new or changing `/` target in `project add`/`bind`/`rebind` and `vault move --to /` still fails with `VAULT_CONTAINMENT`, while an identity no-op `project rebind --from <recorded-dir> --to <same-recorded-dir>` preserves `PRJ-024` (`changed: false`, zero mutation or event).
+  - `doctor` check `bindings.nested` (`packages/adapters/src/doctor-checks-bindings.ts`) inspects BOTH `directory` and `git_repository` bindings for legacy rows where `workspaceRootOf(binding) === "/"`, excludes them from the ordinary directory nesting stack (so valid bindings are never falsely reported as nested inside `/`), and emits deterministic `warning` outcomes without altering the static `RECOVERIES` table or the 21-ID `doctor` catalog golden of [section 35](#35-doctor-check-catalog): (a) ordinary nested bindings only -> default `RECOVERIES["bindings.nested"]` (`Pass --as <project-slug> wherever the deepest match is not the intended Project`); (b) legacy root row(s) only -> `withRecovery` carrying `Run sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir> or sorage project unbind <slug> --dir <the recorded directory this warning names>`; (c) both legacy root row(s) and ordinary nested bindings -> deduplicated space-joined message (legacy root warnings first, then ordinary nested warnings) with `withRecovery` combining both recoveries (`Pass --as <project-slug> wherever the deepest match is not the intended Project; for a legacy root binding, run sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir> or sorage project unbind <slug> --dir <the recorded directory this warning names>`).
+  - Git common-directory precedence for valid non-`/` repositories, deepest valid directory matching, and same-depth physical-alias `AMBIGUOUS_PROJECT` remain unchanged.
+
+#### 42.6.3 Boundary 2: `web` and `daemon` CLI `--json`, default output, and `setup.ts` isolation (`TASK-174`)
+
+All `sorage web` and `sorage daemon start|stop|restart|status` invocations forward `globals.json === true` from `apps/cli/src/commands/runtime.ts` and render through `apps/cli/src/cli-output.ts` (`successEnvelope`, `renderAppError`, and `requestId()` honoring `SORAGE_TEST_REQUEST_ID`), logging failures to `<home>/logs/sorage.log` (`RUN-009`).
+
+- **Exact `sorage web` outputs:**
+  - `--json` success (exit `0`, stdout only): standard `successEnvelope({ url, daemonStarted, expiresAt, note }, id)` where `url` carries the single-use `#s=<secret>` fragment.
+  - `--json` failure (stderr only): standard `errorEnvelope` via `renderAppError` with matching exit code (`78` for `NOT_INITIALIZED`/`CONFIG_INVALID`, `69` for `DAEMON_UNAVAILABLE`, `1` for `INTERNAL_ERROR`), never exposing any single-use URL or secret.
+  - Default human output (no `--json`, exit `0`, stdout, exact four-line template):
+    - `Web control plane: <url>\n`
+    - `Daemon: started\n` (when `daemonStarted === true`) or `Daemon: already running\n` (when `daemonStarted === false`)
+    - `Expires: <expiresAt>\n`
+    - `Note: the fragment secret is single-use and expires; run sorage web again for a fresh one\n`
+  - Default human failure (no `--json`, stderr only): standard `renderAppError` human output (`<CODE>: <message>\nRecovery: <suggestedCommand>\n`), or the unchanged [section 4](#4-pre-initialization-gate) `ERROR [NOT_INITIALIZED]` block when intercepted by `requireInitialized`.
+- **Exact `sorage daemon start|stop|restart|status` outputs and error-code alignment:**
+  - Error codes follow the section 15–16 catalogue: missing installation -> `NOT_INITIALIZED` (exit `78`, recovery `sorage init`; CLI invocations always hit `requireInitialized` first with `details.expectedConfigPath` satisfying `INIT-012` / [section 4](#4-pre-initialization-gate), while direct/internal `daemonStart`/`daemonStatus` port-level fallbacks omit `expectedConfigPath` and emit `details: {}` as an explicit scoped exception because `DaemonRuntimePorts` carries no configuration-path getter); unreadable/invalid config -> returned `AppError` (e.g., `CONFIG_INVALID`, exit `78`); bound port -> `PORT_IN_USE` (exit `75`); unsupported schema or admission refusal (`daemonStartAdmissionRefusal`) -> exact typed `AppError` (`STORAGE_SCHEMA_UNSUPPORTED` exit `78` or `STORAGE_INTEGRITY_ERROR` exit `73`); no live daemon / health mismatch / start timeout -> `DAEMON_UNAVAILABLE` (exit `69`, recovery `sorage daemon start`); stop grace timeout -> `SERVICE_PAUSED` (exit `75`, recovery `Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop`). Because `renderAppError` (`apps/cli/src/cli-output.ts`) applies its `recoveryOverride` parameter only to human stderr and serializes `AppError.recovery` inside JSON `errorEnvelope`, daemon-specific recoveries (such as the stop-grace `SERVICE_PAUSED` guidance) MUST be attached directly on `AppError.recovery` before calling `renderAppError` so both `--json` and human outputs preserve the exact recovery. Every JSON error envelope includes `error.details` (default `{}` when empty, or the structured details object) per [section 14](#14-cli-envelopes).
+  - `--json` success (exit `0`, stdout, exactly one JSON object with per-invocation `meta.requestId`): `daemon start` emits `data: { started: true, daemon?: DaemonRunRecord }`; `daemon stop` emits `data: { stopped: true }`; `daemon restart` suppresses intermediate stop stdout and emits only the final `start` envelope `data: { started: true, daemon?: DaemonRunRecord }`; `daemon status` emits `data: { daemon: DaemonRunRecord, restartRequired: boolean }`.
+  - `--json` failure (stderr, exactly one JSON error envelope with per-invocation `meta.requestId`): including `daemon restart`, where a stop failure emits only the stop error envelope and does not proceed to start.
+  - Default human output (no `--json`, exit `0`, stdout, exact templates):
+    - `sorage daemon start` and `sorage daemon restart` (`daemon restart` suppresses intermediate stop output and prints only this final started line): `Daemon started (pid <pid> at <host>:<port>, version <version>).\n` when `daemon` run record is present, or `Daemon started.\n` when absent.
+    - `sorage daemon stop`: `Daemon stopped.\n`
+    - `sorage daemon status` (unchanged two-line format): `daemon pid <pid> at <host>:<port> (version <version>)\n` followed by `a configuration change requires sorage daemon restart\n` (when `restartRequired === true`) or `up to date with the configuration\n` (when `restartRequired === false`).
+    - Default human failures (no `--json`, stderr only, including `daemon status` failures): standard `renderAppError` human output (`<CODE>: <message>\nRecovery: <suggestedCommand>\n`), or the unchanged [section 4](#4-pre-initialization-gate) `ERROR [NOT_INITIALIZED]` block from `requireInitialized`. Hidden `daemon serve` is unchanged.
+- **Internal `setup.ts` isolation (`init --start-daemon` and `uninstall`):**
+  - `init --start-daemon` suppresses `daemonStart` stdout completely so `init` owns stdout and emits exactly one `successEnvelope` (including `data.daemon: { started: true }`) under `--json` or its multi-line human summary ending with `Started the daemon.`. On daemon-start failure, `init` surfaces exactly one error in the parent's format (`--json` error envelope or human error) on stderr with the daemon-start exit code and writes nothing to stdout.
+  - `uninstall` suppresses both stdout and stderr of internal `daemonStop` (consuming its non-zero outcome internally), so `uninstall` emits exactly one `successEnvelope` (including `data.daemonStopped: true`) or human summary on stdout; when internal `daemonStop` fails, `uninstall` writes nothing to stdout and emits exactly one `renderAppError` diagnostic on stderr with `DAEMON_UNAVAILABLE` (exit `69`, message `sorage daemon stop did not end the daemon.`, standard recovery) and no duplicate child error envelope.
+- **Before-and-after JSON examples (`web --json` and `daemon`):**
+
+Before (`v0.1.5` / `EPIC-024`) — `sorage web --json` success (bare object on stdout) and failure (plain text on stderr):
+
+```json
+{
+  "url": "http://127.0.0.1:46321/#s=<one-time-secret>",
+  "daemonStarted": false,
+  "expiresAt": "2026-11-26T12:05:00.000Z",
+  "note": "the fragment secret is single-use and expires; run sorage web again for a fresh one"
+}
+```
+
+```text
+DAEMON_UNAVAILABLE: the daemon did not become ready
+Recovery: sorage daemon start
+```
+
+After (`ADR-0041` / `TASK-174`) — `sorage web --json` success (stdout) and failure (stderr):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "url": "http://127.0.0.1:46321/#s=<one-time-secret>",
+    "daemonStarted": false,
+    "expiresAt": "2026-11-26T12:05:00.000Z",
+    "note": "the fragment secret is single-use and expires; run sorage web again for a fresh one"
+  },
+  "meta": {
+    "requestId": "00000000-0000-4000-8000-000000000001"
+  }
+}
+```
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "DAEMON_UNAVAILABLE",
+    "message": "the daemon did not become ready",
+    "details": {},
+    "recovery": {
+      "suggestedCommand": "sorage daemon start"
+    }
+  },
+  "meta": {
+    "requestId": "00000000-0000-4000-8000-000000000002"
+  }
+}
+```
+
+Before (`v0.1.5` / `EPIC-024`) — `sorage daemon restart --json` (two concatenated JSON objects with literal `"daemon"` requestId), `sorage daemon status --json` when no live daemon exists (`fail()` with literal `"daemon"` and missing `details`), and direct/internal `daemonStart` uninitialized fallback (misclassified as `DAEMON_UNAVAILABLE` with literal `"daemon"`):
+
+```json
+{
+  "ok": true,
+  "data": { "stopped": true },
+  "meta": { "requestId": "daemon" }
+}
+{
+  "ok": true,
+  "data": { "started": true, "daemon": { "pid": 4242, "host": "127.0.0.1", "port": 46321, "startedAt": "2026-11-26T12:00:00.000Z", "version": "0.1.5", "installationId": "1f0ac9a0-0000-4000-8000-0000000000cc" } },
+  "meta": { "requestId": "daemon" }
+}
+```
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "DAEMON_UNAVAILABLE",
+    "message": "no live daemon record was found",
+    "recovery": { "suggestedCommand": "sorage daemon start" }
+  },
+  "meta": { "requestId": "daemon" }
+}
+```
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "DAEMON_UNAVAILABLE",
+    "message": "Sorage has not been initialized.",
+    "recovery": { "suggestedCommand": "sorage init" }
+  },
+  "meta": { "requestId": "daemon" }
+}
+```
+
+After (`ADR-0041` / `TASK-174`) — `sorage daemon restart --json` (one final envelope on stdout with per-invocation UUID), `sorage daemon status --json` when no live daemon exists (standard error envelope with `details: {}` and UUID `requestId`), and direct/internal `daemonStart` uninitialized fallback (aligned to `NOT_INITIALIZED` with `details: {}` and UUID `requestId`; CLI `sorage daemon start --json` continues hitting the unchanged `requireInitialized` gate in `apps/cli/src/cli-output.ts`, which emits `NOT_INITIALIZED` with `details: { expectedConfigPath }` per `INIT-012` / [section 4](#4-pre-initialization-gate)):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "started": true,
+    "daemon": {
+      "pid": 4242,
+      "host": "127.0.0.1",
+      "port": 46321,
+      "startedAt": "2026-11-26T12:00:00.000Z",
+      "version": "0.1.5",
+      "installationId": "1f0ac9a0-0000-4000-8000-0000000000cc"
+    }
+  },
+  "meta": {
+    "requestId": "00000000-0000-4000-8000-000000000003"
+  }
+}
+```
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "DAEMON_UNAVAILABLE",
+    "message": "no live daemon record was found",
+    "details": {},
+    "recovery": {
+      "suggestedCommand": "sorage daemon start"
+    }
+  },
+  "meta": {
+    "requestId": "00000000-0000-4000-8000-000000000004"
+  }
+}
+```
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "NOT_INITIALIZED",
+    "message": "Sorage has not been initialized.",
+    "details": {},
+    "recovery": {
+      "suggestedCommand": "sorage init"
+    }
+  },
+  "meta": {
+    "requestId": "00000000-0000-4000-8000-000000000005"
+  }
+}
+```
+
+Client migration: update every `web --json` caller from top-level `url`, `daemonStarted`, `expiresAt`, and `note` to `data.url`, `data.daemonStarted`, `data.expiresAt`, and `data.note`, parse stderr as a standard CLI error envelope on non-zero exit, and pass `--json` explicitly wherever JSON output is expected from `sorage web` or `sorage daemon *` (including `daemon status` failure diagnostics). Installations carrying a pre-existing invalid `/` binding row should repair or remove it explicitly via `sorage project rebind <slug> --from <recorded-dir> --to <dir>` or `sorage project unbind <slug> --dir <recorded-dir>` (until repaired, a Project whose sole remaining binding is a legacy `/` row remains fail-closed in `checkExternalSource` on `revise --as <slug>`—which evaluates `workspaceRootOf(binding)`—and on `send` invoked from `cwd === "/"`, whereas `send` always evaluates normalized `cwd` regardless of `--as`).
+
+#### 42.6.4 Boundary 3: `TASK-175` evidence-reuse boundary for `TASK-163` drills and metrics
+
+Under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review) and [Gate M11](testing-and-acceptance.md#912-gate-m11-architecture-hardening-and-modernization-end-of-epic-022-epic-023-and-epic-024):
+
+- **Always freshly executed on the exact combined `EPIC-025` candidate:** complete `make test` once (including frozen dependencies, check-first `test-prepare`, unit, single `package` double-build reproducibility and signed binary SHA-256, integration, contract including new Web/Daemon goldens, ordinary E2E covering applicable AJ-01–AJ-37 regressions and all updated Web `data.url` / 390px / 1280px / `axe-a11y` checks, and release `AJ-16`), `bun run check:sot`, `git diff --check`, fresh re-measurement of any performance metric whose measured inputs changed in `EPIC-025` (specifically Metric 1 and Metric 5 below), and verification of all seven `EPIC-025` outcomes and their [Closed findings](../deferred-feedback/README.md#closed-findings) records.
+- **Conditionally reusable from `TASK-163` (`1723cfe807726d3f7f2792615aa1990dc72390b2`) only with explicit diff-verified unchanged inputs and recorded limitations:**
+  - Authentic `v0.1.5` (`878ba9d`) schema-16 → schema-17 upgrade, guarded predecessor `STORAGE_SCHEMA_UNSUPPORTED` refusal, Format 1–5 restore with `ADR-0031` short Artifact IDs, matched-binary separate-home rollback, and all 12 schema-17 `EXPLAIN QUERY PLAN` plans — reusable only if `git diff 1723cfe..<combined-head>` confirms zero changes to SQLite migrations, migrator, read-admission, `known-schemas.ts`, backup snapshot codecs/restore/verify, and Vault marker/layout schemas, AND the fresh automated upgrade, Format 1–5 characterization, short-ID, and schema-17 query-plan suites pass inside `make test` on the combined candidate. Because `EPIC-025` changes non-storage code (`TASK-169`–`TASK-174`) and therefore produces a new compiled executable digest, reusing any `1723cfe` manual drill under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review) MUST record both the explicit domain-invariance justification (proving that the changed code paths cannot alter SQLite migrations, backup codecs, restore, or Vault marker/layout behavior) and the executable-digest difference as an explicit reuse limitation; any compiled-binary drill where that invariance cannot be established MUST be freshly re-run on the new binary.
+  - Five `TASK-147` performance criteria (matching the metric names of [M11 qualification §2](../implementation-tips/m11-qualification.md#2-recorded-pre-work-baselines-head-f842225)) — evaluated per metric against `git diff 1723cfe..<combined-head>`:
+    - **[Metric 1: SQLite opens and `BEGIN IMMEDIATE` write locks per CLI command](../implementation-tips/m11-qualification.md#21-metric-1-sqlite-opens-and-begin-immediate-write-locks-per-cli-command-task-151-target) (`send`, `revise`, `doctor`):** inputs include `migrator.ts` plus the `send`, `revise`, and `doctor` command/adapter paths (`projects.ts`, `workspace-identity.ts`, `project-commands.ts`, `import-policy.ts`, `handoff-command-ports.ts`, `doctor-checks-bindings.ts`). Because `TASK-169` modifies these paths, `TASK-175` MUST freshly re-measure Metric 1 across `send`, `revise`, and `doctor` on the combined candidate.
+    - **[Metric 2: Handoff listing SQL statement count](../implementation-tips/m11-qualification.md#22-metric-2-handoff-listing-sql-statement-count-task-154-target):** inputs are `handoff-read-store.ts` `listPage` and schema-17 Handoff list indexes; reusable only if untouched.
+    - **[Metric 3: Daemon `GET /api/v1/health` latency under slow `git push` and 64 MiB sweep](../implementation-tips/m11-qualification.md#23-metric-3-daemon-get-apiv1health-latency-under-slow-git-push-and-64-mib-sweep-task-153-target):** inputs are the daemon async backup/push and streaming sweep execution paths; reusable only if untouched.
+    - **[Metric 4: Exchange `planRead` paged retrieval I/O over 10 MiB material](../implementation-tips/m11-qualification.md#24-metric-4-exchange-planread-paged-retrieval-io-over-10-mib-material-task-154-target):** inputs are the Exchange working store and `planRead` paths; reusable only if untouched.
+    - **[Metric 5: Cold spawn latency of compiled `sorage exchange renew`](../implementation-tips/m11-qualification.md#25-metric-5-cold-spawn-latency-of-compiled-sorage-exchange-renew-task-159-target):** inputs include `apps/cli/src/main.ts`, `apps/cli/src/program.ts`, all statically reachable CLI bundle modules under `apps/cli/src/**` (including `web.ts`, `daemon-commands.ts`, `commands/runtime.ts`, `commands/setup.ts`, `cli-output.ts`), and the `exchange renew` path. Because `TASK-174` modifies reachable CLI bundle modules, `TASK-175` MUST freshly re-measure Metric 5 (10 cold spawns after 1 warm-up at or below 1,000 ms median plus zero daemon initialization) on the combined compiled candidate.
+  - Any other drill or metric whose inputs change during implementation MUST likewise be freshly re-run rather than reused; every reused item MUST record the original `1723cfe` evidence, the diff audit proving unchanged domain inputs, and the explicit reuse limitation.
