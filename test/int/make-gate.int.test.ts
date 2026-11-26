@@ -9,7 +9,7 @@ const preparation = [
   "run check:toolchain",
   "run check:version",
   "run format",
-  "run build:web",
+  "run build:web -- --check",
   "run check:lint",
   "run check:typecheck",
   "run check:import-boundaries",
@@ -70,6 +70,7 @@ describe("the single make test gate", () => {
   it.each([
     "run check:toolchain",
     "run format",
+    "run build:web -- --check",
     "run check:cycles",
     "run test:unit",
     "run package",
