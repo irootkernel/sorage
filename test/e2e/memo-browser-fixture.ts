@@ -34,7 +34,7 @@ export async function memoBrowserFixture() {
   async function authenticate(target: Page = page, home = f.home) {
     const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
     if (web.status !== 0) throw new Error(web.stderr);
-    await target.goto((JSON.parse(web.stdout) as { url: string }).url);
+    await target.goto((JSON.parse(web.stdout) as { data: { url: string } }).data.url);
     await target.waitForSelector(".counts");
   }
   await authenticate();

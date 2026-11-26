@@ -44,7 +44,7 @@ beforeAll(async () => {
   cleanup.push(() => sorage(["daemon", "stop", "--json"], { home }));
   const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
   expect(web.status).toBe(0);
-  webUrl = (JSON.parse(web.stdout) as { url: string }).url;
+  webUrl = (JSON.parse(web.stdout) as { data: { url: string } }).data.url;
 });
 
 afterAll(() => {

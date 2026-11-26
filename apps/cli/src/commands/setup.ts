@@ -112,7 +112,7 @@ function runInitChoices(
           sorageHome: homePaths.home,
         }),
       startDaemon: () => {
-        const code = daemonStart(createDaemonRuntimePorts(), ports);
+        const code = daemonStart(createDaemonRuntimePorts(), { out: () => {}, err: ports.err }, { json });
         return code === 0 ? { ok: true } : { ok: false, exitCode: code };
       },
     },
@@ -354,7 +354,7 @@ export function registerSetupCommands(
       const json = globals.json === true;
       const uninstallPorts = createNodeUninstallPorts({
         stopDaemon: () => {
-          const code = daemonStop(createDaemonRuntimePorts(), ports);
+          const code = daemonStop(createDaemonRuntimePorts(), { out: () => {}, err: () => {} }, { json });
           // A non-zero stop leaves the daemon running, and the use case refuses
           // to remove live state from under it rather than reporting success.
           return code === 0

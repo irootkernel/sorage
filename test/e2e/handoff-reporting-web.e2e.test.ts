@@ -95,7 +95,7 @@ describe("versioned Web recipient reporting (AJ-31/32)", () => {
       try {
         const entry = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
         expect(entry.status).toBe(0);
-        await page.goto(JSON.parse(entry.stdout).url as string);
+        await page.goto(JSON.parse(entry.stdout).data.url as string);
         await page.waitForSelector(".counts");
         const id = send(`Report ${viewport.name}`);
         await open(page, id);
@@ -366,7 +366,7 @@ describe("versioned Web recipient reporting (AJ-31/32)", () => {
       try {
         const entry = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
         expect(entry.status).toBe(0);
-        await page.goto(JSON.parse(entry.stdout).url as string);
+        await page.goto(JSON.parse(entry.stdout).data.url as string);
         await page.waitForSelector(".counts");
         const id = send(`Conflict reporting ${viewport.name}`);
         await open(page, id);
@@ -531,7 +531,7 @@ describe("versioned Web recipient reporting (AJ-31/32)", () => {
     try {
       const entry = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
       expect(entry.status).toBe(0);
-      await page.goto(JSON.parse(entry.stdout).url as string);
+      await page.goto(JSON.parse(entry.stdout).data.url as string);
       await page.waitForSelector(".counts");
       // Same-document navigation retains this load state while the comment is pending.
       await page.waitForLoadState("networkidle");

@@ -1,10 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import type { AppError, Configuration, Result } from "@sorage/core";
-import { appError, errorEnvelope, errorSpec, sleepWithinDeadline } from "@sorage/core";
-import { createNodeDaemonPorts, type DaemonRunRecord } from "@sorage/adapters/src/daemon-command-ports";
-import { daemonStartAdmissionRefusal } from "@sorage/adapters/src/daemon-command-ports";
+import {
+  createNodeDaemonPorts,
+  type DaemonRunRecord,
+  daemonStartAdmissionRefusal,
+} from "@sorage/adapters/src/daemon-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
+import type { AppError, Configuration, Result } from "@sorage/core";
+import { appError, sleepWithinDeadline, successEnvelope } from "@sorage/core";
+import { renderAppError, requestId } from "./cli-output";
 import { selfInvocationArgv } from "./self-invocation";
 
 /**
@@ -84,20 +87,28 @@ export interface DaemonStatusPayload {
   restartRequired: boolean;
 }
 
-function fail(ports: DaemonCommandPorts, code: number, message: string, recovery?: string): number {
-  ports.err(
-    `${JSON.stringify({ ok: false, error: { code: "DAEMON_UNAVAILABLE", message, ...(recovery !== undefined ? { recovery: { suggestedCommand: recovery } } : {}) }, meta: { requestId: "daemon" } }, null, 2)}\n`,
-  );
-  return code;
+function withRecovery(code: Parameters<typeof appError>[0], message: string, suggestedCommand: string): AppError {
+  return { ...appError(code, message), recovery: { suggestedCommand } };
 }
 
-function configured(ports: DaemonRuntimePorts): { host: string; port: number; installationId: string } | null {
+function readConfigured(
+  ports: DaemonRuntimePorts,
+): Result<{ host: string; port: number; installationId: string }, AppError> {
   const config = ports.readConfiguration();
-  if (!config.ok || config.value === null) return null;
+  if (!config.ok) return config;
+  if (config.value === null) {
+    return {
+      ok: false,
+      error: withRecovery("NOT_INITIALIZED", "Sorage has not been initialized.", "sorage init"),
+    };
+  }
   return {
-    host: config.value.config.server.host,
-    port: config.value.config.server.port,
-    installationId: config.value.installationId,
+    ok: true,
+    value: {
+      host: config.value.config.server.host,
+      port: config.value.config.server.port,
+      installationId: config.value.installationId,
+    },
   };
 }
 
@@ -112,17 +123,26 @@ function liveDaemon(ports: DaemonRuntimePorts): DaemonRunRecord | null {
 export function daemonStart(
   runtime: DaemonRuntimePorts,
   ports: DaemonCommandPorts,
-  options: { startTimeoutMs?: number; now?: () => number; sleepMs?: (milliseconds: number) => void } = {},
+  options: {
+    json?: boolean;
+    startTimeoutMs?: number;
+    now?: () => number;
+    sleepMs?: (milliseconds: number) => void;
+  } = {},
 ): number {
-  const config = configured(runtime);
-  if (config === null) return fail(ports, 78, "Sorage has not been initialized.", "sorage init");
+  const json = options.json === true;
+  const configResult = readConfigured(runtime);
+  if (!configResult.ok) return renderAppError(configResult.error, ports, json);
+  const config = configResult.value;
   if (runtime.portHeld(config.host, config.port)) {
-    return renderDomainError(
+    return renderAppError(
+      withRecovery(
+        "PORT_IN_USE",
+        "the configured port is already bound",
+        "Stop the other listener, or change server.port and restart",
+      ),
       ports,
-      "PORT_IN_USE",
-      "the configured port is already bound",
-      75,
-      "Stop the other listener, or change server.port and restart",
+      json,
     );
   }
   // A confirmed unsupported database history is the one refusal the parent
@@ -132,7 +152,7 @@ export function daemonStart(
   // refusal surfaces — anything else keeps the original lifecycle behavior.
   const admission = runtime.historyAdmissionRefusal();
   if (admission !== null) {
-    return renderTypedRefusal(admission, ports);
+    return renderAppError(admission, ports, json);
   }
   runtime.spawnDaemon();
   const now = options.now ?? Date.now;
@@ -146,12 +166,21 @@ export function daemonStart(
     ready = runtime.healthConfirms(config.host, config.port, config.installationId);
   }
   if (!ready) {
-    return renderDomainError(ports, "DAEMON_UNAVAILABLE", "the daemon did not become ready", 69, "sorage daemon start");
+    return renderAppError(
+      withRecovery("DAEMON_UNAVAILABLE", "the daemon did not become ready", "sorage daemon start"),
+      ports,
+      json,
+    );
   }
   const record = runtime.readDaemonRecord();
-  ports.out(
-    `${JSON.stringify({ ok: true, data: { started: true, ...(record !== null ? { daemon: record } : {}) }, meta: { requestId: "daemon" } }, null, 2)}\n`,
-  );
+  const payload = { started: true, ...(record !== null ? { daemon: record } : {}) };
+  if (json) {
+    ports.out(`${JSON.stringify(successEnvelope(payload, requestId()), null, 2)}\n`);
+  } else if (record !== null) {
+    ports.out(`Daemon started (pid ${record.pid} at ${record.host}:${record.port}, version ${record.version}).\n`);
+  } else {
+    ports.out("Daemon started.\n");
+  }
   return 0;
 }
 
@@ -159,12 +188,17 @@ export function daemonStart(
 export function daemonStop(
   runtime: DaemonRuntimePorts,
   ports: DaemonCommandPorts,
-  options: { stopGraceMs?: number; now?: () => number; sleepMs?: (milliseconds: number) => void } = {},
+  options: { json?: boolean; stopGraceMs?: number; now?: () => number; sleepMs?: (milliseconds: number) => void } = {},
 ): number {
+  const json = options.json === true;
   const record = liveDaemon(runtime);
   if (record === null) {
     runtime.removeDaemonRecord();
-    return fail(ports, 69, "no live daemon record was found", "sorage daemon start");
+    return renderAppError(
+      withRecovery("DAEMON_UNAVAILABLE", "no live daemon record was found", "sorage daemon start"),
+      ports,
+      json,
+    );
   }
   runtime.signal(record.pid, "SIGTERM");
   const now = options.now ?? Date.now;
@@ -178,27 +212,45 @@ export function daemonStop(
     alive = runtime.isPidAlive(record.pid);
   }
   if (alive) {
-    return renderDomainError(
+    return renderAppError(
+      withRecovery(
+        "SERVICE_PAUSED",
+        "the daemon did not stop within the grace window",
+        "Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop",
+      ),
       ports,
-      "SERVICE_PAUSED",
-      "the daemon did not stop within the grace window",
-      75,
-      "Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop",
+      json,
     );
   }
   runtime.removeDaemonRecord();
-  ports.out(`${JSON.stringify({ ok: true, data: { stopped: true }, meta: { requestId: "daemon" } }, null, 2)}\n`);
+  if (json) {
+    ports.out(`${JSON.stringify(successEnvelope({ stopped: true }, requestId()), null, 2)}\n`);
+  } else {
+    ports.out("Daemon stopped.\n");
+  }
   return 0;
 }
 
 /** `sorage daemon restart`: the controlled restart a host or port change requires. */
-export function daemonRestart(runtime: DaemonRuntimePorts, ports: DaemonCommandPorts): number {
+export function daemonRestart(
+  runtime: DaemonRuntimePorts,
+  ports: DaemonCommandPorts,
+  options: {
+    json?: boolean;
+    stopGraceMs?: number;
+    startTimeoutMs?: number;
+    now?: () => number;
+    sleepMs?: (milliseconds: number) => void;
+  } = {},
+): number {
   const record = liveDaemon(runtime);
   if (record !== null) {
-    const stopped = daemonStop(runtime, ports);
+    // Suppress intermediate stop stdout so restart emits only the final start result
+    // on success, while still surfacing a stop failure cleanly on stderr.
+    const stopped = daemonStop(runtime, { out: () => {}, err: ports.err }, options);
     if (stopped !== 0) return stopped;
   }
-  return daemonStart(runtime, ports);
+  return daemonStart(runtime, ports, options);
 }
 
 /** `sorage daemon status`: discovery through `run/daemon.json` and health. */
@@ -207,29 +259,37 @@ export function daemonStatus(
   ports: DaemonCommandPorts,
   options: { json: boolean },
 ): number {
-  const config = configured(runtime);
-  if (config === null) return fail(ports, 78, "Sorage has not been initialized.", "sorage init");
+  const json = options.json;
+  const configResult = readConfigured(runtime);
+  if (!configResult.ok) return renderAppError(configResult.error, ports, json);
+  const config = configResult.value;
   const record = liveDaemon(runtime);
   if (record === null) {
     runtime.removeDaemonRecord();
-    return fail(ports, 69, "no live daemon record was found", "sorage daemon start");
+    return renderAppError(
+      withRecovery("DAEMON_UNAVAILABLE", "no live daemon record was found", "sorage daemon start"),
+      ports,
+      json,
+    );
   }
   // Health is confirmed at the address the record says the daemon listens on; the
   // configuration may have moved on to a new host or port, which is exactly the
   // restart requirement reported below (RUN-008).
   if (!runtime.healthConfirms(record.host, record.port, config.installationId)) {
-    return renderDomainError(
+    return renderAppError(
+      withRecovery(
+        "DAEMON_UNAVAILABLE",
+        "run/daemon.json names a daemon that does not answer health with this installationId",
+        "sorage daemon start",
+      ),
       ports,
-      "DAEMON_UNAVAILABLE",
-      "run/daemon.json names a daemon that does not answer health with this installationId",
-      69,
-      "sorage daemon start",
+      json,
     );
   }
   const restartRequired = record.host !== config.host || record.port !== config.port;
   const payload: DaemonStatusPayload = { daemon: record, restartRequired };
-  if (options.json) {
-    ports.out(`${JSON.stringify({ ok: true, data: payload, meta: { requestId: "daemon" } }, null, 2)}\n`);
+  if (json) {
+    ports.out(`${JSON.stringify(successEnvelope(payload, requestId()), null, 2)}\n`);
   } else {
     ports.out(
       `daemon pid ${record.pid} at ${record.host}:${record.port} (version ${record.version})\n` +
@@ -239,25 +299,4 @@ export function daemonStatus(
     );
   }
   return 0;
-}
-
-function renderDomainError(
-  ports: DaemonCommandPorts,
-  code: Parameters<typeof appError>[0],
-  message: string,
-  exit: number,
-  recovery: string,
-): number {
-  const error = appError(code, message);
-  const envelope = errorEnvelope(error, randomUUID());
-  envelope.error.recovery = { suggestedCommand: recovery };
-  ports.err(`${JSON.stringify(envelope, null, 2)}\n`);
-  return exit;
-}
-
-/** Renders one established typed admission refusal with its documented exit code and recovery. */
-function renderTypedRefusal(error: AppError, ports: DaemonCommandPorts): number {
-  const envelope = errorEnvelope(error, randomUUID());
-  ports.err(`${JSON.stringify(envelope, null, 2)}\n`);
-  return errorSpec(error.code).exitCode;
 }

@@ -19,9 +19,9 @@ type DaemonAction = "start" | "stop" | "restart" | "status";
 function runDaemonCommand(action: DaemonAction, ports: OutputPorts, options = { json: false }): number {
   const runtime = createDaemonRuntimePorts();
   const sinks = { out: ports.out, err: ports.err };
-  if (action === "start") return daemonStart(runtime, sinks);
-  if (action === "stop") return daemonStop(runtime, sinks);
-  if (action === "restart") return daemonRestart(runtime, sinks);
+  if (action === "start") return daemonStart(runtime, sinks, { json: options.json });
+  if (action === "stop") return daemonStop(runtime, sinks, { json: options.json });
+  if (action === "restart") return daemonRestart(runtime, sinks, { json: options.json });
   return daemonStatus(runtime, sinks, { json: options.json });
 }
 
@@ -53,32 +53,36 @@ export function registerRuntimeCommands(
     .description("start the daemon and confirm it through health")
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
-      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
-      reportExitCode(runDaemonCommand("start", ports));
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("start", ports, { json }));
     });
   daemon
     .command("stop")
     .description("stop the daemon after a graceful drain of in-flight requests")
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
-      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
-      reportExitCode(runDaemonCommand("stop", ports));
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("stop", ports, { json }));
     });
   daemon
     .command("restart")
     .description("stop and start again; required after a server.host or server.port change")
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
-      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
-      reportExitCode(runDaemonCommand("restart", ports));
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("restart", ports, { json }));
     });
   daemon
     .command("status")
     .description("read run/daemon.json and verify installationId through health")
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
-      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
-      reportExitCode(runDaemonCommand("status", ports, { json: globals.json === true }));
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
+      reportExitCode(runDaemonCommand("status", ports, { json }));
     });
   daemon
     .command("serve", { hidden: true })
@@ -89,9 +93,10 @@ export function registerRuntimeCommands(
     .description("start the daemon when needed and open the Web control plane with a one-time session secret")
     .action((_options, command) => {
       const globals = command.optsWithGlobals();
-      if (!requireInitialized(ports, globals.json === true, reportExitCode)) return;
+      const json = globals.json === true;
+      if (!requireInitialized(ports, json, reportExitCode)) return;
       const home = createNodeHomePaths();
-      const code = runWebCommand(createWebRuntimePorts(home.stateDir), ports, { openBrowser: true });
+      const code = runWebCommand(createWebRuntimePorts(home.stateDir), ports, { openBrowser: true, json });
       reportExitCode(code);
     });
 

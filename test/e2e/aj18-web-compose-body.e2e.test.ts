@@ -68,7 +68,7 @@ describe("AJ-18 User creates a Handoff from Web compose body text", () => {
     const page = await browser.newPage();
     const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
     expect(web.status).toBe(0);
-    await page.goto((JSON.parse(web.stdout) as { url: string }).url);
+    await page.goto((JSON.parse(web.stdout) as { data: { url: string } }).data.url);
     await page.waitForFunction(() => window.document.querySelector("#session-note")?.textContent === "");
 
     await page.goto(`http://127.0.0.1:${port}/#/compose`);
@@ -178,7 +178,7 @@ describe("AJ-18 User creates a Handoff from Web compose body text", () => {
       await page.addInitScript(() => Reflect.set(window, "__artifactXss", false));
       const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
       expect(web.status).toBe(0);
-      await page.goto(JSON.parse(web.stdout).url);
+      await page.goto(JSON.parse(web.stdout).data.url);
       await page.waitForFunction(() => document.querySelector("#session-note")?.textContent === "");
       await page.goto(`http://127.0.0.1:${port}/#/compose`);
       const body =
@@ -254,7 +254,7 @@ describe("AJ-18 User creates a Handoff from Web compose body text", () => {
       const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
       const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
       expect(web.status, web.stderr).toBe(0);
-      await page.goto((JSON.parse(web.stdout) as { url: string }).url);
+      await page.goto((JSON.parse(web.stdout) as { data: { url: string } }).data.url);
       await page.waitForFunction(() => document.querySelector("#session-note")?.textContent === "");
 
       const createdByViewport = new Map<string, string[]>();

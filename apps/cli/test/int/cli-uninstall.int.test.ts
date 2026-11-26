@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { mkdtempSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -128,4 +128,44 @@ describe("sorage uninstall", () => {
     const envelope = JSON.parse(io.out.join("")) as { data: { retainedVaultPath: string } };
     expect(envelope.data.retainedVaultPath).toBe(vault);
   });
+
+  it("suppresses child daemonStop stderr and emits one DAEMON_UNAVAILABLE envelope when stopping the daemon fails", () => {
+    const home = tempHome("sorage-uninstall-stopfail-");
+    const vault = join(home, "keep-vault");
+    const init = capture();
+    expect(runCli(["init", "--vault", vault, "--non-interactive", "--json"], init.ports)).toBe(0);
+    // Spawn a child that ignores SIGTERM so daemonStop exhausts its grace window.
+    const stubborn = spawn("/bin/sh", ["-c", 'trap "" TERM; sleep 20'], { stdio: "ignore" });
+    try {
+      mkdirSync(join(home, "run"), { recursive: true });
+      writeFileSync(
+        join(home, "run", "daemon.json"),
+        JSON.stringify({
+          pid: stubborn.pid,
+          host: "127.0.0.1",
+          port: 46321,
+          startedAt: new Date().toISOString(),
+          version: "0.1.5",
+          installationId: "1f0ac9a0-0000-4000-8000-0000000000cc",
+        }),
+      );
+      const io = capture();
+      const code = withTempUserHome(() => runCli(["uninstall", "--as-user", "--confirm", "--json"], io.ports));
+      expect(code).toBe(69);
+      expect(io.out.join("")).toBe("");
+      // Exactly one JSON error envelope on stderr (no child SERVICE_PAUSED envelope).
+      const envelope = JSON.parse(io.err.join(""));
+      expect(envelope).toMatchObject({
+        ok: false,
+        error: {
+          code: "DAEMON_UNAVAILABLE",
+          message: "sorage daemon stop did not end the daemon.",
+          details: {},
+        },
+      });
+      expect(io.err.join("")).not.toContain("SERVICE_PAUSED");
+    } finally {
+      stubborn.kill("SIGKILL");
+    }
+  }, 20000);
 });

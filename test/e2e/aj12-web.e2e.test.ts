@@ -92,7 +92,9 @@ beforeAll(async () => {
   // sorage web issues the one-time secret and prints the fragment URL.
   const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
   expect(web.status).toBe(0);
-  const url = (JSON.parse(web.stdout) as { url: string }).url;
+  const webEnvelope = JSON.parse(web.stdout) as { ok: true; data: { url: string }; meta: { requestId: string } };
+  expect(webEnvelope.ok).toBe(true);
+  const url = webEnvelope.data.url;
   secret = /#s=(.+)$/.exec(url)?.[1] ?? "";
   expect(secret).not.toBe("");
 
@@ -114,7 +116,7 @@ describe("AJ-12 web session and the local network boundary", () => {
     // 1-2. The browser opens the fragment URL and the SPA exchanges the secret.
     // A fresh secret: the one used above is already spent, so issue another.
     const second = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
-    const secondUrl = (JSON.parse(second.stdout) as { url: string }).url;
+    const secondUrl = (JSON.parse(second.stdout) as { data: { url: string } }).data.url;
     await page.goto(secondUrl);
     await page.waitForFunction(() => window.document.querySelector("#session-note")?.textContent === "");
     expect(await page.evaluate(() => sessionStorage.getItem("sorage-session"))).toBeTruthy();
@@ -257,7 +259,7 @@ describe("T130-R1-001 existing Web proposal retention", () => {
       const id = JSON.parse(sent.stdout).data.handoffs[0].handoffId as string;
       const entry = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
       expect(entry.status, entry.stderr).toBe(0);
-      await page.goto(JSON.parse(entry.stdout).url as string);
+      await page.goto(JSON.parse(entry.stdout).data.url as string);
       await page.waitForSelector(".counts");
       const detailUrl = `http://127.0.0.1:${port}/#/handoff/${id}`;
       await page.goto(detailUrl);

@@ -73,7 +73,7 @@ describe("the Web backup page and the Backup Health card", () => {
     const page = await browser.newPage();
 
     const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
-    const url = (JSON.parse(web.stdout) as { url: string }).url;
+    const url = (JSON.parse(web.stdout) as { data: { url: string } }).data.url;
     await page.goto(url);
     await page.waitForSelector(".counts");
 

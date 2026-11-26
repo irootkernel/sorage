@@ -1,0 +1,157 @@
+{
+  "webSuccessAlreadyRunningJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"url\": \"http://127.0.0.1:46321/#s=SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\",\n    \"daemonStarted\": false,\n    \"expiresAt\": \"2026-11-26T12:05:00.000Z\",\n    \"note\": \"the fragment secret is single-use and expires; run sorage web again for a fresh one\"\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "webSuccessAlreadyRunningHuman": {
+    "exitCode": 0,
+    "stdout": "Web control plane: http://127.0.0.1:46321/#s=SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\nDaemon: already running\nExpires: 2026-11-26T12:05:00.000Z\nNote: the fragment secret is single-use and expires; run sorage web again for a fresh one\n",
+    "stderr": ""
+  },
+  "webSuccessStartedDaemonJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"url\": \"http://127.0.0.1:46321/#s=SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\",\n    \"daemonStarted\": true,\n    \"expiresAt\": \"2026-11-26T12:05:00.000Z\",\n    \"note\": \"the fragment secret is single-use and expires; run sorage web again for a fresh one\"\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "webSuccessStartedDaemonHuman": {
+    "exitCode": 0,
+    "stdout": "Web control plane: http://127.0.0.1:46321/#s=SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS\nDaemon: started\nExpires: 2026-11-26T12:05:00.000Z\nNote: the fragment secret is single-use and expires; run sorage web again for a fresh one\n",
+    "stderr": ""
+  },
+  "webFailureDaemonUnavailableJson": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"the daemon did not become ready\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "webFailureDaemonUnavailableHuman": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "DAEMON_UNAVAILABLE: the daemon did not become ready\nRecovery: sorage daemon start\n"
+  },
+  "webFailureConfigInvalidJson": {
+    "exitCode": 78,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"CONFIG_INVALID\",\n    \"message\": \"invalid server.port\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage config validate\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "webFailureInternalErrorJson": {
+    "exitCode": 1,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"failed to issue web secret\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Inspect meta.requestId in logs/sorage.log under the selected Sorage home (SORAGE_HOME, otherwise ~/.sorage). If no log was written, retain the request id and this output for diagnosis\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStartSuccessJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"started\": true,\n    \"daemon\": {\n      \"pid\": 4242,\n      \"host\": \"127.0.0.1\",\n      \"port\": 46321,\n      \"startedAt\": \"2026-11-26T12:00:00.000Z\",\n      \"version\": \"0.1.5\",\n      \"installationId\": \"1f0ac9a0-0000-4000-8000-0000000000cc\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "daemonStartSuccessHumanWithRecord": {
+    "exitCode": 0,
+    "stdout": "Daemon started (pid 4242 at 127.0.0.1:46321, version 0.1.5).\n",
+    "stderr": ""
+  },
+  "daemonStartSuccessHumanWithoutRecord": {
+    "exitCode": 0,
+    "stdout": "Daemon started.\n",
+    "stderr": ""
+  },
+  "daemonStartFailureNotInitializedJson": {
+    "exitCode": 78,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"NOT_INITIALIZED\",\n    \"message\": \"Sorage has not been initialized.\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage init\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStartFailureConfigInvalidJson": {
+    "exitCode": 78,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"CONFIG_INVALID\",\n    \"message\": \"corrupt config\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage config validate\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStartFailurePortInUseJson": {
+    "exitCode": 75,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"PORT_IN_USE\",\n    \"message\": \"the configured port is already bound\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Stop the other listener, or change server.port and restart\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStartFailureSchemaUnsupportedJson": {
+    "exitCode": 78,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"STORAGE_SCHEMA_UNSUPPORTED\",\n    \"message\": \"future schema 99\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Retain the original send material and use a Sorage version supporting this storage layout\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStartFailureDaemonUnavailableJson": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"the daemon did not become ready\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStopSuccessJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"stopped\": true\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "daemonStopSuccessHuman": {
+    "exitCode": 0,
+    "stdout": "Daemon stopped.\n",
+    "stderr": ""
+  },
+  "daemonStopFailureNoRecordJson": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"no live daemon record was found\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStopFailureServicePausedJson": {
+    "exitCode": 75,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"SERVICE_PAUSED\",\n    \"message\": \"the daemon did not stop within the grace window\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStopFailureServicePausedHuman": {
+    "exitCode": 75,
+    "stdout": "",
+    "stderr": "SERVICE_PAUSED: the daemon did not stop within the grace window\nRecovery: Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop\n"
+  },
+  "daemonRestartSuccessJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"started\": true,\n    \"daemon\": {\n      \"pid\": 4242,\n      \"host\": \"127.0.0.1\",\n      \"port\": 46321,\n      \"startedAt\": \"2026-11-26T12:00:00.000Z\",\n      \"version\": \"0.1.5\",\n      \"installationId\": \"1f0ac9a0-0000-4000-8000-0000000000cc\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "daemonRestartSuccessHuman": {
+    "exitCode": 0,
+    "stdout": "Daemon started (pid 4242 at 127.0.0.1:46321, version 0.1.5).\n",
+    "stderr": ""
+  },
+  "daemonRestartFailureStopFailedJson": {
+    "exitCode": 75,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"SERVICE_PAUSED\",\n    \"message\": \"the daemon did not stop within the grace window\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStatusSuccessUpToDateJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"daemon\": {\n      \"pid\": 4242,\n      \"host\": \"127.0.0.1\",\n      \"port\": 46321,\n      \"startedAt\": \"2026-11-26T12:00:00.000Z\",\n      \"version\": \"0.1.5\",\n      \"installationId\": \"1f0ac9a0-0000-4000-8000-0000000000cc\"\n    },\n    \"restartRequired\": false\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "daemonStatusSuccessUpToDateHuman": {
+    "exitCode": 0,
+    "stdout": "daemon pid 4242 at 127.0.0.1:46321 (version 0.1.5)\nup to date with the configuration\n",
+    "stderr": ""
+  },
+  "daemonStatusSuccessRestartRequiredJson": {
+    "exitCode": 0,
+    "stdout": "{\n  \"ok\": true,\n  \"data\": {\n    \"daemon\": {\n      \"pid\": 4242,\n      \"host\": \"127.0.0.1\",\n      \"port\": 46322,\n      \"startedAt\": \"2026-11-26T12:00:00.000Z\",\n      \"version\": \"0.1.5\",\n      \"installationId\": \"1f0ac9a0-0000-4000-8000-0000000000cc\"\n    },\n    \"restartRequired\": true\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n",
+    "stderr": ""
+  },
+  "daemonStatusSuccessRestartRequiredHuman": {
+    "exitCode": 0,
+    "stdout": "daemon pid 4242 at 127.0.0.1:46322 (version 0.1.5)\na configuration change requires sorage daemon restart\n",
+    "stderr": ""
+  },
+  "daemonStatusFailureNoRecordJson": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"no live daemon record was found\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStatusFailureNoRecordHuman": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "DAEMON_UNAVAILABLE: no live daemon record was found\nRecovery: sorage daemon start\n"
+  },
+  "daemonStatusFailureHealthMismatchJson": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"run/daemon.json names a daemon that does not answer health with this installationId\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  }
+}

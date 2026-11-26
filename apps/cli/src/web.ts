@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
-import { showConfiguration, sleepWithinDeadline, SystemClock } from "@sorage/core";
-import type { AppError, Configuration, Result } from "@sorage/core";
 import { createNodeConfigCommandPorts } from "@sorage/adapters/src/config-command-ports";
 import { blockingSleepMs } from "@sorage/adapters/src/sleep";
 import { createNodeWebSecretStore } from "@sorage/adapters/src/token-store";
+import type { AppError, Configuration, Result } from "@sorage/core";
+import { appError, showConfiguration, sleepWithinDeadline, successEnvelope, SystemClock } from "@sorage/core";
+import { renderAppError, requestId } from "./cli-output";
 import { selfInvocation } from "./self-invocation";
 
 /**
@@ -79,21 +80,24 @@ export interface WebOutcome {
   expiresAt: string;
 }
 
+const WEB_SECRET_NOTE = "the fragment secret is single-use and expires; run sorage web again for a fresh one";
+
 /** Runs `sorage web`: the daemon answers, the secret exists, and the browser opens. */
 export function runWebCommand(
   ports: WebRuntimePorts,
   output: WebCommandPorts,
   options: {
     openBrowser: boolean;
+    json?: boolean;
     startTimeoutMs?: number;
     now?: () => number;
     sleepMs?: (milliseconds: number) => void;
   },
 ): number {
+  const json = options.json === true;
   const config = ports.readConfig();
   if (!config.ok) {
-    output.err(`CONFIG_INVALID: ${config.error.message}\n`);
-    return 78;
+    return renderAppError(config.error, output, json);
   }
   const { host, port } = config.value.server;
   let daemonStarted = false;
@@ -111,31 +115,48 @@ export function runWebCommand(
       ready = ports.probeDaemon(host, port);
     }
     if (!ready) {
-      output.err("DAEMON_UNAVAILABLE: the daemon did not become ready\nRecovery: sorage daemon start\n");
-      return 69;
+      return renderAppError(
+        {
+          ...appError("DAEMON_UNAVAILABLE", "the daemon did not become ready"),
+          recovery: { suggestedCommand: "sorage daemon start" },
+        },
+        output,
+        json,
+      );
     }
   }
   const secret = ports.issueSecret();
   if (!secret.ok) {
-    output.err(`INTERNAL_ERROR: ${secret.error.message}\n`);
-    return 1;
+    return renderAppError(secret.error, output, json);
   }
   // The URL must name the address the daemon actually bound: an IPv6 loopback bind
   // is only reachable in bracketed form.
   const authority = config.value.server.host === "::1" ? `[::1]:${port}` : `127.0.0.1:${port}`;
   const url = `http://${authority}/#s=${secret.value.secret}`;
   if (options.openBrowser) ports.openBrowser(url);
-  output.out(
-    `${JSON.stringify(
-      {
-        url,
-        daemonStarted,
-        expiresAt: secret.value.expiresAt,
-        note: "the fragment secret is single-use and expires; run sorage web again for a fresh one",
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  if (json) {
+    output.out(
+      `${JSON.stringify(
+        successEnvelope(
+          {
+            url,
+            daemonStarted,
+            expiresAt: secret.value.expiresAt,
+            note: WEB_SECRET_NOTE,
+          },
+          requestId(),
+        ),
+        null,
+        2,
+      )}\n`,
+    );
+  } else {
+    output.out(
+      `Web control plane: ${url}\n` +
+        `Daemon: ${daemonStarted ? "started" : "already running"}\n` +
+        `Expires: ${secret.value.expiresAt}\n` +
+        `Note: ${WEB_SECRET_NOTE}\n`,
+    );
+  }
   return 0;
 }

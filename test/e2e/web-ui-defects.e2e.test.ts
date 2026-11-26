@@ -189,7 +189,7 @@ async function openAuthenticatedPage(viewport: { width: number; height: number }
   });
   const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
   expect(web.status, web.stderr).toBe(0);
-  const url = (JSON.parse(web.stdout) as { url: string }).url;
+  const url = (JSON.parse(web.stdout) as { data: { url: string } }).data.url;
   await page.goto(url);
   await page.waitForSelector(".counts");
   return { browser, page, pageErrors, consoleErrors };
