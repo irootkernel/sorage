@@ -587,4 +587,196 @@ describe("browser upload (API-003, NFR-005)", () => {
     });
     expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
   });
+
+  it("rejects body-only uploads with missing, empty, or whitespace-only titles without creating a Handoff or spool", async () => {
+    const listIds = async (): Promise<string[]> => {
+      const listing = await new Promise<string>((resolve, reject) => {
+        const outgoing = httpRequest(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/api/v1/handoffs?asUser=true&includeArchived=true&limit=200",
+            method: "GET",
+            headers: { host: `127.0.0.1:${port}`, authorization: `Bearer ${apiToken}` },
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+          },
+        );
+        outgoing.on("error", reject);
+        outgoing.end();
+      });
+      return (json({ body: listing }).data.handoffs as Array<{ id: string }>).map((entry) => entry.id);
+    };
+
+    const beforeIds = await listIds();
+    const cases: Array<{ label: string; parts: Array<{ name: string; filename?: string; value: string | Buffer }> }> = [
+      {
+        label: "missing title",
+        parts: [
+          { name: "to", value: "web-app" },
+          { name: "body", value: "# No title provided\n" },
+        ],
+      },
+      {
+        label: "empty title",
+        parts: [
+          { name: "title", value: "" },
+          { name: "to", value: "web-app" },
+          { name: "body", value: "# Empty title provided\n" },
+        ],
+      },
+      {
+        label: "whitespace title",
+        parts: [
+          { name: "title", value: "  \t\n  " },
+          { name: "to", value: "web-app" },
+          { name: "body", value: "# Whitespace title provided\n" },
+        ],
+      },
+    ];
+    for (const trial of cases) {
+      const response = await upload("/api/v1/handoffs/upload", { bearer: sessionToken, parts: trial.parts });
+      expect(response.status, trial.label).toBe(422);
+      expect(json(response).error.code, trial.label).toBe("CONFIG_INVALID");
+      expect(json(response).error.message, trial.label).toContain("title");
+      expect(readdirSync(join(home, "state", "uploads")), trial.label).toEqual([]);
+    }
+    expect(await listIds()).toEqual(beforeIds);
+
+    // File uploads without an explicit title still preserve the filename fallback.
+    const fallback = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      parts: [
+        { name: "to", value: "web-app" },
+        { name: "file", filename: "fallback-name.md", value: "# Filename fallback\n" },
+      ],
+    });
+    expect(fallback.status).toBe(201);
+    const fallbackId = json(fallback).data.handoffs[0].handoffId as string;
+    const afterIds = await listIds();
+    expect(afterIds.filter((id) => !beforeIds.includes(id))).toEqual([fallbackId]);
+    const detail = await new Promise<string>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: `/api/v1/handoffs/${fallbackId}?asUser=true`,
+          method: "GET",
+          headers: { host: `127.0.0.1:${port}`, authorization: `Bearer ${apiToken}` },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        },
+      );
+      outgoing.on("error", reject);
+      outgoing.end();
+    });
+    const detailData = json({ body: detail }).data as { title: string; currentArtifact: { originalName: string } };
+    expect(detailData.title).toBe("fallback-name.md");
+    expect(detailData.currentArtifact.originalName).toBe("fallback-name.md");
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
+  });
+
+  it("rejects an at-limit whitespace-only body, accepts chunk-split multi-byte UTF-8, and preserves keyed oversized refusal and replay", async () => {
+    // At-limit (2048-byte) whitespace-only body fails CONFIG_INVALID and leaves no spool.
+    const largeWhitespace = " \t\n ".repeat(artifactMaxBytes / 4);
+    expect(Buffer.byteLength(largeWhitespace, "utf8")).toBe(artifactMaxBytes);
+    const whitespaceResponse = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      parts: [
+        { name: "title", value: "At Limit Whitespace" },
+        { name: "to", value: "web-app" },
+        { name: "body", value: largeWhitespace },
+      ],
+    });
+    expect(whitespaceResponse.status).toBe(422);
+    expect(json(whitespaceResponse).error.code).toBe("CONFIG_INVALID");
+    expect(json(whitespaceResponse).error.message).toContain("empty after trimming");
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
+
+    // Valid split multi-byte UTF-8 streamed across TCP writes creates a byte-identical Handoff.
+    const unicodeBody = "\u3000# 다국어 핸드오프 🚀\n\nchunk-boundary UTF-8\n";
+    const { body: unicodeWire, contentType: unicodeType } = multipart([
+      { name: "title", value: "Unicode Chunked" },
+      { name: "to", value: "web-app" },
+      { name: "body", value: unicodeBody },
+    ]);
+    const unicodeResponse = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const outgoing = httpRequest(
+        {
+          host: "127.0.0.1",
+          port,
+          path: "/api/v1/handoffs/upload",
+          method: "POST",
+          headers: {
+            host: `127.0.0.1:${port}`,
+            authorization: `Bearer ${sessionToken}`,
+            "content-type": unicodeType,
+            "content-length": String(unicodeWire.length),
+          },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () =>
+            resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+          );
+        },
+      );
+      outgoing.on("error", reject);
+      // Exercise end-to-end multi-byte UTF-8 round-trip over small socket writes
+      // (deterministic 1-byte decoder chunk splits are verified in upload.unit.test.ts).
+      for (let offset = 0; offset < unicodeWire.length; offset += 3) {
+        outgoing.write(unicodeWire.subarray(offset, Math.min(offset + 3, unicodeWire.length)));
+      }
+      outgoing.end();
+    });
+    expect(unicodeResponse.status).toBe(201);
+    const createdId = json(unicodeResponse).data.handoffs[0].handoffId as string;
+    expect((await contentOf(createdId)).toString("utf8")).toBe(unicodeBody);
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
+
+    // Oversized keyed body request fails 413 ARTIFACT_TOO_LARGE without leaving a spool or receipt,
+    // so a subsequent valid request with the same Idempotency-Key succeeds and replays cleanly.
+    const key = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+    const oversizedBody = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      idempotencyKey: key,
+      parts: [
+        { name: "title", value: "Oversized Keyed Body" },
+        { name: "to", value: "web-app" },
+        { name: "body", value: " ".repeat(artifactMaxBytes + 512) },
+      ],
+    });
+    expect(oversizedBody.status).toBe(413);
+    expect(json(oversizedBody).error.code).toBe("ARTIFACT_TOO_LARGE");
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
+
+    const validParts = [
+      { name: "title", value: "Recovered Keyed Body" },
+      { name: "to", value: "web-app" },
+      { name: "body", value: "# Recovered after 413\n" },
+    ];
+    const first = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      idempotencyKey: key,
+      parts: validParts,
+    });
+    expect(first.status).toBe(201);
+    const replay = await upload("/api/v1/handoffs/upload", {
+      bearer: sessionToken,
+      idempotencyKey: key,
+      parts: validParts,
+      boundary: "recovered-body-replay-boundary",
+    });
+    expect(replay.status).toBe(201);
+    expect(json(replay).data.replayed).toBe(true);
+    expect(json(replay).data.handoffs[0].handoffId).toBe(json(first).data.handoffs[0].handoffId);
+    expect(readdirSync(join(home, "state", "uploads"))).toEqual([]);
+  });
 });

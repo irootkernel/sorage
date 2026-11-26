@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { appError, type AppError } from "@sorage/core";
 import type { IncomingMessage } from "node:http";
@@ -15,10 +15,12 @@ import {
  * NFR-005), a thin Handoff policy over the shared multipart engine using
  * `push-sink`: a file part and a `body` field are mutually exclusive by
  * presence, every streamed part is spooled under `state/uploads` with the
- * mid-stream `artifact.maxBytes` abort, and the closing validation keeps the
- * original empty-after-trim body check and error wording. The engine owns all
- * framing mechanics; this wrapper owns spool persistence, cleanup, Handoff
- * domain rules, and existing error categories.
+ * mid-stream `artifact.maxBytes` abort, and `body` UTF-8 validity and
+ * non-whitespace presence are tracked incrementally inside the `body`
+ * push-sink during streaming (with zero post-stream disk rescan) and evaluated
+ * in `onComplete` so the original error wording and precedence hold. The engine
+ * owns all framing mechanics; this wrapper owns spool persistence, cleanup,
+ * Handoff domain rules, and existing error categories.
  */
 
 export interface UploadedPart {
@@ -40,7 +42,6 @@ export interface MultipartUploadResult {
 
 const TEXT_FIELD_BOUND_BYTES = 65_536;
 const HEADER_BOUND_BYTES = 16_384;
-const SCAN_BUFFER_BYTES = 64 * 1024;
 
 /** Streams one multipart/form-data body, spooling a file part or a `body` field to disk. */
 export function consumeMultipartUpload(
@@ -51,6 +52,7 @@ export function consumeMultipartUpload(
   let file: UploadedPart | null = null;
   let body: UploadedPart | null = null;
   let bodyPresent = false;
+  let bodyValidation: "valid" | "empty" | "invalid-utf8" = "empty";
   let activeSink: MultipartPushSink | null = null;
   let cleaned = false;
 
@@ -69,6 +71,9 @@ export function consumeMultipartUpload(
         error: appError("INTERNAL_ERROR", "opening the uploaded spool failed", { cause: String(error) }),
       };
     }
+    const bodyDecoder = header.name === "body" ? new TextDecoder("utf-8", { fatal: true }) : null;
+    let bodyHasNonWhitespace = false;
+    let bodyInvalidUtf8 = false;
     let sinkError: AppError | null = null;
     let removed = false;
 
@@ -96,6 +101,16 @@ export function consumeMultipartUpload(
     const sink: MultipartPushSink = {
       write(chunk: Buffer) {
         if (sinkError !== null || fd === null || chunk.length === 0) return;
+        if (bodyDecoder !== null && !bodyInvalidUtf8) {
+          try {
+            const text = bodyDecoder.decode(chunk, { stream: true });
+            if (!bodyHasNonWhitespace && text.trim() !== "") {
+              bodyHasNonWhitespace = true;
+            }
+          } catch {
+            bodyInvalidUtf8 = true;
+          }
+        }
         try {
           let offset = 0;
           while (offset < chunk.length) {
@@ -116,6 +131,16 @@ export function consumeMultipartUpload(
           removeSpool();
           return sinkError;
         }
+        if (bodyDecoder !== null && !bodyInvalidUtf8) {
+          try {
+            const flushed = bodyDecoder.decode();
+            if (!bodyHasNonWhitespace && flushed.trim() !== "") {
+              bodyHasNonWhitespace = true;
+            }
+          } catch {
+            bodyInvalidUtf8 = true;
+          }
+        }
         const uploaded: UploadedPart = {
           field: header.name,
           filename: header.filename ?? (header.name === "body" ? "body.md" : "upload"),
@@ -123,8 +148,12 @@ export function consumeMultipartUpload(
           bytes: totalBytes,
           sha256,
         };
-        if (header.name === "body") body = uploaded;
-        else file = uploaded;
+        if (header.name === "body") {
+          body = uploaded;
+          bodyValidation = bodyInvalidUtf8 ? "invalid-utf8" : bodyHasNonWhitespace ? "valid" : "empty";
+        } else {
+          file = uploaded;
+        }
         return null;
       },
       abort() {
@@ -206,11 +235,10 @@ export function consumeMultipartUpload(
         if (body === null) {
           return { ok: false, error: appError("CONFIG_INVALID", "the body field is empty after trimming") };
         }
-        const emptiness = utf8EmptyAfterTrim((body as UploadedPart).path);
-        if (!emptiness.ok) {
-          return { ok: false, error: emptiness.error };
+        if (bodyValidation === "invalid-utf8") {
+          return { ok: false, error: appError("CONFIG_INVALID", "the body field is not valid UTF-8 text") };
         }
-        if (emptiness.empty) {
+        if (bodyValidation === "empty") {
           return { ok: false, error: appError("CONFIG_INVALID", "the body field is empty after trimming") };
         }
         if (!spoolSurvives((body as UploadedPart).path)) {
@@ -268,32 +296,4 @@ export function consumeMultipartUpload(
   }
 
   return streamMultipart(request, policy);
-}
-
-/** True when the UTF-8 file is empty after JavaScript `trim()`, scanned with a bounded buffer. */
-export function utf8EmptyAfterTrim(path: string): { ok: true; empty: boolean } | { ok: false; error: AppError } {
-  try {
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    const handle = openSync(path, "r");
-    try {
-      const buffer = Buffer.alloc(SCAN_BUFFER_BYTES);
-      for (;;) {
-        const read_ = readSync(handle, buffer, 0, SCAN_BUFFER_BYTES, null);
-        if (read_ === 0) break;
-        const text = decoder.decode(buffer.subarray(0, read_), { stream: true });
-        for (const character of text) {
-          if (character.trim() !== "") return { ok: true, empty: false };
-        }
-      }
-      const flushed = decoder.decode();
-      for (const character of flushed) {
-        if (character.trim() !== "") return { ok: true, empty: false };
-      }
-      return { ok: true, empty: true };
-    } finally {
-      closeSync(handle);
-    }
-  } catch {
-    return { ok: false, error: appError("CONFIG_INVALID", "the body field is not valid UTF-8 text") };
-  }
 }
