@@ -19,22 +19,22 @@ Milestone values come from the specification and name the release gate at whose 
 | GEN-001 to GEN-015 | M1, M2, M4 | `TASK-005`, `TASK-008`, `TASK-051`, `TASK-080`, `TASK-082`, `TASK-103`, `TASK-125`, `TASK-001` to `TASK-002`, `TASK-039` to `TASK-042`, `TASK-064` to `TASK-065`, `TASK-136`, `TASK-138`, `TASK-160` | AJ-01, AJ-02, AJ-16, AJ-17, AJ-26; the dependency-boundary check in `make test-prepare` and the clean-home run in `make test-int` TASK-125 extends GEN-014 to the MCP-first skill under EPIC-018. EPIC-020 preserves dependency boundaries and compiled distribution coverage while removing obsolete scaffolding and redundant preparation. See the M10 shared-contract amendments and AJ-34 to AJ-37. M11 `TASK-160` refines `skills/use-sorage/SKILL.md` wording while preserving its 35-tool domain scope. |
 | INIT-001 to INIT-017 | M1, M3 | `TASK-009`, `TASK-012` to `TASK-014`, `TASK-020`, `TASK-025`, `TASK-043`, `TASK-053`, `TASK-056`, `TASK-059`, `TASK-068` to `TASK-069`, `TASK-073`, `TASK-118`, `TASK-149`, `TASK-154`, `TASK-158` | AJ-01, AJ-02, AJ-16; `make test-int` for idempotent init and `make test-contract` for the milestone-scoped `doctor` catalog snapshot, the shared Vault-open guidance correction in TASK-118, and M11 `SORAGE_HOME` logging isolation (`TASK-149`) and `DoctorContext` caching/decomposition (`TASK-154`, `TASK-158`). |
 | CFG-001 to CFG-020 | M1 | `TASK-010` to `TASK-013`, `TASK-015`, `TASK-026`, `TASK-045`, `TASK-061`, `TASK-063`, `TASK-072`, `TASK-147`, `TASK-148`, `TASK-149`, `TASK-156` | AJ-01, AJ-13; `make test-unit` for schema defaults and the comment round-trip, `make test-int` for atomic writes and ETag conflict, `make test-contract` for the schema against the example; M11 restores daemon-routed `config set` parity (`TASK-147`, `TASK-148`), fixes `$EDITOR` fallback (`TASK-149`) and moves YAML AST mechanics behind adapter ports (`TASK-156`). |
-| RUN-001 to RUN-014 | M1, M2, M3 | `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-073`, `TASK-121`, `TASK-122`, `TASK-006` to `TASK-007`, `TASK-042` to `TASK-045`, `TASK-068` to `TASK-069`, `TASK-137`, `TASK-149`, `TASK-151`, `TASK-153`, `TASK-156`, `TASK-160` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version EPIC-018 amends RUN-002 and RUN-009 with the zero-write read exceptions in TASK-121, implemented by TASK-122. TASK-137 verifies command-local connection ownership, reuse, startup behavior and the zero-write read boundary. M11 adds owner-checked daemon lock release and isolated logging (`TASK-149`), migrator short-circuiting (`TASK-151`), non-blocking daemon backup/sweep (`TASK-153`), plist port extraction (`TASK-156`) and daemon/web CLI backoff (`TASK-160`). |
-| PRJ-001 to PRJ-024 | M1, M6 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050`, `TASK-066`, `TASK-086`, `TASK-158` | AJ-03, AJ-05, AJ-19; `make test-int` for worktree folding, binding replacement, and archived sends; M11 `TASK-158` returns binding overlap checks to `core` and moves `openHandoffCount` into a Handoff-owned stats adapter. |
-| VLT-001 to VLT-024 | M1, M2 | `TASK-003`, `TASK-012`, `TASK-021` to `TASK-026`, `TASK-029` to `TASK-030`, `TASK-032`, `TASK-034` to `TASK-035`, `TASK-044`, `TASK-046`, `TASK-052`, `TASK-055`, `TASK-063`, `TASK-118`, `TASK-120`, `TASK-149`, `TASK-157` | AJ-08 to AJ-10; `make test-int` for the intent log and the seven crash points, plus `sorage doctor` and `sorage vault verify` for exhaustive checksums, the shared Vault-open guidance correction in TASK-118, the TASK-120 policy-check and re-assertion precision, and M11 `adoptMarker` cleanup (`TASK-149`) and shared atomic-fs/maintenance extraction (`TASK-157`). |
+| RUN-001 to RUN-014 | M1, M2, M3 | `TASK-009`, `TASK-024`, `TASK-026`, `TASK-036`, `TASK-052`, `TASK-056`, `TASK-059`, `TASK-061`, `TASK-073`, `TASK-121`, `TASK-122`, `TASK-006` to `TASK-007`, `TASK-042` to `TASK-045`, `TASK-068` to `TASK-069`, `TASK-137`, `TASK-149`, `TASK-151`, `TASK-153`, `TASK-156`, `TASK-160`, `TASK-174` | AJ-01, AJ-09, AJ-11; `make test-int` for locks, drain, and `SERVICE_PAUSED`, `make test-contract` for health, readiness, and version EPIC-018 amends RUN-002 and RUN-009 with the zero-write read exceptions in TASK-121, implemented by TASK-122. TASK-137 verifies command-local connection ownership, reuse, startup behavior and the zero-write read boundary. M11 adds owner-checked daemon lock release and isolated logging (`TASK-149`), migrator short-circuiting (`TASK-151`), non-blocking daemon backup/sweep (`TASK-153`), plist port extraction (`TASK-156`) and daemon/web CLI backoff (`TASK-160`). |
+| PRJ-001 to PRJ-024 | M1, M6 | `TASK-015` to `TASK-020`, `TASK-029`, `TASK-050`, `TASK-066`, `TASK-086`, `TASK-158`, `TASK-169` | AJ-03, AJ-05, AJ-19; `make test-int` for worktree folding, binding replacement, and archived sends; M11 `TASK-158` returns binding overlap checks to `core` and moves `openHandoffCount` into a Handoff-owned stats adapter. |
+| VLT-001 to VLT-024 | M1, M2 | `TASK-003`, `TASK-012`, `TASK-021` to `TASK-026`, `TASK-029` to `TASK-030`, `TASK-032`, `TASK-034` to `TASK-035`, `TASK-044`, `TASK-046`, `TASK-052`, `TASK-055`, `TASK-063`, `TASK-118`, `TASK-120`, `TASK-149`, `TASK-157`, `TASK-168`, `TASK-169` | AJ-08 to AJ-10; `make test-int` for the intent log and the seven crash points, plus `sorage doctor` and `sorage vault verify` for exhaustive checksums, the shared Vault-open guidance correction in TASK-118, the TASK-120 policy-check and re-assertion precision, and M11 `adoptMarker` cleanup (`TASK-149`) and shared atomic-fs/maintenance extraction (`TASK-157`). |
 | HND-001 to HND-027 | M1, M11 | `TASK-027` to `TASK-030`, `TASK-032` to `TASK-033`, `TASK-035`, `TASK-038` to `TASK-039`, `TASK-080` to `TASK-082`, `TASK-084`, `TASK-086`, `TASK-103`, `TASK-147`, `TASK-149`, `TASK-151`, `TASK-155`, `TASK-158`, `TASK-161`, `TASK-163`, `TASK-164` | AJ-04, AJ-06, AJ-07, AJ-08, AJ-17, AJ-18, AJ-26; `make test-unit` for the transition table and `make test-contract` for the public representation. M11 adopts `HND-027` (self-handoff prohibition) in `TASK-147`, enforces it with unified role resolution in `TASK-149`, fixes fan-out marker handle leaks in `TASK-151`, and cleans up read/next-actor internals in `TASK-155` and `TASK-158`. |
 | REV-001 to REV-017 | M1 | `TASK-027`, `TASK-031` to `TASK-032`, `TASK-049` | AJ-04, AJ-07, AJ-13; `make test-unit` for the Note rules and `make test-int` for atomic resolution |
 | LIFE-001 to LIFE-018 | M1 | `TASK-028`, `TASK-033` to `TASK-034`, `TASK-049`, `TASK-081`, `TASK-148`, `TASK-161` | AJ-04, AJ-07, AJ-10, AJ-17; `make test-int` for terminal immutability, tombstone rejection, retention, and the two-phase deletion; M11 `TASK-148` restores User-admin enforcement on HTTP `archive`, `unarchive` and `deletion-reject` and forwards `reason`. |
-| CLI-001 to CLI-025 | M1, M3, M4, M6 | `TASK-013`, `TASK-026`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-067`, `TASK-086`, `TASK-111`, `TASK-113`, `TASK-116`, `TASK-121`, `TASK-122`, `TASK-123`, `TASK-124`, `TASK-004` to `TASK-005`, `TASK-017` to `TASK-018`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-064` to `TASK-065`, `TASK-080` to `TASK-082`, `TASK-147`, `TASK-148`, `TASK-151`, `TASK-159`, `TASK-160`, `TASK-167` | AJ-01 to AJ-10, AJ-17, AJ-19; `make test-contract` for golden envelopes, exit-code categories, and cursors; from EPIC-017, TASK-111 amends CLI-020's wait continuation with TASK-113 implementing and TASK-116 qualifying; EPIC-018 adds CLI-012's `revise --body` in TASK-121 and TASK-124 and cites CLI-020 for the rebuilt waits in TASK-122 and TASK-123. M11 restores daemon-routed `config set` User-admin parity (`TASK-147`, `TASK-148`), fixes `inbox --wait` storage lifetimes (`TASK-151`), introduces lazy CLI bootstrap (`TASK-159`), fixes completion (`TASK-160`) and aligns `CLI-018` package exports and allowlists (`TASK-167`). |
-| API-001 to API-013 | M2, M5 | `TASK-042`, `TASK-045` to `TASK-048`, `TASK-060`, `TASK-067`, `TASK-070`, `TASK-084`, `TASK-147`, `TASK-148`, `TASK-153`, `TASK-161`, `TASK-163`, `TASK-164` | AJ-11, AJ-12, AJ-13, AJ-18; `make test-contract` for the symbolic-error to HTTP-status matrix and the DTOs; M11 fixes HTTP retention, revise and JSON-parsing defects (`TASK-147`, `TASK-148`). `TASK-153` moved uploads to streaming `push-sink` and skipped replay spooling for unkeyed requests. `TASK-161` removed the replay spool and unified HTTP replay on Core SQLite receipts under [interface section 42.4](interfaces-and-operations.md#424-m11-adr-0039-public-contract-classification). |
-| WEB-001 to WEB-019 | M2, M5, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060`, `TASK-067`, `TASK-084`, `TASK-136`, `TASK-150`, `TASK-161`, `TASK-162`, `TASK-163`, `TASK-164` | AJ-12, AJ-13, AJ-18; `make test-e2e` under Playwright with the axe-core check as engineering practice. TASK-136 verifies that compiled Web serving and browser behavior survive removal of the unused apps/web placeholder. M11 `TASK-150` fixes `renderMarkdownSafe` double-escaping, URL encoding, backup deduplication and aggregate pagination. |
-| BKP-001 to BKP-026 | M3 | `TASK-061`, `TASK-065`, `TASK-120`, `TASK-123`, `TASK-052` to `TASK-058`, `TASK-105` to `TASK-110`, `TASK-153`, `TASK-155`, `TASK-156`, `TASK-165`, `TASK-161` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify`; M9 event atomicity and ledger recovery in AJ-27/AJ-28; TASK-123 carries the rebuilt Channel records through BKP-023 under EPIC-018. M11 offloads daemon backup runs asynchronously (`TASK-153`), caches timezone formatters (`TASK-155`), moves Git CLI mechanics behind `VaultGitRepository` (`TASK-156`), flattens V5 export onto `SnapshotDomainCodec` behind characterization goldens while preserving Format 1–5 restore readers (`TASK-165`) and splits `backup-commands.ts` (`TASK-166`). |
+| CLI-001 to CLI-025 | M1, M3, M4, M6 | `TASK-013`, `TASK-026`, `TASK-040`, `TASK-055`, `TASK-057`, `TASK-067`, `TASK-086`, `TASK-111`, `TASK-113`, `TASK-116`, `TASK-121`, `TASK-122`, `TASK-123`, `TASK-124`, `TASK-004` to `TASK-005`, `TASK-017` to `TASK-018`, `TASK-029` to `TASK-034`, `TASK-036` to `TASK-037`, `TASK-064` to `TASK-065`, `TASK-080` to `TASK-082`, `TASK-147`, `TASK-148`, `TASK-151`, `TASK-159`, `TASK-160`, `TASK-167`, `TASK-171`, `TASK-174` | AJ-01 to AJ-10, AJ-17, AJ-19; `make test-contract` for golden envelopes, exit-code categories, and cursors; from EPIC-017, TASK-111 amends CLI-020's wait continuation with TASK-113 implementing and TASK-116 qualifying; EPIC-018 adds CLI-012's `revise --body` in TASK-121 and TASK-124 and cites CLI-020 for the rebuilt waits in TASK-122 and TASK-123. M11 restores daemon-routed `config set` User-admin parity (`TASK-147`, `TASK-148`), fixes `inbox --wait` storage lifetimes (`TASK-151`), introduces lazy CLI bootstrap (`TASK-159`), fixes completion (`TASK-160`) and aligns `CLI-018` package exports and allowlists (`TASK-167`). |
+| API-001 to API-013 | M2, M5 | `TASK-042`, `TASK-045` to `TASK-048`, `TASK-060`, `TASK-067`, `TASK-070`, `TASK-084`, `TASK-147`, `TASK-148`, `TASK-153`, `TASK-161`, `TASK-163`, `TASK-164`, `TASK-170` | AJ-11, AJ-12, AJ-13, AJ-18; `make test-contract` for the symbolic-error to HTTP-status matrix and the DTOs; M11 fixes HTTP retention, revise and JSON-parsing defects (`TASK-147`, `TASK-148`). `TASK-153` moved uploads to streaming `push-sink` and skipped replay spooling for unkeyed requests. `TASK-161` removed the replay spool and unified HTTP replay on Core SQLite receipts under [interface section 42.4](interfaces-and-operations.md#424-m11-adr-0039-public-contract-classification). |
+| WEB-001 to WEB-019 | M2, M5, Deferred | `TASK-045`, `TASK-047` to `TASK-051`, `TASK-058`, `TASK-060`, `TASK-067`, `TASK-084`, `TASK-136`, `TASK-150`, `TASK-161`, `TASK-162`, `TASK-163`, `TASK-164`, `TASK-170`, `TASK-171`, `TASK-172`, `TASK-173` | AJ-12, AJ-13, AJ-18; `make test-e2e` under Playwright with the axe-core check as engineering practice. TASK-136 verifies that compiled Web serving and browser behavior survive removal of the unused apps/web placeholder. M11 `TASK-150` fixes `renderMarkdownSafe` double-escaping, URL encoding, backup deduplication and aggregate pagination. |
+| BKP-001 to BKP-026 | M3 | `TASK-061`, `TASK-065`, `TASK-120`, `TASK-123`, `TASK-052` to `TASK-058`, `TASK-105` to `TASK-110`, `TASK-153`, `TASK-155`, `TASK-156`, `TASK-165`, `TASK-161`, `TASK-173` | AJ-14, AJ-15; `make test-int` with the fault-injection Git adapter, plus `sorage backup verify`; M9 event atomicity and ledger recovery in AJ-27/AJ-28; TASK-123 carries the rebuilt Channel records through BKP-023 under EPIC-018. M11 offloads daemon backup runs asynchronously (`TASK-153`), caches timezone formatters (`TASK-155`), moves Git CLI mechanics behind `VaultGitRepository` (`TASK-156`), flattens V5 export onto `SnapshotDomainCodec` behind characterization goldens while preserving Format 1–5 restore readers (`TASK-165`) and splits `backup-commands.ts` (`TASK-166`). |
 | SEC-001 to SEC-021 | M1, M2 | `TASK-011`, `TASK-013`, `TASK-018`, `TASK-035`, `TASK-052`, `TASK-057`, `TASK-063`, `TASK-068`, `TASK-123`, `TASK-006` to `TASK-007`, `TASK-023` to `TASK-025`, `TASK-027` to `TASK-028`, `TASK-040` to `TASK-044`, `TASK-060` to `TASK-061`, `TASK-070` to `TASK-071`, `TASK-105` to `TASK-110`, `TASK-137`, `TASK-153`, `TASK-156`, `TASK-157`, `TASK-162` | AJ-08, AJ-10, AJ-12, AJ-13; the security matrix inside `make test` and the crash-point suite in `make test-int`; M9 event atomicity and ledger recovery in AJ-27/AJ-28; TASK-123 carries the rebuilt Channel events under SEC-012 in EPIC-018; TASK-137 preserves real SQLite transaction, conflict, rollback and event-atomicity behavior through connection reuse. M11 adds streaming artifact sweep and token-rotation session pruning (`TASK-153`) and preserves transaction/exec safety through `core`/adapter cleanup (`TASK-156`, `TASK-157`). |
-| NFR-001 to NFR-017 | M1, M3 | `TASK-008`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-073`, `TASK-080`, `TASK-096`, `TASK-121`, `TASK-122`, `TASK-001` to `TASK-006`, `TASK-014` to `TASK-015`, `TASK-036` to `TASK-037`, `TASK-062` to `TASK-065`, `TASK-083` to `TASK-084`, `TASK-135`, `TASK-136`, `TASK-137`, `TASK-138`, `TASK-147`, `TASK-148`, `TASK-151`, `TASK-152`, `TASK-153`, `TASK-154`, `TASK-155`, `TASK-156`, `TASK-157`, `TASK-158`, `TASK-160`, `TASK-166`, `TASK-167`, `TASK-161`, `TASK-162`, `TASK-163`, `TASK-164` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062`; EPIC-018 amends NFR-009 with the read-only inspection exception in TASK-121, implemented by TASK-122; EPIC-020 adopts proportionate verification, removes obsolete checks, preserves migration/read-only boundaries and retains the complete make test and reproducible signed-release gates. M11 records pre-work baselines (`TASK-147`), fixes HTTP/CLI contract defects (`TASK-148`), eliminates migrator lock storms (`TASK-151`), appends v17 indexes (`TASK-152`), optimizes streaming/read I/O (`TASK-153`, `TASK-154`), eliminates runtime cycles with permanent `check:cycles` (`TASK-155`), purifies `core` and restores adapter boundaries (`TASK-156`, `TASK-157`, `TASK-158`), extends `sot-check` to `skills/` (`TASK-160`), reorganizes `core` into bounded directories (`TASK-166`) and enforces package `"exports"` and shared check scripts (`TASK-167`). |
+| NFR-001 to NFR-017 | M1, M3 | `TASK-008`, `TASK-022`, `TASK-027`, `TASK-030`, `TASK-041`, `TASK-047`, `TASK-051`, `TASK-073`, `TASK-080`, `TASK-096`, `TASK-121`, `TASK-122`, `TASK-001` to `TASK-006`, `TASK-014` to `TASK-015`, `TASK-036` to `TASK-037`, `TASK-062` to `TASK-065`, `TASK-083` to `TASK-084`, `TASK-135`, `TASK-136`, `TASK-137`, `TASK-138`, `TASK-147`, `TASK-148`, `TASK-151`, `TASK-152`, `TASK-153`, `TASK-154`, `TASK-155`, `TASK-156`, `TASK-157`, `TASK-158`, `TASK-160`, `TASK-166`, `TASK-167`, `TASK-161`, `TASK-162`, `TASK-163`, `TASK-164`, `TASK-168`, `TASK-170`, `TASK-172`, `TASK-174`, `TASK-175` | AJ-16; `make test-prepare` for boundaries and the toolchain pin, `make test-contract` for versioned contracts, and the scale run of `TASK-062`; EPIC-018 amends NFR-009 with the read-only inspection exception in TASK-121, implemented by TASK-122; EPIC-020 adopts proportionate verification, removes obsolete checks, preserves migration/read-only boundaries and retains the complete make test and reproducible signed-release gates. M11 records pre-work baselines (`TASK-147`), fixes HTTP/CLI contract defects (`TASK-148`), eliminates migrator lock storms (`TASK-151`), appends v17 indexes (`TASK-152`), optimizes streaming/read I/O (`TASK-153`, `TASK-154`), eliminates runtime cycles with permanent `check:cycles` (`TASK-155`), purifies `core` and restores adapter boundaries (`TASK-156`, `TASK-157`, `TASK-158`), extends `sot-check` to `skills/` (`TASK-160`), reorganizes `core` into bounded directories (`TASK-166`) and enforces package `"exports"` and shared check scripts (`TASK-167`). |
 | MEM-001 to MEM-024 | M7 | `TASK-087` to `TASK-094`, `TASK-150`, `TASK-154`, `TASK-161`, `TASK-162`, `TASK-163` | AJ-20 to AJ-23; pure domain/contract, real SQLite migration and restore, compiled CLI, authenticated daemon, browser, and separately observed skill behavior; M11 debounces Web Memo preview (`TASK-150`) and combines Memo search/preview scan (`TASK-154`). |
 | PFL-001 to PFL-008 | M8 | `TASK-097` to `TASK-100`, `TASK-119`, `TASK-154`, `TASK-158` | Required AJ-24; pure report, real filesystem/DB/WAL inspection, native CLI contracts and source no-write proof; the private-copy write-protection correction and its full-inventory no-write proof in TASK-119; M11 optimizes preflight header/streaming fingerprint I/O (`TASK-154`) and decomposes `preflight.ts` (`TASK-158`). |
 | SND-001 to SND-006 | M8 | `TASK-101` to `TASK-102`, `TASK-103` to `TASK-104`, `TASK-119` | Required AJ-25 and AJ-26 for SND-001, SND-004 and SND-005; exact historical receipt lookup, native compiled recovery, expiry/restore/race and no-execution proof; replay-only inspecting a readable write-protected installation in TASK-119 |
-| SHR-001 to SHR-015 | M9 | `TASK-105`, `TASK-109`, `TASK-110`, `TASK-111`, `TASK-112`, `TASK-114`, `TASK-116`, `TASK-119`, `TASK-120`, `TASK-121`, `TASK-123`, `TASK-106` to `TASK-108`, `TASK-147`, `TASK-149`, `TASK-151`, `TASK-152`, `TASK-154`, `TASK-157`, `TASK-165`, `TASK-163`, `TASK-164` | Required AJ-27; design-only adoption in TASK-105, real SQLite/filesystem store, format-3 writer/reader switch, migration and baseline round-trip evidence in TASK-106, domain adoptions in TASK-107 and TASK-108, shared-record usage in TASK-109, assembled qualification in TASK-110; EPIC-017 design adoption of SHR-015 in TASK-111, contention-contract implementation in TASK-112, concurrency qualification in TASK-114, the write-protected-storage classification in TASK-119, and shared-release qualification in TASK-116, and the TASK-120 post-upgrade re-assertion order precision; EPIC-018 amends SHR-005, SHR-009, SHR-012 and SHR-015 in TASK-121, and TASK-123 implements SHR-004, SHR-005, SHR-009 and SHR-012 for the rebuilt Channel storage and listing. See the M10 shared-contract amendments and AJ-34 to AJ-37. M11 amends `SHR-009` in place in `TASK-147` for additive schema `17 / m11-secondary-indexes-v1` and `"exchange"` `SchemaSurface` floor `16` (`TASK-152`), fixes shared inline-limit constants (`TASK-149`), short-circuits no-op migrations (`TASK-151`), switches `removeContentRecordInTx` to point-lookup `EXISTS` (`TASK-154`), and decomposes `content-store.ts`/`intent-log.ts` (`TASK-157`). |
+| SHR-001 to SHR-015 | M9 | `TASK-105`, `TASK-109`, `TASK-110`, `TASK-111`, `TASK-112`, `TASK-114`, `TASK-116`, `TASK-119`, `TASK-120`, `TASK-121`, `TASK-123`, `TASK-106` to `TASK-108`, `TASK-147`, `TASK-149`, `TASK-151`, `TASK-152`, `TASK-154`, `TASK-157`, `TASK-165`, `TASK-163`, `TASK-164`, `TASK-175` | Required AJ-27; design-only adoption in TASK-105, real SQLite/filesystem store, format-3 writer/reader switch, migration and baseline round-trip evidence in TASK-106, domain adoptions in TASK-107 and TASK-108, shared-record usage in TASK-109, assembled qualification in TASK-110; EPIC-017 design adoption of SHR-015 in TASK-111, contention-contract implementation in TASK-112, concurrency qualification in TASK-114, the write-protected-storage classification in TASK-119, and shared-release qualification in TASK-116, and the TASK-120 post-upgrade re-assertion order precision; EPIC-018 amends SHR-005, SHR-009, SHR-012 and SHR-015 in TASK-121, and TASK-123 implements SHR-004, SHR-005, SHR-009 and SHR-012 for the rebuilt Channel storage and listing. See the M10 shared-contract amendments and AJ-34 to AJ-37. M11 amends `SHR-009` in place in `TASK-147` for additive schema `17 / m11-secondary-indexes-v1` and `"exchange"` `SchemaSurface` floor `16` (`TASK-152`), fixes shared inline-limit constants (`TASK-149`), short-circuits no-op migrations (`TASK-151`), switches `removeContentRecordInTx` to point-lookup `EXISTS` (`TASK-154`), and decomposes `content-store.ts`/`intent-log.ts` (`TASK-157`). |
 | CHN-001 to CHN-014 | M9 | `TASK-105`, `TASK-109`, `TASK-110`, `TASK-111`, `TASK-121`, `TASK-123`, `TASK-125`, `TASK-126`, `TASK-113` to `TASK-119`, `TASK-149`, `TASK-156` | Required AJ-28 and AJ-29; design-only adoption in TASK-105, domain/CLI/backup delivery in TASK-109, assembled qualification and consumer walkthrough in TASK-110; EPIC-017 design adoption of CHN-012 and the CHN-006, CHN-007, and CHN-010 amendments in TASK-111, result-semantics implementation in TASK-113, concurrency qualification in TASK-114, the Channel create and database-schema recovery corrections in TASK-117, the shared Vault-open guidance correction in TASK-118, the write-protected replay-only correction in TASK-119, skill and guidance in TASK-115, and shared-release qualification in TASK-116; EPIC-018's TASK-121 adopts the rebuilt CHN-001 to CHN-014 contract under ADR-0034, TASK-123 rebuilds the domain on it, TASK-125 teaches the five-step loop, and TASK-126 requalifies. M11 passes `CHANNEL_BODY_CAPTURE_CODES` in `stageAccepted` (`TASK-149`), injects `Clock` into `channels.ts` (`TASK-156`) and decomposes `core/channels.ts` (`TASK-166`). |
 | RDR-001 to RDR-005 | M9 | `TASK-121`, `TASK-122`, `TASK-126`, `TASK-137`, `TASK-138`, `TASK-151`, `TASK-159` | Required AJ-30; design-only adoption in TASK-121, the shared read primitive, persistent WAL, the storage-state refusals and the sidecars-absent rule implemented by TASK-122, and the sandboxed journey requalified by TASK-126. TASK-137 preserves native zero-write reads during resource reuse; TASK-138 requalifies the integrated candidate without inventing another journey. See the M10 shared-contract amendments and AJ-34 to AJ-37. M11 preserves zero-write reads across per-poll `inbox --wait` storage reuse (`TASK-151`) and lazy CLI bootstrap (`TASK-159`). |
 | MCP-001 to MCP-006 | M9 | `TASK-121`, `TASK-124`, `TASK-125`, `TASK-126`, `TASK-159`, `TASK-160` | Required AJ-29 and AJ-30; design-only adoption in TASK-121, the STDIO server and 31-tool catalogue implemented by TASK-124, the MCP-first skill observed by TASK-125 (MCP-001, MCP-005), and the assembled journey requalified by TASK-126. See the M10 shared-contract amendments and AJ-34 to AJ-37. M11 preserves `MCP-002` keeper placement and workspace confinement (`TASK-159`) and unifies all 59 tools onto `defineMcpTool()` preserving `MCP-005` golden parity (`TASK-160`). |
@@ -136,13 +136,13 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `RUN-003` | M1 | `TASK-036`, `TASK-137` |
 | `RUN-004` | M1 | `TASK-036` |
 | `RUN-005` | M2 | `TASK-042`, `TASK-073`, `TASK-153` |
-| `RUN-006` | M2 | `TASK-044`, `TASK-160` |
+| `RUN-006` | M2 | `TASK-044`, `TASK-160`, `TASK-174` |
 | `RUN-007` | M3 | `TASK-059`, `TASK-069`, `TASK-073`, `TASK-074` |
 | `RUN-008` | M2 | `TASK-044`, `TASK-045` |
 | `RUN-009` | M1 | `TASK-007`, `TASK-121`, `TASK-122`, `TASK-137`, `TASK-149` |
 | `RUN-010` | M1 | `TASK-007` |
 | `RUN-011` | M3 | `TASK-059`, `TASK-074`, `TASK-156` |
-| `RUN-012` | M2 | `TASK-043`, `TASK-160` |
+| `RUN-012` | M2 | `TASK-043`, `TASK-160`, `TASK-174` |
 | `RUN-013` | M2 | `TASK-044`, `TASK-068`, `TASK-149` |
 | `RUN-014` | M1 | `TASK-026`, `TASK-052` |
 | `PRJ-001` | M1 | `TASK-015` |
@@ -150,20 +150,20 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `PRJ-003` | M1 | `TASK-016` |
 | `PRJ-004` | M1 | `TASK-016`, `TASK-020` |
 | `PRJ-005` | M1 | `TASK-015` |
-| `PRJ-006` | M1 | `TASK-015`, `TASK-018`, `TASK-066` |
-| `PRJ-007` | M1 | `TASK-018` |
-| `PRJ-008` | M1 | `TASK-018` |
+| `PRJ-006` | M1 | `TASK-015`, `TASK-018`, `TASK-066`, `TASK-169` |
+| `PRJ-007` | M1 | `TASK-018`, `TASK-169` |
+| `PRJ-008` | M1 | `TASK-018`, `TASK-169` |
 | `PRJ-009` | M1 | `TASK-017` |
-| `PRJ-010` | M1 | `TASK-017` |
+| `PRJ-010` | M1 | `TASK-017`, `TASK-169` |
 | `PRJ-011` | M1 | `TASK-016` |
 | `PRJ-012` | M1 | `TASK-020`, `TASK-029` |
 | `PRJ-013` | M1 | `TASK-019` |
 | `PRJ-014` | M1 | `TASK-019` |
 | `PRJ-015` | M1 | `TASK-019` |
-| `PRJ-016` | M1 | `TASK-015`, `TASK-017`, `TASK-050`, `TASK-158` |
+| `PRJ-016` | M1 | `TASK-015`, `TASK-017`, `TASK-050`, `TASK-158`, `TASK-169` |
 | `PRJ-017` | M1 | `TASK-018`, `TASK-095` |
 | `PRJ-018` | M1 | `TASK-018`, `TASK-066` |
-| `PRJ-019` | M1 | `TASK-019`, `TASK-029`, `TASK-095` |
+| `PRJ-019` | M1 | `TASK-019`, `TASK-029`, `TASK-095`, `TASK-169` |
 | `PRJ-020` | M1 | `TASK-019` |
 | `PRJ-021` | M1 | `TASK-017` |
 | `PRJ-022` | M1 | `TASK-016`, `TASK-017`, `TASK-020`, `TASK-050`, `TASK-128`, `TASK-130`, `TASK-134`, `TASK-158` |
@@ -185,7 +185,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `VLT-014` | M1 | `TASK-024`, `TASK-035` |
 | `VLT-015` | M1 | `TASK-023` |
 | `VLT-016` | M1 | `TASK-023`, `TASK-095` |
-| `VLT-017` | M1 | `TASK-023` |
+| `VLT-017` | M1 | `TASK-023`, `TASK-168`, `TASK-169` |
 | `VLT-018` | M1 | `TASK-023` |
 | `VLT-019` | M1 | `TASK-021`, `TASK-026`, `TASK-052`, `TASK-063`, `TASK-118`, `TASK-149` |
 | `VLT-020` | M1 | `TASK-022` |
@@ -255,8 +255,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `LIFE-016` | M1 | `TASK-034`, `TASK-148` |
 | `LIFE-017` | M1 | `TASK-028`, `TASK-033`, `TASK-128`, `TASK-130` |
 | `LIFE-018` | M1 | `TASK-028`, `TASK-034`, `TASK-081` |
-| `CLI-001` | M1 | `TASK-005`, `TASK-036`, `TASK-081`, `TASK-159` |
-| `CLI-002` | M1 | `TASK-005`, `TASK-036`, `TASK-075`, `TASK-077`, `TASK-081`, `TASK-159` |
+| `CLI-001` | M1 | `TASK-005`, `TASK-036`, `TASK-081`, `TASK-159`, `TASK-174` |
+| `CLI-002` | M1 | `TASK-005`, `TASK-036`, `TASK-075`, `TASK-077`, `TASK-081`, `TASK-159`, `TASK-174` |
 | `CLI-003` | M1 | `TASK-005`, `TASK-036`, `TASK-159` |
 | `CLI-004` | M1 | `TASK-004`, `TASK-037`, `TASK-081` |
 | `CLI-005` | M1 | `TASK-005`, `TASK-037` |
@@ -277,7 +277,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `CLI-020` | M1 | `TASK-018`, `TASK-036`, `TASK-111`, `TASK-113`, `TASK-116`, `TASK-122`, `TASK-123`, `TASK-151` |
 | `CLI-021` | M1 | `TASK-029` |
 | `CLI-022` | M4 | `TASK-080`, `TASK-081`, `TASK-082` |
-| `CLI-023` | M4 | `TASK-080`, `TASK-081` |
+| `CLI-023` | M4 | `TASK-080`, `TASK-081`, `TASK-171` |
 | `CLI-024` | M6 | `TASK-086` |
 | `CLI-025` | M6 | `TASK-086` |
 | `API-001` | M2 | `TASK-042`, `TASK-161` |
@@ -292,11 +292,11 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `API-010` | M2 | `TASK-048`, `TASK-060` |
 | `API-011` | M2 | `TASK-046`, `TASK-131` |
 | `API-012` | M2 | `TASK-046`, `TASK-131`, `TASK-161`, `TASK-163`, `TASK-164` |
-| `API-013` | M5 | `TASK-084`, `TASK-161` |
-| `WEB-001` | M2 | `TASK-048`, `TASK-136`, `TASK-162`, `TASK-163`, `TASK-164` |
-| `WEB-002` | M2 | `TASK-048`, `TASK-058`, `TASK-079`, `TASK-150` |
+| `API-013` | M5 | `TASK-084`, `TASK-161`, `TASK-170` |
+| `WEB-001` | M2 | `TASK-048`, `TASK-136`, `TASK-162`, `TASK-163`, `TASK-164`, `TASK-172` |
+| `WEB-002` | M2 | `TASK-048`, `TASK-058`, `TASK-079`, `TASK-150`, `TASK-173` |
 | `WEB-003` | M2 | `TASK-048`, `TASK-067`, `TASK-079`, `TASK-150`, `TASK-161`, `TASK-163` |
-| `WEB-004` | M2 | `TASK-048`, `TASK-079`, `TASK-132`, `TASK-136`, `TASK-150` |
+| `WEB-004` | M2 | `TASK-048`, `TASK-079`, `TASK-132`, `TASK-136`, `TASK-150`, `TASK-171` |
 | `WEB-005` | M2 | `TASK-048`, `TASK-150`, `TASK-162` |
 | `WEB-006` | M2 | `TASK-048`, `TASK-060`, `TASK-162` |
 | `WEB-007` | M2 | `TASK-047`, `TASK-084` |
@@ -310,8 +310,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `WEB-015` | M2 | `TASK-045` |
 | `WEB-016` | Deferred | None |
 | `WEB-017` | M2 | `TASK-048`, `TASK-084` |
-| `WEB-018` | M2 | `TASK-051`, `TASK-079`, `TASK-150`, `TASK-162` |
-| `WEB-019` | M5 | `TASK-084`, `TASK-162` |
+| `WEB-018` | M2 | `TASK-051`, `TASK-079`, `TASK-150`, `TASK-162`, `TASK-173` |
+| `WEB-019` | M5 | `TASK-084`, `TASK-162`, `TASK-170`, `TASK-173` |
 | `BKP-001` | M3 | `TASK-053` |
 | `BKP-002` | M3 | `TASK-056` |
 | `BKP-003` | M3 | `TASK-052`, `TASK-165` |
@@ -329,7 +329,7 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `BKP-015` | M3 | `TASK-056` |
 | `BKP-016` | M3 | `TASK-055` |
 | `BKP-017` | M3 | `TASK-055`, `TASK-057`, `TASK-161` |
-| `BKP-018` | M3 | `TASK-058` |
+| `BKP-018` | M3 | `TASK-058`, `TASK-173` |
 | `BKP-019` | M3 | `TASK-058` |
 | `BKP-020` | M3 | `TASK-058`, `TASK-065` |
 | `BKP-021` | M3 | `TASK-052`, `TASK-165` |
@@ -361,20 +361,20 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SEC-021` | M1 | `TASK-028`, `TASK-040`, `TASK-060` |
 | `NFR-001` | M1 | `TASK-001`, `TASK-136`, `TASK-138`, `TASK-155`, `TASK-162` |
 | `NFR-002` | M1 | `TASK-002`, `TASK-136`, `TASK-155`, `TASK-156`, `TASK-157`, `TASK-158`, `TASK-166` |
-| `NFR-003` | M1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073`, `TASK-075`, `TASK-077`, `TASK-078`, `TASK-138`, `TASK-148` |
+| `NFR-003` | M1 | `TASK-004`, `TASK-005`, `TASK-051`, `TASK-065`, `TASK-073`, `TASK-075`, `TASK-077`, `TASK-078`, `TASK-138`, `TASK-148`, `TASK-168`, `TASK-174` |
 | `NFR-004` | M3 | `TASK-062`, `TASK-147`, `TASK-152`, `TASK-154`, `TASK-163` |
-| `NFR-005` | M1 | `TASK-022`, `TASK-047`, `TASK-084`, `TASK-148`, `TASK-153`, `TASK-154`, `TASK-161`, `TASK-163` |
+| `NFR-005` | M1 | `TASK-022`, `TASK-047`, `TASK-084`, `TASK-148`, `TASK-153`, `TASK-154`, `TASK-161`, `TASK-163`, `TASK-170` |
 | `NFR-006` | M1 | `TASK-004`, `TASK-030`, `TASK-062`, `TASK-155` |
 | `NFR-007` | M1 | `TASK-004` |
 | `NFR-008` | M1 | `TASK-003`, `TASK-004` |
 | `NFR-009` | M1 | `TASK-006`, `TASK-015`, `TASK-027`, `TASK-063`, `TASK-121`, `TASK-122`, `TASK-137`, `TASK-147`, `TASK-151`, `TASK-152`, `TASK-163` |
 | `NFR-010` | M1 | `TASK-014`, `TASK-037` |
-| `NFR-011` | M1 | `TASK-004`, `TASK-036` |
-| `NFR-012` | M1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-073`, `TASK-077`, `TASK-078`, `TASK-138` |
-| `NFR-013` | M1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-077`, `TASK-078`, `TASK-135`, `TASK-138`, `TASK-162` |
+| `NFR-011` | M1 | `TASK-004`, `TASK-036`, `TASK-174` |
+| `NFR-012` | M1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-073`, `TASK-077`, `TASK-078`, `TASK-138`, `TASK-172`, `TASK-175` |
+| `NFR-013` | M1 | `TASK-001`, `TASK-041`, `TASK-064`, `TASK-077`, `TASK-078`, `TASK-135`, `TASK-138`, `TASK-162`, `TASK-172` |
 | `NFR-014` | M1 | `TASK-002`, `TASK-135`, `TASK-136`, `TASK-138`, `TASK-155`, `TASK-156`, `TASK-158`, `TASK-166`, `TASK-167`, `TASK-162` |
-| `NFR-015` | M1 | `TASK-008`, `TASK-065`, `TASK-076`, `TASK-080`, `TASK-083`, `TASK-085`, `TASK-096`, `TASK-135`, `TASK-136`, `TASK-138`, `TASK-147`, `TASK-160`, `TASK-166`, `TASK-161`, `TASK-162`, `TASK-163`, `TASK-164` |
-| `NFR-016` | M1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074`, `TASK-076`, `TASK-078`, `TASK-135`, `TASK-138`, `TASK-155`, `TASK-167`, `TASK-162`, `TASK-163` |
+| `NFR-015` | M1 | `TASK-008`, `TASK-065`, `TASK-076`, `TASK-080`, `TASK-083`, `TASK-085`, `TASK-096`, `TASK-135`, `TASK-136`, `TASK-138`, `TASK-147`, `TASK-160`, `TASK-166`, `TASK-161`, `TASK-162`, `TASK-163`, `TASK-164`, `TASK-168`, `TASK-175` |
+| `NFR-016` | M1 | `TASK-001`, `TASK-002`, `TASK-003`, `TASK-074`, `TASK-076`, `TASK-078`, `TASK-135`, `TASK-138`, `TASK-155`, `TASK-167`, `TASK-162`, `TASK-163`, `TASK-168`, `TASK-172`, `TASK-175` |
 | `NFR-017` | M1 | `TASK-001`, `TASK-064`, `TASK-135`, `TASK-138`, `TASK-162` |
 | `MEM-001` | M7 | `TASK-087`, `TASK-094` |
 | `MEM-002` | M7 | `TASK-089`, `TASK-090`, `TASK-094` |
@@ -422,8 +422,8 @@ An entry reading `None` for a requirement that is not `Deferred` is a coverage g
 | `SHR-006` | M9 | `TASK-105`, `TASK-106`, `TASK-107` |
 | `SHR-007` | M9 | `TASK-105`, `TASK-108`, `TASK-154` |
 | `SHR-008` | M9 | `TASK-105`, `TASK-108`, `TASK-109` |
-| `SHR-009` | M9 | `TASK-105`, `TASK-106`, `TASK-109`, `TASK-110`, `TASK-121`, `TASK-123`, `TASK-147`, `TASK-151`, `TASK-152`, `TASK-163`, `TASK-164` |
-| `SHR-010` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110`, `TASK-139`, `TASK-140`, `TASK-141`, `TASK-143`, `TASK-144`, `TASK-146`, `TASK-152`, `TASK-165`, `TASK-163`, `TASK-164` |
+| `SHR-009` | M9 | `TASK-105`, `TASK-106`, `TASK-109`, `TASK-110`, `TASK-121`, `TASK-123`, `TASK-147`, `TASK-151`, `TASK-152`, `TASK-163`, `TASK-164`, `TASK-175` |
+| `SHR-010` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-110`, `TASK-139`, `TASK-140`, `TASK-141`, `TASK-143`, `TASK-144`, `TASK-146`, `TASK-152`, `TASK-165`, `TASK-163`, `TASK-164`, `TASK-175` |
 | `SHR-011` | M9 | `TASK-105`, `TASK-106`, `TASK-108`, `TASK-120`, `TASK-139`, `TASK-140`, `TASK-141`, `TASK-143`, `TASK-146` |
 | `SHR-012` | M9 | `TASK-105`, `TASK-106`, `TASK-107`, `TASK-108`, `TASK-109`, `TASK-121`, `TASK-123` |
 | `SHR-013` | M9 | `TASK-105`, `TASK-107`, `TASK-108`, `TASK-110`, `TASK-126` |

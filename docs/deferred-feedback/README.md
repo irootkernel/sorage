@@ -1,6 +1,6 @@
 # Deferred feedback
 
-Record only small, actionable findings that have been intentionally postponed. Move an epic-sized finding to [TODO](../todo/README.md) or adopt it into the [roadmap](../roadmap/README.md). This index never records lifecycle status.
+Track small, actionable findings that have been intentionally postponed and retain the reasons for closing findings at the end of this page. Move an epic-sized finding to [TODO](../todo/README.md) or adopt it into the [roadmap](../roadmap/README.md). The roadmap owns delivery status.
 
 ## EPIC-010 whole-epic audit
 
@@ -8,35 +8,31 @@ Two Low findings were confirmed during the EPIC-010 validation audit. Timeline o
 
 ### Timeline bound overflow coverage
 
+- **Verification gap.**
+- **Roadmap follow-up.** [TASK-171](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
 - **Impact:** `sorage events` and `GET /api/v1/handoffs/{id}/events` already pass `HANDOFF_TIMELINE_LIMIT` (50) into a newest-first SQL `LIMIT`, and existing tests assert `length <= 50` plus one newest-first pair on short fixtures. A regression that dropped or widened the bound, or that ignored the limit argument, would still pass those assertions.
 - **Owner:** `docs/deferred-feedback/README.md` (originating requirement CLI-023 / TASK-081)
 - **Re-entry:** Add a focused adapter or CLI integration test that inserts more than 50 events for one Handoff and asserts the returned list is exactly 50, newest-first, with the oldest event types absent. Do not reopen EPIC-010 for this coverage.
 
 ## EPIC-011 whole-epic audit
 
-This Low finding was confirmed during the EPIC-011 validation audit. Current body-upload emptiness rejection is correct; the entry captures independent event-loop hardening.
+The EPIC-011 audit identified event-loop hardening and a missing integration case for body uploads.
 
 ### Body emptiness rescan on the request callback
 
+- **Product fix.**
+- **Roadmap follow-up.** [TASK-170](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
 - **Impact:** After a `body` field is streamed to a spool, `utf8EmptyAfterTrim` re-reads the file with `readSync` on the daemon request callback so empty and whitespace-only UTF-8 text fail with `CONFIG_INVALID`. A body near `artifact.maxBytes` that is only whitespace can stall the loopback event loop for the duration of that scan. Non-whitespace bodies return as soon as the first non-trim character is decoded, and current AJ-18 plus upload tests pass.
 - **Owner:** `docs/deferred-feedback/README.md` (originating requirement API-013 / TASK-084)
 - **Re-entry:** Track non-whitespace UTF-8 while spooling the `body` field, or move the post-stream scan off the request callback, then add a focused test that a large whitespace-only body still fails with `CONFIG_INVALID` and leaves no spool. Do not reopen EPIC-011 for this scan.
 
 ### Body-only upload with a missing title
 
+- **Verification gap.**
+- **Roadmap follow-up.** [TASK-170](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
 - **Impact:** `sendHandoffs` already rejects an empty title with `CONFIG_INVALID` before creating a Handoff. The Web compose form always sends a title field. An HTTP body upload that omits `title` or sends it empty is therefore refused, but no upload integration fixture names that path.
 - **Owner:** `docs/deferred-feedback/README.md` (originating requirement WEB-019 / TASK-084)
 - **Re-entry:** Add a focused `POST /api/v1/handoffs/upload` test that a body part with a missing or empty `title` fails with `CONFIG_INVALID` and creates no Handoff. Do not reopen EPIC-011 for this fixture.
-
-## EPIC-017 TASK-115 observation follow-up
-
-The accepted TASK-115 observations disclosed auxiliary inaccuracies that remain as independent guidance work; this entry is not a TASK-115 acceptance condition.
-
-### Observer explanation accuracy
-
-- **Impact:** The accepted run-5 and scoped observations recorded five auxiliary inaccuracies, two in the AJ-29 journey and three in the AJ-26 journey: an improvised "new content" condition on a new submission, a misread body size corrected in the same step, a wrong claim that `delete request` takes no row-version option, a wrong claim that a restored installation holds a different Handoff, and a receipt treated as proof that external work remained undone. Each is disclosed and corrected in the [EPIC-017 independent observations](../implementation-tips/use-sorage-acceptance.md#epic-017-independent-observations-2026-10-23); none failed its step except the last, which failed under the judgment-rule exception and passed scoped re-observation.
-- **Owner:** `docs/deferred-feedback/README.md` (observed during EPIC-017 TASK-115)
-- **Re-entry:** A future guidance pass could add the symmetric receipt sentence — a receipt is neither proof that external work ran nor that it did not — and tighten reference wording where observers improvised conditions. Do not reopen TASK-115 for this; it was not an acceptance condition.
 
 ## EPIC-023 execution refinement
 
@@ -44,45 +40,41 @@ These items surfaced while the [2026-11-24 EPIC-023 execution refinement](../gov
 
 ### Daemon and Web CLI JSON envelope alignment
 
-- **Impact:** `apps/cli/src/daemon-commands.ts` emits JSON envelopes whose `meta.requestId` is the hardcoded literal `"daemon"` instead of a per-invocation request identifier, and `apps/cli/src/web.ts` emits a bare `{ url, daemonStarted, expiresAt, note }` JSON object without the standard `{ ok, data, meta }` envelope. Changing either shape changes the CLI JSON contract, which a Standard `EPIC-023` Task may not do.
+- **Contract fix.**
+- **Roadmap follow-up.** [TASK-174](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
+- **Impact:** `apps/cli/src/daemon-commands.ts` emits `"daemon"` as `meta.requestId`, and `apps/cli/src/web.ts` emits a bare `{ url, daemonStarted, expiresAt, note }` object. Both differ from the [documented CLI envelope](../specs/interfaces-and-operations.md#14-cli-envelopes).
 - **Owner:** `docs/deferred-feedback/README.md` (removed from `TASK-160` by the EPIC-023 execution refinement)
-- **Re-entry:** A Contract Task classifies both output changes in interface section 42 or its successor, updates the affected goldens and tests, and aligns both modules onto the shared CLI output helper.
+- **Re-entry:** A Contract Task identifies affected consumers and their migration needs, classifies both output changes in interface section 42 or its successor, updates the affected goldens and tests, and aligns both modules onto the shared CLI output helper.
 
 ### Full Result conversion of Exchange storage methods
 
+- **Conditional follow-up.**
 - **Impact:** Exchange storage methods behind the core `ExchangeBusinessRepository` port (`packages/core/src/exchange/exchange-use-cases.ts`) return plain values and abort by throwing a carried `AppError`, which `runInTransaction` turns into a rollback and a typed error. `TASK-158` converts only adapter-owned orchestration; a full conversion changes a core port and its use cases.
 - **Owner:** `docs/deferred-feedback/README.md` (scoped out of `TASK-158`)
-- **Re-entry:** Change the repository port methods to return `Result`, update `commitExchangeBusiness` and `planExchangeBusiness`, and prove rollback, `storageFailure` precedence and the `commitAttempted` cleanup path with focused failure tests.
-
-### Exchange claim revocation schema guard
-
-- **Impact:** `revokeExchangeClaims` in `packages/adapters/src/projects.ts` probes for `exchange_notice_claims` (schema 16) before deleting from both `exchange_claims` (schema 14) and `exchange_notice_claims`, so an injected schema-14 or schema-15 database would also skip `exchange_claims`. Production compositions always migrate to the current schema, so no shipped path reaches the gap. `TASK-158` moves the code behind a hook without changing the guard.
-- **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
-- **Re-entry:** Guard each table separately or remove the guard once no caller can open an unmigrated database, with a focused test.
-
-### Startup maintenance live-key queries
-
-- **Impact:** The Vault startup maintenance protects storage keys of materialized Artifacts only and checks table existence, while the backup startup maintenance protects every recorded storage key. `TASK-157` unifies the sequence in `maintenance.ts` but keeps each caller's query, so GC protection is unchanged.
-- **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
-- **Re-entry:** Decide whether one protected-key set (the unfiltered superset is the conservative choice) applies to both callers and prove the GC outcome with an integration test.
+- **Re-entry:** Revisit when a concrete error propagation problem warrants changing the port. If converted, cover rollback, `storageFailure` precedence and the `commitAttempted` cleanup path with focused failure tests.
 
 ### Atomic writes without fsync
 
-- **Impact:** `token-store.ts` and `inbox-marker-ports.ts` replace files by rename without `fsync`, and `daemon-command-ports.ts` treats the directory `fsync` as best effort. `TASK-157` preserves these semantics through explicit `fs-atomic.ts` options.
+- **Conditional follow-up.**
+- **Impact:** The Installation API token is replaced by rename without file or directory `fsync`. The relevant question is whether an acknowledged token rotation must survive abrupt power loss. The Web secret and derived inbox marker also use rename without `fsync`. The daemon run record syncs the file and attempts to sync its directory.
 - **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
-- **Re-entry:** Decide per file whether durability should be strengthened and add a crash-point test for each changed site.
+- **Re-entry:** Revisit the API token if a durability requirement or an observed rotation recovery failure establishes the need. Test the affected crash points if the policy changes. Evaluate the single-use Web secret, derived marker and daemon run record only if a file-specific recovery requirement arises.
 
 ### Root-safe workspace containment in project resolution
 
-- **Impact:** The adapter's commit-time `atOrBelow` treats a `/` root correctly, while core `isAtOrBelow` in `project-commands.ts` does not. `TASK-158` moves revalidation into core with a root-safe helper and leaves `resolveWorkspaceActor` unchanged, so the two paths still differ for a binding at `/`.
+- **Product fix.**
+- **Roadmap follow-up.** [TASK-169](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
+- **Impact:** `isAtOrBelow` in `project-commands.ts` misses descendants of `/`, so workspace resolution can miss an existing root binding. The [Vault containment check](../../packages/core/src/content/import-policy.ts) has the same edge case in the path checks used for Project registration, binding and rebinding. At `dcd7ee5`, the check accepted `/` as a Project directory with `/audit/vault` as the Vault, violating VLT-017.
 - **Owner:** `docs/deferred-feedback/README.md` (observed during the EPIC-023 execution refinement)
-- **Re-entry:** Switch `resolveWorkspaceActor` and `checkedBindingTarget` to the root-safe helper with a focused unit test for a `/` binding.
+- **Re-entry:** Enforce root-safe containment in the Vault guard, Vault move guard, external-source guard, and sender downgrade guard, and isolate any existing invalid `/` binding record so it remains explicitly repairable through `rebind` or `unbind` without gaining implicit authority over descendant workspaces. Cover rejection of `/` as a new or replacement binding, downgrade refusal from `/`, ordinary path segment boundaries, and explicit repair of a legacy root row.
 
 ## EPIC-024 TASK-162 browser observation
 
 ### Narrow Web layout overflow
 
-- **Impact:** At a 390 CSS pixel viewport, Dashboard, New Handoff (Compose), and Backup can extend past the viewport and require page-wide horizontal scrolling. The same three views overflowed in the pre-extraction binary and in the extracted-asset candidate.
+- **Product fix.**
+- **Roadmap follow-up.** [TASK-173](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
+- **Impact:** At a 390 CSS pixel viewport, Dashboard, New Handoff (Compose), and Backup can extend past the viewport and require page-wide horizontal scrolling. The same three views overflowed before and after Web asset extraction. The [M11 qualification](../implementation-tips/m11-qualification.md) carries forward that observation against unchanged Web sources and embedded bytes.
 - **Owner:** `docs/deferred-feedback/README.md` (observed during TASK-162 browser verification)
 - **Re-entry:** Adjust the three views' narrow layout in a focused Web follow-up and add a compiled-browser regression at 390 CSS pixels that checks document width and access to the existing controls. Verify the desktop layout in the same pass.
 
@@ -90,6 +82,24 @@ These items surfaced while the [2026-11-24 EPIC-023 execution refinement](../gov
 
 ### Detecting stale committed Web assets
 
-- **Impact:** `make test-prepare` regenerates the tracked Web embedding before the aggregate reaches packaging, so `make test` can pass after rewriting previously stale bytes. Standalone `make package` rejects stale embedding bytes before compiling. The validated M11 candidate's tracked embedding regenerated byte-identically.
+- **Verification gap.**
+- **Roadmap follow-up.** [TASK-172](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
+- **Impact:** `make test-prepare` regenerates the tracked Web embedding before the aggregate reaches packaging, so `make test` can pass after rewriting previously stale bytes. Standalone `make package` rejects stale embedding bytes before compiling. The embedding at `dcd7ee5` passed the read-only `bun run build:web -- --check`.
 - **Owner:** `docs/deferred-feedback/README.md` (observed during EPIC-024 validation)
-- **Re-entry:** If a future gate should reject committed drift, compare the committed `apps/daemon/src/web-assets.generated.ts` with the expected generated bytes before auto-generation and add an isolated test that deliberately supplies stale input and verifies rejection before any rewrite.
+- **Re-entry:** Compare the checked-out `apps/daemon/src/web-assets.generated.ts` with the expected generated bytes before any regeneration and verify in an isolated copy that a deliberately stale input is rejected before it is rewritten.
+
+## Closed findings
+
+### EPIC-017 TASK-115 observation follow-up
+
+#### Observer explanation accuracy
+
+- **Superseded by current guidance.** The [current skill](../../skills/use-sorage/SKILL.md) limits receipts to historical broker results and excludes inferences about external work in either direction. The [independent observations](../implementation-tips/use-sorage-acceptance.md#epic-017-independent-observations-2026-10-23) retain all five inaccuracies, their corrections and the two scoped passes for step 7f. That record also preserves which inaccuracies affected the original judgments.
+
+### Exchange claim revocation schema guard
+
+- **Inapplicable to supported writes.** The [claim hook](../../packages/adapters/src/exchange-claims.ts) introduced by TASK-158 still skips both deletes when an injected schema-14 or schema-15 database lacks `exchange_notice_claims`. Supported Project writes open a [migrated database](../../packages/adapters/src/adapter-context.ts), and the [schema-16 migration](../../packages/adapters/src/sqlite/migrations.ts) removes claims for Projects that already lost authority. Revisit if a supported write path starts operating on schema 14 or 15 before migration.
+
+### Startup maintenance live-key queries
+
+- **Redundant for live-key protection.** TASK-157 retained the two queries. Vault startup reads materialized Artifact keys and backup startup reads all recorded Artifact keys. [Common startup maintenance](../../packages/adapters/src/maintenance.ts) already protects every recorded `content_records.storage_key` in addition to the caller's Artifact keys. Unifying the queries would leave the protected set the same. The Artifact sweep still depends on whether the caller's list is empty. Revisit that sweep condition if an actual cleanup problem is observed.

@@ -1786,3 +1786,42 @@ None. No database, Vault, configuration or backup format changes.
 ### Consequences
 
 The Web UI gains full isolated browser TypeScript typechecking and Biome `.ts`/`.css` formatting and linting while keeping zero frontend framework dependencies and reproducible single-binary distribution intact. The small cost is one deterministic build-time asset-embed script shared by `test-prepare`, `build:cli` and `package`.
+
+## ADR-0041: M11 release hardening and regression coverage
+
+- **Status:** Proposed
+- **Date:** 2026-11-26
+- **Design owner:** TASK-168 under [EPIC-025](../roadmap/README.md#epic-025-m11-release-hardening-and-regression-coverage).
+
+### Problem
+
+The original M11 candidate completed qualification under TASK-163. The [deferred feedback review](../deferred-feedback/README.md) identified seven concrete follow-ups for Vault isolation, Handoff behavior and coverage, Web usability and build verification, and CLI JSON consistency. The current Web JSON object requires consumers to read `url` at the top level. Daemon JSON includes fixed request IDs and a restart can emit two successes. Test preparation regenerates the tracked Web embedding before the package check can detect stale input.
+
+### Proposed decision
+
+Master approved adding the seven follow-ups and combined qualification to the `v0.1.6` release on 2026-11-26 and selected a single `web --json` cutover. The [execution dossier](../todo/m11-release-hardening-dossier.md) gives the technical design for adoption in TASK-168.
+
+- Enforce root-safe segment containment across Vault containment (`VLT-017`), Vault move self-overlap, external-source containment, sender downgrade checks (`PRJ-019`) and binding commit-time validation (`createProjectWithBinding`, `addBinding`, `replaceBinding`). Isolate any existing invalid `/` binding record so it remains visible and explicitly repairable via `rebind` or `unbind` without gaining implicit authority over descendant workspaces in lookup, sender inheritance, commit revalidation or conflict checks.
+- Eliminate synchronous `readSync` body-emptiness rescans on the daemon request callback while keeping `MultipartEnginePolicy.onComplete` synchronous and shared with Memo uploads—either by incremental UTF-8/trim tracking in the `body` push-sink evaluated in `onComplete` (zero re-read I/O) or by bounded asynchronous file reads after `streamMultipart` settles with explicit cleanup on refusal—preserving error precedence, title validation, keyed replay and spool cleanup. Pin the 50-event timeline limit across both read surfaces.
+- Replace automatic Web embedding regeneration in `Makefile` `test-prepare` with read-only `bun run build:web -- --check`, updating `test/int/make-gate.int.test.ts`. Keep explicit `bun run build:web` and ordinary `make build` (`scripts/build-cli.ts`) as generation entry points while preserving `make test`'s prepare-first gate order, automatic formatting and deterministic packaging.
+- Fit Dashboard, Compose and Backup into a 390 CSS pixel viewport with their current controls accessible, and exercise the desktop layout and `axe-a11y` checks in the same pass.
+- Apply the shared CLI output conventions (`apps/cli/src/cli-output.ts`) to `web --json` and `daemon start`, `stop`, `restart` and `status` under `--json`, allocating one per-invocation request ID (supporting `SORAGE_TEST_REQUEST_ID` for goldens), emitting one final Daemon result on restart, updating all tracked Web JSON consumers in the same release, and settling explicit non-`--json` default output plus silent/isolated internal `daemonStart`/`daemonStop` calls from `sorage init --start-daemon` and `sorage uninstall` so parent commands never emit duplicate JSON envelopes on stdout (`CLI-002`). Preserve exit categories and the hidden `daemon serve` entry point.
+
+### Alternatives considered
+
+- **Ship the original M11 candidate first.** This would bring the release forward and leave the Vault root isolation defect and the six other confirmed follow-ups for a later release. Master chose to include them in `v0.1.6`.
+- **Offer a transition period with two Web JSON formats.** This would ease migration for an independently deployed caller and add another public format to support. The approved single cutover updates the documented contract and known callers together.
+- **Regenerate the embedding before testing it.** This keeps development convenient and masks stale checked-in input. Explicit regeneration remains available when modifying the Web sources.
+- **Normalize existing root bindings by rewriting or deleting records, or let `/` resolve descendants.** Rewriting or deleting records could change Project identity or access without operator intent, while letting a legacy `/` row match descendants would grant one invalid row implicit authority over every workspace on the machine. Isolating legacy `/` rows while keeping explicit `rebind`/`unbind` repair preserves identity and enforces VLT-017.
+
+### Compatibility impact
+
+The Web JSON cutover is breaking for callers reading the top-level object. Daemon request IDs become per-invocation values and restart JSON produces one final result, so callers depending on a literal request ID or multiple restart objects must update. Any caller relying on non-`--json` `web` or `daemon` output follows the default output contract explicitly settled in `TASK-168`. The path correction rejects previously admitted invalid `/` targets using `VAULT_CONTAINMENT` and refuses unregistered sends from `/` when bindings exist using `SENDER_IDENTITY_DOWNGRADE`. The planned build check changes when developers regenerate tracked assets before running `make test-prepare` or `make test`. SQLite schema 17, Vault layout, backup format 5, Format 1–5 readers, short Artifact IDs and the 59-tool MCP catalogue remain compatibility targets.
+
+### Migration impact
+
+Update Web JSON consumers to read `data.url`, `data.daemonStarted`, `data.expiresAt` and `data.note` on success and the standard error envelope on stderr on failure. Existing invalid root bindings remain visible in `project list`/`project show` and may be explicitly rebound or unbound with the existing protections. The design introduces no database or backup migration.
+
+### Required Source of Truth edits and roadmap impact
+
+`TASK-168` adopts this decision and adds dated amendments to `ADR-0038` (extended `v0.1.6` release scope) and `ADR-0040` (check-first `test-prepare` Web verification order). It updates `docs/specs/interfaces-and-operations.md` (sections 8, 9, 14, 42.5 and new 42.6 for root-safe path containment, legacy `/` isolation/repair, exact `web` and `daemon` JSON/default contracts with before-and-after examples, compatibility classification, and check-first preparation), `docs/specs/security-reliability.md` (section 4 path safety), `docs/specs/testing-and-acceptance.md` (section 1 `test-prepare` target row, keeping the existing `#912-...` Gate M11 anchor intact for inbound links), `docs/specs/required-specification.md` (adding accepted `ADR-0041` beside `ADR-0038`–`ADR-0040`), `docs/implementation-tips/README.md` (section 2), and `docs/implementation-tips/toolchains.md` (`make test-prepare` check-first and standalone `make build` regeneration behavior). `TASK-174` owns implementation, new Web/Daemon JSON contract goldens and updating every tracked Web JSON consumer. `TASK-175` qualifies the exact combined `v0.1.6` candidate under [Gate M11](../specs/testing-and-acceptance.md#912-gate-m11-architecture-hardening-and-modernization-end-of-epic-022-epic-023-and-epic-024) with explicit reuse boundaries for unchanged `TASK-163` storage and performance evidence under [governance section 18.1](../governance/README.md#181-proportionate-verification-and-review). The original M11 qualification remains evidence for its original candidate.
