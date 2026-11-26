@@ -5,12 +5,12 @@ import type { ApiEnvelope, DispatchResult } from "../types";
 export function compose() {
   view().replaceChildren();
   view().appendChild(el("h2", { text: "New Handoff" }));
-  const form = el("form", {});
+  const form = el("form", { class: "compose-form" });
   const title = el("input", { placeholder: "title", size: "40" });
   const recipients = el("input", { placeholder: "recipient slugs, comma-separated", size: "40" });
   const file = el("input", { type: "file" });
   const body = el("textarea", { rows: "8", cols: "40", placeholder: "Markdown body", "aria-label": "Body" });
-  const result = el("p", {});
+  const result = el("div", { class: "compose-result", role: "status" });
   form.appendChild(el("p", { class: "field" }, [el("label", { text: "Title " }, [title])]));
   form.appendChild(el("p", { class: "field" }, [el("label", { text: "To " }, [recipients])]));
   form.appendChild(

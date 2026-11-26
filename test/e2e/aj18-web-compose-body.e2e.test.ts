@@ -246,4 +246,103 @@ describe("AJ-18 User creates a Handoff from Web compose body text", () => {
       await browser.close();
     }
   });
+
+  it("fits the Compose form within 390px and 1280px viewports with long values and reachable controls (TASK-173)", async () => {
+    const axeSource = readFileSync(new URL("../../node_modules/axe-core/axe.min.js", import.meta.url), "utf8");
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+      const web = sorage(["web", "--json"], { home, env: { SORAGE_WEB_SUPPRESS_OPEN: "1" } });
+      expect(web.status, web.stderr).toBe(0);
+      await page.goto((JSON.parse(web.stdout) as { url: string }).url);
+      await page.waitForFunction(() => document.querySelector("#session-note")?.textContent === "");
+
+      const createdByViewport = new Map<string, string[]>();
+      for (const vp of [
+        { name: "mobile", width: 390, height: 844 },
+        { name: "desktop", width: 1280, height: 900 },
+      ]) {
+        await page.setViewportSize({ width: vp.width, height: vp.height });
+        // Route through #/dashboard so hashchange triggers a fresh Compose render on every iteration.
+        await page.goto(`http://127.0.0.1:${port}/#/dashboard`);
+        await page.waitForSelector(".counts");
+        await page.goto(`http://127.0.0.1:${port}/#/compose`);
+        await page.waitForSelector(".compose-form");
+        expect(await page.locator("form ul li").count()).toBe(0);
+
+        const beforeFit = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth,
+        }));
+        expect(beforeFit.scrollWidth, `${vp.name} compose initial overflow`).toBeLessThanOrEqual(beforeFit.innerWidth);
+
+        const formBox = await page.locator(".compose-form").boundingBox();
+        expect(formBox, `${vp.name} form missing boundingBox`).not.toBeNull();
+        for (const locator of [
+          page.getByLabel("Title"),
+          page.getByLabel("To"),
+          page.getByLabel("Document"),
+          page.getByLabel("Body"),
+          page.getByRole("button", { name: "Send", exact: true }),
+        ]) {
+          const box = await locator.boundingBox();
+          expect(box, `${vp.name} control missing boundingBox`).not.toBeNull();
+          if (box !== null && formBox !== null) {
+            expect(box.x).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);
+            expect(box.x + box.width).toBeLessThanOrEqual(formBox.x + formBox.width + 1);
+          }
+        }
+
+        if (vp.name === "mobile") {
+          await page.getByRole("button", { name: "Send", exact: true }).click();
+          await page.waitForFunction(() =>
+            document.querySelector(".compose-result")?.textContent?.includes("Choose a document"),
+          );
+          const errorFit = await page.evaluate(() => ({
+            scrollWidth: document.documentElement.scrollWidth,
+            innerWidth: window.innerWidth,
+          }));
+          expect(errorFit.scrollWidth, "mobile compose validation-status overflow").toBeLessThanOrEqual(
+            errorFit.innerWidth,
+          );
+        }
+
+        const longTitle = `Long-Unbroken-${vp.name}-Compose-Title-/very/deep/path/segment/file.md-https://example.invalid/handoff`;
+        await page.getByLabel("Title").fill(longTitle);
+        await page.getByLabel("To").fill("alpha, beta");
+        await page.getByLabel("Body").fill(`# Narrow viewport ${vp.name}\n\nSubmitted at ${vp.width}px.\n`);
+        const [uploadResponse] = await Promise.all([
+          page.waitForResponse((res) => res.url().includes("/api/v1/handoffs/upload") && res.status() === 201),
+          page.getByRole("button", { name: "Send", exact: true }).click(),
+        ]);
+        expect(uploadResponse.status()).toBe(201);
+        await page.waitForFunction(() => document.querySelectorAll("form ul li").length === 2);
+        const resultItems = await page.locator("form ul li").allTextContents();
+        expect(resultItems).toHaveLength(2);
+        createdByViewport.set(vp.name, resultItems);
+
+        const afterFit = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth,
+        }));
+        expect(afterFit.scrollWidth, `${vp.name} compose post-submit overflow`).toBeLessThanOrEqual(
+          afterFit.innerWidth,
+        );
+
+        await page.evaluate(axeSource);
+        const axeReport = (await page.evaluate(() =>
+          (
+            window as unknown as {
+              axe: { run: () => Promise<{ violations: Array<{ id: string; impact?: string }> }> };
+            }
+          ).axe.run(),
+        )) as { violations: Array<{ id: string; impact?: string }> };
+        expect(axeReport.violations, `${vp.name} post-submit compose axe violations`).toEqual([]);
+      }
+      expect(createdByViewport.get("desktop")).not.toEqual(createdByViewport.get("mobile"));
+    } finally {
+      await browser.close();
+    }
+  });
 });

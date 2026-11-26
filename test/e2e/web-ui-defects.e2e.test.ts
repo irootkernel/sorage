@@ -25,6 +25,8 @@ let totalAwaiting = 0;
 let totalDeleted = 0;
 const cleanup: Array<() => void> = [];
 const matchingFilterTitle = "Matching Sender and Recipient";
+const longDashboardTitle =
+  "Long-Unbroken-Dashboard-Title-Without-Spaces-For-390px-Viewport-Containment-Verification-0123456789abcdef";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -157,7 +159,9 @@ beforeAll(async () => {
 
   // Seed 202 additional awaiting Handoffs to exercise totals beyond the 200-row page.
   seedBulkHandoffs(projectId, 202);
-  totalAwaiting = 206;
+  // Add one newest Handoff with a realistic long unbroken title so Dashboard's Recent updates table exercises narrow-viewport containment.
+  cli(["send", "--as-user", "--to", "alpha", "--title", longDashboardTitle, "--body", "# Long title body\n"]);
+  totalAwaiting = 207;
 
   // Run one backup so lastAttempt/lastSuccess/lastCommit share one run.id (#6b).
   cli(["backup", "run"]);
@@ -326,9 +330,10 @@ describe("TASK-150 Web UI defect fixes (#5 and #6)", () => {
       expect(await fullMemoBody.innerText()).not.toContain("&lt;");
       expect(await fullMemoBody.innerText()).not.toContain("&amp;");
 
-      // --- Axe-core accessibility check across affected routes on desktop & mobile ---
+      // --- Axe-core accessibility & narrow/desktop viewport fit check across affected routes (TASK-173) ---
       const routes = [
         "#/dashboard",
+        "#/compose",
         "#/inbox",
         "#/deletion-requests",
         "#/projects",
@@ -345,6 +350,42 @@ describe("TASK-150 Web UI defect fixes (#5 and #6)", () => {
         for (const route of routes) {
           await page.goto(`${origin}/${route}`);
           await page.waitForLoadState("networkidle");
+          if (route === "#/dashboard") {
+            await page.waitForSelector(".counts");
+            await page.waitForSelector(".table-wrap table tbody tr");
+            await page.waitForFunction(() =>
+              document.querySelector(".backup-health")?.textContent?.includes("Backup:"),
+            );
+            const fit = await page.evaluate(() => ({
+              scrollWidth: document.documentElement.scrollWidth,
+              innerWidth: window.innerWidth,
+            }));
+            expect(fit.scrollWidth, `${vp.name} ${route} overflow`).toBeLessThanOrEqual(fit.innerWidth);
+            const longLink = page.getByRole("link", { name: longDashboardTitle });
+            await browserExpect(longLink).toBeVisible();
+            const wrap = page.locator('.table-wrap[role="region"][tabindex="0"]');
+            await browserExpect(wrap).toHaveCount(1);
+            await wrap.focus();
+            expect(await page.evaluate(() => document.activeElement?.className)).toContain("table-wrap");
+          } else if (route === "#/compose") {
+            await page.waitForSelector(".compose-form");
+            const fit = await page.evaluate(() => ({
+              scrollWidth: document.documentElement.scrollWidth,
+              innerWidth: window.innerWidth,
+            }));
+            expect(fit.scrollWidth, `${vp.name} ${route} overflow`).toBeLessThanOrEqual(fit.innerWidth);
+            await browserExpect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+          } else if (route === "#/backup") {
+            await page.waitForSelector(".table-wrap table tbody tr");
+            const fit = await page.evaluate(() => ({
+              scrollWidth: document.documentElement.scrollWidth,
+              innerWidth: window.innerWidth,
+            }));
+            expect(fit.scrollWidth, `${vp.name} ${route} overflow`).toBeLessThanOrEqual(fit.innerWidth);
+            const wrap = page.locator('.table-wrap[role="region"][tabindex="0"]');
+            await browserExpect(wrap).toHaveCount(1);
+            await browserExpect(page.locator(".backup-runs-table th")).toHaveCount(6);
+          }
           await page.evaluate(axeSource);
           const report = (await page.evaluate(() =>
             (
@@ -357,6 +398,18 @@ describe("TASK-150 Web UI defect fixes (#5 and #6)", () => {
             allViolations.push({ viewport: vp.name, route, id: v.id, impact: v.impact ?? "unknown" });
           }
         }
+      }
+      // Verify a Dashboard row link remains navigable at both 1280px and 390px.
+      for (const vp of [
+        { width: 1280, height: 900 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(vp);
+        await page.goto(`${origin}/#/dashboard`);
+        await page.waitForSelector(".table-wrap table tbody tr");
+        await page.getByRole("link", { name: longDashboardTitle }).click();
+        await page.waitForURL(/#\/handoff\//);
+        await browserExpect(page.locator("main")).toContainText(longDashboardTitle);
       }
       expect(allViolations).toEqual([]);
       expect(pageErrors).toEqual([]);

@@ -100,5 +100,85 @@ describe("the Web backup page and the Backup Health card", () => {
     // BKP-019: the Git-history deletion warning with no purge offer.
     expect(body).toContain("prior Git commits may retain earlier content");
     expect(body.toLowerCase()).not.toContain("purge history");
-  }, 30000);
+
+    // TASK-173: trigger a real backup push failure so lastFailure warning and multiple rows render at 390px and 1280px.
+    expect(
+      sorage(["backup", "enable-push", "--remote", "missing-remote", "--branch", "main", "--as-user", "--json"], {
+        home,
+      }).status,
+    ).toBe(0);
+    const failedRun = sorage(["backup", "run", "--json"], { home });
+    expect(failedRun.status).toBe(75);
+
+    for (const vp of [
+      { name: "mobile", width: 390, height: 844 },
+      { name: "desktop", width: 1280, height: 900 },
+    ]) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      for (const route of ["#/dashboard", "#/backup"] as const) {
+        await page.goto(`http://127.0.0.1:${port}/${route}`);
+        await page.waitForSelector(".table-wrap table tbody tr");
+        if (route === "#/dashboard") {
+          await page.waitForFunction(() => document.querySelector(".backup-health")?.textContent?.includes("Backup:"));
+        } else {
+          await page.waitForSelector("p.warning");
+          expect(await page.locator(".backup-runs-table tbody tr").count()).toBeGreaterThanOrEqual(2);
+          expect((await page.textContent("p.warning")) ?? "").toContain("The last backup run failed with");
+        }
+        const fit = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth,
+        }));
+        expect(fit.scrollWidth, `${vp.name} ${route} overflow`).toBeLessThanOrEqual(fit.innerWidth);
+        const region = page.locator('.table-wrap[role="region"][tabindex="0"]');
+        expect(await region.count()).toBe(1);
+        await region.focus();
+        expect(await page.evaluate(() => document.activeElement?.className)).toContain("table-wrap");
+        if (vp.name === "mobile" && route === "#/backup") {
+          const metricsBefore = await page.evaluate(() => {
+            const wrap = document.querySelector(".table-wrap");
+            if (!wrap) return null;
+            return { scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth, scrollLeft: wrap.scrollLeft };
+          });
+          expect(metricsBefore).not.toBeNull();
+          if (metricsBefore !== null) {
+            expect(metricsBefore.scrollWidth).toBeGreaterThan(metricsBefore.clientWidth);
+          }
+          await page.keyboard.press("ArrowRight");
+          await page.waitForFunction(() => {
+            const wrap = document.querySelector(".table-wrap");
+            return wrap !== null && wrap.scrollLeft > 0;
+          });
+          for (let step = 0; step < 20; step += 1) {
+            const reached = await page.evaluate(() => {
+              const wrap = document.querySelector(".table-wrap");
+              const lastTh = document.querySelector(".table-wrap thead th:last-child");
+              if (!wrap || !lastTh) return false;
+              return lastTh.getBoundingClientRect().right <= wrap.getBoundingClientRect().right + 1;
+            });
+            if (reached) break;
+            await page.keyboard.press("ArrowRight");
+            await page.waitForTimeout(30);
+          }
+          const metricsAfter = await page.evaluate(() => {
+            const wrap = document.querySelector(".table-wrap");
+            const lastTh = document.querySelector(".table-wrap thead th:last-child");
+            if (!wrap || !lastTh) return null;
+            const wrapRect = wrap.getBoundingClientRect();
+            const thRect = lastTh.getBoundingClientRect();
+            return {
+              scrollLeft: wrap.scrollLeft,
+              thRight: thRect.right,
+              wrapRight: wrapRect.right,
+            };
+          });
+          expect(metricsAfter).not.toBeNull();
+          if (metricsAfter !== null) {
+            expect(metricsAfter.scrollLeft).toBeGreaterThan(0);
+            expect(metricsAfter.thRight).toBeLessThanOrEqual(metricsAfter.wrapRight + 1);
+          }
+        }
+      }
+    }
+  }, 60000);
 });

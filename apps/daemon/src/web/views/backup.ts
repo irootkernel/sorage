@@ -55,7 +55,7 @@ export function backupPage() {
         }),
       );
     }
-    const table = el("table", {}, [
+    const table = el("table", { class: "backup-runs-table" }, [
       el("thead", {}, [
         el("tr", {}, [
           el("th", { text: "Started" }),
@@ -102,8 +102,19 @@ export function backupPage() {
       );
     });
     table.appendChild(body);
-    view().appendChild(el("h3", { text: "Recent runs" }));
-    view().appendChild(table);
+    view().appendChild(el("h3", { id: "backup-recent-runs-heading", text: "Recent runs" }));
+    view().appendChild(
+      el(
+        "div",
+        {
+          class: "table-wrap",
+          tabindex: "0",
+          role: "region",
+          "aria-labelledby": "backup-recent-runs-heading",
+        },
+        [table],
+      ),
+    );
     view().appendChild(
       el("p", {
         class: "muted",

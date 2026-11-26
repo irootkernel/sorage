@@ -102,12 +102,12 @@ export function dashboard() {
           health.appendChild(el("span", { text: "the status endpoint is unavailable" }));
         });
       view().appendChild(counts);
-      view().appendChild(el("h3", { text: "Recent updates" }));
+      view().appendChild(el("h3", { id: "dashboard-recent-updates-heading", text: "Recent updates" }));
       if (result.body.data.handoffs.length === 0) {
         view().appendChild(emptyState("No Handoffs yet; compose one from the Compose tab."));
         return;
       }
-      const recent = el("table", {}, [
+      const recent = el("table", { class: "dashboard-recent-table" }, [
         el("thead", {}, [
           el("tr", {}, [el("th", { text: "Updated" }), el("th", { text: "Title" }), el("th", { text: "State" })]),
         ]),
@@ -123,7 +123,18 @@ export function dashboard() {
         );
       });
       recent.appendChild(body);
-      view().appendChild(recent);
+      view().appendChild(
+        el(
+          "div",
+          {
+            class: "table-wrap",
+            tabindex: "0",
+            role: "region",
+            "aria-labelledby": "dashboard-recent-updates-heading",
+          },
+          [recent],
+        ),
+      );
     })
     .catch(() => {
       if (!pending.isConnected) return;
