@@ -9,6 +9,7 @@ import {
   checkRecipientEligibility,
   findBindingConflict,
   listProjects,
+  rebindProject,
   renameProject,
   showProject,
   unarchiveProject,
@@ -558,5 +559,118 @@ describe("findBindingConflict", () => {
     expect(contained?.message).toBe("the target lies inside an already-bound Git repository");
     expect(contained?.details).toEqual({ directory: "/work/repo/sub", existing: "/work/repo/.git" });
     expect(findBindingConflict({ directory: "/work/other", physicalPath: "/work/other" }, existing)).toBeNull();
+  });
+
+  it("excludes legacy '/' rows from descendant git_repository conflict while preserving exact-path duplicates (ADR-0041)", () => {
+    const legacyRows: ProjectBinding[] = [
+      {
+        id: "b-root-git",
+        projectId: "p-legacy",
+        installationId: "i1",
+        directory: "/.git",
+        bindingKind: "git_repository",
+        createdAt: "t",
+        updatedAt: "t",
+      },
+      {
+        id: "b-root-dir",
+        projectId: "p-legacy-dir",
+        installationId: "i1",
+        directory: "/",
+        bindingKind: "directory",
+        createdAt: "t",
+        updatedAt: "t",
+      },
+    ];
+    expect(findBindingConflict({ directory: "/work/new", physicalPath: "/work/new" }, legacyRows)).toBeNull();
+    expect(findBindingConflict({ directory: "/.git", physicalPath: "/" }, legacyRows)?.code).toBe("BINDING_DUPLICATE");
+    expect(findBindingConflict({ directory: "/", physicalPath: "/" }, legacyRows)?.code).toBe("BINDING_DUPLICATE");
+  });
+});
+
+describe("root '/' binding containment and PRJ-024 no-op (ADR-0041)", () => {
+  const identityFs: ProjectBindingFsPort = {
+    resolveDirectory: (path) => ok({ directory: path, bindingKind: "directory" }),
+    physicalIdentity: () => null,
+    realPath: (path) => ok(path),
+    absentRealPath: (path) => ok(path),
+    gitCommonDirectory: () => null,
+  };
+  const project: Project = {
+    id: "p1",
+    slug: "web-app",
+    displayName: "Web App",
+    description: null,
+    status: "active",
+    createdAt: "t",
+    updatedAt: "t",
+  };
+  const validBinding: ProjectBinding = {
+    id: "b1",
+    projectId: "p1",
+    installationId: "i1",
+    directory: "/work/app",
+    bindingKind: "directory",
+    createdAt: "t",
+    updatedAt: "t",
+  };
+  const legacyRootBinding: ProjectBinding = {
+    id: "b-root",
+    projectId: "p1",
+    installationId: "i1",
+    directory: "/",
+    bindingKind: "directory",
+    createdAt: "t",
+    updatedAt: "t",
+  };
+
+  it("rejects '/' targets in addProject, bindProject, and changing rebindProject with VAULT_CONTAINMENT", () => {
+    const pAdd = { ...ports([], []), bindings: identityFs };
+    const added = addProject(pAdd, { name: "Root", dir: "/", userHome: "/h", actor: TEST_ACTOR });
+    expect(added.ok).toBe(false);
+    expect(!added.ok && added.error.code).toBe("VAULT_CONTAINMENT");
+
+    const pBind = { ...ports([project], [validBinding]), bindings: identityFs };
+    const bound = bindProject(pBind, { slug: "web-app", dir: "/", userHome: "/h", actor: TEST_ACTOR });
+    expect(bound.ok).toBe(false);
+    expect(!bound.ok && bound.error.code).toBe("VAULT_CONTAINMENT");
+
+    const rebound = rebindProject(pBind, {
+      slug: "web-app",
+      from: "/work/app",
+      to: "/",
+      userHome: "/h",
+      actor: TEST_ACTOR,
+    });
+    expect(rebound.ok).toBe(false);
+    expect(!rebound.ok && rebound.error.code).toBe("VAULT_CONTAINMENT");
+  });
+
+  it("preserves PRJ-024 identity no-op for rebind --from / --to / while allowing repair to a valid directory", () => {
+    const pLegacy = { ...ports([project], [legacyRootBinding]), bindings: identityFs };
+    const noop = rebindProject(pLegacy, {
+      slug: "web-app",
+      from: "/",
+      to: "/",
+      userHome: "/h",
+      actor: TEST_ACTOR,
+    });
+    expect(noop.ok).toBe(true);
+    if (noop.ok) {
+      expect(noop.value.changed).toBe(false);
+      expect(noop.value.binding.directory).toBe("/");
+    }
+    const repaired = rebindProject(pLegacy, {
+      slug: "web-app",
+      from: "/",
+      to: "/work/repaired",
+      userHome: "/h",
+      actor: TEST_ACTOR,
+    });
+    expect(repaired.ok).toBe(true);
+    if (repaired.ok) {
+      expect(repaired.value.changed).toBe(true);
+      expect(repaired.value.binding.directory).toBe("/work/repaired");
+    }
   });
 });

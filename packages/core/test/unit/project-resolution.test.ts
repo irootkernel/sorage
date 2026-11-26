@@ -247,6 +247,50 @@ describe("resolveWorkspaceActor", () => {
     });
     expect(result.ok && result.value.kind === "unregistered_workspace" && result.value.directory).toBe("/elsewhere");
   });
+
+  it("isolates legacy '/' directory and '/.git' git_repository bindings from implicit resolution (ADR-0041)", () => {
+    const legacyDir = binding("p1", "/", "directory");
+    const legacyGit = binding("p2", "/.git", "git_repository");
+    const valid = binding("p3", "/work/gamma", "directory");
+
+    const fromRoot = resolveWorkspaceActor(ports([legacyDir, legacyGit, valid], projects, { "/": "/.git" }), {
+      path: "/",
+      userHome: "/h",
+    });
+    expect(fromRoot.ok && fromRoot.value.kind === "unregistered_workspace" && fromRoot.value.directory).toBe("/");
+
+    const fromDescendant = resolveWorkspaceActor(
+      ports([legacyDir, legacyGit, valid], projects, { "/unrelated": "/.git" }),
+      { path: "/unrelated", userHome: "/h" },
+    );
+    expect(
+      fromDescendant.ok && fromDescendant.value.kind === "unregistered_workspace" && fromDescendant.value.directory,
+    ).toBe("/unrelated");
+
+    const fromValid = resolveWorkspaceActor(ports([legacyDir, legacyGit, valid], projects, {}), {
+      path: "/work/gamma/sub",
+      userHome: "/h",
+    });
+    expect(fromValid.ok && fromValid.value.kind === "registered_project" && fromValid.value.project.slug).toBe("gamma");
+  });
+
+  it("excludes legacy '/' rows under --as when a valid non-'/' binding exists, falling back only when sole binding", () => {
+    const multi = ports([binding("p1", "/"), binding("p1", "/work/b")], projects, {});
+    const preferred = resolveWorkspaceActor(multi, { path: "/elsewhere", userHome: "/h", as: "alpha" });
+    expect(preferred.ok && preferred.value.kind === "registered_project" && preferred.value.binding.directory).toBe(
+      "/work/b",
+    );
+
+    const sole = ports([binding("p1", "/")], projects, {});
+    const fallback = resolveWorkspaceActor(sole, { path: "/elsewhere", userHome: "/h", as: "alpha" });
+    expect(fallback.ok && fallback.value.kind === "registered_project" && fallback.value.binding.directory).toBe("/");
+
+    const soleGit = ports([binding("p1", "/.git", "git_repository")], projects, {});
+    const fallbackGit = resolveWorkspaceActor(soleGit, { path: "/elsewhere", userHome: "/h", as: "alpha" });
+    expect(
+      fallbackGit.ok && fallbackGit.value.kind === "registered_project" && fallbackGit.value.binding.directory,
+    ).toBe("/.git");
+  });
 });
 
 describe("workspaceRootOf", () => {

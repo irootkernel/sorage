@@ -157,6 +157,7 @@ export interface SendPorts {
   clock: Clock;
   config: {
     vaultPath: string;
+    resolvedVaultPath?: string | undefined;
     maxBytes: number;
     allowUnregisteredSenders: boolean;
   };
@@ -498,7 +499,7 @@ function sendStaged(ports: SendPorts, input: SendInput, title: string): Result<S
     const inspected = ports.inspectSource(file, input.userHome);
     if (!inspected.ok) return err(inspected.error);
     const contained = checkVaultContainment({
-      resolvedVaultPath: ports.config.vaultPath,
+      resolvedVaultPath: ports.config.resolvedVaultPath ?? ports.config.vaultPath,
       resolvedBindingDirectories: ports.bindingDirectories,
     });
     if (!contained.ok) return err(contained.error);

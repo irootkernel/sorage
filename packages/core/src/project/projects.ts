@@ -46,6 +46,8 @@ export interface NewProjectBinding {
   /** Stored as the normalized real path; the repository never persists the caller's raw spelling. */
   directory: string;
   bindingKind: BindingKind;
+  /** Resolved physical path supplied for commit-time containment and conflict checks; defaults to `directory`. */
+  physicalPath?: string | undefined;
   createdAt: string;
 }
 

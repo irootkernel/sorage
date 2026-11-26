@@ -491,4 +491,72 @@ describe("the TASK-118 doctor configuration and Vault branches", () => {
     expect(permissions?.severity).toBe("blocking");
     expect(permissions?.recovery?.suggestedCommand).toBe(HOME_PERMISSIONS);
   });
+
+  it("warns on legacy '/' directory and '/.git' bindings in bindings.nested without false nesting and preserves 21 IDs (ADR-0041)", () => {
+    const home = tempHome("sorage-t169-doctor-legacy-root-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const validOuter = join(home, "valid-outer");
+    const validInner = join(validOuter, "inner");
+    mkdirSync(validInner, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", validOuter], capture().ports)).toBe(0);
+
+    // Seed legacy '/' (directory) and '/.git' (git_repository) rows directly.
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const alpha = db.prepare("SELECT id FROM projects WHERE slug = 'alpha'").get() as { id: string };
+    const inst = db.prepare("SELECT installation_id FROM project_bindings LIMIT 1").get() as {
+      installation_id: string;
+    };
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES ('p-leg', 'legacy', 'Legacy', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run();
+    db.prepare(
+      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-leg-dir', 'p-leg', ?, '/', 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'), ('b-leg-git', 'p-leg', ?, '/.git', 'git_repository', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run(inst.installation_id, inst.installation_id);
+    db.close();
+
+    // Branch (b): legacy root rows only — valid binding must NOT be falsely flagged as nested inside '/'.
+    const legacyOnly = capture();
+    expect(runCli(["doctor", "--json"], legacyOnly.ports)).toBe(0);
+    const legacyReport = JSON.parse(legacyOnly.outText()) as DoctorEnvelope;
+    expect(legacyReport.data.checks).toHaveLength(21);
+    const legacyCheck = checkOf(legacyReport, "bindings.nested");
+    expect(legacyCheck?.severity).toBe("warning");
+    expect(legacyCheck?.message).toContain("Legacy root binding '/' (legacy)");
+    expect(legacyCheck?.message).toContain("Legacy root binding '/.git' (legacy)");
+    expect(legacyCheck?.message).not.toContain("nested inside '/'");
+    expect(legacyCheck?.recovery?.suggestedCommand).toBe(
+      "Run sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir> or sorage project unbind <slug> --dir <the recorded directory this warning names>",
+    );
+
+    // Branch (c): both legacy root rows AND ordinary nested directory bindings.
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", validInner], capture().ports)).toBe(0);
+    const both = capture();
+    expect(runCli(["doctor", "--json"], both.ports)).toBe(0);
+    const bothReport = JSON.parse(both.outText()) as DoctorEnvelope;
+    const bothCheck = checkOf(bothReport, "bindings.nested");
+    expect(bothCheck?.severity).toBe("warning");
+    expect(bothCheck?.message).toContain("Legacy root binding '/' (legacy)");
+    expect(bothCheck?.message).toContain("is nested inside");
+    expect(bothCheck?.message.indexOf("Legacy root binding")).toBeLessThan(
+      bothCheck?.message.indexOf("is nested inside") ?? -1,
+    );
+    expect(bothCheck?.recovery?.suggestedCommand).toBe(
+      "Pass --as <project-slug> wherever the deepest match is not the intended Project; for a legacy root binding, run sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir> or sorage project unbind <slug> --dir <the recorded directory this warning names>",
+    );
+
+    // Branch (a): after removing legacy rows, only ordinary nested recovery remains.
+    expect(runCli(["project", "unbind", "legacy", "--dir", "/"], capture().ports)).toBe(0);
+    const dbClean = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    dbClean.prepare("DELETE FROM project_bindings WHERE id = 'b-leg-git'").run();
+    dbClean.close();
+    const nestedOnly = capture();
+    expect(runCli(["doctor", "--json"], nestedOnly.ports)).toBe(0);
+    const nestedCheck = checkOf(JSON.parse(nestedOnly.outText()) as DoctorEnvelope, "bindings.nested");
+    expect(nestedCheck?.severity).toBe("warning");
+    expect(nestedCheck?.message).not.toContain("Legacy root binding");
+    expect(nestedCheck?.recovery?.suggestedCommand).toBe(
+      "Pass --as <project-slug> wherever the deepest match is not the intended Project",
+    );
+    expect(alpha.id).toBeTruthy();
+  });
 });

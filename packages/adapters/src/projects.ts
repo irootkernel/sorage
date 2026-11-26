@@ -1,6 +1,13 @@
 import { realpathSync } from "node:fs";
-import { dirname } from "node:path";
-import type { ActorRef, Project, ProjectBinding, ProjectRepositoryPort, ProjectResolutionPorts } from "@sorage/core";
+import type {
+  ActorRef,
+  BindingKind,
+  Project,
+  ProjectBinding,
+  ProjectRepositoryPort,
+  ProjectResolutionPorts,
+  Result,
+} from "@sorage/core";
 import {
   type AppError,
   appError,
@@ -9,6 +16,7 @@ import {
   findBindingConflict,
   ok,
   UuidGenerator,
+  workspaceRootOf,
 } from "@sorage/core";
 import type { SqliteEventLedger } from "./events";
 import { storageContentionOf, type ContentionSurface } from "./storage-contention";
@@ -161,6 +169,20 @@ export function createSqliteProjectRepository(
   ): void => {
     ledger.appendNow({ eventType, actor, metadata, id: defaultEventIds.next(), createdAt });
   };
+  const revalidateVaultContainment = (
+    directory: string,
+    bindingKind: BindingKind,
+    physicalPath: string,
+  ): Result<void, AppError> => {
+    if (options.vaultPath === undefined) return ok(undefined);
+    const vault = fs.realpath(options.vaultPath);
+    const root = workspaceRootOf({ directory, bindingKind });
+    const containment = checkVaultContainment({
+      resolvedVaultPath: vault,
+      resolvedBindingDirectories: [root, physicalPath],
+    });
+    return containment.ok ? ok(undefined) : containment;
+  };
   return {
     createProject(project, actor) {
       try {
@@ -213,8 +235,19 @@ export function createSqliteProjectRepository(
       try {
         const installationId = options.installationId;
         const directory = fs.realpath(binding.directory);
+        const physicalPath = fs.realpath(binding.physicalPath ?? binding.directory);
+        const containment = revalidateVaultContainment(directory, binding.bindingKind, physicalPath);
+        if (!containment.ok) return containment;
         db.exec("BEGIN IMMEDIATE");
         try {
+          const existing = db
+            .prepare("SELECT * FROM project_bindings WHERE installation_id = ?")
+            .all(installationId) as BindingRow[];
+          const conflict = findBindingConflict({ directory, physicalPath }, existing.map(toBinding));
+          if (conflict !== null) {
+            db.exec("ROLLBACK");
+            return err(conflict);
+          }
           db.prepare(
             "INSERT INTO projects (id, slug, display_name, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
           ).run(
@@ -270,9 +303,20 @@ export function createSqliteProjectRepository(
         // between the resolveDirectory check and this insert surfaces as an error
         // result instead of a raw throw past the error envelope.
         const directory = fs.realpath(binding.directory);
+        const physicalPath = fs.realpath(binding.physicalPath ?? binding.directory);
         const installationId = options.installationId;
+        const containment = revalidateVaultContainment(directory, binding.bindingKind, physicalPath);
+        if (!containment.ok) return containment;
         db.exec("BEGIN IMMEDIATE");
         try {
+          const existing = db
+            .prepare("SELECT * FROM project_bindings WHERE installation_id = ?")
+            .all(installationId) as BindingRow[];
+          const conflict = findBindingConflict({ directory, physicalPath }, existing.map(toBinding));
+          if (conflict !== null) {
+            db.exec("ROLLBACK");
+            return err(conflict);
+          }
           db.prepare(
             "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
           ).run(
@@ -438,15 +482,8 @@ export function createSqliteProjectRepository(
       try {
         const directory = fs.realpath(replacement.directory);
         const physicalPath = fs.realpath(replacement.physicalPath);
-        if (options.vaultPath !== undefined) {
-          const vault = fs.realpath(options.vaultPath);
-          const root = replacement.bindingKind === "git_repository" ? dirname(directory) : directory;
-          const containment = checkVaultContainment({
-            resolvedVaultPath: vault,
-            resolvedBindingDirectories: [root, physicalPath],
-          });
-          if (!containment.ok) return containment;
-        }
+        const containment = revalidateVaultContainment(directory, replacement.bindingKind, physicalPath);
+        if (!containment.ok) return containment;
         db.exec("BEGIN IMMEDIATE");
         try {
           const previous = db.prepare("SELECT * FROM project_bindings WHERE id = ?").get(bindingId) as

@@ -4,7 +4,12 @@ import { decodeCursor, encodeCursor, filterHash } from "../primitives/cursor";
 import { type AppError, appError, err, isRetryableWaitListingFailure, ok, type Result } from "../shared/errors";
 import { type NewDomainEvent, projectActor, USER_ACTOR } from "../shared/events";
 import type { ReviewState } from "./handoffs";
-import { type ProjectCommandPorts, resolveWorkspaceActor, workspaceRootOf } from "../project/project-commands";
+import {
+  isLegacyRootBinding,
+  type ProjectCommandPorts,
+  resolveWorkspaceActor,
+  workspaceRootOf,
+} from "../project/project-commands";
 import type { ProjectBinding } from "../project/projects";
 import type {
   HandoffProcessingEvidence,
@@ -855,6 +860,7 @@ export interface HandoffParticipantTarget {
 }
 
 function bindingMatchesWorkspaceKey(installationId: string, binding: ProjectBinding, targetKey: string): boolean {
+  if (isLegacyRootBinding(binding)) return false;
   const root = workspaceRootOf(binding);
   if (deriveWorkspaceKey(installationId, root) === targetKey) return true;
   return root !== binding.directory && deriveWorkspaceKey(installationId, binding.directory) === targetKey;

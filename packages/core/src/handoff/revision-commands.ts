@@ -82,7 +82,12 @@ export interface RevisionPorts extends HandoffReadPorts {
   content: {
     prepareArtifactBody(request: ArtifactBodyPrepareRequest): Result<PreparedArtifactBody, AppError>;
   };
-  config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
+  config: {
+    vaultPath: string;
+    resolvedVaultPath?: string | undefined;
+    maxBytes: number;
+    verifyChecksumOnFetch: boolean;
+  };
   /** Resolved binding directories for the Vault containment half of the import policy. */
   bindingDirectories: string[];
   /** Digests a file with a bounded read so the guards can run before staging (section 19). */
@@ -403,7 +408,7 @@ function reviseContent(
   const spoolUpload = input.fileSourceKind === "authenticated-spool";
   if (!asBody) {
     const contained = checkVaultContainment({
-      resolvedVaultPath: ports.config.vaultPath,
+      resolvedVaultPath: ports.config.resolvedVaultPath ?? ports.config.vaultPath,
       resolvedBindingDirectories: ports.bindingDirectories,
     });
     if (!contained.ok) return err(contained.error);

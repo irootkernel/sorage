@@ -5,6 +5,7 @@ import {
   checkExternalSource,
   checkVaultContainment,
   classifyMimeType,
+  isPathAtOrBelow,
   prepareArtifactImport,
   sanitizeStoredName,
 } from "../../src/content/import-policy";
@@ -100,14 +101,79 @@ describe("checkExternalSource", () => {
     });
     expect(refused.ok).toBe(false);
   });
+
+  it("stays fail-closed when workspaceRoot is '/' so VLT-016 is never weakened", () => {
+    for (const source of ["/", "/etc/passwd", "/tmp/doc.md"]) {
+      const refused = checkExternalSource({
+        resolvedSourcePath: source,
+        workspaceRoot: "/",
+        policy: "workspace_or_explicit",
+        allowExternalSource: false,
+      });
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error.code).toBe("SOURCE_OUTSIDE_WORKSPACE");
+      const workspaceOnly = checkExternalSource({
+        resolvedSourcePath: source,
+        workspaceRoot: "/",
+        policy: "workspace_only",
+        allowExternalSource: true,
+      });
+      expect(workspaceOnly.ok).toBe(false);
+      if (!workspaceOnly.ok) expect(workspaceOnly.error.code).toBe("SOURCE_OUTSIDE_WORKSPACE");
+      const explicit = checkExternalSource({
+        resolvedSourcePath: source,
+        workspaceRoot: "/",
+        policy: "workspace_or_explicit",
+        allowExternalSource: true,
+      });
+      expect(explicit).toEqual({ ok: true, value: { insideWorkspace: false } });
+    }
+  });
+});
+
+describe("isPathAtOrBelow", () => {
+  it("handles root '/' and segment boundaries without sibling false positives", () => {
+    expect(isPathAtOrBelow("/", "/")).toBe(true);
+    expect(isPathAtOrBelow("/tmp/vault", "/")).toBe(true);
+    expect(isPathAtOrBelow("relative", "/")).toBe(false);
+    expect(isPathAtOrBelow("/a", "/a")).toBe(true);
+    expect(isPathAtOrBelow("/a/b", "/a")).toBe(true);
+    expect(isPathAtOrBelow("/a-b", "/a")).toBe(false);
+  });
 });
 
 describe("checkVaultContainment", () => {
-  it("accepts disjoint directories", () => {
+  it("accepts disjoint directories and non-matching sibling prefixes", () => {
     expect(
-      checkVaultContainment({ resolvedVaultPath: "/vault", resolvedBindingDirectories: ["/projects/a", "/projects/b"] })
-        .ok,
+      checkVaultContainment({
+        resolvedVaultPath: "/vault",
+        resolvedBindingDirectories: ["/projects/a", "/projects/b", "/vault-other"],
+      }).ok,
     ).toBe(true);
+  });
+
+  it("rejects '/' as a binding directory or as the Vault path (VLT-017, ADR-0041)", () => {
+    const rootBinding = checkVaultContainment({
+      resolvedVaultPath: "/tmp/vault",
+      resolvedBindingDirectories: ["/"],
+    });
+    expect(rootBinding.ok).toBe(false);
+    if (!rootBinding.ok) {
+      expect(rootBinding.error.code).toBe("VAULT_CONTAINMENT");
+      expect(rootBinding.error.details?.side).toBe("vault-inside-project");
+    }
+
+    const rootVault = checkVaultContainment({
+      resolvedVaultPath: "/",
+      resolvedBindingDirectories: ["/tmp/project"],
+    });
+    expect(rootVault.ok).toBe(false);
+    if (!rootVault.ok) {
+      expect(rootVault.error.code).toBe("VAULT_CONTAINMENT");
+      expect(rootVault.error.details?.side).toBe("project-inside-vault");
+    }
+
+    expect(checkVaultContainment({ resolvedVaultPath: "/", resolvedBindingDirectories: ["/"] }).ok).toBe(false);
   });
 
   it("rejects a Vault inside a bound Project directory at exit 64 (VLT-017)", () => {

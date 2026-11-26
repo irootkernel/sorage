@@ -30,6 +30,7 @@ import type { SorageSqlite } from "./sqlite/connection";
 import { productionMigrationPlan } from "./sqlite/migrations";
 import { asSchemaAdmission, openAndMigrate } from "./sqlite/migrator";
 import { openVault } from "./vault";
+import { resolveContainmentBindingDirectories, resolvePhysicalPath } from "./vault-command-ports";
 
 /**
  * The production wiring of the `sorage send` command of TASK-029: one migrated SQLite
@@ -296,6 +297,7 @@ export function createNodeSendPorts(options: NodeHandoffCommandPortsOptions = {}
       clock,
       config: {
         vaultPath: effective.vault.path,
+        resolvedVaultPath: resolvePhysicalPath(effective.vault.path),
         maxBytes: effective.artifact.maxBytes,
         allowUnregisteredSenders: effective.handoff.allowUnregisteredSenders,
       },
@@ -426,7 +428,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
   revisions: ReturnType<typeof createSqliteRevisionStore>;
   content: SendPorts["content"];
   artifactStore: ReturnType<typeof createNodeArtifactStore>;
-  config: { vaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
+  config: { vaultPath: string; resolvedVaultPath: string; maxBytes: number; verifyChecksumOnFetch: boolean };
   bindingDirectories: string[];
   digestSource: (path: string) => Result<string, AppError>;
   disclosures?: NonNullable<RevisionPorts["disclosures"]>;
@@ -485,6 +487,7 @@ export function createNodeRevisionPorts(options: NodeHandoffCommandPortsOptions 
       ),
       config: {
         vaultPath: effective.vault.path,
+        resolvedVaultPath: resolvePhysicalPath(effective.vault.path),
         maxBytes: effective.artifact.maxBytes,
         verifyChecksumOnFetch: effective.artifact.verifyChecksumOnFetch,
       },
@@ -613,11 +616,14 @@ export function createNodeHandoffReadPorts(options: NodeHandoffCommandPortsOptio
   });
 }
 
-/** The resolved binding directories the Vault containment check runs against (VLT-017). */
+/** The resolved binding directories the Vault containment check runs against (VLT-017, ADR-0041). */
 function bindingDirectoriesOf(db: { prepare(sql: string): { all(...params: unknown[]): unknown } }): string[] {
   try {
-    const rows = db.prepare("SELECT directory FROM project_bindings").all() as Array<{ directory: string }>;
-    return rows.map((row) => row.directory);
+    const rows = db.prepare("SELECT directory, binding_kind FROM project_bindings").all() as Array<{
+      directory: string;
+      binding_kind: string;
+    }>;
+    return resolveContainmentBindingDirectories(rows);
   } catch {
     return [];
   }

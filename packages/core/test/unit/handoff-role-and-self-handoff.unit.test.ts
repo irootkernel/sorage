@@ -808,4 +808,63 @@ describe("unified resolveHandoffParticipantRole across all 5 core modules", () =
       ),
     ).toEqual(ok("recipient"));
   });
+
+  it("never grants inherited PRJ-020 sender authority via a legacy '/' or '/.git' binding (VLT-017, ADR-0041)", () => {
+    const projects = [makeProject(ALPHA_ID, "alpha"), makeProject(BETA_ID, "beta")];
+    const rootWsHandoff = makeHandoffView({
+      senderKind: "unregistered_workspace",
+      senderProjectId: null,
+      senderProjectSlug: null,
+      senderWorkspaceKey: workspaceKey(INSTALLATION, "/"),
+      senderPathSnapshot: "/",
+      recipientProjectId: BETA_ID,
+      recipientProjectSlug: "beta",
+    });
+
+    // Case 1: Project carries both a valid sibling binding and a legacy '/' binding;
+    // resolving implicitly from the valid sibling must NOT inherit authority over '/'.
+    const mixedBindings = [
+      makeBinding("b-valid", ALPHA_ID, "/workspaces/alpha"),
+      makeBinding("b-legacy-dir", ALPHA_ID, "/"),
+      makeBinding("b-legacy-git", ALPHA_ID, "/.git", "git_repository"),
+    ];
+    const { readPorts: mixedPorts } = makeAllPorts(rootWsHandoff, projects, mixedBindings);
+    const deniedImplicit = resolveHandoffParticipantRole(
+      mixedPorts,
+      { path: "/workspaces/alpha", userHome: "/home/tester", as: undefined, asUser: false },
+      rootWsHandoff,
+    );
+    expect(deniedImplicit.ok).toBe(false);
+    if (!deniedImplicit.ok) expect(deniedImplicit.error.code).toBe("HANDOFF_NOT_FOUND");
+
+    // Case 2: Project whose sole binding is legacy '/' accessed via --as alpha must NOT inherit '/'.
+    const soleLegacyBindings = [makeBinding("b-legacy-sole", ALPHA_ID, "/")];
+    const { readPorts: solePorts } = makeAllPorts(rootWsHandoff, projects, soleLegacyBindings);
+    const deniedAs = resolveHandoffParticipantRole(
+      solePorts,
+      { path: "/workspaces/elsewhere", userHome: "/home/tester", as: "alpha", asUser: false },
+      rootWsHandoff,
+    );
+    expect(deniedAs.ok).toBe(false);
+    if (!deniedAs.ok) expect(deniedAs.error.code).toBe("HANDOFF_NOT_FOUND");
+
+    // Case 3: Valid non-'/' bindings on the same Project still inherit PRJ-020 sender authority normally.
+    const validWsHandoff = makeHandoffView({
+      senderKind: "unregistered_workspace",
+      senderProjectId: null,
+      senderProjectSlug: null,
+      senderWorkspaceKey: workspaceKey(INSTALLATION, "/workspaces/alpha"),
+      senderPathSnapshot: "/workspaces/alpha",
+      recipientProjectId: BETA_ID,
+      recipientProjectSlug: "beta",
+    });
+    const { readPorts: validPorts } = makeAllPorts(validWsHandoff, projects, mixedBindings);
+    expect(
+      resolveHandoffParticipantRole(
+        validPorts,
+        { path: "/workspaces/alpha", userHome: "/home/tester", as: undefined, asUser: false },
+        validWsHandoff,
+      ),
+    ).toEqual(ok("sender"));
+  });
 });

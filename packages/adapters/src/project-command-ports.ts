@@ -141,7 +141,7 @@ export function createNodeProjectPorts(options: NodeProjectPortsOptions = {}): N
           const existing = `/${segments.join("/")}`;
           const real = fs.realpath(existing);
           const rest = absolute.slice(existing.length).replace(/^\/+|\/+$/g, "");
-          return ok(rest === "" ? real : `${real}/${rest}`);
+          return ok(rest === "" ? real : real === "/" ? `/${rest}` : `${real}/${rest}`);
         },
         resolveDirectory(path, currentUserHome) {
           const expanded =

@@ -556,3 +556,110 @@ describe("sorage project add (ADR-0020)", () => {
     expect(report.error.message).toContain("no working tree");
   });
 });
+
+describe("root '/' containment and legacy '/' binding repair (ADR-0041)", () => {
+  it("refuses '/' in project add, bind, and changing rebind with VAULT_CONTAINMENT (exit 64)", () => {
+    initializedHome();
+    const valid = tempDir();
+
+    const addRoot = capture();
+    expect(runCli(["project", "add", "--name", "Root", "--dir", "/", "--json"], addRoot.ports)).toBe(64);
+    expect((JSON.parse(addRoot.errText()) as { error: { code: string } }).error.code).toBe("VAULT_CONTAINMENT");
+
+    expect(runCli(["project", "add", "--name", "App", "--dir", valid], capture().ports)).toBe(0);
+
+    const bindRoot = capture();
+    expect(runCli(["project", "bind", "app", "--dir", "/", "--json"], bindRoot.ports)).toBe(64);
+    expect((JSON.parse(bindRoot.errText()) as { error: { code: string } }).error.code).toBe("VAULT_CONTAINMENT");
+
+    const rebindRoot = capture();
+    expect(runCli(["project", "rebind", "app", "--from", valid, "--to", "/", "--json"], rebindRoot.ports)).toBe(64);
+    expect((JSON.parse(rebindRoot.errText()) as { error: { code: string } }).error.code).toBe("VAULT_CONTAINMENT");
+  });
+
+  it("keeps seeded legacy '/' bindings inspectable and repairable via rebind/unbind while preserving PRJ-024 no-op", () => {
+    const home = initializedHome();
+    const initialDir = tempDir();
+    const repairedDir = tempDir();
+    expect(runCli(["project", "add", "--name", "Legacy", "--dir", initialDir], capture().ports)).toBe(0);
+
+    // Seed a legacy '/' binding row directly in SQLite (simulating pre-ADR-0041 data).
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const projectRow = db.prepare("SELECT id FROM projects WHERE slug = 'legacy'").get() as { id: string };
+    const instRow = db.prepare("SELECT installation_id FROM project_bindings LIMIT 1").get() as {
+      installation_id: string;
+    };
+    db.prepare("DELETE FROM project_bindings WHERE project_id = ?").run(projectRow.id);
+    db.prepare(
+      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-legacy', ?, ?, '/', 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run(projectRow.id, instRow.installation_id);
+    db.close();
+
+    // list and show still display the legacy '/' row.
+    const listed = capture();
+    expect(runCli(["project", "list", "--json"], listed.ports)).toBe(0);
+    expect(
+      (JSON.parse(listed.outText()).data as Array<{ slug: string; bindingCount: number; unbound: boolean }>).find(
+        (entry) => entry.slug === "legacy",
+      ),
+    ).toMatchObject({ slug: "legacy", bindingCount: 1, unbound: false });
+
+    const shown = capture();
+    expect(runCli(["project", "show", "legacy", "--json"], shown.ports)).toBe(0);
+    const shownData = JSON.parse(shown.outText()).data as {
+      project: { id: string };
+      bindings: Array<{ directory: string }>;
+    };
+    expect(shownData.project.id).toBe(projectRow.id);
+    expect(shownData.bindings.map((b) => b.directory)).toEqual(["/"]);
+
+    // Identity no-op rebind --from / --to / preserves PRJ-024 (exit 0, no event).
+    expect(runCli(["project", "rebind", "legacy", "--from", "/", "--to", "/"], capture().ports)).toBe(0);
+    const dbCheck = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    expect(
+      dbCheck.prepare("SELECT COUNT(*) AS n FROM events WHERE event_type = 'PROJECT_BINDING_REBOUND'").get(),
+    ).toEqual({ n: 0 });
+    dbCheck.close();
+
+    // Explicit rebind repairs the row while preserving Project ID and binding ID.
+    const repaired = capture();
+    expect(runCli(["project", "rebind", "legacy", "--from", "/", "--to", repairedDir, "--json"], repaired.ports)).toBe(
+      0,
+    );
+    const repairedData = JSON.parse(repaired.outText()).data as { id: string; projectId: string; directory: string };
+    expect(repairedData).toMatchObject({
+      id: "b-legacy",
+      projectId: projectRow.id,
+      directory: realpathSync(repairedDir),
+    });
+
+    // Also verify explicit unbind removes a legacy '/' row cleanly while preserving CONFIRMATION_REQUIRED
+    // when open Handoffs exist.
+    const db2 = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    db2
+      .prepare(
+        "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-legacy-2', ?, ?, '/', 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+      )
+      .run(projectRow.id, instRow.installation_id);
+    db2.close();
+    expect(
+      runCli(
+        ["send", "--as-user", "--to", "legacy", "--title", "Open Legacy Handoff", "--body", "keep open"],
+        capture().ports,
+      ),
+    ).toBe(0);
+    const unbindRefused = capture();
+    expect(runCli(["project", "unbind", "legacy", "--dir", "/", "--json"], unbindRefused.ports)).toBe(64);
+    expect((JSON.parse(unbindRefused.errText()) as { error: { code: string } }).error.code).toBe(
+      "CONFIRMATION_REQUIRED",
+    );
+    expect(runCli(["project", "unbind", "legacy", "--dir", "/", "--confirm"], capture().ports)).toBe(0);
+    const afterUnbind = capture();
+    expect(runCli(["project", "show", "legacy", "--json"], afterUnbind.ports)).toBe(0);
+    expect(
+      (JSON.parse(afterUnbind.outText()).data as { bindings: Array<{ directory: string }> }).bindings.map(
+        (b) => b.directory,
+      ),
+    ).toEqual([realpathSync(repairedDir)]);
+  });
+});

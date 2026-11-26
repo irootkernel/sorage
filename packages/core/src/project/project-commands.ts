@@ -1,7 +1,7 @@
 import { type AppError, appError, err, ok, type Result } from "../shared/errors";
 import { type ActorRef, projectActor, USER_ACTOR, workspaceActor } from "../shared/events";
 import type { Clock, IdGenerator } from "../primitives/ids";
-import { checkVaultContainment } from "../content/import-policy";
+import { checkVaultContainment, isPathAtOrBelow } from "../content/import-policy";
 import type { BindingKind, Project, ProjectBinding, ProjectRepositoryPort } from "./projects";
 import { workspaceKey } from "../primitives/identity";
 
@@ -161,6 +161,7 @@ export function addProject(ports: ProjectCommandPorts, input: AddProjectInput): 
       projectId,
       directory: directory.value.directory,
       bindingKind: directory.value.bindingKind,
+      physicalPath: directory.value.physicalPath,
       createdAt: now,
     },
     input.actor,
@@ -219,11 +220,6 @@ function projectBySlug(projects: ProjectRepositoryPort, slug: string): Result<Pr
   return ok(found.value);
 }
 
-/** True when `candidate` is `directory` itself or any path beneath it. */
-function isAtOrBelow(candidate: string, directory: string): boolean {
-  return candidate === directory || candidate.startsWith(`${directory}/`);
-}
-
 /** Checks a normalized binding target against existing bindings for exact duplication or Git repository containment (PRJ-016). */
 export function findBindingConflict(
   target: { directory: string; physicalPath: string },
@@ -235,7 +231,11 @@ export function findBindingConflict(
     if (binding.directory === target.directory) {
       return appError("BINDING_DUPLICATE", "the target directory is already bound", { directory: target.directory });
     }
-    if (binding.bindingKind === "git_repository" && isAtOrBelow(target.physicalPath, workspaceRootOf(binding))) {
+    if (
+      binding.bindingKind === "git_repository" &&
+      !isLegacyRootBinding(binding) &&
+      isPathAtOrBelow(target.physicalPath, workspaceRootOf(binding))
+    ) {
       return appError("BINDING_DUPLICATE", "the target lies inside an already-bound Git repository", {
         directory: target.physicalPath,
         existing: binding.directory,
@@ -292,6 +292,7 @@ export function bindProject(ports: ProjectCommandPorts, input: BindProjectInput)
       projectId: project.value.id,
       directory: directory.value.directory,
       bindingKind: directory.value.bindingKind,
+      physicalPath: directory.value.physicalPath,
       createdAt: ports.clock.now().toISOString(),
     },
     input.actor,
@@ -459,8 +460,18 @@ function bindingWorkspaceRoot(directory: string, kind: BindingKind): string {
   return parent === "" ? "/" : parent;
 }
 
-export function workspaceRootOf(binding: ProjectBinding): string {
+export function workspaceRootOf(binding: Pick<ProjectBinding, "directory" | "bindingKind">): string {
   return bindingWorkspaceRoot(binding.directory, binding.bindingKind);
+}
+
+/**
+ * True for a pre-existing invalid legacy root binding whose workspace root is
+ * `"/"` (whether `directory` at `"/"` or `git_repository` at `"/.git"`). Such
+ * rows are excluded from implicit authority and runtime containment while
+ * staying inspectable and repairable via explicit `rebind`/`unbind` (ADR-0041).
+ */
+export function isLegacyRootBinding(binding: Pick<ProjectBinding, "directory" | "bindingKind">): boolean {
+  return workspaceRootOf(binding) === "/";
 }
 
 export type ResolvedActor =
@@ -498,11 +509,14 @@ export function resolveWorkspaceActor(
         }),
       );
     }
-    // A multi-bound Project under --as selects the code-point-first binding
-    // directory deterministically; --as names the Project, and the documented
-    // escape for a specific workspace is running from that directory or the
-    // resolution ladder.
-    const ordered = [...bindings.value].sort((a, b) => compareByCodePoint(a.directory, b.directory));
+    // A multi-bound Project under --as excludes legacy "/" rows whenever at
+    // least one valid non-"/" binding exists, falling back to a legacy row only
+    // when it is the Project's sole binding so --as does not falsely report
+    // PROJECT_UNBOUND before repair (ADR-0041); candidates then select the
+    // code-point-first binding directory deterministically.
+    const validBindings = bindings.value.filter((binding) => !isLegacyRootBinding(binding));
+    const candidates = validBindings.length > 0 ? validBindings : bindings.value;
+    const ordered = [...candidates].sort((a, b) => compareByCodePoint(a.directory, b.directory));
     return ok({ kind: "registered_project", project: found.value, binding: ordered[0] as ProjectBinding });
   }
   const real = ports.bindings.realPath(input.path, input.userHome);
@@ -516,9 +530,10 @@ export function resolveWorkspaceActor(
   for (const project of projects.value) registered.set(project.id, project);
 
   if (common !== null) {
-    // Step 5: a repository binding outranks every directory binding, whatever the depths.
+    // Step 5: a valid non-"/" repository binding outranks every directory binding, whatever the depths.
     const gitMatches = bindings.value.filter(
-      (binding) => binding.bindingKind === "git_repository" && binding.directory === common,
+      (binding) =>
+        binding.bindingKind === "git_repository" && !isLegacyRootBinding(binding) && binding.directory === common,
     );
     if (gitMatches.length === 1) {
       const binding = gitMatches[0] as ProjectBinding;
@@ -530,9 +545,12 @@ export function resolveWorkspaceActor(
     }
   }
 
-  // Step 4: the deepest directory binding wins; a same-depth tie is ambiguous (step 6).
+  // Step 4: the deepest valid non-"/" directory binding wins; a same-depth tie is ambiguous (step 6).
   const directoryMatches = bindings.value.filter(
-    (binding) => binding.bindingKind === "directory" && isAtOrBelow(real.value, binding.directory),
+    (binding) =>
+      binding.bindingKind === "directory" &&
+      !isLegacyRootBinding(binding) &&
+      isPathAtOrBelow(real.value, binding.directory),
   );
   if (directoryMatches.length > 0) {
     const deepest = Math.max(...directoryMatches.map((binding) => depthOf(binding.directory)));

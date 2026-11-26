@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorSpec } from "../../src/shared/errors";
+import { errorSpec, ok } from "../../src/shared/errors";
 import {
   parseVaultMarker,
   REQUIRED_GITATTRIBUTES_LINES,
@@ -10,6 +10,7 @@ import {
   vaultGitattributesContent,
   vaultGitignoreContent,
 } from "../../src/vault/vault";
+import { moveVault, type VaultMovePorts } from "../../src/vault/vault-commands";
 
 function markerBody(overrides: Record<string, unknown> = {}): string {
   return `${JSON.stringify({
@@ -172,5 +173,61 @@ describe("verifyVaultPolicyFiles", () => {
       ".gitattributes is missing from the Vault.",
       ".gitignore is missing from the Vault.",
     ]);
+  });
+});
+
+describe("moveVault root-safe self-overlap (VLT-017, ADR-0041)", () => {
+  function stubMovePorts(resolvedVaultPath: string, resolvedTargetPath: string): VaultMovePorts {
+    const unused = () => {
+      throw new Error("should fail before acquiring lock or reading bindings");
+    };
+    return {
+      vaultPath: resolvedVaultPath,
+      targetPath: resolvedTargetPath,
+      installationId: "11111111-1111-4111-8111-111111111111",
+      resolvedVaultPath,
+      resolvedTargetPath,
+      openVault: () =>
+        ok({
+          marker: {
+            type: "sorage-vault",
+            schemaVersion: 1,
+            installationId: "11111111-1111-4111-8111-111111111111",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          layoutProblems: [],
+        }),
+      bindingDirectories: unused,
+      drainUnderLock: unused,
+      fenceAndCountPendingIntents: unused,
+      releaseSwitchFence: unused,
+      lock: { acquire: unused },
+      target: {
+        prepare: unused,
+        managedFiles: unused,
+        stageCopy: unused,
+        sourceChecksum: unused,
+        activate: unused,
+        finalize: unused,
+      },
+      config: { current: unused, updateVaultPath: unused },
+      emitMoved: unused,
+    };
+  }
+
+  it("refuses moving to '/' or moving from '/' with VAULT_CONTAINMENT", () => {
+    const toRoot = moveVault(stubMovePorts("/tmp/vault", "/"));
+    expect(toRoot.ok).toBe(false);
+    if (!toRoot.ok) {
+      expect(toRoot.error.code).toBe("VAULT_CONTAINMENT");
+      expect(toRoot.error.details?.side).toBe("move-target-overlaps-source");
+    }
+
+    const fromRoot = moveVault(stubMovePorts("/", "/tmp/moved"));
+    expect(fromRoot.ok).toBe(false);
+    if (!fromRoot.ok) {
+      expect(fromRoot.error.code).toBe("VAULT_CONTAINMENT");
+      expect(fromRoot.error.details?.side).toBe("move-target-overlaps-source");
+    }
   });
 });

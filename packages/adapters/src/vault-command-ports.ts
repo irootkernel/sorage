@@ -12,10 +12,12 @@ import { dirname, join, relative } from "node:path";
 import {
   type AppError,
   appError,
+  type BindingKind,
   type Configuration,
   type DrainReport,
   err,
   expandConfigurationPath,
+  isLegacyRootBinding,
   isManagedContentStorageKey,
   isManagedStorageKey,
   ok,
@@ -24,6 +26,7 @@ import {
   type VaultMovePorts,
   type VaultStatusPorts,
   type VaultVerifyPorts,
+  workspaceRootOf,
 } from "@sorage/core";
 import { openAdapterContext } from "./adapter-context";
 import { createNodeArtifactStore } from "./artifact-store";
@@ -339,10 +342,11 @@ export function createNodeVaultCommandPorts(options: NodeVaultCommandPortsOption
               .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_bindings'")
               .get() as { name: string } | null | undefined;
             if (!table) return ok([]);
-            const rows = db.prepare("SELECT directory FROM project_bindings").all() as unknown as Array<{
+            const rows = db.prepare("SELECT directory, binding_kind FROM project_bindings").all() as unknown as Array<{
               directory: string;
+              binding_kind: string;
             }>;
-            return ok(rows.map((row) => resolvePhysicalPath(row.directory)));
+            return ok(resolveContainmentBindingDirectories(rows));
           }),
         lock: { acquire: acquireMoveLock },
         target: {
@@ -581,6 +585,32 @@ function writeMoveScratchMarker(path: string, marker: MoveScratchMarker): void {
 }
 
 /**
+ * Builds the deduplicated, physically resolved binding directory census used by
+ * runtime Vault containment checks (`send`, `revise`, `vault move`, VLT-017,
+ * ADR-0041): excludes pre-existing legacy `"/"` rows first so one invalid row
+ * cannot break unrelated valid Projects, and for every valid binding emits its
+ * physically resolved `workspaceRootOf` plus its physically resolved stored
+ * `directory` when distinct (covering `git_repository` working trees).
+ */
+export function resolveContainmentBindingDirectories(
+  rows: ReadonlyArray<{ directory: string; binding_kind: string }>,
+): string[] {
+  const resolved = new Set<string>();
+  for (const row of rows) {
+    const bindingKind: BindingKind = row.binding_kind === "git_repository" ? "git_repository" : "directory";
+    if (isLegacyRootBinding({ directory: row.directory, bindingKind })) continue;
+    const root = workspaceRootOf({ directory: row.directory, bindingKind });
+    const physicalRoot = resolvePhysicalPath(root);
+    resolved.add(physicalRoot);
+    const physicalDir = resolvePhysicalPath(row.directory);
+    if (physicalDir !== physicalRoot) {
+      resolved.add(physicalDir);
+    }
+  }
+  return [...resolved];
+}
+
+/**
  * Resolves one path to its physical spelling through the nearest existing
  * ancestor, so a symlink or a platform prefix such as /private on darwin
  * cannot disguise a nested layout from a prefix comparison. A path whose
@@ -592,7 +622,7 @@ export function resolvePhysicalPath(path: string): string {
   while (!existsSync(current)) {
     const parent = dirname(current);
     if (parent === current) return path;
-    tail.unshift(current.slice(parent.length + 1));
+    tail.unshift(parent === "/" ? current.slice(1) : current.slice(parent.length + 1));
     current = parent;
   }
   try {

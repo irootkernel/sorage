@@ -16,7 +16,7 @@ import { type AppError, errorSpec, initializeInstallation, moveVault, vaultStatu
 import { afterEach, describe, expect, it } from "vitest";
 import { createNodeInitPorts } from "../../src/init-ports";
 import { FakeClock } from "../../src/testkit/fakes";
-import { createNodeVaultCommandPorts } from "../../src/vault-command-ports";
+import { createNodeVaultCommandPorts, resolvePhysicalPath } from "../../src/vault-command-ports";
 
 /**
  * The relocation failure matrix of section 7 and AJ-09: an injected mid-move
@@ -532,5 +532,101 @@ describe("moveVault switch fencing (cold validation round 1)", () => {
     expect(record.artifactsMoved).toBe(1);
     expect(record.fromPath).toBe("<home>/vault");
     expect(record.toPath).toBe("<home>/moved-vault");
+  });
+
+  it("refuses moving to '/' or into a bound git_repository working tree, while succeeding past an unrelated legacy '/' row (ADR-0041)", () => {
+    const { home, vault } = initializedHome("sorage-move-root-and-git-");
+    const repo = join(home, "repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const repoVaultTarget = join(repo, "vault");
+    const validTarget = join(home, "moved-vault");
+
+    // 1. Moving to "/" fails immediately with VAULT_CONTAINMENT (exit 64).
+    const toRootPorts = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: home },
+      userHome: home,
+      targetPath: "/",
+    }).movePorts();
+    expect(toRootPorts.ok).toBe(true);
+    if (!toRootPorts.ok) return;
+    const toRoot = moveVault(toRootPorts.value);
+    expect(toRoot.ok).toBe(false);
+    if (!toRoot.ok) {
+      expect(toRoot.error.code).toBe("VAULT_CONTAINMENT");
+      expect(exitCodeOf(toRoot.error)).toBe(64);
+    }
+
+    // 2. Seed a valid git_repository binding (/repo/.git) AND unrelated legacy '/' rows.
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      db.prepare(
+        "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES ('p-repo', 'repo', 'Repo', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'), ('p-legacy', 'legacy', 'Legacy', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+      ).run();
+      db.prepare(
+        "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-repo', 'p-repo', 'i', ?, 'git_repository', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'), ('b-legacy-dir', 'p-legacy', 'i', '/', 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z'), ('b-legacy-git', 'p-legacy', 'i', '/.git', 'git_repository', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+      ).run(join(repo, ".git"));
+    } finally {
+      db.close();
+    }
+
+    // 3. Moving into the bound git_repository working tree (not just .git) fails with VAULT_CONTAINMENT.
+    const intoRepoPorts = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: home },
+      userHome: home,
+      targetPath: repoVaultTarget,
+    }).movePorts();
+    expect(intoRepoPorts.ok).toBe(true);
+    if (!intoRepoPorts.ok) return;
+    const intoRepo = moveVault(intoRepoPorts.value);
+    expect(intoRepo.ok).toBe(false);
+    if (!intoRepo.ok) {
+      expect(intoRepo.error.code).toBe("VAULT_CONTAINMENT");
+      expect(exitCodeOf(intoRepo.error)).toBe(64);
+    }
+
+    // 4. Moving to an unrelated valid target succeeds despite the seeded legacy '/' rows.
+    const validPorts = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: home },
+      userHome: home,
+      targetPath: validTarget,
+    }).movePorts();
+    expect(validPorts.ok).toBe(true);
+    if (!validPorts.ok) return;
+    const moved = moveVault(validPorts.value);
+    expect(moved.ok).toBe(true);
+    expect(statusPathOf(home)).toBe(validTarget);
+    expect(existsSync(vault)).toBe(true);
+
+    // 5. resolvePhysicalPath preserves top-level missing segments under '/'.
+    expect(resolvePhysicalPath("/sorage-missing-top-169/sub")).toBe("/sorage-missing-top-169/sub");
+
+    // 6. A non-legacy binding replaced on disk by a symlink to '/' fails closed with VAULT_CONTAINMENT
+    // instead of being silently dropped from runtime containment (ADR-0041, F6).
+    const symlinkDir = join(home, "symlink-to-root");
+    symlinkSync("/", symlinkDir);
+    const dbSym = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    try {
+      dbSym
+        .prepare(
+          "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-sym-root', 'p-repo', 'i', ?, 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+        )
+        .run(symlinkDir);
+    } finally {
+      dbSym.close();
+    }
+    const symTarget = join(home, "moved-vault-2");
+    const symPorts = createNodeVaultCommandPorts({
+      env: { SORAGE_HOME: home },
+      userHome: home,
+      targetPath: symTarget,
+    }).movePorts();
+    expect(symPorts.ok).toBe(true);
+    if (!symPorts.ok) return;
+    const symMoved = moveVault(symPorts.value);
+    expect(symMoved.ok).toBe(false);
+    if (!symMoved.ok) {
+      expect(symMoved.error.code).toBe("VAULT_CONTAINMENT");
+      expect(exitCodeOf(symMoved.error)).toBe(64);
+    }
   });
 });

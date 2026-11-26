@@ -770,4 +770,90 @@ describe("sorage revise --body (CLI-012, HND-023)", () => {
     expect(report.error.message).toBe("the no-change resolution requires a --reason");
     process.chdir(original);
   });
+
+  it("enforces git_repository working-tree containment, ignores unrelated legacy '/' rows, and keeps sole-'/' --as fail-closed (ADR-0041)", () => {
+    const original = process.cwd();
+    const { home, workA, handoffId } = setup();
+
+    // Seed an unrelated legacy '/' binding row; valid Project file revise must still succeed.
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const inst = db.prepare("SELECT installation_id FROM project_bindings LIMIT 1").get() as {
+      installation_id: string;
+    };
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES ('p-leg', 'legacy-root', 'Legacy Root', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run();
+    db.prepare(
+      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-leg', 'p-leg', ?, '/', 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run(inst.installation_id);
+    db.close();
+
+    const fileInA = join(workA, "rev2.md");
+    writeFileSync(fileInA, "# Revision 2 past legacy root\n");
+    process.chdir(workA);
+    const validRevise = capture();
+    expect(
+      runCli(
+        ["revise", handoffId, "--file", fileInA, "--json", ...observedHandoffFlags(handoffId, "row")],
+        validRevise.ports,
+      ),
+    ).toBe(0);
+
+    // Send a handoff owned by the sole-'/' project via --as and confirm file revise stays fail-closed on VLT-016.
+    const legSend = capture();
+    expect(
+      runCli(
+        ["send", "--to", "beta", "--as", "legacy-root", "--title", "Leg", "--body", "v1", "--json"],
+        legSend.ports,
+      ),
+    ).toBe(0);
+    const legHandoffId = handoffIdOf(legSend.outText());
+    const legFile = join(workA, "leg-v2.md");
+    writeFileSync(legFile, "# External file under sole-root --as\n");
+    const refusedExternal = capture();
+    expect(
+      runCli(
+        [
+          "revise",
+          legHandoffId,
+          "--as",
+          "legacy-root",
+          "--file",
+          legFile,
+          "--json",
+          ...observedHandoffFlags(legHandoffId, "row"),
+        ],
+        refusedExternal.ports,
+      ),
+    ).toBe(77);
+    expect((JSON.parse(refusedExternal.errText()) as { error: { code: string } }).error.code).toBe(
+      "SOURCE_OUTSIDE_WORKSPACE",
+    );
+
+    // Bind a git_repository whose working tree contains the Vault (seeded in DB): file revise must refuse with VAULT_CONTAINMENT.
+    const db2 = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    db2
+      .prepare(
+        "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES ('p-git-wrap', 'git-wrap', 'Git Wrap', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+      )
+      .run();
+    db2
+      .prepare(
+        "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-git-wrap', 'p-git-wrap', ?, ?, 'git_repository', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+      )
+      .run(inst.installation_id, join(home, ".git"));
+    db2.close();
+
+    const fileInA3 = join(workA, "rev3.md");
+    writeFileSync(fileInA3, "# Revision 3 blocked by git working-tree containment\n");
+    const refusedContain = capture();
+    expect(
+      runCli(
+        ["revise", handoffId, "--file", fileInA3, "--json", ...observedHandoffFlags(handoffId, "row")],
+        refusedContain.ports,
+      ),
+    ).toBe(64);
+    expect((JSON.parse(refusedContain.errText()) as { error: { code: string } }).error.code).toBe("VAULT_CONTAINMENT");
+    process.chdir(original);
+  });
 });

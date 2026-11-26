@@ -1,6 +1,12 @@
 import { type AppError, appError, err, ok, type Result } from "../shared/errors";
+import { isPathAtOrBelow } from "../content/import-policy";
 import { workspaceKey } from "../primitives/identity";
-import { type ProjectResolutionPorts, resolveWorkspaceActor, workspaceRootOf } from "./project-commands";
+import {
+  isLegacyRootBinding,
+  type ProjectResolutionPorts,
+  resolveWorkspaceActor,
+  workspaceRootOf,
+} from "./project-commands";
 
 /**
  * Unregistered Workspace identity and the downgrade guard of section 22.3 (PRJ-013,
@@ -44,9 +50,9 @@ export function resolveSenderIdentity(
   if (!input.allowUnregistered) {
     const bindings = ports.projects.listBindings();
     if (!bindings.ok) return bindings;
-    const roots = bindings.value.map(workspaceRootOf);
-    const aboveARoot = roots.some((root) => root === directory || root.startsWith(`${directory}/`));
-    const insideAnUnresolvedRoot = roots.some((root) => directory.startsWith(`${root}/`));
+    const roots = bindings.value.filter((binding) => !isLegacyRootBinding(binding)).map(workspaceRootOf);
+    const aboveARoot = roots.some((root) => isPathAtOrBelow(root, directory));
+    const insideAnUnresolvedRoot = roots.some((root) => directory !== root && isPathAtOrBelow(directory, root));
     if (aboveARoot || insideAnUnresolvedRoot) {
       return err(
         appError(
@@ -90,16 +96,12 @@ export interface CommitSenderCheck {
   unregisteredSenderPath?: CommitUnregisteredSenderPath | undefined;
 }
 
-function posixParentDirectory(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  if (trimmed === "") return "/";
-  const lastSlash = trimmed.lastIndexOf("/");
-  if (lastSlash <= 0) return "/";
-  return trimmed.slice(0, lastSlash);
+function commitBindingKind(row: CommitSenderBindingFact): "git_repository" | "directory" {
+  return row.bindingKind === "git_repository" ? "git_repository" : "directory";
 }
 
-function atOrBelowRootSafe(path: string, root: string): boolean {
-  return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
+function isLegacyCommitBinding(row: CommitSenderBindingFact): boolean {
+  return isLegacyRootBinding({ directory: row.directory, bindingKind: commitBindingKind(row) });
 }
 
 function matchDirectoryOwner(
@@ -107,21 +109,21 @@ function matchDirectoryOwner(
   directory: string,
 ): CommitSenderBindingFact | undefined {
   return bindings
-    .filter(
-      (row) =>
-        row.bindingKind === "directory" && (directory === row.directory || directory.startsWith(`${row.directory}/`)),
-    )
+    .filter((row) => row.bindingKind === "directory" && isPathAtOrBelow(directory, row.directory))
     .sort((a, b) => b.directory.length - a.directory.length)[0];
 }
 
 /**
  * Revalidates a prepared Handoff sender's Project or Workspace identity against
  * the current binding snapshot at commit time (PRJ-019, PRJ-021, PRJ-022).
+ * Pre-existing invalid legacy `"/"` rows are excluded from implicit ownership
+ * and downgrade root matching (ADR-0041).
  */
 export function revalidateSenderAtCommit(
   bindings: readonly CommitSenderBindingFact[],
   sender: CommitSenderCheck,
 ): Result<void, AppError> {
+  const validBindings = bindings.filter((row) => !isLegacyCommitBinding(row));
   if (sender.registeredSender !== undefined) {
     const registered = sender.registeredSender;
     if (registered.asOverride) {
@@ -131,10 +133,10 @@ export function revalidateSenderAtCommit(
         );
       }
     } else {
-      const gitOwner = bindings.find(
+      const gitOwner = validBindings.find(
         (row) => row.bindingKind === "git_repository" && row.directory === registered.gitCommonDirectory,
       );
-      const directoryOwner = matchDirectoryOwner(bindings, registered.directory);
+      const directoryOwner = matchDirectoryOwner(validBindings, registered.directory);
       const owner = gitOwner ?? directoryOwner;
       if (owner?.id !== registered.bindingId || owner.projectId !== registered.projectId) {
         return err(
@@ -159,14 +161,14 @@ export function revalidateSenderAtCommit(
   }
   if (sender.unregisteredSenderPath !== undefined) {
     const { directory, gitCommonDirectory, allowUnregistered } = sender.unregisteredSenderPath;
-    const gitOwner = bindings.find(
+    const gitOwner = validBindings.find(
       (row) => row.bindingKind === "git_repository" && row.directory === gitCommonDirectory,
     );
-    const directoryOwner = matchDirectoryOwner(bindings, directory);
+    const directoryOwner = matchDirectoryOwner(validBindings, directory);
     const owner = gitOwner ?? directoryOwner;
-    const unresolvedRoot = bindings.find((row) => {
-      const root = row.bindingKind === "directory" ? row.directory : posixParentDirectory(row.directory);
-      return atOrBelowRootSafe(root, directory) || atOrBelowRootSafe(directory, root);
+    const unresolvedRoot = validBindings.find((row) => {
+      const root = workspaceRootOf({ directory: row.directory, bindingKind: commitBindingKind(row) });
+      return isPathAtOrBelow(root, directory) || isPathAtOrBelow(directory, root);
     });
     if (owner !== undefined || (!allowUnregistered && unresolvedRoot !== undefined)) {
       return err(

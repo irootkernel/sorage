@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { verifyVaultArtifacts } from "../content/artifact-integrity";
 import type { ArtifactStore } from "../content/artifacts";
 import { type AppError, appError, err, ok, type Result } from "../shared/errors";
-import { checkVaultContainment } from "../content/import-policy";
+import { checkVaultContainment, isPathAtOrBelow } from "../content/import-policy";
 import type { DrainReport } from "../content/intent-log";
 import type { VaultMarker } from "./vault";
 
@@ -223,9 +223,8 @@ export function moveVault(
   // comparison runs on physically resolved spellings, so an alias such as a
   // symlink or a /private prefix cannot slip a nested target past it.
   if (
-    ports.resolvedTargetPath === ports.resolvedVaultPath ||
-    ports.resolvedTargetPath.startsWith(`${ports.resolvedVaultPath}/`) ||
-    ports.resolvedVaultPath.startsWith(`${ports.resolvedTargetPath}/`)
+    isPathAtOrBelow(ports.resolvedTargetPath, ports.resolvedVaultPath) ||
+    isPathAtOrBelow(ports.resolvedVaultPath, ports.resolvedTargetPath)
   ) {
     return err(
       appError(

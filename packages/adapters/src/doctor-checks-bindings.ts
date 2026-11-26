@@ -1,6 +1,10 @@
-import type { CheckOutcome } from "@sorage/core";
+import { type CheckOutcome, isLegacyRootBinding } from "@sorage/core";
 import type { BindingRow, DoctorContext } from "./doctor-context";
-import { ok, warning } from "./doctor-recoveries";
+import { ok, RECOVERIES, warning, withRecovery } from "./doctor-recoveries";
+
+const LEGACY_ROOT_BINDING_RECOVERY =
+  "Run sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir> or sorage project unbind <slug> --dir <the recorded directory this warning names>";
+const NESTED_AND_LEGACY_ROOT_RECOVERY = `${RECOVERIES["bindings.nested"]}; for a legacy root binding, run sorage project rebind <slug> --from <the recorded directory this warning names> --to <dir> or sorage project unbind <slug> --dir <the recorded directory this warning names>`;
 
 export const bindingsDoctorChecks: Record<
   "bindings.exist" | "bindings.nested" | "bindings.ambiguous",
@@ -39,8 +43,23 @@ export const bindingsDoctorChecks: Record<
     if (registry === null) return ok("No Project bindings are recorded yet on this installation.");
     const { projects, bindings } = registry;
     const slugByProjectId = new Map(projects.map((project) => [project.id, project.slug]));
+    const legacyRaw: string[] = [];
+    for (const binding of bindings) {
+      const bindingKind = binding.binding_kind === "git_repository" ? "git_repository" : "directory";
+      if (isLegacyRootBinding({ directory: binding.directory, bindingKind })) {
+        const slug = slugByProjectId.get(binding.project_id) ?? binding.project_id;
+        legacyRaw.push(
+          `Legacy root binding '${binding.directory}' (${slug}) is invalid and excluded from automatic Project resolution.`,
+        );
+      }
+    }
+    const legacyMessages = [...new Set(legacyRaw)];
     const indexed = bindings
-      .filter((binding) => binding.binding_kind === "directory")
+      .filter(
+        (binding) =>
+          binding.binding_kind === "directory" &&
+          !isLegacyRootBinding({ directory: binding.directory, bindingKind: "directory" }),
+      )
       .map((binding, idx) => ({ binding, idx, segments: binding.directory.split("/") }));
     // Path-segment sort guarantees every directory immediately precedes all
     // descendants without ASCII sibling traps (e.g. `'-' < '/'` putting
@@ -85,7 +104,14 @@ export const bindingsDoctorChecks: Record<
       stack.push(current);
     }
     emitted.sort((a, b) => a.innerIdx - b.innerIdx || a.outerIdx - b.outerIdx);
-    if (emitted.length > 0) return warning([...new Set(emitted.map((entry) => entry.message))].join(" "));
+    const nestedMessages = [...new Set(emitted.map((entry) => entry.message))];
+    if (legacyMessages.length > 0 && nestedMessages.length > 0) {
+      return withRecovery(warning([...legacyMessages, ...nestedMessages].join(" ")), NESTED_AND_LEGACY_ROOT_RECOVERY);
+    }
+    if (legacyMessages.length > 0) {
+      return withRecovery(warning(legacyMessages.join(" ")), LEGACY_ROOT_BINDING_RECOVERY);
+    }
+    if (nestedMessages.length > 0) return warning(nestedMessages.join(" "));
     return ok("No directory binding is nested inside another.");
   },
 

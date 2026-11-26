@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createSqliteEventLedger } from "../../src/events";
 import { createSqliteProjectHandoffStats } from "../../src/handoff-stats";
+import { createNodeProjectPorts } from "../../src/project-command-ports";
 import { createSqliteProjectReader, createSqliteProjectRepository } from "../../src/projects";
 import type { SorageSqlite } from "../../src/sqlite/connection";
 
@@ -741,5 +742,175 @@ describe("project repository", () => {
     const stats = createSqliteProjectHandoffStats(db);
     expect(stats.openHandoffCount("p-rec")).toEqual({ ok: true, value: 4 });
     expect(stats.openHandoffCount("p-other")).toEqual({ ok: true, value: 1 });
+  });
+});
+
+describe("commit-time containment, conflict revalidation, and absentRealPath root joins (ADR-0041)", () => {
+  it("resolves realpath before BEGIN IMMEDIATE and rejects VAULT_CONTAINMENT or conflict with zero partial rows", () => {
+    const temp = migratedDb();
+    const vault = tempDir();
+    const repoDir = tempDir();
+    const repoGit = join(repoDir, ".git");
+    mkdirSync(repoGit);
+    const insideRepo = join(repoDir, "nested");
+    mkdirSync(insideRepo);
+
+    let inWriteTransaction = false;
+    const tracked: SorageSqlite = {
+      exec(sql) {
+        temp.db.exec(sql);
+        if (sql === "BEGIN IMMEDIATE") inWriteTransaction = true;
+        if (sql === "COMMIT" || sql === "ROLLBACK") inWriteTransaction = false;
+      },
+      prepare<Row = Record<string, unknown>>(sql: string) {
+        return temp.db.prepare<Row>(sql);
+      },
+      close: () => temp.db.close(),
+    };
+
+    const repo = createSqliteProjectRepository(tracked, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      events: createSqliteEventLedger(tracked),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+      vaultPath: vault,
+      fs: {
+        realpath(path) {
+          if (inWriteTransaction) throw new Error("filesystem resolution occurred inside the write transaction");
+          return realpathSync(path);
+        },
+      },
+    });
+
+    // Reject "/" in createProjectWithBinding with zero partial Project or binding rows.
+    const rootCreate = repo.createProjectWithBinding(
+      { id: "p-root", slug: "root", displayName: "Root", description: null, createdAt: "t1" },
+      {
+        id: "b-root",
+        projectId: "p-root",
+        directory: "/",
+        bindingKind: "directory",
+        physicalPath: "/",
+        createdAt: "t1",
+      },
+      TEST_ACTOR,
+    );
+    expect(rootCreate.ok).toBe(false);
+    expect(!rootCreate.ok && rootCreate.error.code).toBe("VAULT_CONTAINMENT");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 0 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 0 });
+    expect(inWriteTransaction).toBe(false);
+
+    // Valid git_repository registration succeeds, resolving realpath outside BEGIN IMMEDIATE.
+    const validCreate = repo.createProjectWithBinding(
+      { id: "p-repo", slug: "repo", displayName: "Repo", description: null, createdAt: "t2" },
+      {
+        id: "b-repo",
+        projectId: "p-repo",
+        directory: repoGit,
+        bindingKind: "git_repository",
+        physicalPath: repoDir,
+        createdAt: "t2",
+      },
+      TEST_ACTOR,
+    );
+    expect(validCreate.ok).toBe(true);
+    expect(inWriteTransaction).toBe(false);
+
+    // Commit-time findBindingConflict rejects adding a nested directory inside the bound git repo,
+    // both via createProjectWithBinding (leaving zero partial Project rows) and via addBinding.
+    const nestedCreate = repo.createProjectWithBinding(
+      { id: "p-sub", slug: "sub", displayName: "Sub", description: null, createdAt: "t3" },
+      {
+        id: "b-sub",
+        projectId: "p-sub",
+        directory: insideRepo,
+        bindingKind: "directory",
+        physicalPath: insideRepo,
+        createdAt: "t3",
+      },
+      TEST_ACTOR,
+    );
+    expect(nestedCreate.ok).toBe(false);
+    expect(!nestedCreate.ok && nestedCreate.error.code).toBe("BINDING_DUPLICATE");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 1 });
+
+    const rootAdd = repo.addBinding(
+      {
+        id: "b-add-root",
+        projectId: "p-repo",
+        directory: "/",
+        bindingKind: "directory",
+        physicalPath: "/",
+        createdAt: "t4",
+      },
+      TEST_ACTOR,
+    );
+    expect(rootAdd.ok).toBe(false);
+    expect(!rootAdd.ok && rootAdd.error.code).toBe("VAULT_CONTAINMENT");
+
+    const nestedAdd = repo.addBinding(
+      {
+        id: "b-add-sub",
+        projectId: "p-repo",
+        directory: insideRepo,
+        bindingKind: "directory",
+        physicalPath: insideRepo,
+        createdAt: "t5",
+      },
+      TEST_ACTOR,
+    );
+    expect(nestedAdd.ok).toBe(false);
+    expect(!nestedAdd.ok && nestedAdd.error.code).toBe("BINDING_DUPLICATE");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 1 });
+
+    // Commit-time replaceBinding also rejects "/" with VAULT_CONTAINMENT outside BEGIN IMMEDIATE,
+    // leaving the binding unchanged and emitting zero PROJECT_BINDING_REBOUND events.
+    const rootReplace = repo.replaceBinding(
+      "b-repo",
+      realpathSync(repoGit),
+      { directory: "/", bindingKind: "directory", physicalPath: "/", updatedAt: "t6" },
+      TEST_ACTOR,
+    );
+    expect(rootReplace.ok).toBe(false);
+    expect(!rootReplace.ok && rootReplace.error.code).toBe("VAULT_CONTAINMENT");
+    expect(inWriteTransaction).toBe(false);
+    expect(temp.db.prepare("SELECT directory FROM project_bindings WHERE id = 'b-repo'").get()).toEqual({
+      directory: realpathSync(repoGit),
+    });
+    expect(
+      temp.db.prepare("SELECT COUNT(*) AS n FROM events WHERE event_type = 'PROJECT_BINDING_REBOUND'").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("emits '/<rest>' rather than '//<rest>' in absentRealPath when '/' is the longest existing ancestor", () => {
+    const temp = migratedDb();
+    const home = tempDir();
+    const vault = join(home, "vault");
+    mkdirSync(vault);
+    const ports = createNodeProjectPorts({
+      database: temp.db,
+      configuration: {
+        config: {
+          installationId: "00000000-0000-4000-8000-000000000001",
+          vault: { path: vault },
+        } as never,
+        etag: "test",
+        source: "file",
+      } as never,
+      userHome: home,
+    });
+    try {
+      const missing = "/sorage-definitely-missing-top-level-dir-169/sub/leaf";
+      const resolved = ports.bindings.absentRealPath(missing, home);
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) {
+        expect(resolved.value).toBe(missing);
+        expect(resolved.value.startsWith("//")).toBe(false);
+      }
+      const rootOnly = ports.bindings.absentRealPath("/", home);
+      expect(rootOnly).toEqual({ ok: true, value: "/" });
+    } finally {
+      ports.close();
+    }
   });
 });

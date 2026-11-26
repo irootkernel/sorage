@@ -137,6 +137,51 @@ describe("resolveSenderIdentity", () => {
     const result = resolveSenderIdentity(ports({}), { ...base, path: "/work/independent" });
     expect(result.ok && result.value.kind === "registered_project" && result.value.project.slug).toBe("bound-repo");
   });
+
+  it("refuses unregistered sends from '/' with SENDER_IDENTITY_DOWNGRADE when any valid binding exists (ADR-0041)", () => {
+    const refused = resolveSenderIdentity(ports({}), { ...base, path: "/" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
+    const allowed = resolveSenderIdentity(ports({}), { ...base, path: "/", allowUnregistered: true });
+    expect(allowed.ok && allowed.value.kind === "unregistered_workspace" && allowed.value.pathSnapshot).toBe("/");
+  });
+
+  it("excludes legacy '/' rows from downgrade checks so they never hijack unrelated workspaces", () => {
+    const legacyBindings: ProjectBinding[] = [
+      {
+        id: "b-legacy-dir",
+        projectId: "p1",
+        installationId: "i1",
+        directory: "/",
+        bindingKind: "directory",
+        createdAt: "t",
+        updatedAt: "t",
+      },
+      {
+        id: "b-legacy-git",
+        projectId: "p1",
+        installationId: "i1",
+        directory: "/.git",
+        bindingKind: "git_repository",
+        createdAt: "t",
+        updatedAt: "t",
+      },
+    ];
+    const legacyPorts: ProjectCommandPorts = {
+      ...ports({}),
+      projects: {
+        ...repository,
+        listBindings: () => ok(legacyBindings),
+        listBindingsForProject: (projectId) => ok(legacyBindings.filter((b) => b.projectId === projectId)),
+      },
+    };
+    const unrelated = resolveSenderIdentity(legacyPorts, { ...base, path: "/elsewhere" });
+    expect(unrelated.ok && unrelated.value.kind === "unregistered_workspace" && unrelated.value.pathSnapshot).toBe(
+      "/elsewhere",
+    );
+    const fromRoot = resolveSenderIdentity(legacyPorts, { ...base, path: "/" });
+    expect(fromRoot.ok && fromRoot.value.kind === "unregistered_workspace" && fromRoot.value.pathSnapshot).toBe("/");
+  });
 });
 
 describe("revalidateSenderAtCommit", () => {
@@ -315,6 +360,19 @@ describe("revalidateSenderAtCommit", () => {
     });
     expect(belowGitRootAllowed.ok).toBe(true);
 
+    const fromRootAboveValid = revalidateSenderAtCommit([activeGit], {
+      unregisteredSenderPath: {
+        directory: "/",
+        gitCommonDirectory: null,
+        allowUnregistered: false,
+      },
+    });
+    expect(fromRootAboveValid.ok).toBe(false);
+    if (!fromRootAboveValid.ok) {
+      expect(fromRootAboveValid.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
+      expect(fromRootAboveValid.error.details).toEqual({ slug: "git-app" });
+    }
+
     const rootGitBinding: CommitSenderBindingFact = {
       id: "b-root-git",
       projectId: "p-root",
@@ -323,17 +381,27 @@ describe("revalidateSenderAtCommit", () => {
       slug: "root-repo",
       status: "active",
     };
-    const underRootGit = revalidateSenderAtCommit([rootGitBinding], {
-      unregisteredSenderPath: {
-        directory: "/anywhere",
-        gitCommonDirectory: null,
-        allowUnregistered: false,
-      },
-    });
-    expect(underRootGit.ok).toBe(false);
-    if (!underRootGit.ok) {
-      expect(underRootGit.error.code).toBe("SENDER_IDENTITY_DOWNGRADE");
-      expect(underRootGit.error.details).toEqual({ slug: "root-repo" });
-    }
+    const rootDirBinding: CommitSenderBindingFact = {
+      id: "b-root-dir",
+      projectId: "p-root-dir",
+      directory: "/",
+      bindingKind: "directory",
+      slug: "root-dir",
+      status: "active",
+    };
+    expect(
+      revalidateSenderAtCommit([rootGitBinding, rootDirBinding], {
+        unregisteredSenderPath: {
+          directory: "/anywhere",
+          gitCommonDirectory: "/.git",
+          allowUnregistered: false,
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      revalidateSenderAtCommit([rootDirBinding], {
+        registeredSender: { projectId: "p-root-dir", asOverride: true },
+      }).ok,
+    ).toBe(true);
   });
 });

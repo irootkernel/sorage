@@ -159,4 +159,83 @@ describe("sorage send", () => {
       db.close();
     }
   });
+
+  it("refuses unregistered send from '/', enforces git_repository working-tree containment, ignores legacy '/' rows, and keeps '/' fail-closed (ADR-0041)", () => {
+    const original = process.cwd();
+    const home = tempHome("sorage-send-root-isolation-");
+    expect(runCli(["init", "--non-interactive"], capture().ports)).toBe(0);
+    const workA = join(home, "work-a");
+    const workB = join(home, "work-b");
+    mkdirSync(workA, { recursive: true });
+    mkdirSync(workB, { recursive: true });
+    expect(runCli(["project", "add", "--name", "Alpha", "--dir", workA], capture().ports)).toBe(0);
+    expect(runCli(["project", "add", "--name", "Beta", "--dir", workB], capture().ports)).toBe(0);
+
+    // Seed an unrelated legacy '/' binding row.
+    const db = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+    const inst = db.prepare("SELECT installation_id FROM project_bindings LIMIT 1").get() as {
+      installation_id: string;
+    };
+    db.prepare(
+      "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES ('p-leg', 'legacy-root', 'Legacy Root', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run();
+    db.prepare(
+      "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-leg', 'p-leg', ?, '/', 'directory', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+    ).run(inst.installation_id);
+    db.close();
+
+    try {
+      // 1. Valid Project file send succeeds despite the seeded legacy '/' row.
+      const docA = join(workA, "brief.md");
+      writeFileSync(docA, "# Valid send past legacy root\n");
+      process.chdir(workA);
+      const validSend = capture();
+      expect(runCli(["send", "--to", "beta", "--title", "Valid", "--file", docA, "--json"], validSend.ports)).toBe(0);
+
+      // 2. Unregistered send from cwd='/' fails with SENDER_IDENTITY_DOWNGRADE (exit 65) rather than resolving to legacy-root.
+      process.chdir("/");
+      const downgrade = capture();
+      expect(runCli(["send", "--to", "beta", "--title", "From root", "--body", "hi", "--json"], downgrade.ports)).toBe(
+        65,
+      );
+      expect((JSON.parse(downgrade.errText()) as { error: { code: string } }).error.code).toBe(
+        "SENDER_IDENTITY_DOWNGRADE",
+      );
+
+      // 3. File send from cwd='/' with --allow-unregistered stays fail-closed on VLT-016 (SOURCE_OUTSIDE_WORKSPACE, exit 77).
+      const rootExternal = capture();
+      expect(
+        runCli(
+          ["send", "--to", "beta", "--allow-unregistered", "--title", "From root file", "--file", docA, "--json"],
+          rootExternal.ports,
+        ),
+      ).toBe(77);
+      expect((JSON.parse(rootExternal.errText()) as { error: { code: string } }).error.code).toBe(
+        "SOURCE_OUTSIDE_WORKSPACE",
+      );
+
+      // 4. Vault inside a bound git_repository working tree refuses file send with VAULT_CONTAINMENT (exit 64).
+      const db2 = new DatabaseSync(join(home, "state", "sorage.sqlite3"));
+      db2
+        .prepare(
+          "INSERT INTO projects (id, slug, display_name, status, created_at, updated_at) VALUES ('p-git-wrap', 'git-wrap', 'Git Wrap', 'active', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+        )
+        .run();
+      db2
+        .prepare(
+          "INSERT INTO project_bindings (id, project_id, installation_id, directory, binding_kind, created_at, updated_at) VALUES ('b-git-wrap', 'p-git-wrap', ?, ?, 'git_repository', '2026-05-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z')",
+        )
+        .run(inst.installation_id, join(home, ".git"));
+      db2.close();
+
+      process.chdir(workA);
+      const contained = capture();
+      expect(runCli(["send", "--to", "beta", "--title", "Blocked", "--file", docA, "--json"], contained.ports)).toBe(
+        64,
+      );
+      expect((JSON.parse(contained.errText()) as { error: { code: string } }).error.code).toBe("VAULT_CONTAINMENT");
+    } finally {
+      process.chdir(original);
+    }
+  });
 });

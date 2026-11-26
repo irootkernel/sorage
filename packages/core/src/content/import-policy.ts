@@ -20,16 +20,29 @@ export interface ExternalSourceCheck {
 }
 
 /**
+ * Segment-aware path containment for normalized absolute POSIX paths (VLT-017,
+ * PRJ-019): when `root === "/"`, every absolute path starting with `"/"` is
+ * contained; otherwise `candidate` must equal `root` or start with `${root}/`,
+ * so sibling prefixes never falsely match.
+ */
+export function isPathAtOrBelow(candidate: string, root: string): boolean {
+  if (root === "/") return candidate.startsWith("/");
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+/**
  * Enforces the external-source rule (VLT-016): a source inside the resolved
  * sender workspace imports normally; a source outside it requires the explicit
  * override and fails with `SOURCE_OUTSIDE_WORKSPACE` otherwise; under
  * `workspace_only` the override does not exist and the import always fails.
+ * A root workspace (`"/"`) stays explicitly fail-closed so the entire
+ * filesystem is never treated as inside a workspace.
  */
 export function checkExternalSource(check: ExternalSourceCheck): Result<{ insideWorkspace: boolean }, AppError> {
   const inside =
     check.workspaceRoot !== null &&
-    (check.resolvedSourcePath === check.workspaceRoot ||
-      check.resolvedSourcePath.startsWith(`${check.workspaceRoot}/`));
+    check.workspaceRoot !== "/" &&
+    isPathAtOrBelow(check.resolvedSourcePath, check.workspaceRoot);
   if (inside) return ok({ insideWorkspace: true });
   if (check.policy === "workspace_or_explicit" && check.allowExternalSource) {
     return ok({ insideWorkspace: false });
@@ -63,7 +76,7 @@ export interface ContainmentCheck {
 export function checkVaultContainment(check: ContainmentCheck): Result<{ safe: true }, AppError> {
   const vault = check.resolvedVaultPath;
   for (const directory of check.resolvedBindingDirectories) {
-    if (vault === directory || vault.startsWith(`${directory}/`)) {
+    if (isPathAtOrBelow(vault, directory)) {
       return err(
         appError("VAULT_CONTAINMENT", `The Vault ${vault} lies inside the bound Project directory ${directory}.`, {
           resolvedVaultPath: vault,
@@ -72,7 +85,7 @@ export function checkVaultContainment(check: ContainmentCheck): Result<{ safe: t
         }),
       );
     }
-    if (directory === vault || directory.startsWith(`${vault}/`)) {
+    if (isPathAtOrBelow(directory, vault)) {
       return err(
         appError("VAULT_CONTAINMENT", `The bound Project directory ${directory} lies inside the Vault ${vault}.`, {
           resolvedVaultPath: vault,
