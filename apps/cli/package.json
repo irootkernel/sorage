@@ -1,7 +1,7 @@
 {
   "name": "@sorage/cli",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "main": "./src/main.ts",
   "types": "./src/main.ts",
@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "commander": "14.0.2",
-    "@sorage/core": "0.1.5",
-    "@sorage/adapters": "0.1.5",
-    "@sorage/daemon": "0.1.5"
+    "@sorage/core": "0.1.6",
+    "@sorage/adapters": "0.1.6",
+    "@sorage/daemon": "0.1.6"
   }
 }

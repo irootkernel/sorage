@@ -10,19 +10,19 @@ Do not expose authentication material or copy output containing secrets into an 
 
 ## Release-candidate verification
 
-The commands below verify packaging while `SORAGE_VERSION` remains `"0.1.5"` pending a separately authorized version bump. The planned M11 release is `v0.1.6` and remains Unreleased. Use the reviewed source revision and signed digest to identify the build, and keep the retained predecessor executable outside `dist/` before packaging. The [M11 procedure](#m11-schema-v17-upgrade-and-rollback) covers the qualified upgrade from schema 16 to 17. For an earlier schema, use its matching historical procedure, such as the [M10 procedure](#m10-exchange-storage-upgrade-and-rollback) for schema 15 to 16.
+The commands below verify the v0.1.6 packaging identity. Follow the [M11 schema v17 upgrade and rollback procedure](#m11-schema-v17-upgrade-and-rollback) before replacing the executable for an existing Installation, and keep the retained predecessor executable outside `dist/` before packaging. For an earlier schema, use its matching historical procedure, such as the [M10 procedure](#m10-exchange-storage-upgrade-and-rollback) for schema 15 to 16.
 
 Before publication, build and inspect the Apple Silicon macOS candidate from the reviewed checkout:
 
 ```sh
 make package
 cd dist
-shasum -a 256 -c sorage-v0.1.5-darwin-arm64.sha256
-codesign --verify --strict sorage-v0.1.5-darwin-arm64
-./sorage-v0.1.5-darwin-arm64 version
+shasum -a 256 -c sorage-v0.1.6-darwin-arm64.sha256
+codesign --verify --strict sorage-v0.1.6-darwin-arm64
+./sorage-v0.1.6-darwin-arm64 version
 ```
 
-The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.5`, target `darwin-arm64`, binary `sorage-v0.1.5-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
+The checksum file must contain the digest, two spaces, the asset basename, and one newline. The adjacent manifest must report version `0.1.6`, target `darwin-arm64`, binary `sorage-v0.1.6-darwin-arm64`, the same signed digest, signature mode `ad-hoc`, and the reviewed HEAD revision. `dist/sorage` must have the same signed digest so the source-install path and release candidate cannot diverge. These checks establish a local candidate only; they do not prove a hosted download, publication, notarization, Developer ID signing, or Gatekeeper behavior.
 
 ## Replace the withdrawn v0.1.2 binary
 
@@ -175,7 +175,7 @@ M11 upgrades schema 16 to `17 / m11-secondary-indexes-v1` in one direction. The 
 
 ### Upgrade the intended home
 
-Set `LIVE_HOME` to the absolute path of the intended schema-16 home. Set `OLD_SORAGE` and `NEW_SORAGE` to the absolute paths of the retained v0.1.5 executable and the reviewed M11 executable, respectively. Verify each executable against its known source revision and SHA-256. Both builds still report the same runtime version. For a rehearsal, use a separate temporary home and Vault and follow the [copied-home isolation procedure](#m9-shared-content-upgrade-and-rollback) before making any command call.
+Set `LIVE_HOME` to the absolute path of the intended schema-16 home. Set `OLD_SORAGE` and `NEW_SORAGE` to the absolute paths of the retained v0.1.5 executable and the v0.1.6 executable, respectively. Verify each executable against its known source revision, runtime version (`sorage v0.1.5` versus `sorage v0.1.6`), and SHA-256. For a rehearsal, use a separate temporary home and Vault and follow the [copied-home isolation procedure](#m9-shared-content-upgrade-and-rollback) before making any command call.
 
 1. Stop CLI writers, the daemon, its LaunchAgent, and external schedulers. Preserve the settings and disable scheduling and remote push for the transition. Run `SORAGE_HOME="$LIVE_HOME" "$OLD_SORAGE" backup run --as-user --json` and `SORAGE_HOME="$LIVE_HOME" "$OLD_SORAGE" backup verify --as-user --json`. Keep an immutable copy of the verified pre-upgrade Vault and its matching executable. Record the executable revision and digest, the backup manifest digest, and the Vault Git commit when available. Rehearse the separate-home restore below with that pair before upgrading.
 2. Run `SORAGE_HOME="$LIVE_HOME" "$NEW_SORAGE" preflight --json`. On the schema-16 home, expect `upgrade_required` with exit 78. Preflight changes neither database nor WAL bytes. Determine the cause of any other result before proceeding.
