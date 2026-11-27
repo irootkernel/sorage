@@ -913,4 +913,144 @@ describe("commit-time containment, conflict revalidation, and absentRealPath roo
       ports.close();
     }
   });
+
+  it("resolves an absent vaultPath via its longest existing ancestor during commit-time containment checks", () => {
+    const temp = migratedDb();
+    const root = tempDir();
+    const projectDir = join(root, "proj");
+    mkdirSync(projectDir);
+    const absentOutsideVault = join(root, "not-yet-created-vault");
+    const repoOutside = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: absentOutsideVault,
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const accepted = repoOutside.createProjectWithBinding(
+      { id: "p-absent-ok", slug: "absent-ok", displayName: "Absent OK", description: null, createdAt: "t1" },
+      { id: "b-absent-ok", projectId: "", directory: projectDir, bindingKind: "directory", createdAt: "t1" },
+      TEST_ACTOR,
+    );
+    expect(accepted.ok).toBe(true);
+
+    const absentInsideVault = join(projectDir, "future-vault");
+    const repoInside = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: absentInsideVault,
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const refused = repoInside.createProjectWithBinding(
+      { id: "p-absent-bad", slug: "absent-bad", displayName: "Absent Bad", description: null, createdAt: "t2" },
+      { id: "b-absent-bad", projectId: "", directory: projectDir, bindingKind: "directory", createdAt: "t2" },
+      TEST_ACTOR,
+    );
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error.code).toBe("VAULT_CONTAINMENT");
+    // Rejected commit-time containment checks must leave zero partial rows.
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 1 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 1 });
+
+    // Unnormalized '..' and '//' in an absent absolute vaultPath normalize before containment checks.
+    const traversalInsideVault = `${root}//outside/../proj/nested/../future-vault/`;
+    const repoTraversal = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: traversalInsideVault,
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const traversalRefused = repoTraversal.createProjectWithBinding(
+      { id: "p-absent-trav", slug: "absent-trav", displayName: "Absent Trav", description: null, createdAt: "t3" },
+      { id: "b-absent-trav", projectId: "", directory: projectDir, bindingKind: "directory", createdAt: "t3" },
+      TEST_ACTOR,
+    );
+    expect(traversalRefused.ok).toBe(false);
+    expect(!traversalRefused.ok && traversalRefused.error.code).toBe("VAULT_CONTAINMENT");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 1 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 1 });
+
+    // Symlinked ancestor pointing to the Project directory still triggers VAULT_CONTAINMENT.
+    const symlinkToProject = join(root, "link-to-proj");
+    symlinkSync(projectDir, symlinkToProject);
+    const repoSymlinkAncestor = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: join(symlinkToProject, "future-vault"),
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const symlinkRefused = repoSymlinkAncestor.createProjectWithBinding(
+      { id: "p-absent-sym", slug: "absent-sym", displayName: "Absent Sym", description: null, createdAt: "t4" },
+      { id: "b-absent-sym", projectId: "", directory: projectDir, bindingKind: "directory", createdAt: "t4" },
+      TEST_ACTOR,
+    );
+    expect(symlinkRefused.ok).toBe(false);
+    expect(!symlinkRefused.ok && symlinkRefused.error.code).toBe("VAULT_CONTAINMENT");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 1 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 1 });
+
+    // Absent top-level vaultPath whose longest existing ancestor is '/' resolves cleanly without '//'.
+    const rootProjectDir = join(root, "proj-root-ok");
+    mkdirSync(rootProjectDir);
+    const repoRootAncestor = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: "/sorage-definitely-missing-top-level-vault-175/sub",
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const rootAncestorAccepted = repoRootAncestor.createProjectWithBinding(
+      { id: "p-absent-root", slug: "absent-root", displayName: "Absent Root", description: null, createdAt: "t5" },
+      {
+        id: "b-absent-root",
+        projectId: "",
+        directory: rootProjectDir,
+        bindingKind: "directory",
+        createdAt: "t5",
+      },
+      TEST_ACTOR,
+    );
+    expect(rootAncestorAccepted.ok).toBe(true);
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 2 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 2 });
+
+    // Dangling symlink at vaultPath or an ancestor fails closed (mapped to INTERNAL_ERROR) instead of climbing past the link.
+    const danglingVault = join(root, "dangling-vault");
+    symlinkSync(join(projectDir, "not-yet-created-target"), danglingVault);
+    const repoDangling = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: danglingVault,
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const danglingRefused = repoDangling.createProjectWithBinding(
+      { id: "p-dangling", slug: "absent-dangling", displayName: "Dangling", description: null, createdAt: "t6" },
+      { id: "b-dangling", projectId: "", directory: projectDir, bindingKind: "directory", createdAt: "t6" },
+      TEST_ACTOR,
+    );
+    expect(danglingRefused.ok).toBe(false);
+    expect(!danglingRefused.ok && danglingRefused.error.code).toBe("INTERNAL_ERROR");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 2 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 2 });
+
+    const repoDanglingAncestor = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: join(danglingVault, "nested-vault"),
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const danglingAncestorRefused = repoDanglingAncestor.createProjectWithBinding(
+      {
+        id: "p-dangling-anc",
+        slug: "absent-dangling-anc",
+        displayName: "Dangling Anc",
+        description: null,
+        createdAt: "t7",
+      },
+      { id: "b-dangling-anc", projectId: "", directory: projectDir, bindingKind: "directory", createdAt: "t7" },
+      TEST_ACTOR,
+    );
+    expect(danglingAncestorRefused.ok).toBe(false);
+    expect(!danglingAncestorRefused.ok && danglingAncestorRefused.error.code).toBe("INTERNAL_ERROR");
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 2 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 2 });
+  });
 });

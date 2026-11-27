@@ -1,4 +1,5 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import type {
   ActorRef,
   BindingKind,
@@ -55,6 +56,35 @@ export type ProjectRepositoryFs = {
 };
 
 const nativeFs: ProjectRepositoryFs = { realpath: (path) => realpathSync(path) };
+
+function resolveVaultPhysicalPath(vaultPath: string, fs: ProjectRepositoryFs): string {
+  const normalized = resolve(vaultPath);
+  try {
+    return fs.realpath(normalized);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") throw error;
+  }
+  // When the configured Vault directory has not been created on disk yet, climb to
+  // the longest existing ancestor so symlinked prefixes still resolve root-safely.
+  // Checking entries with lstatSync keeps dangling symlinks fail-closed instead of
+  // climbing past a symlink whose target does not exist yet.
+  const segments = normalized.split("/").filter((segment) => segment !== "");
+  for (let count = segments.length; count > 0; count -= 1) {
+    const candidate = `/${segments.slice(0, count).join("/")}`;
+    try {
+      lstatSync(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") continue;
+      throw error;
+    }
+    const real = fs.realpath(candidate);
+    const tail = segments.slice(count).join("/");
+    return tail === "" ? real : real === "/" ? `/${tail}` : `${real}/${tail}`;
+  }
+  const real = fs.realpath("/");
+  const tail = segments.join("/");
+  return tail === "" ? real : real === "/" ? `/${tail}` : `${real}/${tail}`;
+}
 
 export interface SqliteProjectRepositoryOptions {
   /**
@@ -175,7 +205,7 @@ export function createSqliteProjectRepository(
     physicalPath: string,
   ): Result<void, AppError> => {
     if (options.vaultPath === undefined) return ok(undefined);
-    const vault = fs.realpath(options.vaultPath);
+    const vault = resolveVaultPhysicalPath(options.vaultPath, fs);
     const root = workspaceRootOf({ directory, bindingKind });
     const containment = checkVaultContainment({
       resolvedVaultPath: vault,
