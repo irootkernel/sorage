@@ -23,7 +23,7 @@ Delivery is sequential with exactly one review overlap, and the rules below are 
 
 This section is the only place in the repository where delivery status pointers live; a second location is a governance defect rather than redundancy.
 
-- **Active Epic:** `EPIC-025`
+- **Active Epic:** None
 - **Active Task:** None
 - **In Review Task:** None
 - **Next eligible Task:** None
@@ -121,7 +121,7 @@ The journeys are defined in [../specs/testing-and-acceptance.md](../specs/testin
 | `EPIC-022` | M11 non-breaking defect fixes, hot-path performance and v17 indexes | M11 | Completed | `TASK-147` to `TASK-154` |
 | `EPIC-023` | M11 golden-preserving internal architecture cleanup | M11 | Completed | `TASK-155` to `TASK-160`, `TASK-165` to `TASK-167` |
 | `EPIC-024` | M11 targeted contract modernizations and qualification | M11 | Completed | `TASK-161` to `TASK-164` |
-| `EPIC-025` | M11 release hardening and regression coverage | M11 | In Progress | `TASK-168` to `TASK-175` |
+| `EPIC-025` | M11 release hardening and regression coverage | M11 | Completed | `TASK-168` to `TASK-175` |
 
 ## EPIC-001: Foundation and toolchain
 
@@ -713,10 +713,10 @@ The reviewed `error-renderings.json` diff changes only the common `INTERNAL_ERRO
 
 ## EPIC-025: M11 release hardening and regression coverage
 
-- **Status:** In Progress
+- **Status:** Completed
 - **Milestone:** M11
 - **Objective:** Deliver seven confirmed deferred-feedback follow-ups for `v0.1.6` and qualify the combined release candidate.
-- **Detailed SOT:** [M11 Release Hardening and Regression Coverage Dossier](../todo/m11-release-hardening-dossier.md).
+- **Canonical Outcomes:** [accepted ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage), [Interfaces and Operations §42.6](../specs/interfaces-and-operations.md#426-m11-adr-0041-public-contract-classification-and-design-boundaries), [M11 qualification §8](../implementation-tips/m11-qualification.md#8-combined-epic-025-v016-release-hardening-qualification-task-175), [M11 operations](../ops/README.md#web-and-daemon-cli-json-cutover-and-legacy-root-binding-recovery-adr-0041), [Closed findings](../deferred-feedback/README.md#closed-findings), and [CHANGELOG.md](../../CHANGELOG.md).
 - **Design basis:** Master's 2026-11-26 release scope and single Web JSON cutover decision, the [reviewed deferred feedback](../deferred-feedback/README.md), and [accepted ADR-0041](../architecture-decision-records/README.md#adr-0041-m11-release-hardening-and-regression-coverage).
 - **Prerequisite:** `EPIC-024` is Completed. Registration leaves the implementation and review slots available.
 - **Execution policy:** Run `TASK-168` through `TASK-175` in order under [governance sections 7–10](../governance/README.md#7-active-slot-rule) and [section 18.1](../governance/README.md#181-proportionate-verification-and-review). Design Gate impact is `Not required` because this repository has no enrolled Design Gate registry.
