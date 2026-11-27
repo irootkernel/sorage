@@ -580,7 +580,7 @@ form[aria-label$="Memo"] input {
   overflow-wrap: anywhere;
 }
 .backup-runs-table td {
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 .compose-form {
   max-width: 44rem;

@@ -188,9 +188,16 @@ export function daemonStart(
 export function daemonStop(
   runtime: DaemonRuntimePorts,
   ports: DaemonCommandPorts,
-  options: { json?: boolean; stopGraceMs?: number; now?: () => number; sleepMs?: (milliseconds: number) => void } = {},
+  options: {
+    json?: boolean;
+    log?: boolean;
+    stopGraceMs?: number;
+    now?: () => number;
+    sleepMs?: (milliseconds: number) => void;
+  } = {},
 ): number {
   const json = options.json === true;
+  const renderOpts = options.log === false ? { log: false } : {};
   const record = liveDaemon(runtime);
   if (record === null) {
     runtime.removeDaemonRecord();
@@ -198,6 +205,8 @@ export function daemonStop(
       withRecovery("DAEMON_UNAVAILABLE", "no live daemon record was found", "sorage daemon start"),
       ports,
       json,
+      undefined,
+      renderOpts,
     );
   }
   runtime.signal(record.pid, "SIGTERM");
@@ -220,6 +229,8 @@ export function daemonStop(
       ),
       ports,
       json,
+      undefined,
+      renderOpts,
     );
   }
   runtime.removeDaemonRecord();

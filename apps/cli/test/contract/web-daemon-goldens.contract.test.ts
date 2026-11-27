@@ -175,9 +175,24 @@ function buildSnapshots(): Record<string, { exitCode: number; stdout: string; st
         { json: true },
       ),
     ),
+    daemonStartFailureStorageIntegrityJson: captureRun((p) =>
+      daemonStart(
+        daemonPorts({ historyAdmissionRefusal: () => appError("STORAGE_INTEGRITY_ERROR", "corrupt sqlite ledger") }),
+        p,
+        { json: true },
+      ),
+    ),
     daemonStartFailureDaemonUnavailableJson: captureRun((p) =>
       daemonStart(daemonPorts({ healthConfirms: () => false }), p, {
         json: true,
+        startTimeoutMs: 0,
+        now: () => 0,
+        sleepMs: () => {},
+      }),
+    ),
+    daemonStartFailureDaemonUnavailableHuman: captureRun((p) =>
+      daemonStart(daemonPorts({ healthConfirms: () => false }), p, {
+        json: false,
         startTimeoutMs: 0,
         now: () => 0,
         sleepMs: () => {},
@@ -240,6 +255,15 @@ function buildSnapshots(): Record<string, { exitCode: number; stdout: string; st
       daemonRestart(daemonPorts({ dieOnSignal: false }), p, {
         json: true,
         stopGraceMs: 0,
+        now: () => 0,
+        sleepMs: () => {},
+      }),
+    ),
+    daemonRestartFailureStartFailedJson: captureRun((p) =>
+      daemonRestart(daemonPorts({ dieOnSignal: true, healthConfirms: () => false }), p, {
+        json: true,
+        stopGraceMs: 0,
+        startTimeoutMs: 0,
         now: () => 0,
         sleepMs: () => {},
       }),

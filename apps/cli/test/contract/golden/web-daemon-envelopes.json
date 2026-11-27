@@ -74,10 +74,20 @@
     "stdout": "",
     "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"STORAGE_SCHEMA_UNSUPPORTED\",\n    \"message\": \"future schema 99\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Retain the original send material and use a Sorage version supporting this storage layout\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
   },
+  "daemonStartFailureStorageIntegrityJson": {
+    "exitCode": 73,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"STORAGE_INTEGRITY_ERROR\",\n    \"message\": \"corrupt sqlite ledger\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Retain the original send material and diagnose storage integrity before further inspection\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
   "daemonStartFailureDaemonUnavailableJson": {
     "exitCode": 69,
     "stdout": "",
     "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"the daemon did not become ready\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonStartFailureDaemonUnavailableHuman": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "DAEMON_UNAVAILABLE: the daemon did not become ready\nRecovery: sorage daemon start\n"
   },
   "daemonStopSuccessJson": {
     "exitCode": 0,
@@ -118,6 +128,11 @@
     "exitCode": 75,
     "stdout": "",
     "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"SERVICE_PAUSED\",\n    \"message\": \"the daemon did not stop within the grace window\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"Inspect ~/.sorage/logs/sorage.log, then retry sorage daemon stop\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
+  },
+  "daemonRestartFailureStartFailedJson": {
+    "exitCode": 69,
+    "stdout": "",
+    "stderr": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"DAEMON_UNAVAILABLE\",\n    \"message\": \"the daemon did not become ready\",\n    \"details\": {},\n    \"recovery\": {\n      \"suggestedCommand\": \"sorage daemon start\"\n    }\n  },\n  \"meta\": {\n    \"requestId\": \"2f0ac9a0-0000-4000-8000-0000000000aa\"\n  }\n}\n"
   },
   "daemonStatusSuccessUpToDateJson": {
     "exitCode": 0,

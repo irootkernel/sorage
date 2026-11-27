@@ -243,6 +243,18 @@ describe("daemon stop (SEC-015)", () => {
     const logText = readFileSync(join(isolatedHome, "logs", "sorage.log"), "utf8");
     expect(logText).toContain("SERVICE_PAUSED");
     expect(logText).toContain(envelope.meta.requestId);
+
+    const silentHarness = sink();
+    expect(
+      daemonStop(ports({ record: RECORD, alive: true }), silentHarness.ports, {
+        json: true,
+        log: false,
+        stopGraceMs: 300,
+      }),
+    ).toBe(75);
+    const silentEnvelope = JSON.parse(silentHarness.err.join(""));
+    const logAfterSilent = readFileSync(join(isolatedHome, "logs", "sorage.log"), "utf8");
+    expect(logAfterSilent).not.toContain(silentEnvelope.meta.requestId);
   });
 });
 

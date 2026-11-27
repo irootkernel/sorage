@@ -354,7 +354,7 @@ export function registerSetupCommands(
       const json = globals.json === true;
       const uninstallPorts = createNodeUninstallPorts({
         stopDaemon: () => {
-          const code = daemonStop(createDaemonRuntimePorts(), { out: () => {}, err: () => {} }, { json });
+          const code = daemonStop(createDaemonRuntimePorts(), { out: () => {}, err: () => {} }, { json, log: false });
           // A non-zero stop leaves the daemon running, and the use case refuses
           // to remove live state from under it rather than reporting success.
           return code === 0

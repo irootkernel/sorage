@@ -988,12 +988,54 @@ describe("commit-time containment, conflict revalidation, and absentRealPath roo
     expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 1 });
     expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 1 });
 
-    // Absent top-level vaultPath whose longest existing ancestor is '/' resolves cleanly without '//'.
+    // Absent top-level vaultPath whose longest existing ancestor is '/' resolves to '/<rest>'
+    // (not '//<rest>') and respects injected ProjectRepositoryFs.lstat: a Project rooted at the
+    // missing prefix is rejected with VAULT_CONTAINMENT (which would pass wrongly if '//' were emitted),
+    // while an unrelated Project is accepted.
+    const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    const lstatCalls: string[] = [];
+    const missingTopRoot = "/sorage-definitely-missing-top-level-vault-175";
+    const missingTopVault = `${missingTopRoot}/sub`;
+    const virtualRootFs = {
+      realpath: (p: string) => {
+        if (p === "/" || p === missingTopRoot) return p;
+        if (p === missingTopVault) throw enoent();
+        return realpathSync(p);
+      },
+      lstat: (p: string) => {
+        lstatCalls.push(p);
+        if (p === missingTopVault || p === missingTopRoot) throw enoent();
+      },
+    };
+    const repoRootOverlap = createSqliteProjectRepository(temp.db, {
+      installationId: "00000000-0000-4000-8000-000000000001",
+      vaultPath: missingTopVault,
+      fs: virtualRootFs,
+      events: createSqliteEventLedger(temp.db),
+      onLocalProjectWithdrawn: NOOP_WITHDRAWN,
+    });
+    const rootOverlapRefused = repoRootOverlap.createProjectWithBinding(
+      {
+        id: "p-root-overlap",
+        slug: "absent-root-overlap",
+        displayName: "Root Overlap",
+        description: null,
+        createdAt: "t5a",
+      },
+      { id: "b-root-overlap", projectId: "", directory: missingTopRoot, bindingKind: "directory", createdAt: "t5a" },
+      TEST_ACTOR,
+    );
+    expect(rootOverlapRefused.ok).toBe(false);
+    expect(!rootOverlapRefused.ok && rootOverlapRefused.error.code).toBe("VAULT_CONTAINMENT");
+    expect(lstatCalls).toEqual([missingTopVault, missingTopRoot]);
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM projects").get()).toEqual({ n: 1 });
+    expect(temp.db.prepare("SELECT COUNT(*) AS n FROM project_bindings").get()).toEqual({ n: 1 });
+
     const rootProjectDir = join(root, "proj-root-ok");
     mkdirSync(rootProjectDir);
     const repoRootAncestor = createSqliteProjectRepository(temp.db, {
       installationId: "00000000-0000-4000-8000-000000000001",
-      vaultPath: "/sorage-definitely-missing-top-level-vault-175/sub",
+      vaultPath: missingTopVault,
       events: createSqliteEventLedger(temp.db),
       onLocalProjectWithdrawn: NOOP_WITHDRAWN,
     });

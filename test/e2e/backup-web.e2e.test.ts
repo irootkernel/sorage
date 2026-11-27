@@ -1,6 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeTempDir, sorage } from "./helpers";
@@ -110,6 +111,11 @@ describe("the Web backup page and the Backup Health card", () => {
     const failedRun = sorage(["backup", "run", "--json"], { home });
     expect(failedRun.status).toBe(75);
 
+    const axeSource = readFileSync(
+      fileURLToPath(new URL("../../node_modules/axe-core/axe.min.js", import.meta.url)),
+      "utf8",
+    );
+
     for (const vp of [
       { name: "mobile", width: 390, height: 844 },
       { name: "desktop", width: 1280, height: 900 },
@@ -124,6 +130,15 @@ describe("the Web backup page and the Backup Health card", () => {
           await page.waitForSelector("p.warning");
           expect(await page.locator(".backup-runs-table tbody tr").count()).toBeGreaterThanOrEqual(2);
           expect((await page.textContent("p.warning")) ?? "").toContain("The last backup run failed with");
+          await page.evaluate(axeSource);
+          const axeReport = (await page.evaluate(() =>
+            (
+              window as unknown as {
+                axe: { run: () => Promise<{ violations: Array<{ id: string; impact: string }> }> };
+              }
+            ).axe.run(),
+          )) as { violations: Array<{ id: string; impact: string }> };
+          expect(axeReport.violations, `${vp.name} #/backup failure-warning axe violations`).toEqual([]);
         }
         const fit = await page.evaluate(() => ({
           scrollWidth: document.documentElement.scrollWidth,
